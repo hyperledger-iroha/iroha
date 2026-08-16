@@ -51,10 +51,10 @@ POLICY_ID = hashlib.sha256(
 ).hexdigest()
 PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "a235a552578f612033c2d335d4d2d4ba3afa9cb38fb73b4e6d95cd7ad14eeceb"
+    "67e2059e3d5b13832ac8b3f19ecb54a46fe24b0653ecb74b89c902a2ddb60077"
 )
 GENESIS_PUBLIC_BASE_SHA256 = (
-    "ff00af54a8e2c28e8cc324301ca240ecc26f683c33ed57c51ffe406bc5148bed"
+    "355226bf9aeb76176d5c5fcdf15aaba1acae26f32e0712135ea01127c068bc49"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),

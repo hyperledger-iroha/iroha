@@ -723,7 +723,22 @@ timestamp="$(env TZ=UTC date '+%Y%m%dT%H%M%SZ')"
 bundle_name="taira-rollout-${timestamp}-${git_head:0:12}-${PROFILE}-linux-aarch64"
 bundle_dir="${OUTPUT_DIR}/${bundle_name}"
 archive_path="${OUTPUT_DIR}/${bundle_name}.tar.gz"
-binary_dir="${REPO_ROOT}/target/${PROFILE}"
+# Keep Cargo artifacts outside the authenticated source checkout when the
+# caller supplies an untrusted-build cache.  The workflow scopes that writable
+# target to one exact Iroha+DPN source identity; never share one target across
+# different untrusted commits.  The later authority and native qualification
+# stages still treat every resulting byte as hostile.
+cargo_target_root="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+if [[ "$cargo_target_root" != /* ]]; then
+  cargo_target_root="${REPO_ROOT}/${cargo_target_root}"
+fi
+if [[ -L "$cargo_target_root" ]]; then
+  echo "Cargo target directory must not be a symlink: $cargo_target_root" >&2
+  exit 1
+fi
+mkdir -p "$cargo_target_root"
+cargo_target_root="$(cd "$cargo_target_root" && pwd -P)"
+binary_dir="${cargo_target_root}/${PROFILE}"
 
 mkdir -p "$bundle_dir/bin" "$bundle_dir/libexec" "$bundle_dir/configs/soranexus" \
   "$bundle_dir/scripts" "$bundle_dir/provenance" "$bundle_dir/share/iroha/sorafs"

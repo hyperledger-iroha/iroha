@@ -1649,18 +1649,13 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
         ),
     ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "decode_exact_queue_plan_pending_route_member_marker",
-        (
+    (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "decode_exact_queue_plan_pending_route_member_marker", (
             "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
             "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
             "queue_plan_pending_route_member_marker_payload",
             "queue_plan_pending_route_member_marker_key",
             "canonical.as_slice() != payload || &expected_key != key",
-        ),
-    ),
+    )),
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
@@ -1878,11 +1873,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "remove_queue_plan_marker(member_key)",
         ),
     ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "stage_queue_plan_admissions",
-        (
+    (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "stage_queue_plan_admissions", (
             "validate_merge_queue_plan_admissions",
             "queue_plan_pending_obligation_from_admission",
             "queue_plan_pending_obligation_matches_active_lifecycle",
@@ -1892,19 +1883,13 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "markers.insert_queue_plan_marker(key, payload)",
             "stage_queue_plan_pending_obligation_in_storage",
             "markers.apply()",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "resolve_queue_plan_pending_obligations_for_entrypoints",
-        (
+    )),
+    (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "resolve_queue_plan_pending_obligations_for_entrypoints", (
             "self.world.smart_contract_state.transaction()",
             "for entrypoint_hash in entrypoint_hashes",
             "resolve_queue_plan_pending_obligation_in_storage",
             "markers.apply()",
-        ),
-    ),
+    )),
 )
 QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN = (
     QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
@@ -1918,19 +1903,34 @@ QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN = (
     ),
 )
 QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
+    *(
+        binding for binding in QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
+        if binding[2] in (
+            "decode_exact_queue_plan_pending_route_member_marker", "stage_queue_plan_admissions",
+            "resolve_queue_plan_pending_obligations_for_entrypoints",
+        )
+    ),
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "queue_plan_pending_obligation_matches_active_lifecycle",
+        "resolve_required_queue_plan_pending_obligations",
         (
+            "self.world.smart_contract_state.transaction()",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "obligation.binding_hash != expected_binding_hash",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()",
+        ),
+    ),
+    (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "queue_plan_pending_obligation_matches_active_lifecycle", (
             "let proposal_height = obligation.binding.admission_context.proposal_height;",
             "obligation.routes.iter().all(|route| {",
             "state\n                .nexus()\n                .lane_catalog\n                .lanes()",
             ".any(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)",
             "state.lane_incarnation_at_height(route.lane_id, proposal_height)",
             "== Some(route.lane_incarnation)",
-        ),
-    ),
+    )),
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",

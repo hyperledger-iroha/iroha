@@ -42,7 +42,6 @@ def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:
     """Copy and track one parent's exact recursive reviewed include closure."""
-
     parent_relative = Path(relative)
     errors: list[str] = []
     expanded = module._expanded_source_manifest_paths(
@@ -169,18 +168,14 @@ def canonical_models() -> list[dict]:
 
 
 def copy_stable_generation_diagnostics_fixture(
-    tmp_path: Path,
+    tmp_path: Path, module
 ) -> tuple[Path, Path]:
-    destinations = []
-    for relative in (
+    relatives = (
         Path("crates/iroha_core/src/state.rs"),
         Path("crates/iroha_core/src/state/diagnostic_state_generation.rs"),
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
-        destinations.append(destination)
-    return destinations[0], destinations[1]
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, set(relatives))
+    return tmp_path / relatives[0], tmp_path / relatives[1]
 
 
 def validate_stable_generation_diagnostics_fixture(
@@ -202,7 +197,6 @@ def canonical_kura_retention_contract() -> dict:
 
 def copy_kura_retention_fixture(tmp_path: Path, module) -> dict:
     """Copy every file consumed by the isolated Kura retention validator."""
-
     contract = canonical_kura_retention_contract()
     relatives = {
         module.FORMAL_RELATIVE / f"{contract['module']}.tla",
@@ -286,7 +280,10 @@ def test_kura_replica_retention_contract_rejects_relayed_ingress_drift(
 ) -> None:
     module = load_checker()
     contract = copy_kura_retention_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    )
     replace_once(
         path,
         "authenticated_via.as_ref() != Some(&advertised_keeper)",
@@ -471,7 +468,6 @@ def test_kura_replica_retention_contract_rejects_unbound_start_drift(
 
 def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
     """Copy every file consumed by the isolated layout-contract validator."""
-
     relatives = {
         module.FORMAL_RELATIVE / f"{contract['module']}.tla",
         module.FORMAL_RELATIVE / contract["positive_config"],
@@ -516,7 +512,6 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 def replace_once_after(path: Path, anchor: str, old: str, new: str) -> None:
     """Replace one token after an exact enclosing-item anchor."""
-
     source = path.read_text(encoding="utf-8")
     anchor_offset = source.find(anchor)
     assert anchor_offset >= 0, f"fixture cannot find {anchor!r} in {path}"
@@ -530,7 +525,6 @@ def replace_once_after(path: Path, anchor: str, old: str, new: str) -> None:
 
 def swap_ordered_once(path: Path, earlier: str, later: str) -> None:
     """Swap one ordered token pair while retaining both source anchors."""
-
     source = path.read_text(encoding="utf-8")
     earlier_offset = source.find(earlier)
     assert earlier_offset >= 0, f"fixture cannot find {earlier!r} in {path}"
@@ -655,10 +649,7 @@ def copy_native_exact_object_prune_fixture(
         Path(relative)
         for relative, _, _, _ in module.NATIVE_EXACT_OBJECT_PRUNE_BINDINGS
     }
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -684,10 +675,7 @@ def copy_native_participant_classifier_fixture(
             module.NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS
         )
     }
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -699,7 +687,6 @@ def validate_native_participant_classifier_fixture(
         tmp_path, models, errors
     )
     return tuple(errors)
-
 
 
 def copy_queue_plan_pending_membership_fixture(
@@ -716,10 +703,11 @@ def copy_queue_plan_pending_membership_fixture(
         Path(relative)
         for relative, _, _ in module.QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS
     )
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    relatives.update(
+        Path(row[0])
+        for row in module.QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -888,6 +876,23 @@ def test_queue_plan_pending_membership_contract_rejects_visible_native_prefix(
     ), errors
 
 
+def assert_inflight_order_drift_rejected(
+    tmp_path: Path, earlier: str, later: str,
+    rejected_token: str, required_scope: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        required_scope in error
+        and f"missing or reorders token {rejected_token!r}" in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("symbol", "token"),
     (
@@ -998,7 +1003,7 @@ def test_queue_plan_pending_membership_contract_rejects_decode_before_bound(
     swap_ordered_once_after(
         path,
         "fn decode_exact_queue_plan_pending_route_member_marker(",
-        "if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {",
+        "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
         "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
     )
     errors = validate_queue_plan_pending_membership_fixture(
@@ -1571,8 +1576,12 @@ def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     ownership_guard = "(before.carrier.kura_active & projection.actor) != 0u128"
-    replace_once(path, ownership_guard, "projection.actor != 0u128")
-    replace_once(path, ownership_guard, "projection.actor != 0u128")
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY\n                )",
+        ownership_guard,
+        "projection.actor != 0u128",
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1620,8 +1629,12 @@ def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(
         "after.session.ready_authorized "
         "== (before.session.ready_authorized | projection.actor)"
     )
-    replace_once(path, ready_guard, weakened)
-    replace_once(path, ready_guard, weakened)
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY\n                )",
+        ready_guard,
+        weakened,
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1638,8 +1651,12 @@ def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     retirement_guard = "!before.release.kura_retired"
-    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
-    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+        retirement_guard,
+        "before.release.kura_retired == before.release.kura_retired",
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1917,11 +1934,12 @@ def test_inflight_layout_contract_rejects_partial_ordinary_carrier_filter(
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_candidate.rs"
     replace_once(
         path,
-        "                certified_execution_selected,\n                report,\n            ) {\n",
-        "                certified_execution_selected\n"
-        "                    && transaction.creation_time() >= Duration::from_millis(1_000),\n"
-        "                report,\n"
-        "            ) {\n",
+        "if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {",
+        "if record_ordinary_execution_carrier_exclusion(\n"
+        "    certified_execution_selected\n"
+        "        && transaction.creation_time() >= Duration::from_millis(1_000),\n"
+        "    report,\n"
+        ") {",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
@@ -2000,10 +2018,10 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
             "matches!(self, Self::Any)",
         ),
         (
-            "proposal_state.heartbeat_only = None",
-            "proposal_state.heartbeat_only = proposal_state.heartbeat_only",
-            "claim_certified_execution_proposal_turn",
-            "proposal_state.heartbeat_only = None",
+            "work_provider: &mut *lane_work",
+            "work_provider: &mut *unchecked_lane_work",
+            "schedule_local_proposal",
+            "work_provider: &mut *lane_work",
         ),
     ),
 )
@@ -2554,17 +2572,10 @@ def test_inflight_layout_contract_rejects_revalidate_consume_apply_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "IndexedReservationReplayState::apply_checked_transition" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "IndexedReservationReplayState::apply_checked_transition",
+    )
 
 
 @pytest.mark.parametrize(
@@ -2787,17 +2798,10 @@ def test_inflight_layout_contract_rejects_append_publication_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "LaneQueueReservationJournal::append_durable" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "LaneQueueReservationJournal::append_durable",
+    )
 
 
 @pytest.mark.parametrize(
@@ -2825,17 +2829,10 @@ def test_inflight_layout_contract_rejects_compaction_publication_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "LaneQueueReservationJournal::compact_if_needed" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "LaneQueueReservationJournal::compact_if_needed",
+    )
 
 
 def test_inflight_layout_contract_rejects_capability_restart_test_name_drift(
@@ -2984,7 +2981,7 @@ def test_stable_generation_diagnostics_rejects_unwrapped_projection(
     consumer_anchor: str,
 ) -> None:
     module = load_checker()
-    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path, module)
     replace_once_after(
         state,
         consumer_anchor,

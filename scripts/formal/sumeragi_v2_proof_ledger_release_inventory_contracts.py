@@ -254,8 +254,8 @@ def _production_liveness_release_inventory_errors(
 
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
-        ("python", 62),
-        ("javascript", 60),
+        ("python", 63),
+        ("javascript", 61),
         ("swift", 4),
         ("kotlin", 6),
         ("java", 5),
@@ -402,11 +402,11 @@ def _production_liveness_release_inventory_errors(
         )
 
     canonical_sdk_diagnostics_suites = (
-        ("python", 121),
+        ("python", 129),
         ("javascript", 88),
-        ("swift", 33),
-        ("kotlin", 42),
-        ("java", 41),
+        ("swift", 34),
+        ("kotlin", 43),
+        ("java", 42),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -1067,6 +1067,7 @@ def _production_liveness_release_inventory_errors(
                     successor_test,
                     """
                     let mut proposal_subject = subject(0x72);
+                    proposal_subject.parent_block_hash = Some(parent_subject.block_hash);
                     let proposal_body = b"parent-auth-body".to_vec();
                     proposal_subject.payload_hash = Hash::new(&proposal_body);
                     let manifest = encode_payload(
@@ -1122,6 +1123,22 @@ def _production_liveness_release_inventory_errors(
                     """,
                     "embedded-certificate conflict authentication must bind "
                     "the later-view canonical payload fixture",
+                    errors,
+                )
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let mut unbound_qc_b = wire::QuorumCertificate {
+                        round: timeout_round,
+                        proposal_round: timeout_round,
+                        execution_commitment: execution_commitment(0x86),
+                        ..unbound_qc_a.clone()
+                    };
+                    authenticate_qc(&mut unbound_qc_b, &keys);
+                    """,
+                    "timeout-group commitment conflicts must use a structurally "
+                    "valid timeout-round certificate",
                     errors,
                 )
             if successor_test is not None:
@@ -1457,13 +1474,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
+        '  run_cargo test --locked --offline -p irohad --lib '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
+        '  run_cargo test --locked --offline -p irohad --lib '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -1779,16 +1796,16 @@ def _production_liveness_release_inventory_errors(
                 )
             expected_receipt_component_sha256 = {
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-                    "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+                    "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "d57f1fac4c07849e8a377a0d0ce4fdba09aa20d1de35cf0cc8d7f0c191ebc786"
+                    "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+                    "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+                    "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1820,6 +1837,7 @@ def _production_liveness_release_inventory_errors(
                     "_sdk_suite_source_manifest",
                     "_test_count_from_log",
                     "_prebuilt_artifact_root",
+                    "_require_pruned_private_root",
                     "_prebuilt_release_roots",
                     "_prebuilt_directory",
                     "_publish_receipt_validation_ack",
@@ -1875,6 +1893,7 @@ def _production_liveness_release_inventory_errors(
                     "_runtime_tool_probe_evidence",
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
+                    "_require_pruned_build_roots",
                     "build_receipt",
                     "_iter_artifact_records",
                     "_capture_path_contract",
@@ -2149,8 +2168,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 319 core, 143 queue-journal, 13 configuration, eight data-model, "
-            "39\nTorii, one Torii-shared, and two integration.",
+            "tests: 321 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",
             "The G-UNIT static inventory checks establish exact "

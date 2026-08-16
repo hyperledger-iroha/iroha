@@ -8243,8 +8243,7 @@ mod tests {
     }
     #[test]
     fn non_zk_run_defers_memory_merkle_commit_until_root_is_requested() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.load_program(&store_program_with_mode(0, 0))
             .expect("program loads");
         let before = vm.memory.current_root();
@@ -8262,8 +8261,7 @@ mod tests {
     }
     #[test]
     fn zk_run_with_trace_collection_disabled_defers_memory_merkle_commit() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
             .expect("program loads");
         vm.set_zk_trace_enabled(false);
@@ -8282,8 +8280,7 @@ mod tests {
     }
     #[test]
     fn zk_trace_collection_still_commits_memory_merkle_root_before_returning() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
             .expect("program loads");
         let before = vm.memory.current_root();
@@ -8306,6 +8303,10 @@ mod tests {
         let hash: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new([]).into();
         tlv.extend_from_slice(&hash);
         tlv
+    }
+    fn quiet_vm(gas_limit: u64) -> IVM {
+        set_banner_enabled(false);
+        IVM::new(gas_limit)
     }
     fn program_with_literal_prefix() -> (Vec<u8>, usize) {
         let mut bytes = ProgramMetadata::default().encode();
@@ -8497,28 +8498,16 @@ mod tests {
         let mut payload_mutation = original.clone();
         payload_mutation[metadata_len + 16 + 8] ^= 1;
         let original_hash = crate::metadata::contract_code_hash(&original);
-        assert_ne!(
-            crate::metadata::contract_code_hash(&kind_mutation),
-            original_hash
-        );
-        assert_ne!(
-            crate::metadata::contract_code_hash(&payload_mutation),
-            original_hash
-        );
+        for mutation in [&kind_mutation, &payload_mutation] {
+            assert_ne!(crate::metadata::contract_code_hash(mutation), original_hash);
+        }
     }
     #[test]
-    fn indexed_i64_out_of_range_is_rejected_at_load() {
-        set_banner_enabled(false);
-        let program = program_with_indexed_i64(7, 1);
-        let mut vm = IVM::new(u64::MAX);
-        assert!(matches!(
-            vm.load_program(&program),
-            Err(VMError::InvalidMetadata)
-        ));
-    }
-    #[test]
-    fn indexed_literal_opcode_kind_mismatch_is_rejected_at_load() {
-        set_banner_enabled(false);
+    fn indexed_program_metadata_rejections_are_fail_closed() {
+        let mut case_groups = vec![(
+            "indexed_i64_out_of_range_is_rejected_at_load",
+            vec![program_with_indexed_i64(7, 1)],
+        )];
         let (mut pointer_program, _) = program_with_indexed_literal(0);
         let pointer_code = pointer_program.len() - 8;
         let ldi64 = crate::encoding::wide::encode_literal(instruction::wide::memory::LDI64, 5, 0);
@@ -8527,17 +8516,10 @@ mod tests {
         let scalar_code = scalar_program.len() - 8;
         let ldlit = crate::encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 5, 0);
         scalar_program[scalar_code..scalar_code + 4].copy_from_slice(&ldlit.to_le_bytes());
-        for program in [pointer_program, scalar_program] {
-            let mut vm = IVM::new(u64::MAX);
-            assert!(matches!(
-                vm.load_program(&program),
-                Err(VMError::InvalidMetadata)
-            ));
-        }
-    }
-    #[test]
-    fn indexed_i64_rejects_unknown_kind_and_wrong_length() {
-        set_banner_enabled(false);
+        case_groups.push((
+            "indexed_literal_opcode_kind_mismatch_is_rejected_at_load",
+            vec![pointer_program, scalar_program],
+        ));
         let metadata_len = ProgramMetadata::default().encode().len();
         let mut unknown_kind = program_with_indexed_i64(7, 0);
         let descriptor = metadata_len + 16;
@@ -8551,55 +8533,34 @@ mod tests {
         long[metadata_len + 8..metadata_len + 12].copy_from_slice(&3u32.to_le_bytes());
         let data_end = metadata_len + 16 + 8 + 8;
         long.splice(data_end..data_end, [0; 4]);
-        for program in [unknown_kind, short, long] {
-            let mut vm = IVM::new(u64::MAX);
-            assert!(matches!(
-                vm.load_program(&program),
-                Err(VMError::InvalidMetadata)
-            ));
-        }
-    }
-    #[test]
-    fn indexed_literal_out_of_range_is_rejected_at_load() {
-        set_banner_enabled(false);
-        let (program, _) = program_with_indexed_literal(1);
-        let mut vm = IVM::new(u64::MAX);
-        assert!(matches!(
-            vm.load_program(&program),
-            Err(VMError::InvalidMetadata)
+        case_groups.push((
+            "indexed_i64_rejects_unknown_kind_and_wrong_length",
+            vec![unknown_kind, short, long],
         ));
-    }
-    #[test]
-    fn indexed_literal_table_target_must_point_into_typed_data() {
-        set_banner_enabled(false);
+        case_groups.push((
+            "indexed_literal_out_of_range_is_rejected_at_load",
+            vec![program_with_indexed_literal(1).0],
+        ));
         let (mut program, _) = program_with_indexed_literal(0);
         let entry_start = ProgramMetadata::default().encode().len() + 16;
         program[entry_start..entry_start + 8].copy_from_slice(&0u64.to_le_bytes());
-        let mut vm = IVM::new(u64::MAX);
-        assert!(matches!(
-            vm.load_program(&program),
-            Err(VMError::InvalidMetadata)
+        case_groups.push((
+            "indexed_literal_table_target_must_point_into_typed_data",
+            vec![program],
         ));
-    }
-    #[test]
-    fn indexed_literal_table_rejects_duplicate_and_reordered_targets() {
-        set_banner_enabled(false);
         let (canonical, entries_start, offsets) = program_with_two_indexed_literals();
+        let mut duplicate_and_reordered = Vec::new();
         for entries in [[offsets[0], offsets[0]], [offsets[1], offsets[0]]] {
             let mut program = canonical.clone();
             program[entries_start..entries_start + 8].copy_from_slice(&entries[0].to_le_bytes());
             program[entries_start + 8..entries_start + 16]
                 .copy_from_slice(&entries[1].to_le_bytes());
-            let mut vm = IVM::new(u64::MAX);
-            assert!(matches!(
-                vm.load_program(&program),
-                Err(VMError::InvalidMetadata)
-            ));
+            duplicate_and_reordered.push(program);
         }
-    }
-    #[test]
-    fn indexed_literal_table_rejects_gaps_interior_targets_and_bad_pointer_hashes() {
-        set_banner_enabled(false);
+        case_groups.push((
+            "indexed_literal_table_rejects_duplicate_and_reordered_targets",
+            duplicate_and_reordered,
+        ));
         let (canonical, entries_start, offsets) = program_with_two_indexed_literals();
         let mut leading_gap = canonical.clone();
         leading_gap[entries_start..entries_start + 8]
@@ -8610,12 +8571,20 @@ mod tests {
         let (mut bad_hash, _) = program_with_indexed_literal(0);
         let hash_byte = ProgramMetadata::default().encode().len() + 16 + 8 + 7;
         bad_hash[hash_byte] ^= 1;
-        for program in [leading_gap, interior_target, bad_hash] {
-            let mut vm = IVM::new(u64::MAX);
-            assert!(matches!(
-                vm.load_program(&program),
-                Err(VMError::InvalidMetadata)
-            ));
+        case_groups.push((
+            "indexed_literal_table_rejects_gaps_interior_targets_and_bad_pointer_hashes",
+            vec![leading_gap, interior_target, bad_hash],
+        ));
+        assert_eq!(case_groups.len(), 7, "indexed admission case inventory");
+        set_banner_enabled(false);
+        for (case_id, programs) in case_groups {
+            for program in programs {
+                let mut vm = IVM::new(u64::MAX);
+                assert!(
+                    matches!(vm.load_program(&program), Err(VMError::InvalidMetadata)),
+                    "indexed admission case {case_id} did not fail closed"
+                );
+            }
         }
     }
     #[test]
@@ -8729,8 +8698,7 @@ mod tests {
     }
     #[test]
     fn runtime_template_geometry_mismatch_never_replaces_the_memory_image() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
@@ -8759,8 +8727,7 @@ mod tests {
     }
     #[test]
     fn runtime_template_rejects_a_different_heap_authority() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
@@ -8943,8 +8910,7 @@ mod tests {
     }
     #[test]
     fn load_program_rejects_non_v1_abi_version() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
         assert_eq!(program.len(), crate::HEADER_SIZE);
         program[16] = 2;
@@ -8956,8 +8922,7 @@ mod tests {
     }
     #[test]
     fn recompute_input_bump_handles_empty_tlv() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let tlv = empty_blob_tlv();
         vm.memory.preload_input(0, &tlv).expect("preload empty TLV");
         let mut program = ProgramMetadata::default().encode();
@@ -8975,8 +8940,7 @@ mod tests {
     }
     #[test]
     fn alloc_host_tlv_prefers_input_when_space_is_available() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let tlv = empty_blob_tlv();
         let ptr = vm.alloc_host_tlv(&tlv).expect("allocate host TLV");
         assert!(
@@ -8992,8 +8956,7 @@ mod tests {
     }
     #[test]
     fn alloc_host_tlv_spills_to_heap_after_input_fills() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let filler = vec![0u8; Memory::INPUT_SIZE as usize];
         vm.alloc_input_tlv(&filler)
             .expect("fill the input allocator exactly");
@@ -9009,8 +8972,7 @@ mod tests {
     }
     #[test]
     fn alloc_host_tlv_spills_when_input_tail_cannot_fit_next_tlv() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let tlv = empty_blob_tlv();
         let filler = vec![0u8; Memory::INPUT_SIZE as usize - (tlv.len() - 1)];
         vm.alloc_input_tlv(&filler)
@@ -9028,8 +8990,7 @@ mod tests {
     }
     #[test]
     fn alloc_host_tlv_propagates_out_of_memory_when_heap_spill_cannot_fit() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let filler = vec![0u8; Memory::INPUT_SIZE as usize];
         vm.alloc_input_tlv(&filler)
             .expect("fill the input allocator exactly");
@@ -9072,8 +9033,7 @@ mod tests {
     }
     #[test]
     fn owned_tlv_validation_rejects_unallocated_heap_bytes() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         let tlv = empty_blob_tlv();
         vm.store_bytes(Memory::HEAP_START, &tlv)
             .expect("write well-formed bytes into unallocated heap capacity");
@@ -9115,8 +9075,7 @@ mod tests {
     }
     #[test]
     fn argument_decode_escrow_requires_the_exact_prepaid_cost() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(100);
+        let mut vm = quiet_vm(100);
         vm.prepay_argument_decode(40)
             .expect("escrow argument decode gas");
         assert_eq!(vm.remaining_gas(), 60);
@@ -9495,8 +9454,7 @@ seiyaku Demo {
     }
     #[test]
     fn generic_abort_cannot_inherit_a_contract_error_code() {
-        set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = quiet_vm(u64::MAX);
         vm.set_register(10, 18);
         vm.request_abort();
         assert_eq!(vm.contract_abort_code, None);

@@ -43,9 +43,6 @@ evidence_signer = importlib.util.module_from_spec(SIGNER_SPEC)
 SIGNER_SPEC.loader.exec_module(evidence_signer)  # type: ignore[misc]
 
 
-
-
-
 KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS = (
     device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS
 )
@@ -1153,6 +1150,10 @@ def write_candidate_binding_v2(
             "source_commit": source_commit,
             "source_tree_sha256": source_tree_sha256,
             "source_repo_dirty": False,
+            "reviewed_source_closure_descriptor_sha256": "6" * 64,
+            "authenticated_source_seal_projection_sha256": "7" * 64,
+            "reviewed_cargo_binary_sha256": "8" * 64,
+            "reviewed_rustc_binary_sha256": "9" * 64,
             "generation": generation,
             "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
             "generation_memory_enforcement_profile": (
@@ -21832,7 +21833,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             self.assertIn("--json-out must not be hardlinked", rendered)
             self.assertNotIn(str(alias_target), rendered)
             self.assertNotIn("[device-lab] wrote summary", rendered)
-
 
 
 

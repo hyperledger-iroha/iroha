@@ -1,3 +1,229 @@
+macro_rules! signed_lifecycle_attempt_fixture {
+    (
+        $context:literal;
+        $network_id:ident, $epoch:ident, $height_context_id:ident,
+        $payload_template:ident, $local_peer:ident, $signer:ident;
+        $payload:ident, $reservation_group:ident, $binding:ident, $activated:ident,
+        $activate:ident, $prepared_activate:ident, $live_activate:ident,
+        $authentication_facts:ident, $sign_cursor:ident
+    ) => {
+        let (reservation_owner_hash, proposal_identity_hash) =
+            autonomous_lane_reservation_identity_hashes_for_proposal(
+                $network_id,
+                $height_context_id,
+                $epoch,
+                &$payload_template.origin_proposal,
+                &$local_peer,
+            )
+            .expect(concat!($context, ": derive reservation identities"));
+        let mut reservation_keys = $payload_template.reservation_keys.clone();
+        for reservation in &mut reservation_keys {
+            reservation.reservation_owner_hash = reservation_owner_hash;
+            reservation.proposal_identity_hash = proposal_identity_hash;
+        }
+        let $payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            $network_id,
+            $epoch,
+            $payload_template.origin_proposal.clone(),
+            $payload_template.entrypoints.clone(),
+            reservation_keys,
+            $payload_template.routing_plans.clone(),
+            $payload_template.native_amx_receipts.clone(),
+            $local_peer.clone(),
+            $signer.private_key(),
+        )
+        .expect(concat!($context, ": construct signed payload"));
+        let $reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            $payload.reservation_keys.iter(),
+        )
+        .expect(concat!($context, ": bind reservation group"));
+        let $binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+            $height_context_id,
+            1,
+            &$payload,
+            $reservation_group,
+            &$local_peer,
+        )
+        .expect(concat!($context, ": bind lifecycle attempt"));
+        let before_activate = ProductionInFlightFirstReleaseStateProjection {
+            validator_count: 1,
+            producer: 1,
+            producer_selected_owner: 1,
+            replicated_carrier_owners: 0,
+            payload_binding_a: 1,
+            binding_a: canonical_lane_queue_reservation_group_identity_projection(
+                $reservation_group,
+            ),
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count: $reservation_group.reservation_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: 1,
+                producer_alive: true,
+                ..ProductionInFlightFirstReleaseSessionProjection::default()
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut $activated = before_activate;
+        $activated.carrier.kura_active = 1;
+        let $activate = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            actor: 1,
+            target: 0,
+            before: before_activate,
+            after: $activated,
+        };
+        let $sign_cursor =
+            |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
+                let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+                    sequence,
+                    previous_cursor_hash,
+                    $binding.clone(),
+                    phase,
+                    $local_peer.clone(),
+                )
+                .expect(concat!($context, ": construct lifecycle cursor"));
+                let preimage = unsigned
+                    .signing_preimage()
+                    .expect(concat!($context, ": encode cursor signing preimage"));
+                let signature = Signature::try_new($signer.private_key(), &preimage)
+                    .expect(concat!($context, ": sign lifecycle cursor"));
+                unsigned
+                    .finalize(
+                        <[u8; 96]>::try_from(signature.payload())
+                            .expect(concat!($context, ": require 96-byte signature")),
+                        &$payload.origin_proposal.descriptor.validator_set,
+                    )
+                    .expect(concat!($context, ": finalize lifecycle cursor"))
+            };
+        let $prepared_activate = $sign_cursor(
+            1,
+            None,
+            AutonomousLifecycleCursorPhaseV2::prepared(1, $activate)
+                .expect(concat!($context, ": construct Prepared ActivateKura")),
+        );
+        let $live_activate = $sign_cursor(
+            2,
+            Some($prepared_activate.cursor_hash()),
+            AutonomousLifecycleCursorPhaseV2::live(1, $activated)
+                .expect(concat!($context, ": construct Live ActivateKura")),
+        );
+        let $authentication_facts = ($height_context_id, 1, 1, $reservation_group);
+    };
+}
+
+macro_rules! install_default_lane_markers_for_lifecycle_test {
+    ($context:literal; $kura:ident, $lane_config:ident $(,)?) => {
+        for entry in $lane_config.entries() {
+            let incarnation = Hash::new(
+                format!(
+                    "kura-lane-incarnation:{}:{}",
+                    entry.lane_id.as_u32(),
+                    entry.dataspace_id.as_u64()
+                )
+                .as_bytes(),
+            );
+            $kura
+                .install_lane_incarnation_marker_for_test(entry, incarnation, 0)
+                .expect(concat!($context, ": install lifecycle lane marker"));
+        }
+    };
+}
+
+macro_rules! reopen_single_lifecycle_bootstrap {
+    (
+        $context:literal; $config:ident, $lane_config:ident, $network_id:ident,
+        $local_peer:ident, $lane:ident, $payload:ident, $expected_stage:ident;
+        $kura:ident, $generation:ident, $authority:ident
+    ) => {
+        let ($kura, _) =
+            Kura::new(&$config, &$lane_config).expect(concat!($context, ": reopen Kura"));
+        $kura
+            .bind_local_peer_id($local_peer.clone())
+            .expect(concat!($context, ": bind local peer"));
+        let $generation = $kura
+            .claim_autonomous_lifecycle_process_generation($network_id, &$local_peer)
+            .expect(concat!($context, ": claim process generation"));
+        let mut inventory = $kura
+            .autonomous_lifecycle_bootstrap_recovery_inventory(
+                &$generation,
+                $lane.lane_id,
+                $lane.dataspace_id,
+                $payload.origin_proposal.descriptor.lane_incarnation,
+            )
+            .expect(concat!($context, ": inventory lifecycle bootstrap"));
+        assert_eq!(
+            inventory.len(),
+            1,
+            concat!($context, ": expected one lifecycle bootstrap")
+        );
+        let $authority = inventory
+            .pop()
+            .expect(concat!($context, ": missing lifecycle bootstrap authority"));
+        assert_eq!(
+            $authority.stage(),
+            AutonomousLifecycleBootstrapRecoveryStage::$expected_stage,
+            concat!($context, ": lifecycle bootstrap stage")
+        );
+    };
+}
+
+macro_rules! prepare_terminal_outcome {
+    ($kura:ident, $lane:ident, $payload:ident, $source:ident) => {{
+        let _prune_guard = $kura.prune_lock.lock();
+        $kura
+            .ensure_prune_recovery_not_required()
+            .expect("terminal fixture has no prune recovery");
+        let _canonical_chain_guard = $kura.canonical_chain_lock.lock();
+        let _geometry_guard = $kura.lane_geometry_lock.lock();
+        let entry = $kura
+            .lane_storage_entry($lane.lane_id)
+            .expect("terminal fixture lane entry");
+        let _sidecar_guard = $kura.sidecar_lock.lock();
+        $kura.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
+            &entry, &$payload, $source,
+        )
+    }};
+}
+
+fn lifecycle_terminal_steady_capacity(
+    kura: &Kura,
+    physical_bytes: u64,
+    global_terminal_reservations: u64,
+    post_wsv_reservations: u64,
+    context: &str,
+) -> u64 {
+    let (persisted_count, unindexed_bytes) = kura
+        .persisted_count_and_unindexed_bytes()
+        .unwrap_or_else(|error| panic!("{context}: measure durable frontier: {error}"));
+    let pending_canonical_bytes = kura
+        .pending_block_bytes(persisted_count, unindexed_bytes)
+        .unwrap_or_else(|error| panic!("{context}: measure pending canonical bytes: {error}"));
+    let certified_bundle_reservations = kura
+        .certified_bundle_capacity_reserved_bytes()
+        .unwrap_or_else(|error| {
+            panic!("{context}: measure certified-bundle reservations: {error}")
+        });
+    physical_bytes
+        .checked_add(pending_canonical_bytes)
+        .and_then(|bytes| bytes.checked_add(global_terminal_reservations))
+        .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
+        .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
+        .and_then(|bytes| {
+            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
+        })
+        .unwrap_or_else(|| panic!("{context}: steady capacity fits u64"))
+}
+
 #[test]
 fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let temp_dir = TempDir::new().expect("bootstrap temp dir");
@@ -12,129 +238,20 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         Hash::new(b"kura-autonomous-bootstrap-height-context"),
     ));
     let local_peer = PeerId::new(signer.public_key().clone());
-    let (reservation_owner_hash, proposal_identity_hash) =
-        autonomous_lane_reservation_identity_hashes_for_proposal(
-            network_id,
-            height_context_id,
-            epoch,
-            &payload_template.origin_proposal,
-            &local_peer,
-        )
-        .expect("derive bootstrap reservation identities");
-    let mut reservation_keys = payload_template.reservation_keys.clone();
-    for reservation in &mut reservation_keys {
-        reservation.reservation_owner_hash = reservation_owner_hash;
-        reservation.proposal_identity_hash = proposal_identity_hash;
-    }
-    let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        network_id,
-        epoch,
-        payload_template.origin_proposal.clone(),
-        payload_template.entrypoints.clone(),
-        reservation_keys,
-        payload_template.routing_plans.clone(),
-        payload_template.native_amx_receipts.clone(),
-        local_peer.clone(),
-        signer.private_key(),
-    )
-    .expect("construct bootstrap-bound payload");
-    let reservation_group =
-        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
-            .expect("bind bootstrap reservation group");
-    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
-        height_context_id,
-        1,
-        &payload,
-        reservation_group,
-        &local_peer,
-    )
-    .expect("bind bootstrap lifecycle attempt");
-    let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
-    let before_activate = ProductionInFlightFirstReleaseStateProjection {
-        validator_count: 1,
-        producer: 1,
-        producer_selected_owner: 1,
-        replicated_carrier_owners: 0,
-        payload_binding_a: 1,
-        binding_a,
-        queue: ProductionInFlightFirstReleaseQueueProjection {
-            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
-            selected_count: reservation_group.reservation_count,
-            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-        },
-        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
-        session: ProductionInFlightFirstReleaseSessionProjection {
-            bodies: 1,
-            producer_alive: true,
-            ..ProductionInFlightFirstReleaseSessionProjection::default()
-        },
-        history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
-            ..ProductionInFlightFirstReleaseHistoryProjection::default()
-        },
-        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
-        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
-    };
-    let mut activated = before_activate;
-    activated.carrier.kura_active = 1;
-    let activate = ProductionInFlightFirstReleaseTransitionProjection {
-        action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
-        actor: 1,
-        target: 0,
-        before: before_activate,
-        after: activated,
-    };
+    signed_lifecycle_attempt_fixture!(
+        "bootstrap lifecycle fixture";
+        network_id, epoch, height_context_id, payload_template, local_peer, signer;
+        payload, reservation_group, binding, activated, activate, prepared_activate,
+        live_activate, authentication_facts, sign_cursor
+    );
     assert!(check_production_in_flight_first_release_transition(activate).is_some());
-    let sign_cursor = |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
-        let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
-            sequence,
-            previous_cursor_hash,
-            binding.clone(),
-            phase,
-            local_peer.clone(),
-        )
-        .expect("construct bootstrap lifecycle cursor");
-        let preimage = unsigned
-            .signing_preimage()
-            .expect("encode bootstrap cursor signing preimage");
-        let signature = Signature::try_new(signer.private_key(), &preimage)
-            .expect("sign bootstrap lifecycle cursor");
-        unsigned
-            .finalize(
-                <[u8; 96]>::try_from(signature.payload())
-                    .expect("BLS-normal bootstrap signature is exactly 96 bytes"),
-                &payload.origin_proposal.descriptor.validator_set,
-            )
-            .expect("finalize bootstrap lifecycle cursor")
-    };
-    let prepared_activate = sign_cursor(
-        1,
-        None,
-        AutonomousLifecycleCursorPhaseV2::prepared(1, activate)
-            .expect("construct signed Prepared ActivateKura"),
-    );
-    let live_activate = sign_cursor(
-        2,
-        Some(prepared_activate.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(1, activated)
-            .expect("construct signed Live ActivateKura successor"),
-    );
-    let authentication_facts = (height_context_id, 1, 1, reservation_group);
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated bootstrap Kura");
-    for entry in lane_config.entries() {
-        let incarnation = Hash::new(
-            format!(
-                "kura-lane-incarnation:{}:{}",
-                entry.lane_id.as_u32(),
-                entry.dataspace_id.as_u64()
-            )
-            .as_bytes(),
-        );
-        kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-            .expect("install explicit authenticated bootstrap lane marker");
-    }
+    install_default_lane_markers_for_lifecycle_test!(
+        "authenticated bootstrap";
+        kura,
+        lane_config
+    );
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
     drop(kura);
@@ -145,22 +262,39 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let generation_one = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim bootstrap signing generation");
-    let bootstrap_preimage = kura
-        .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
-            &generation_one,
+    let sign_bootstrap = |kura: &Kura, generation: &AutonomousLifecycleProcessGenerationClaim| {
+        let preimage = kura
+            .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
+                generation,
+                &payload,
+                binding.clone(),
+                prepared_activate.clone(),
+                live_activate.clone(),
+                authentication_facts,
+            )
+            .expect("build lifecycle bootstrap signature preimage");
+        let signature = <[u8; 96]>::try_from(
+            Signature::try_new(signer.private_key(), &preimage)
+                .expect("sign lifecycle bootstrap")
+                .payload(),
+        )
+        .expect("lifecycle bootstrap signature is exactly 96 bytes");
+        (preimage, signature)
+    };
+    let (bootstrap_preimage, bootstrap_signature) = sign_bootstrap(&kura, &generation_one);
+    let persist_bootstrap = |kura: &Kura,
+                             generation: &AutonomousLifecycleProcessGenerationClaim,
+                             signature: [u8; 96]| {
+        kura.persist_autonomous_lifecycle_bootstrap_for_tests(
+            generation,
             &payload,
             binding.clone(),
             prepared_activate.clone(),
             live_activate.clone(),
+            signature,
             authentication_facts,
         )
-        .expect("build full bootstrap signature preimage");
-    let bootstrap_signature = <[u8; 96]>::try_from(
-        Signature::try_new(signer.private_key(), &bootstrap_preimage)
-            .expect("sign full lifecycle bootstrap")
-            .payload(),
-    )
-    .expect("BLS-normal bootstrap signature is exactly 96 bytes");
+    };
     let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
         lane,
         temp_dir.path(),
@@ -168,16 +302,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         payload.origin_proposal.descriptor.proposal_height,
     );
     kura.fail_next_atomic_write_after_temporary_sync_for_test();
-    let crash_error = kura
-        .persist_autonomous_lifecycle_bootstrap_for_tests(
-            &generation_one,
-            &payload,
-            binding.clone(),
-            prepared_activate.clone(),
-            live_activate.clone(),
-            bootstrap_signature,
-            authentication_facts,
-        )
+    let crash_error = persist_bootstrap(&kura, &generation_one, bootstrap_signature)
         .err()
         .expect("inject bootstrap failure after temp fsync and before rename");
     let bootstrap_atomic_temp = match crash_error {
@@ -211,16 +336,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert!(!bootstrap_path.exists());
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind bootstrap local peer after crash recovery");
-    let authority = kura
-        .persist_autonomous_lifecycle_bootstrap_for_tests(
-            &generation_one,
-            &payload,
-            binding.clone(),
-            prepared_activate.clone(),
-            live_activate.clone(),
-            bootstrap_signature,
-            authentication_facts,
-        )
+    let authority = persist_bootstrap(&kura, &generation_one, bootstrap_signature)
         .expect("persist signed lifecycle bootstrap before payload mutation");
     assert_eq!(
         authority.stage(),
@@ -320,29 +436,11 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .last_mut()
         .expect("bootstrap encoding is non-empty");
     *tampered_byte ^= 0x80;
-    fs::write(&bootstrap_path, &tampered_bootstrap).expect("write tampered bootstrap");
-    assert!(
-        Kura::new(&config, &lane_config).is_err(),
-        "startup must reject bootstrap signature, canonical, or self-hash drift",
-    );
-    fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore canonical bootstrap");
     let canonical_bootstrap =
         Kura::decode_autonomous_lifecycle_bootstrap(&bootstrap_path, &bootstrap_bytes)
             .expect("decode canonical signed bootstrap");
     let mut corrupted_signature = canonical_bootstrap.clone();
     corrupted_signature.signature[0] ^= 0x40;
-    fs::write(
-        &bootstrap_path,
-        corrupted_signature
-            .encode_framed()
-            .expect("encode signature-corrupted bootstrap"),
-    )
-    .expect("write signature-corrupted bootstrap");
-    assert!(
-        Kura::new(&config, &lane_config).is_err(),
-        "startup must reject an exact-size corrupted bootstrap signature",
-    );
-    fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bootstrap after signature test");
     let mut substituted_source = canonical_bootstrap.clone();
     substituted_source.body.custody.source =
         AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive;
@@ -350,19 +448,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .body
         .canonical_hash()
         .expect("hash source-substituted bootstrap body");
-    fs::write(
-        &bootstrap_path,
-        substituted_source
-            .encode_framed()
-            .expect("encode source-substituted bootstrap"),
-    )
-    .expect("write source-substituted bootstrap");
-    assert!(
-        Kura::new(&config, &lane_config).is_err(),
-        "a ProducerQueue signature must not authorize another custody source",
-    );
-    fs::write(&bootstrap_path, &bootstrap_bytes)
-        .expect("restore bootstrap after source-substitution test");
     let mut corrupted_evidence = canonical_bootstrap.clone();
     corrupted_evidence.body.custody.evidence_hash =
         Hash::new(b"corrupted bootstrap custody evidence hash");
@@ -370,19 +455,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .body
         .canonical_hash()
         .expect("hash evidence-corrupted bootstrap body");
-    fs::write(
-        &bootstrap_path,
-        corrupted_evidence
-            .encode_framed()
-            .expect("encode evidence-corrupted bootstrap"),
-    )
-    .expect("write evidence-corrupted bootstrap");
-    assert!(
-        Kura::new(&config, &lane_config).is_err(),
-        "the full-body signature must reject custody evidence-hash substitution",
-    );
-    fs::write(&bootstrap_path, &bootstrap_bytes)
-        .expect("restore bootstrap after evidence-hash test");
     let wrong_local_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let mut wrong_signer_bootstrap = canonical_bootstrap.clone();
     wrong_signer_bootstrap.signature = <[u8; 96]>::try_from(
@@ -391,19 +463,48 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .payload(),
     )
     .expect("wrong BLS-normal bootstrap signature is exactly 96 bytes");
-    fs::write(
-        &bootstrap_path,
-        wrong_signer_bootstrap
-            .encode_framed()
-            .expect("encode wrong-signer bootstrap"),
-    )
-    .expect("write wrong-signer bootstrap");
-    assert!(
-        Kura::new(&config, &lane_config).is_err(),
-        "bootstrap signatures from another local key must fail closed",
-    );
-    fs::write(&bootstrap_path, &bootstrap_bytes)
-        .expect("restore bootstrap after wrong-signer test");
+    let rejected_bootstraps = [
+        (
+            tampered_bootstrap,
+            "startup must reject bootstrap signature, canonical, or self-hash drift",
+        ),
+        (
+            corrupted_signature
+                .encode_framed()
+                .expect("encode signature-corrupted bootstrap"),
+            "startup must reject an exact-size corrupted bootstrap signature",
+        ),
+        (
+            substituted_source
+                .encode_framed()
+                .expect("encode source-substituted bootstrap"),
+            "a ProducerQueue signature must not authorize another custody source",
+        ),
+        (
+            corrupted_evidence
+                .encode_framed()
+                .expect("encode evidence-corrupted bootstrap"),
+            "the full-body signature must reject custody evidence-hash substitution",
+        ),
+        (
+            wrong_signer_bootstrap
+                .encode_framed()
+                .expect("encode wrong-signer bootstrap"),
+            "bootstrap signatures from another local key must fail closed",
+        ),
+    ];
+    for (rejected_bytes, rejection_diagnostic) in rejected_bootstraps {
+        fs::write(&bootstrap_path, rejected_bytes).unwrap_or_else(|error| {
+            panic!("{rejection_diagnostic}: write rejected bootstrap fixture: {error}")
+        });
+        assert!(
+            Kura::new(&config, &lane_config).is_err(),
+            "{rejection_diagnostic}",
+        );
+        fs::write(&bootstrap_path, &bootstrap_bytes).unwrap_or_else(|error| {
+            panic!("{rejection_diagnostic}: restore canonical bootstrap: {error}")
+        });
+    }
     let process_generation_path =
         Kura::autonomous_lifecycle_process_generation_path_for(temp_dir.path());
     let generation_one_bytes =
@@ -497,32 +598,17 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         fs::remove_file(&symlink_target).expect("remove bootstrap symlink target");
         fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bootstrap after symlink test");
     }
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("bootstrap-only startup retains intent without mutating payload");
-    kura.bind_local_peer_id(local_peer.clone())
-        .expect("rebind bootstrap local peer");
-    let generation_two = kura
-        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim bootstrap-only recovery generation");
-    let mut inventory = kura
-        .autonomous_lifecycle_bootstrap_recovery_inventory(
-            &generation_two,
-            lane.lane_id,
-            lane.dataspace_id,
-            payload.origin_proposal.descriptor.lane_incarnation,
-        )
-        .expect("inventory bootstrap-only crash boundary");
-    assert_eq!(inventory.len(), 1);
-    assert_eq!(
-        inventory[0].stage(),
-        AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly,
+    reopen_single_lifecycle_bootstrap!(
+        "bootstrap-only crash boundary";
+        config, lane_config, network_id, local_peer, lane, payload, BootstrapOnly;
+        kura, _generation_two, authority
     );
     let wrong_height_context = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"wrong-bootstrap-height-context"),
     ));
     assert!(
         kura.authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
-            inventory.pop().expect("bootstrap authority"),
+            authority,
             (wrong_height_context, 1, 1, reservation_group),
         )
         .is_err(),
@@ -531,26 +617,10 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact payload after signed bootstrap");
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("payload-durable bootstrap crash boundary is restartable");
-    kura.bind_local_peer_id(local_peer.clone())
-        .expect("rebind payload-durable local peer");
-    let generation_three = kura
-        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim payload-durable recovery generation");
-    let authority = kura
-        .autonomous_lifecycle_bootstrap_recovery_inventory(
-            &generation_three,
-            lane.lane_id,
-            lane.dataspace_id,
-            payload.origin_proposal.descriptor.lane_incarnation,
-        )
-        .expect("inventory payload-durable crash boundary")
-        .pop()
-        .expect("payload-durable bootstrap authority");
-    assert_eq!(
-        authority.stage(),
-        AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
+    reopen_single_lifecycle_bootstrap!(
+        "payload-durable crash boundary";
+        config, lane_config, network_id, local_peer, lane, payload, PayloadDurable;
+        kura, _generation_three, authority
     );
     assert!(
         kura.delete_completed_autonomous_lifecycle_bootstrap(&authority)
@@ -566,26 +636,10 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("Prepared-durable bootstrap crash boundary is restartable");
-    kura.bind_local_peer_id(local_peer.clone())
-        .expect("rebind Prepared-durable local peer");
-    let generation_four = kura
-        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim Prepared-durable recovery generation");
-    let authority = kura
-        .autonomous_lifecycle_bootstrap_recovery_inventory(
-            &generation_four,
-            lane.lane_id,
-            lane.dataspace_id,
-            payload.origin_proposal.descriptor.lane_incarnation,
-        )
-        .expect("inventory Prepared-durable crash boundary")
-        .pop()
-        .expect("Prepared-durable bootstrap authority");
-    assert_eq!(
-        authority.stage(),
-        AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+    reopen_single_lifecycle_bootstrap!(
+        "Prepared-durable crash boundary";
+        config, lane_config, network_id, local_peer, lane, payload, PreparedDurable;
+        kura, _generation_four, authority
     );
     assert!(
         kura.delete_completed_autonomous_lifecycle_bootstrap(&authority)
@@ -601,26 +655,10 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("Live-durable bootstrap crash boundary is restartable");
-    kura.bind_local_peer_id(local_peer.clone())
-        .expect("rebind Live-durable local peer");
-    let generation_five = kura
-        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim Live-durable recovery generation");
-    let authority = kura
-        .autonomous_lifecycle_bootstrap_recovery_inventory(
-            &generation_five,
-            lane.lane_id,
-            lane.dataspace_id,
-            payload.origin_proposal.descriptor.lane_incarnation,
-        )
-        .expect("inventory Live-durable crash boundary")
-        .pop()
-        .expect("Live-durable bootstrap authority");
-    assert_eq!(
-        authority.stage(),
-        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+    reopen_single_lifecycle_bootstrap!(
+        "Live-durable crash boundary";
+        config, lane_config, network_id, local_peer, lane, payload, LiveDurable;
+        kura, generation_five, authority
     );
     assert!(
         kura.authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(authority)
@@ -653,16 +691,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert_eq!(completion.cursor(), &live_activate);
     assert!(!bootstrap_path.exists());
     assert!(
-        kura.persist_autonomous_lifecycle_bootstrap_for_tests(
-            &generation_five,
-            &payload,
-            binding.clone(),
-            prepared_activate.clone(),
-            live_activate.clone(),
-            bootstrap_signature,
-            authentication_facts,
-        )
-        .is_err(),
+        persist_bootstrap(&kura, &generation_five, bootstrap_signature).is_err(),
         "completed or historical bootstrap bytes must never be replayed around durable state",
     );
     let (current, takeover_lease) = completion.into_cursor_read().into_parts();
@@ -768,33 +797,14 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
             .expect("claim terminal-bootstrap generation");
         install_autonomous_lane_marker_for_kura(&terminal_kura, &lane_config, &payload);
-        let terminal_bootstrap_preimage = terminal_kura
-            .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
-                &terminal_generation,
-                &payload,
-                binding.clone(),
-                prepared_activate.clone(),
-                live_activate.clone(),
-                authentication_facts,
-            )
-            .expect("build terminal-bootstrap signature preimage");
-        let terminal_bootstrap_signature = <[u8; 96]>::try_from(
-            Signature::try_new(signer.private_key(), &terminal_bootstrap_preimage)
-                .expect("sign terminal lifecycle bootstrap")
-                .payload(),
+        let (_, terminal_bootstrap_signature) =
+            sign_bootstrap(&terminal_kura, &terminal_generation);
+        let mut terminal_authority = persist_bootstrap(
+            &terminal_kura,
+            &terminal_generation,
+            terminal_bootstrap_signature,
         )
-        .expect("BLS-normal terminal-bootstrap signature is exactly 96 bytes");
-        let mut terminal_authority = terminal_kura
-            .persist_autonomous_lifecycle_bootstrap_for_tests(
-                &terminal_generation,
-                &payload,
-                binding.clone(),
-                prepared_activate.clone(),
-                live_activate.clone(),
-                terminal_bootstrap_signature,
-                authentication_facts,
-            )
-            .expect("persist terminal lifecycle bootstrap");
+        .expect("persist terminal lifecycle bootstrap");
         if receipt_stage != AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly {
             assert_eq!(
                 terminal_kura
@@ -870,23 +880,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         let terminal_source =
             Kura::autonomous_lifecycle_terminal_source_from_merge_receipt(&receipt)
                 .expect("derive exact receipt terminal source");
-        let blocked = {
-            let _prune_guard = terminal_kura.prune_lock.lock();
-            terminal_kura
-                .ensure_prune_recovery_not_required()
-                .expect("terminal fixture has no prune recovery");
-            let _canonical_chain_guard = terminal_kura.canonical_chain_lock.lock();
-            let _geometry_guard = terminal_kura.lane_geometry_lock.lock();
-            let entry = terminal_kura
-                .lane_storage_entry(lane.lane_id)
-                .expect("terminal fixture lane entry");
-            let _sidecar_guard = terminal_kura.sidecar_lock.lock();
-            terminal_kura.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
-                &entry,
-                &payload,
-                terminal_source,
-            )
-        };
+        let blocked = prepare_terminal_outcome!(terminal_kura, lane, payload, terminal_source);
         let blocked = match blocked {
             Ok(_) => panic!("terminal outcome must wait at {receipt_stage:?}"),
             Err(error) => error,
@@ -928,23 +922,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         assert_eq!(terminal_inventory.len(), 1);
         assert_eq!(terminal_inventory[0].executable_payload(), &payload);
         assert_eq!(terminal_inventory[0].cursor(), Some(&live_activate));
-        let publishable = {
-            let _prune_guard = terminal_kura.prune_lock.lock();
-            terminal_kura
-                .ensure_prune_recovery_not_required()
-                .expect("terminal fixture has no prune recovery");
-            let _canonical_chain_guard = terminal_kura.canonical_chain_lock.lock();
-            let _geometry_guard = terminal_kura.lane_geometry_lock.lock();
-            let entry = terminal_kura
-                .lane_storage_entry(lane.lane_id)
-                .expect("terminal fixture lane entry");
-            let _sidecar_guard = terminal_kura.sidecar_lock.lock();
-            terminal_kura.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
-                &entry,
-                &payload,
-                terminal_source,
-            )
-        };
+        let publishable = prepare_terminal_outcome!(terminal_kura, lane, payload, terminal_source);
         if let Err(error) = publishable {
             panic!(
                 "receipt-terminal {receipt_stage:?} completion must leave a Pending-publishable Live unit: {error}"
@@ -1015,6 +993,25 @@ fn assert_exact_canonical_terminal_publication(
         );
     }
 }
+
+macro_rules! persist_exact_canonical_terminal_pending {
+    ($fixture:ident, $context:literal) => {{
+        let publication = $fixture
+            .kura
+            .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&$fixture.merge_entry)
+            .expect(concat!($context, ": persist Pending outcomes"))
+            .expect(concat!(
+                $context,
+                ": execution carrier has Pending outcomes"
+            ));
+        assert_exact_canonical_terminal_publication(
+            publication,
+            &$fixture.merge_entry,
+            &$fixture.reservation_groups,
+        );
+    }};
+}
+
 fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let temp_dir = TempDir::new().expect("canonical terminal capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1129,18 +1126,16 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let global_terminal_reservations = kura
         .autonomous_global_terminal_outcome_reserved_bytes()
         .expect("account globally reserved terminal slots");
-    let (persisted_count, unindexed_bytes) = kura
-        .persisted_count_and_unindexed_bytes()
-        .expect("measure pre-carrier durable frontier");
-    let pending_canonical_bytes = kura
-        .pending_block_bytes(persisted_count, unindexed_bytes)
-        .expect("measure pre-carrier pending canonical bytes");
     let post_wsv_reservations = kura
         .post_wsv_lane_artifact_budget_reserved_bytes()
         .expect("measure pre-carrier post-WSV reservations");
-    let certified_bundle_reservations = kura
-        .certified_bundle_capacity_reserved_bytes()
-        .expect("measure pre-carrier certified-bundle reservations");
+    let steady_capacity = lifecycle_terminal_steady_capacity(
+        &kura,
+        baseline_disk_usage,
+        global_terminal_reservations,
+        post_wsv_reservations,
+        "pre-carrier",
+    );
     let carrier_required = kura
         .block_required_bytes_for_budget(carrier.as_ref(), Some(&merge_entry), u64::MAX)
         .expect("account exact carrier and post-WSV components");
@@ -1150,15 +1145,8 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(carrier.as_ref(), Some(&merge_entry))
         .expect("account exact canonical association stage");
-    let admitted_limit = baseline_disk_usage
-        .checked_add(pending_canonical_bytes)
-        .and_then(|bytes| bytes.checked_add(global_terminal_reservations))
-        .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
-        .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
-        .and_then(|bytes| {
-            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-        })
-        .and_then(|bytes| bytes.checked_add(carrier_required))
+    let admitted_limit = steady_capacity
+        .checked_add(carrier_required)
         .and_then(|bytes| bytes.checked_add(merge_commit_required))
         .and_then(|bytes| bytes.checked_add(association_stage_required))
         .expect("original carrier capacity limit fits u64");
@@ -1245,28 +1233,13 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
         .collect::<Vec<_>>();
     assert!(budgets_before.iter().all(|budget| budget.0));
     assert!(fixture.outcome_paths.iter().all(|path| !path.exists()));
-    let (persisted_count, unindexed_bytes) = fixture
-        .kura
-        .persisted_count_and_unindexed_bytes()
-        .expect("measure pre-Pending durable frontier");
-    let pending_canonical_bytes = fixture
-        .kura
-        .pending_block_bytes(persisted_count, unindexed_bytes)
-        .expect("measure pre-Pending pending canonical bytes");
-    let certified_bundle_reservations = fixture
-        .kura
-        .certified_bundle_capacity_reserved_bytes()
-        .expect("measure pre-Pending certified-bundle reservations");
-    let exact_steady_required = fixture
-        .initial_disk_usage
-        .checked_add(pending_canonical_bytes)
-        .and_then(|bytes| bytes.checked_add(fixture.global_terminal_reservations))
-        .and_then(|bytes| bytes.checked_add(fixture.reserved_post_wsv_bytes))
-        .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
-        .and_then(|bytes| {
-            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-        })
-        .expect("exact pre-Pending steady capacity");
+    let exact_steady_required = lifecycle_terminal_steady_capacity(
+        &fixture.kura,
+        fixture.initial_disk_usage,
+        fixture.global_terminal_reservations,
+        fixture.reserved_post_wsv_bytes,
+        "pre-Pending",
+    );
     assert!(
         exact_steady_required <= fixture.admitted_limit,
         "materialized receipt/frontier components must fit the original carrier admission limit",
@@ -1290,15 +1263,9 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
     Arc::get_mut(&mut fixture.kura)
         .expect("capacity fixture Kura remains exclusive")
         .max_disk_usage_bytes = fixture.admitted_limit;
-    let publication = fixture
-        .kura
-        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&fixture.merge_entry)
-        .expect("the original carrier admission limit admits the complete Pending set")
-        .expect("execution-bearing carrier publishes Pending outcomes");
-    assert_exact_canonical_terminal_publication(
-        publication,
-        &fixture.merge_entry,
-        &fixture.reservation_groups,
+    persist_exact_canonical_terminal_pending!(
+        fixture,
+        "the original carrier admission limit admits the complete Pending set"
     );
     assert!(fixture.outcome_paths.iter().all(|path| path.is_file()));
     let budgets_after = fixture
@@ -1329,16 +1296,7 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
     Arc::get_mut(&mut fixture.kura)
         .expect("capacity fixture Kura remains exclusive")
         .max_disk_usage_bytes = fixture.admitted_limit;
-    let retry_publication = fixture
-        .kura
-        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&fixture.merge_entry)
-        .expect("exact Pending retry remains admitted")
-        .expect("execution-bearing retry returns publication");
-    assert_exact_canonical_terminal_publication(
-        retry_publication,
-        &fixture.merge_entry,
-        &fixture.reservation_groups,
-    );
+    persist_exact_canonical_terminal_pending!(fixture, "exact Pending retry remains admitted");
     for ((path, expected_bytes), ((lane_id, identity), expected_budget)) in fixture
         .outcome_paths
         .iter()
@@ -1364,16 +1322,7 @@ fn canonical_complete_releases_shared_transient_and_store_retry_stutters() {
     Arc::get_mut(&mut fixture.kura)
         .expect("complete fixture Kura is exclusive")
         .max_disk_usage_bytes = fixture.admitted_limit;
-    let publication = fixture
-        .kura
-        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&fixture.merge_entry)
-        .expect("publish exact canonical Pending set")
-        .expect("execution carrier has a Pending set");
-    assert_exact_canonical_terminal_publication(
-        publication,
-        &fixture.merge_entry,
-        &fixture.reservation_groups,
-    );
+    persist_exact_canonical_terminal_pending!(fixture, "publish exact canonical Pending set");
     for (path, group) in fixture
         .outcome_paths
         .iter()
@@ -1492,27 +1441,16 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let global_reservations = kura
         .autonomous_global_terminal_outcome_reserved_bytes()
         .expect("measure release terminal slot and shared transient");
-    let (persisted_count, unindexed_bytes) = kura
-        .persisted_count_and_unindexed_bytes()
-        .expect("measure release durable frontier");
-    let pending_canonical_bytes = kura
-        .pending_block_bytes(persisted_count, unindexed_bytes)
-        .expect("measure release pending canonical bytes");
     let post_wsv_reservations = kura
         .post_wsv_lane_artifact_budget_reserved_bytes()
         .expect("measure release post-WSV reservations");
-    let certified_bundle_reservations = kura
-        .certified_bundle_capacity_reserved_bytes()
-        .expect("measure release certified-bundle reservations");
-    let exact_limit = physical
-        .checked_add(pending_canonical_bytes)
-        .and_then(|bytes| bytes.checked_add(global_reservations))
-        .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
-        .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
-        .and_then(|bytes| {
-            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-        })
-        .expect("release exact limit fits u64");
+    let exact_limit = lifecycle_terminal_steady_capacity(
+        &kura,
+        physical,
+        global_reservations,
+        post_wsv_reservations,
+        "release",
+    );
     Arc::get_mut(&mut kura)
         .expect("release Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
@@ -1660,7 +1598,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         0,
     )
     .expect("install merge-terminal lane marker");
-    let execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &producer);
+    let _execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &producer);
     let recovered = kura
         .recover_autonomous_lane_block_payload(&proposal, network_id, epoch)
         .expect("recover autonomous merge execution input");
@@ -1678,26 +1616,8 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
             proposal.descriptor.lane_block_height,
         )
         .expect("read retained execution input before terminal receipt");
-    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
-    let carrier_height = carrier.header().height().get();
-    let carrier_hash = carrier.hash();
-    kura.store_block(parent)
-        .expect("store merge carrier parent");
-    kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
-        .expect("store committed merge carrier");
-    let _ = persist_v2_finality_chain_through(
-        &kura,
-        NonZeroUsize::new(usize::try_from(carrier_height).expect("carrier height fits usize"))
-            .expect("carrier height is non-zero"),
-    );
-    kura.persist_merge_lane_block_application_receipts(&merge_entry, carrier_height, carrier_hash)
-        .expect("persist terminal merge receipt and frontier");
-    let receipt = kura
-        .read_lane_block_application_receipt(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-        )
-        .expect("read terminal merge receipt");
+    let receipt =
+        persist_merge_application_receipt_for_autonomous_payload_for_test(&kura, &payload);
     assert_eq!(
         receipt.format,
         LaneBlockApplicationReceiptArtifactFormat::MergeExecution
@@ -1862,122 +1782,20 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         .validate()
         .expect("valid carrier-hint promotion height context");
     let height_context_id = context.id();
-    let (reservation_owner_hash, proposal_identity_hash) =
-        autonomous_lane_reservation_identity_hashes_for_proposal(
-            network_id,
-            height_context_id,
-            epoch,
-            &payload_template.origin_proposal,
-            &local_peer,
-        )
-        .expect("derive carrier-hint promotion reservation identities");
-    let mut reservation_keys = payload_template.reservation_keys.clone();
-    for reservation in &mut reservation_keys {
-        reservation.reservation_owner_hash = reservation_owner_hash;
-        reservation.proposal_identity_hash = proposal_identity_hash;
-    }
-    let hint_free = LaneExecutablePayloadV1::new_signed_with_reservations(
-        network_id,
-        epoch,
-        payload_template.origin_proposal.clone(),
-        payload_template.entrypoints.clone(),
-        reservation_keys,
-        payload_template.routing_plans.clone(),
-        payload_template.native_amx_receipts.clone(),
-        local_peer.clone(),
-        signer.private_key(),
-    )
-    .expect("construct hint-free Queue payload");
+    signed_lifecycle_attempt_fixture!(
+        "carrier-hint promotion lifecycle fixture";
+        network_id, epoch, height_context_id, payload_template, local_peer, signer;
+        hint_free, reservation_group, binding, after_activate, activate, prepared_activate,
+        live_activate, authentication_facts, _sign_cursor
+    );
     assert!(hint_free.origin_proposal.payload_block_hint.is_none());
     let hinted = hint_free
         .attach_global_hint_exact(carrier_hint, network_id, epoch)
         .expect("attach the exact protected carrier hint");
-    let reservation_group =
-        lane_queue_reservation_group_binding_from_ordered_keys(hint_free.reservation_keys.iter())
-            .expect("bind carrier-hint promotion reservation group");
-    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
-        height_context_id,
-        1,
-        &hint_free,
-        reservation_group,
-        &local_peer,
-    )
-    .expect("bind carrier-hint promotion lifecycle attempt");
-    let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
-    let before_activate = ProductionInFlightFirstReleaseStateProjection {
-        validator_count: 1,
-        producer: 1,
-        producer_selected_owner: 1,
-        replicated_carrier_owners: 0,
-        payload_binding_a: 1,
-        binding_a,
-        queue: ProductionInFlightFirstReleaseQueueProjection {
-            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
-            selected_count: reservation_group.reservation_count,
-            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-        },
-        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
-        session: ProductionInFlightFirstReleaseSessionProjection {
-            bodies: 1,
-            producer_alive: true,
-            ..ProductionInFlightFirstReleaseSessionProjection::default()
-        },
-        history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
-            ..ProductionInFlightFirstReleaseHistoryProjection::default()
-        },
-        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
-        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
-    };
-    let mut after_activate = before_activate;
-    after_activate.carrier.kura_active = 1;
-    let activate = ProductionInFlightFirstReleaseTransitionProjection {
-        action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
-        actor: 1,
-        target: 0,
-        before: before_activate,
-        after: after_activate,
-    };
     let checked_activate = || {
         check_production_in_flight_first_release_transition(activate)
             .expect("carrier-hint promotion uses the production ActivateKura transition")
     };
-    let sign_cursor = |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
-        let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
-            sequence,
-            previous_cursor_hash,
-            binding.clone(),
-            phase,
-            local_peer.clone(),
-        )
-        .expect("construct carrier-hint promotion lifecycle cursor");
-        let preimage = unsigned
-            .signing_preimage()
-            .expect("encode carrier-hint promotion cursor preimage");
-        let signature = Signature::try_new(signer.private_key(), &preimage)
-            .expect("sign carrier-hint promotion lifecycle cursor");
-        unsigned
-            .finalize(
-                <[u8; 96]>::try_from(signature.payload())
-                    .expect("BLS-normal cursor signature is exactly 96 bytes"),
-                &hint_free.origin_proposal.descriptor.validator_set,
-            )
-            .expect("finalize carrier-hint promotion lifecycle cursor")
-    };
-    let prepared_activate = sign_cursor(
-        1,
-        None,
-        AutonomousLifecycleCursorPhaseV2::prepared(1, activate)
-            .expect("construct Queue Prepared ActivateKura"),
-    );
-    let live_activate = sign_cursor(
-        2,
-        Some(prepared_activate.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(1, after_activate)
-            .expect("construct Queue Live ActivateKura"),
-    );
-    let authentication_facts = (height_context_id, 1, 1, reservation_group);
     let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
         lane,
         temp_dir.path(),
@@ -1987,18 +1805,11 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
 
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated carrier-hint promotion Kura");
-    for entry in lane_config.entries() {
-        let incarnation = Hash::new(
-            format!(
-                "kura-lane-incarnation:{}:{}",
-                entry.lane_id.as_u32(),
-                entry.dataspace_id.as_u64()
-            )
-            .as_bytes(),
-        );
-        kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-            .expect("install explicit carrier-hint promotion lane marker");
-    }
+    install_default_lane_markers_for_lifecycle_test!(
+        "carrier-hint promotion";
+        kura,
+        lane_config
+    );
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
     drop(kura);
@@ -2153,26 +1964,10 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
     );
     drop(kura);
 
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("Live-durable carrier-hint promotion boundary is restartable");
-    kura.bind_local_peer_id(local_peer.clone())
-        .expect("rebind carrier-hint promotion local peer");
-    let generation_two = kura
-        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
-        .expect("claim post-crash carrier-hint promotion generation");
-    let mut inventory = kura
-        .autonomous_lifecycle_bootstrap_recovery_inventory(
-            &generation_two,
-            lane.lane_id,
-            lane.dataspace_id,
-            hinted.origin_proposal.descriptor.lane_incarnation,
-        )
-        .expect("inventory Live-durable carrier-hint promotion boundary");
-    assert_eq!(inventory.len(), 1);
-    let promotion_authority = inventory.pop().expect("promotion recovery authority");
-    assert_eq!(
-        promotion_authority.stage(),
-        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+    reopen_single_lifecycle_bootstrap!(
+        "Live-durable carrier-hint promotion boundary";
+        config, lane_config, network_id, local_peer, lane, hinted, LiveDurable;
+        kura, _generation_two, promotion_authority
     );
     assert_eq!(promotion_authority.executable_payload(), &hinted);
     let promotion_permit = kura

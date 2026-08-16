@@ -1,18 +1,16 @@
 use crate::ff::Field;
-use crate::gates::circuit::{builder::RangeCircuitBuilder, CircuitBuilderStage};
+use crate::gates::circuit::{CircuitBuilderStage, builder::RangeCircuitBuilder};
 use crate::{
+    QuantumCell::Witness,
     gates::{GateChip, GateInstructions},
     halo2_proofs::{
-        halo2curves::bn256::Fr,
-        plonk::keygen_pk,
-        plonk::{keygen_vk, Assigned},
+        halo2curves::bn256::Fr, plonk::keygen_pk, plonk::keygen_vk,
         poly::kzg::commitment::ParamsKZG,
     },
     utils::testing::{check_proof, gen_proof},
-    QuantumCell::Witness,
 };
 use itertools::Itertools;
-use rand::{rngs::OsRng, thread_rng, Rng};
+use rand::{Rng, rngs::OsRng, thread_rng};
 use test_log::test;
 
 // soundness checks for `idx_to_indicator` function
@@ -24,7 +22,10 @@ fn test_idx_to_indicator_gen(k: u32, len: usize) {
     let dummy_idx = Witness(Fr::zero());
     let indicator = gate.idx_to_indicator(builder.main(0), dummy_idx, len);
     // get the offsets of the indicator cells for later 'pranking'
-    let ind_offsets = indicator.iter().map(|ind| ind.cell.unwrap().offset).collect::<Vec<_>>();
+    let ind_offsets = indicator
+        .iter()
+        .map(|ind| ind.cell.unwrap().offset())
+        .collect::<Vec<_>>();
     let config_params = builder.calculate_params(Some(9));
 
     let params = ParamsKZG::setup(k, OsRng);
@@ -45,7 +46,7 @@ fn test_idx_to_indicator_gen(k: u32, len: usize) {
         gate.idx_to_indicator(ctx, idx, len);
         // prank the indicator cells
         for (offset, witness) in ind_offsets.iter().zip_eq(ind_witnesses) {
-            ctx.advice[*offset] = Assigned::Trivial(*witness);
+            ctx.replace_advice_with_trivial(*offset, *witness);
         }
         gen_proof(&params, &pk, builder)
     };

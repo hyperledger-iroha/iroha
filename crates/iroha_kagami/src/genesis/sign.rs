@@ -593,7 +593,35 @@ pub(crate) fn bind_and_sign_staged_sumeragi_v2_context(
         confidential_policy_hash,
         creation_time_ms,
     )?;
+    verify_final_signed_sumeragi_v2_context(
+        &bound_manifest,
+        config,
+        &block.0,
+        nexus_amx_context_hash,
+        execution_policy_hash,
+    )?;
     Ok((bound_manifest, block))
+}
+fn verify_final_signed_sumeragi_v2_context(
+    bound_manifest: &RawGenesisTransaction,
+    config: Option<&actual::Root>,
+    signed: &SignedBlock,
+    signed_nexus_amx_context_hash: Hash,
+    signed_execution_policy_hash: Hash,
+) -> Result<(), color_eyre::eyre::Error> {
+    let (final_nexus_amx_context_hash, final_execution_policy_hash) =
+        restage_signed_sumeragi_v2_context_hashes(bound_manifest, config, signed)?;
+    if final_nexus_amx_context_hash != signed_nexus_amx_context_hash {
+        return Err(eyre!(
+            "final-NetworkId genesis restaging changed the signed Nexus/AMX context: signed {signed_nexus_amx_context_hash}, restaged {final_nexus_amx_context_hash}"
+        ));
+    }
+    if final_execution_policy_hash != signed_execution_policy_hash {
+        return Err(eyre!(
+            "final-NetworkId genesis restaging changed the signed execution policy: signed {signed_execution_policy_hash}, restaged {final_execution_policy_hash}"
+        ));
+    }
+    Ok(())
 }
 /// Stage a raw genesis transaction and return its exact Nexus/AMX consensus and execution-policy
 /// commitments without committing state or touching persistent node storage.
@@ -635,6 +663,13 @@ pub(crate) fn staged_signed_sumeragi_v2_context_hashes(
     signed: &SignedBlock,
     config: &actual::Root,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
+    restage_signed_sumeragi_v2_context_hashes(genesis, Some(config), signed)
+}
+fn restage_signed_sumeragi_v2_context_hashes(
+    genesis: &RawGenesisTransaction,
+    config: Option<&actual::Root>,
+    signed: &SignedBlock,
+) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     let provisional = GenesisBlock(signed.clone());
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -643,7 +678,7 @@ pub(crate) fn staged_signed_sumeragi_v2_context_hashes(
             .spawn_scoped(scope, move || {
                 staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
                     genesis,
-                    Some(config),
+                    config,
                     provisional,
                 )
             })
@@ -682,6 +717,11 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     provisional: GenesisBlock,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
+    // Never inherit iroha_core's repository-wide test identity here. Signing stages the
+    // unbound provisional block, while prepared-bundle admission stages the final signed block.
+    // Generation-zero Nexus state is intentionally independent of this value, so both paths
+    // reproduce the same signed commitments without requiring a genesis-hash fixed point.
+    let staging_network_id = NetworkId::from_genesis_hash(provisional.0.hash());
     let consensus_mode = match genesis.consensus_mode() {
         SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
         SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
@@ -721,11 +761,12 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
         None => Kura::blank_kura_for_testing(),
     };
-    let mut state = State::try_new_with_chain_with_default_telemetry(
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
+        staging_network_id,
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config)?;
@@ -864,11 +905,11 @@ fn configure_staged_genesis_state(
         state.content = config.content.clone();
         state.set_settlement(config.settlement.clone());
         state.set_kagemusha_release_catalog(
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config_for_genesis_staging(
                 &config.settlement.offline,
             )
             .map_err(|error| {
-                eyre!("invalid Kagemusha release catalog for staged genesis: {error}")
+                eyre!("invalid Kagemusha release policy for staged genesis: {error}")
             })?,
         );
         state
@@ -1792,6 +1833,112 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             &root,
             "defaults/kagami/iroha3-taira/genesis.json",
             "defaults/kagami/iroha3-taira/config.toml",
+        );
+    }
+
+    #[test]
+    fn signer_and_final_network_id_restaging_have_exact_context_parity() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/config.toml"));
+        let genesis_key_pair = KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        config.genesis.public_key = genesis_key_pair.public_key().clone();
+        let mut raw = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
+            .set_topology(valid_test_topology_entries(4))
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let mut unbound_parameters = raw.sumeragi_v2_context_parameters();
+        unbound_parameters.nexus_amx_context_hash = Hash::new(b"unbound-nexus-amx").into();
+        unbound_parameters.execution_policy_hash = Hash::new(b"unbound-execution-policy").into();
+        raw = raw
+            .with_sumeragi_v2_context_parameters(unbound_parameters)
+            .with_consensus_meta();
+        let da_proof_policies = Some(iroha_core::da::proof_policy_bundle(
+            &config.nexus.lane_config,
+        ));
+        let confidential_policy_hash =
+            iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
+        let creation_time_ms = Some(1_700_000_000_000);
+        let provisional = build_signed_genesis(
+            raw.clone(),
+            &genesis_key_pair,
+            da_proof_policies.clone(),
+            confidential_policy_hash,
+            creation_time_ms,
+        )
+        .expect("sign the exact unbound provisional genesis");
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+            raw,
+            &genesis_key_pair,
+            Some(&config),
+            da_proof_policies,
+            confidential_policy_hash,
+            creation_time_ms,
+        )
+        .expect("bind and sign staged genesis context");
+        assert_ne!(
+            provisional.0.hash(),
+            signed.0.hash(),
+            "binding the staged context must exercise distinct provisional and final NetworkIds"
+        );
+        config.genesis.expected_hash = signed.0.hash();
+        let (restaged_nexus_amx, restaged_execution_policy) =
+            staged_signed_sumeragi_v2_context_hashes(&bound_manifest, &signed.0, &config)
+                .expect("restage signed genesis under its final NetworkId");
+        let signed_parameters = bound_manifest.sumeragi_v2_context_parameters();
+        assert_eq!(
+            restaged_nexus_amx,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+            "final runtime Nexus/AMX staging must match signing without a hash fixed point"
+        );
+        assert_eq!(
+            restaged_execution_policy,
+            Hash::prehashed(signed_parameters.execution_policy_hash),
+            "final runtime execution-policy staging must match signing"
+        );
+
+        let mut tampered_nexus_config = config.clone();
+        tampered_nexus_config.pipeline.amx_group_budget_ms = tampered_nexus_config
+            .pipeline
+            .amx_group_budget_ms
+            .checked_add(1)
+            .expect("test AMX budget increment must not overflow");
+        let nexus_error = verify_final_signed_sumeragi_v2_context(
+            &bound_manifest,
+            Some(&tampered_nexus_config),
+            &signed.0,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+            Hash::prehashed(signed_parameters.execution_policy_hash),
+        )
+        .expect_err("a final-identity Nexus/AMX policy mismatch must fail closed");
+        assert!(
+            nexus_error
+                .to_string()
+                .contains("changed the signed Nexus/AMX context"),
+            "unexpected Nexus/AMX tamper error: {nexus_error:#}"
+        );
+
+        let mut tampered_execution_config = config.clone();
+        tampered_execution_config
+            .pipeline
+            .quarantine_max_txs_per_block = tampered_execution_config
+            .pipeline
+            .quarantine_max_txs_per_block
+            .checked_add(1)
+            .expect("test quarantine limit increment must not overflow");
+        let execution_error = verify_final_signed_sumeragi_v2_context(
+            &bound_manifest,
+            Some(&tampered_execution_config),
+            &signed.0,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+            Hash::prehashed(signed_parameters.execution_policy_hash),
+        )
+        .expect_err("a final-identity execution-policy mismatch must fail closed");
+        assert!(
+            execution_error
+                .to_string()
+                .contains("changed the signed execution policy"),
+            "unexpected execution-policy tamper error: {execution_error:#}"
         );
     }
 

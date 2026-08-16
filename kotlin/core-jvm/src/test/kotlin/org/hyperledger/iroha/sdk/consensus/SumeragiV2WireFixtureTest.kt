@@ -15,7 +15,7 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 class SumeragiV2WireFixtureTest {
     @Test
-    fun `execution commitments carry an exact mandatory merge carrier option`() {
+    fun `execution commitments carry exact mandatory lane finality and merge carrier options`() {
         fun hash(seed: Int) =
             SumeragiV2Wire.Hash32(
                 ByteArray(32) { seed.toByte() }.also {
@@ -25,6 +25,7 @@ class SumeragiV2WireFixtureTest {
         val base = SumeragiV2Wire.ExecutionCommitment.withoutTopups(
             hash(0x21), hash(0x23), hash(0x25), 123, hash(0x27),
         )
+        val laneFinality = SumeragiV2Wire.LaneFinalityManifestCommitment(hash(0x2b), 1)
         val carrier = SumeragiV2Wire.MergeCarrierCommitment(1, hash(0x29))
         val carried = SumeragiV2Wire.ExecutionCommitment(
             base.parentStateRoot,
@@ -35,18 +36,29 @@ class SumeragiV2WireFixtureTest {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            laneFinality,
             carrier,
             base.executedBlockWireLen,
             base.executedBlockWireHash,
         )
 
         val decodedBase = SumeragiV2Wire.ExecutionCommitment.decode(base.encode())
+        assertEquals(null, decodedBase.laneFinalityManifest)
         assertEquals(null, decodedBase.mergeCarrier)
         assertEquals(123L, decodedBase.executedBlockWireLen)
         assertEquals(
             carrier,
             SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).mergeCarrier,
         )
+        assertEquals(
+            laneFinality,
+            SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).laneFinalityManifest,
+        )
+        listOf(0L, SumeragiV2Wire.MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK + 1).forEach { count ->
+            assertFailsWith<IllegalArgumentException> {
+                SumeragiV2Wire.LaneFinalityManifestCommitment(hash(0x2b), count)
+            }
+        }
         assertFailsWith<IllegalArgumentException> {
             SumeragiV2Wire.MergeCarrierCommitment(2, hash(0x29))
         }
@@ -540,6 +552,7 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -555,6 +568,7 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -570,6 +584,7 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -585,6 +600,7 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -605,6 +621,7 @@ class SumeragiV2WireFixtureTest {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            base.laneFinalityManifest,
             null,
             base.executedBlockWireLen,
             base.executedBlockWireHash,
@@ -642,6 +659,7 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 base.nativeAmxApplicationManifestRoot,
                 0,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -657,6 +675,7 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 0,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -672,6 +691,7 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 base.nativeAmxApplicationManifestRoot,
                 1,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -687,6 +707,7 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 SumeragiV2Wire.MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                base.laneFinalityManifest,
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
@@ -702,6 +723,7 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.laneFinalityManifest,
                 base.mergeCarrier,
                 0,
                 base.executedBlockWireHash,

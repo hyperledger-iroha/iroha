@@ -458,7 +458,7 @@
         {
           "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
           "required_tokens": [
-            "readonly expected_negative_control_count=55",
+            "readonly expected_negative_control_count=56",
             "openapi|python|javascript|swift|kotlin|java)",
             "grouped Native AMX V2 negative controls must fail closed",
             "--suite-source-manifest-sha256"
@@ -470,6 +470,7 @@
             "\"format\": \"iroha-native-amx-v2-grouped\"",
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
             "\"negative_controls\": [",
+            "\"id\": \"over_quorum_bitmap\"",
             "\"id\": \"manifest_leaf_hash_tampering\""
           ]
         },
@@ -545,7 +546,7 @@
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
             "\"write_sumeragi_v2_release_receipt_gate_evidence.py\": (",
-            "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae",
+            "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5",
             "_SDK_SOURCE_CLOSURE_RESOLVER = \"ci/resolve_sumeragi_v2_sdk_source_closure.py\"",
             "_SDK_SOURCE_CLOSURE_MANIFEST = \"ci/sumeragi_v2_sdk_source_closure.json\"",
             "_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = \"native-amx-v2-grouped\"",
@@ -670,20 +671,23 @@
         {
           "path": "ci/run_sumeragi_v2_sdk_diagnostics.sh",
           "required_tokens": [
-            "observed_test_count=33",
+            "observed_test_count=34",
+            "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=42",
+            "observed_test_count=43",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=41",
+            "observed_test_count=42",
             "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests"
           ]
         },
         {
           "path": "ci/sumeragi_v2_sdk_source_closure.json",
           "required_tokens": [
+            "\"IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift\"",
             "\"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift\"",
             "\"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt\"",
-            "\"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java\""
+            "\"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java\"",
+            "\"python/iroha_torii_client/tests/exact_certificate_cardinality_test.py\""
           ]
         },
         {
@@ -700,9 +704,9 @@
         {
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
-            "(\"swift\", 33)",
-            "(\"kotlin\", 42)",
-            "(\"java\", 41)"
+            "(\"swift\", 34)",
+            "(\"kotlin\", 43)",
+            "(\"java\", 42)"
           ]
         },
         {
@@ -712,7 +716,7 @@
             "bash scripts/check_no_legacy_codec.sh",
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 121 88 33 42 41; do",
+            "for sdk_diagnostics_test_count in 129 88 34 43 42; do",
             "SumeragiV2WireFixtureTest"
           ]
         }
@@ -6809,12 +6813,22 @@
             ".commit_qc",
             ".signers",
             "outstanding.retry_sent",
-            "self.advance_past_front_responder()",
+            "self.abandon_front_responder()?",
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
             "LANE_HISTORICAL_RECOVERY_VERSION_V4",
             "canonical_executed_block_request_fits_frame",
             "V2LaneWorkEffect::PostLaneBlock",
             "OutstandingCanonicalExecutedBlockRequest"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::abandon_front_responder",
+          "required_tokens": [
+            "self.record_whole_wire_restart()?",
+            "self.advance_past_front_responder()",
+            "Ok(())"
           ]
         },
         {
@@ -9831,7 +9845,7 @@
           "required_tokens": [
             "certified_merge_sidecar_holders",
             "signer_indices",
-            "validate_signers",
+            "validate_certificate_signers",
             "bls_normal_pop_verify",
             "bls_normal_verify_preaggregated_same_message"
           ]
@@ -9854,8 +9868,8 @@
             "authenticated_height_context",
             "height_context.roster",
             "signer_indices",
-            "validate_signers",
-            "dual quorum"
+            "validate_certificate_signers",
+            "certificate cardinality"
           ]
         },
         {

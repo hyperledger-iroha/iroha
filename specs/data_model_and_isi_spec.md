@@ -48,7 +48,7 @@ Events: Every entity has events emitted on mutations (create/delete/owner change
 ---
 
 ## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`, `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`, plus `custom: BTreeMap`.
+- Families: `SumeragiParameters { block_cadence_ms, max_clock_drift_ms, key_activation_lead_blocks, key_overlap_grace_blocks, key_expiry_grace_blocks, key_require_hsm, key_allowed_algorithms, key_allowed_hsm_providers }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`, `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`, plus `custom: BTreeMap`. Consensus cadence and key policy are signed chain context; the generic `SumeragiParameter` diff enum exposes only `MaxClockDriftMs`.
 - Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
 - `smart_contract.memory` and `executor.memory` are exact IVM heap ceilings in
   bytes for contract and runtime-executor invocations respectively. ABI V1

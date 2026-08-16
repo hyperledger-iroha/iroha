@@ -27899,11 +27899,10 @@ mod tests {
                 (None, crate::zk::hash_vk(&governed_verifier_key))
             }
             _ => {
-                let (vk_id, vk_commitment) =
-                    install_fhe_full_bootstrap_execution_verifier_record(
-                        &mut stx,
-                        governed_verifier_key.clone(),
-                    );
+                let (vk_id, vk_commitment) = install_fhe_full_bootstrap_execution_verifier_record(
+                    &mut stx,
+                    governed_verifier_key.clone(),
+                );
                 (Some(vk_id), vk_commitment)
             }
         };
@@ -27960,9 +27959,9 @@ mod tests {
                                 "soracloud_fhe_full_bootstrap_execution_v2".to_string();
                         }
                         FullBootstrapVerifierRecordMetadataTamper::Version => {
-                            record.version = u32::from(
-                                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
-                            ) + 1;
+                            record.version =
+                                u32::from(SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1)
+                                    + 1;
                         }
                         FullBootstrapVerifierRecordMetadataTamper::GasSchedule => {
                             record.gas_schedule_id =
@@ -30993,7 +30992,9 @@ mod tests {
         if !generic_air_drift {
             enable_full_bootstrap_proof_quotas(
                 &mut stx,
-                rejection_cases.iter().flat_map(|(proofs, _, _)| proofs.iter()),
+                rejection_cases
+                    .iter()
+                    .flat_map(|(proofs, _, _)| proofs.iter()),
             );
         }
         for (proofs, failure_context, expected_error) in rejection_cases {
@@ -40141,11 +40142,10 @@ mod tests {
             FheInputAdmissionRejectionCase::RegisteredVerifierWrongCircuit => {
                 state_transaction.zk.stark.enabled = true;
                 let verifier_key = sample_fhe_input_admission_vk_box();
-                let (verifier_key_id, _commitment) =
-                    install_fhe_input_admission_verifier_record(
-                        state_transaction,
-                        verifier_key.clone(),
-                    );
+                let (verifier_key_id, _commitment) = install_fhe_input_admission_verifier_record(
+                    state_transaction,
+                    verifier_key.clone(),
+                );
                 assert_eq!(
                     verifier_key_id,
                     iroha_data_model::proof::VerifyingKeyId::new(
@@ -40165,11 +40165,10 @@ mod tests {
                 state_transaction.zk.stark.enabled = true;
                 let verifier_key = sample_fhe_input_admission_vk_box();
                 let wrong_version = u32::from(SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1) + 1;
-                let (verifier_key_id, _commitment) =
-                    install_fhe_input_admission_verifier_record(
-                        state_transaction,
-                        verifier_key.clone(),
-                    );
+                let (verifier_key_id, _commitment) = install_fhe_input_admission_verifier_record(
+                    state_transaction,
+                    verifier_key.clone(),
+                );
                 state_transaction
                     .world
                     .verifying_keys
@@ -40191,10 +40190,8 @@ mod tests {
             FheInputAdmissionRejectionCase::RestoredVerifierWrongCurve => {
                 state_transaction.zk.stark.enabled = true;
                 let verifier_key = sample_fhe_input_admission_vk_box();
-                let verifier_key_id = register_fhe_input_admission_verifier(
-                    state_transaction,
-                    verifier_key.clone(),
-                )?;
+                let verifier_key_id =
+                    register_fhe_input_admission_verifier(state_transaction, verifier_key.clone())?;
                 state_transaction
                     .world
                     .verifying_keys
@@ -40206,10 +40203,8 @@ mod tests {
             FheInputAdmissionRejectionCase::RestoredVerifierWrongLength => {
                 state_transaction.zk.stark.enabled = true;
                 let verifier_key = sample_fhe_input_admission_vk_box();
-                let verifier_key_id = register_fhe_input_admission_verifier(
-                    state_transaction,
-                    verifier_key.clone(),
-                )?;
+                let verifier_key_id =
+                    register_fhe_input_admission_verifier(state_transaction, verifier_key.clone())?;
                 state_transaction
                     .world
                     .verifying_keys
@@ -40246,10 +40241,8 @@ mod tests {
             let mut state_block = state.block(block_header);
             let mut state_transaction = state_block.transaction();
             #[cfg(feature = "zk-stark")]
-            let verifier_key = configure_fhe_input_admission_rejection_verifier(
-                &mut state_transaction,
-                case,
-            )?;
+            let verifier_key =
+                configure_fhe_input_admission_rejection_verifier(&mut state_transaction, case)?;
             isi::DeploySoracloudService {
                 bundle: bundle.clone(),
                 initial_service_configs: BTreeMap::new(),
@@ -40272,10 +40265,9 @@ mod tests {
                 #[cfg(feature = "zk-stark")]
                 FheInputAdmissionGovernanceSeed::StateKey => Hash::new(spec.state_key.as_bytes()),
             };
-            let residual_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(
-                &ram_lfe_bfv_parameters_v1(),
-            )
-            .expect("fresh input residual bound");
+            let residual_bound =
+                bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
+                    .expect("fresh input residual bound");
             let admission_proof = match case {
                 FheInputAdmissionRejectionCase::MissingVerifier
                 | FheInputAdmissionRejectionCase::OversizedEnvelope => {

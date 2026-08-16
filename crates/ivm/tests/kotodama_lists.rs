@@ -162,12 +162,16 @@ fn run_multiword_mutation_failure_case(
 }
 #[test]
 fn safe_mutations_execute_with_transactional_failures() {
-    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/001.ko").strip_suffix('\n').expect("fixture sentinel newline"));
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 312);
 }
 #[test]
 fn comprehension_and_take_execute_as_bounded_copies() {
-    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/002.ko").strip_suffix('\n').expect("fixture sentinel newline"));
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 6);
 }
 #[test]
@@ -208,12 +212,16 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
 fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
     let program = KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/003.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/003.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile parameterized List get contract");
     let control = KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/004.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/004.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile matched argument-decoding control");
     let mut samples = Vec::new();
@@ -381,7 +389,9 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
 fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_preflight() {
     let program = KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/005.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/005.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile multiword mutation failure fixture");
     for index in ["-1", "1", "8", "18446744073709551616"] {
@@ -543,12 +553,16 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
 }
 #[test]
 fn enumerate_materializes_bounded_structured_elements() {
-    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/006.ko").strip_suffix('\n').expect("fixture sentinel newline"));
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/006.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 18);
 }
 #[test]
 fn list_of_options_uses_one_word_per_element() {
-    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/007.ko").strip_suffix('\n').expect("fixture sentinel newline"));
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/007.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     let list = vm.register(10);
     assert_eq!(vm.load_u64(list), Ok(2), "returned List length header");
     assert_eq!(
@@ -576,14 +590,18 @@ fn list_of_options_uses_one_word_per_element() {
 }
 #[test]
 fn contains_compares_nested_lists_sums_and_structs_by_value() {
-    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/008.ko").strip_suffix('\n').expect("fixture sentinel newline"));
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/008.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 #[test]
 fn recursive_contains_support_does_not_admit_resource_elements() {
     let error = KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/009.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/009.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect_err("resource-bearing List elements must remain rejected");
     assert!(
@@ -595,7 +613,9 @@ fn recursive_contains_support_does_not_admit_resource_elements() {
 fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
     let error = KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/010.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/010.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect_err("zero-sized List elements must fail semantic analysis");
     assert!(
@@ -608,7 +628,9 @@ fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
     );
     KotodamaCompiler::new()
         .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/011.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/kotodama_lists/011.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("ordinary contextual empty Lists remain valid");
 }

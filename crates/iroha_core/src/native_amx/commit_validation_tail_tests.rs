@@ -2,6 +2,88 @@
 //
 // Included by `native_amx::tests` to preserve exact libtest names.
 #[test]
+fn aggregate_votes_to_qc_preserves_sparse_high_index_signer_order() {
+    let mut keypairs = (1_u8..=10).map(checked_bls_keypair).collect::<Vec<_>>();
+    keypairs.sort_by_key(|keypair| PeerId::new(keypair.public_key().clone()));
+    let validator_set = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    let body = body_for_validator_set(NativeAmxPhase::Commit, &validator_set);
+    let validator_set_pops = aligned_pops(&validator_set, &keypairs);
+    let signer_indices = [0_usize, 1, 2, 3, 4, 8, 9];
+    let votes = signer_indices
+        .into_iter()
+        .map(|index| signed_vote(&body, &keypairs[index]))
+        .collect::<Vec<_>>();
+    let qc = aggregate_votes_to_qc(body, validator_set.clone(), validator_set_pops, &votes, 7)
+        .expect("exact-threshold sparse native AMX QC");
+    assert_eq!(qc.signers_bitmap, vec![0b0001_1111, 0b0000_0011]);
+    let pops = keypairs
+        .iter()
+        .map(|keypair| {
+            (
+                keypair.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("prove fixture PoP"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        validate_native_amx_qc(&qc, &body, &validator_set, 7, &pops),
+        Ok(())
+    );
+    let mut high_padding_bit = qc;
+    high_padding_bit.signers_bitmap[1] |= 0b1000_0000;
+    assert_eq!(
+        validate_native_amx_qc(&high_padding_bit, &body, &validator_set, 7, &pops),
+        Err(NativeAmxQcValidationError::InvalidSignerBitmap)
+    );
+}
+
+#[test]
+fn native_amx_qc_projects_four_votes_and_rejects_four_signers_on_wire() {
+    let mut keypairs = (0xA1_u8..=0xA4)
+        .map(checked_bls_keypair)
+        .collect::<Vec<_>>();
+    keypairs.sort_by_key(|keypair| PeerId::new(keypair.public_key().clone()));
+    let validator_set = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    let body = body_for_validator_set(NativeAmxPhase::Commit, &validator_set);
+    let validator_set_pops = aligned_pops(&validator_set, &keypairs);
+    let votes = keypairs
+        .iter()
+        .rev()
+        .map(|keypair| signed_vote(&body, keypair))
+        .collect::<Vec<_>>();
+    let qc = aggregate_votes_to_qc(body, validator_set.clone(), validator_set_pops, &votes, 3)
+        .expect("four votes deterministically project to the exact threshold");
+    assert_eq!(qc.signers_bitmap, vec![0b0000_0111]);
+    let pops = keypairs
+        .iter()
+        .map(|keypair| {
+            (
+                keypair.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("prove fixture PoP"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    validate_native_amx_qc(&qc, &body, &validator_set, 3, &pops)
+        .expect("projected three-of-four QC validates");
+    let mut superset = qc;
+    superset.signers_bitmap = vec![0b0000_1111];
+    assert_eq!(
+        validate_native_amx_qc(&superset, &body, &validator_set, 3, &pops),
+        Err(NativeAmxQcValidationError::SignerCountMismatch {
+            expected: 3,
+            actual: 4,
+        })
+    );
+}
+#[test]
 fn commit_request_shape_binds_the_exact_round_and_epoch() {
     let keys = [checked_bls_keypair(0x41), checked_bls_keypair(0x42)];
     let mut validators = keys

@@ -242,8 +242,8 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
         );
         let signer_count = commit_certificate_signer_count(&cert);
         ensure!(
-            signer_count >= commit_quorum_from_len(peers.len()),
-            "commit certificate signature quorum too small: expected >= {}, got {}",
+            signer_count == commit_quorum_from_len(peers.len()),
+            "commit certificate signature quorum mismatch: expected exactly {}, got {}",
             commit_quorum_from_len(peers.len()),
             signer_count
         );
@@ -393,8 +393,10 @@ async fn wait_for_commit_certificate_quorum(
                         ));
                     }
                     let signer_count = commit_certificate_signer_count(cert);
-                    if signer_count < required {
-                        missing.push(format!("{torii} signatures {signer_count} < {required}"));
+                    if signer_count != required {
+                        missing.push(format!(
+                            "{torii} signatures {signer_count} != exact quorum {required}"
+                        ));
                     }
                 }
                 Err(err) => {

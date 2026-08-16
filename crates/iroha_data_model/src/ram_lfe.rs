@@ -1,4 +1,6 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, name::Name, proof::ProofBox};
 use iroha_crypto::{
     Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
@@ -33,10 +35,7 @@ pub enum RamLfeProgramIdParseError {
 }
 /// Stable on-chain identifier for a hidden RAM-LFE program policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeProgramId {
     /// Canonical program name.
     pub name: Name,
@@ -63,10 +62,7 @@ impl FromStr for RamLfeProgramId {
 }
 /// Public metadata for a globally registered hidden RAM-LFE program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeProgramPolicy {
     /// Stable on-chain program identifier.
     pub program_id: RamLfeProgramId,
@@ -127,10 +123,7 @@ impl RamLfeProgramPolicy {
 }
 /// Canonical stateless RAM-LFE execution receipt payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeExecutionReceiptPayload {
     /// Program policy used for the execution.
     pub program_id: RamLfeProgramId,
@@ -177,10 +170,7 @@ impl RamLfeExecutionReceiptPayload {
 }
 /// Canonical payload signed by an external RAM-LFE output-opening authority.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeOutputOpeningPayload {
     /// Program policy whose output ciphertext was opened.
     pub program_id: RamLfeProgramId,
@@ -203,10 +193,7 @@ pub struct RamLfeOutputOpeningPayload {
 }
 /// Externally attested opening of a RAM-LFE encrypted output.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeOutputOpening {
     /// Canonical opening payload.
     pub payload: RamLfeOutputOpeningPayload,
@@ -226,10 +213,7 @@ impl RamLfeOutputOpening {
 }
 /// Explicit attestation attached to a RAM-LFE receipt payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum RamLfeReceiptAttestation {
     /// Resolver signature over the canonical payload bytes.
@@ -257,10 +241,7 @@ impl RamLfeReceiptAttestation {
 }
 /// Self-contained generic RAM-LFE execution receipt.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RamLfeExecutionReceipt {
     /// Canonical receipt payload.
     pub payload: RamLfeExecutionReceiptPayload,

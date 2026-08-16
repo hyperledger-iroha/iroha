@@ -1,14 +1,14 @@
 use std::cmp::max;
 
 use crate::ff::{Field, PrimeField};
-use crate::gates::tests::{flex_gate, range, utils::*, Fr};
+use crate::gates::tests::{Fr, flex_gate, range, utils::*};
 use crate::utils::{biguint_to_fe, bit_length, fe_to_biguint};
 use crate::{QuantumCell, QuantumCell::Witness};
 
 use num_bigint::{BigUint, RandBigInt, RandomBits};
 use proptest::{collection::vec, prelude::*};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 prop_compose! {
     pub fn rand_fr()(seed in any::<u64>()) -> Fr {

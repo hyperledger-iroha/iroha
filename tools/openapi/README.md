@@ -50,14 +50,14 @@ then run the `--check` form against the tracked pin. Rust and Node parse that
 tracked file as the sole size and SHA-256 authority; no hash constant is
 hand-maintained in either implementation.
 
-Provisioning is copy-only. With no `--source`, `provision` may only validate
-and reuse an exact existing ignored root lock; an absent target fails closed.
-With `--source`, it atomically copies only already-existing, stable bytes that
-match the tracked pin. The provisioner never starts Cargo or generates lock
-bytes. CI validates a pre-existing root `Cargo.lock`, and the release wrappers
-copy that authenticated source into their out-of-tree sealed mirrors. All
-Cargo work remains behind the shared `+1.93.1`, `--locked`, `--offline`, `-j1`
-policy and its same-snapshot guard.
+`provision` is verification-only. It requires `Cargo.lock` to be one clean,
+stage-zero mode-`100644` blob shared by the Git index and `HEAD`, with working
+bytes matching that blob and the tracked pin. `--source` adds only a stable,
+byte-identical comparison input; it never replaces the tracked root authority.
+The provisioner never edits the checkout, starts Cargo, or generates lock
+bytes. Release wrappers verify the lock already present in each isolated Git
+clone. All Cargo work remains behind the shared `+1.93.1`, `--locked`,
+`--offline`, `-j1` policy and its same-snapshot guard.
 
 ## Staging-safe development replay
 

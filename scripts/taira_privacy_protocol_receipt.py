@@ -19,24 +19,29 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
 try:
+    from . import taira_authority_client
     from .release_artifact_contract import (
         ReleaseArtifactError,
         canonical_json_bytes,
+        exclusive_write_bytes,
         load_json_object,
         scan_inventory_paths,
         stable_hash_relative,
         stable_read_relative,
     )
 except ImportError:
+    import taira_authority_client
     from release_artifact_contract import (
         ReleaseArtifactError,
         canonical_json_bytes,
+        exclusive_write_bytes,
         load_json_object,
         scan_inventory_paths,
         stable_hash_relative,
@@ -53,6 +58,7 @@ RESULT_SCHEMA_VERSION = 1
 
 RECEIPT_NAME = "privacy-protocol-four-peer-receipt-v2.json"
 MAX_RECEIPT_BYTES = 1024 * 1024
+MAX_AUTHORITY_SIDECAR_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 128 * 1024
 MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 6 * 1024 * 1024
@@ -71,6 +77,10 @@ CONTROLLER_ORIGIN_AUTHENTICATED_RUN_CONTRACT = (
 CONTROLLER_ORIGIN_REPLAY_NAMESPACE = (
     "iroha.taira.privacy-protocol-controller-origin-replay.v1"
 )
+AUTHORITY_ENVELOPE_SUFFIX = (
+    ".privacy-protocol-origin-authority-envelope-v1.json"
+)
+DURABLE_RECEIPT_SUFFIX = ".privacy-protocol-origin-durable-receipt-v1.json"
 CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER = (
     "missing preprovisioned "
     "iroha.taira.privacy-protocol-controller-origin-authority.v1 and "
@@ -250,14 +260,107 @@ class PrivacyProtocolEvidenceError(RuntimeError):
     """Exact12 qualification evidence is absent, mutable, or noncanonical."""
 
 
+class AuthenticatedPrivacyProtocolEvidence(dict[str, object]):
+    """Structurally compatible evidence with explicit authenticated sidecars."""
+
+    __slots__ = (
+        "_authority_envelope",
+        "_durable_receipt",
+        "_evidence_root",
+        "_operation_id",
+        "_run_id",
+    )
+
+    def __init__(
+        self,
+        structural_subject: Mapping[str, object],
+        *,
+        evidence_root: Path,
+        authority_result: taira_authority_client.AuthorityResult,
+    ) -> None:
+        super().__init__(structural_subject)
+        self._authority_envelope = authority_result.authority_envelope_bytes
+        self._durable_receipt = authority_result.durable_receipt_bytes
+        self._evidence_root = Path(os.path.abspath(evidence_root))
+        self._operation_id = authority_result.operation_id
+        self._run_id = authority_result.run_id
+
+    @property
+    def authority_envelope(self) -> bytes:
+        """Return the canonical authority-envelope sidecar bytes."""
+
+        return self._authority_envelope
+
+    @property
+    def durable_receipt(self) -> bytes:
+        """Return the canonical durable-receipt sidecar bytes."""
+
+        return self._durable_receipt
+
+    @property
+    def operation_id(self) -> str:
+        """Return the native authority operation identifier."""
+
+        return self._operation_id
+
+    @property
+    def run_id(self) -> str:
+        """Return the administrator-assigned run identifier."""
+
+        return self._run_id
+
+    def sidecar_paths(self) -> tuple[Path, Path]:
+        """Return deterministic sibling paths outside the evidence inventory."""
+
+        return authority_sidecar_paths(self._evidence_root)
+
+    def persist_sidecars(self) -> tuple[Path, Path]:
+        """Exclusively persist both authenticated sidecars beside the evidence."""
+
+        return persist_authenticated_sidecars(self)
+
+
+def authority_sidecar_paths(evidence_root: Path) -> tuple[Path, Path]:
+    """Return the fixed sibling sidecar paths for one evidence directory."""
+
+    absolute = Path(os.path.abspath(evidence_root))
+    return (
+        absolute.with_name(absolute.name + AUTHORITY_ENVELOPE_SUFFIX),
+        absolute.with_name(absolute.name + DURABLE_RECEIPT_SUFFIX),
+    )
+
+
+def persist_authenticated_sidecars(
+    evidence: AuthenticatedPrivacyProtocolEvidence,
+) -> tuple[Path, Path]:
+    """Exclusively write an authenticated result's two canonical sidecars."""
+
+    if not isinstance(evidence, AuthenticatedPrivacyProtocolEvidence):
+        _fail("privacy protocol sidecars require an authenticated evidence result")
+    envelope_path, receipt_path = evidence.sidecar_paths()
+    try:
+        exclusive_write_bytes(envelope_path, evidence.authority_envelope, mode=0o600)
+        exclusive_write_bytes(receipt_path, evidence.durable_receipt, mode=0o600)
+    except ReleaseArtifactError as error:
+        raise PrivacyProtocolEvidenceError(
+            f"cannot persist privacy protocol authority sidecars: {error}"
+        ) from error
+    return envelope_path, receipt_path
+
+
 def _fail(message: str) -> NoReturn:
     raise PrivacyProtocolEvidenceError(message)
 
 
-def require_controller_origin_authority_provisioned() -> NoReturn:
-    """Refuse release use until the independent provenance authority exists."""
+def require_controller_origin_authority_provisioned() -> None:
+    """Authenticate the fixed privacy-protocol-origin authority service."""
 
-    _fail(CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER)
+    try:
+        taira_authority_client.preflight("privacy-protocol-origin")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyProtocolEvidenceError(
+            f"{CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER}: {error}"
+        ) from error
 
 
 def transcript_name(index: int) -> str:
@@ -952,6 +1055,60 @@ def validate_unsigned_v2_structure(
     }
 
 
+def _validated_authority_request(
+    root: Path,
+    *,
+    expected_source: Mapping[str, object],
+    expected_validator_binary_sha256: str,
+    expected_linux_release_archive_sha256: str,
+    expected_exact12_matrix_sha256: str,
+    expected_artifact_handoff_sha256: str,
+    expected_receipt_id: str,
+    now_unix: int,
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    tuple[taira_authority_client.Artifact, ...],
+]:
+    normalized_source = _source_identity(expected_source, "expected source identity")
+    result = validate_unsigned_v2_structure(
+        root,
+        expected_source=normalized_source,
+        expected_validator_binary_sha256=expected_validator_binary_sha256,
+        expected_linux_release_archive_sha256=(
+            expected_linux_release_archive_sha256
+        ),
+        expected_exact12_matrix_sha256=expected_exact12_matrix_sha256,
+        expected_artifact_handoff_sha256=expected_artifact_handoff_sha256,
+        expected_receipt_id=expected_receipt_id,
+        now_unix=now_unix,
+    )
+    subject = {
+        "authority_schema": CONTROLLER_ORIGIN_AUTHORITY_CONTRACT,
+        "authenticated_run_schema": CONTROLLER_ORIGIN_AUTHENTICATED_RUN_CONTRACT,
+        "expected": {
+            "artifact_handoff_sha256": expected_artifact_handoff_sha256,
+            "exact12_matrix_sha256": expected_exact12_matrix_sha256,
+            "linux_release_archive_sha256": expected_linux_release_archive_sha256,
+            "receipt_id": expected_receipt_id,
+            "source": normalized_source,
+            "validator_binary_sha256": expected_validator_binary_sha256,
+        },
+        "replay_namespace": CONTROLLER_ORIGIN_REPLAY_NAMESPACE,
+        "structural_subject": result,
+        "validation_time_unix": now_unix,
+    }
+    artifacts = tuple(
+        taira_authority_client.Artifact(
+            f"evidence/{name}",
+            root / name,
+            maximum=evidence_file_maximum(name),
+        )
+        for name in sorted(EVIDENCE_NAMES)
+    )
+    return result, subject, artifacts
+
+
 def validate_evidence_directory(
     root: Path,
     *,
@@ -962,11 +1119,11 @@ def validate_evidence_directory(
     expected_artifact_handoff_sha256: str,
     expected_receipt_id: str,
     now_unix: int,
-) -> dict[str, object]:
-    """Refuse authoritative validation until controller provenance is trusted."""
+) -> AuthenticatedPrivacyProtocolEvidence:
+    """Validate and authorize the exact controller-origin evidence inventory."""
 
     require_controller_origin_authority_provisioned()
-    return validate_unsigned_v2_structure(
+    result, subject, artifacts = _validated_authority_request(
         root,
         expected_source=expected_source,
         expected_validator_binary_sha256=expected_validator_binary_sha256,
@@ -977,4 +1134,86 @@ def validate_evidence_directory(
         expected_artifact_handoff_sha256=expected_artifact_handoff_sha256,
         expected_receipt_id=expected_receipt_id,
         now_unix=now_unix,
+    )
+    try:
+        authority_result = taira_authority_client.authorize(
+            "privacy-protocol-origin", subject, artifacts=artifacts
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyProtocolEvidenceError(
+            f"controller-origin authority refused the exact evidence: {error}"
+        ) from error
+    return AuthenticatedPrivacyProtocolEvidence(
+        result,
+        evidence_root=root,
+        authority_result=authority_result,
+    )
+
+
+def verify_authenticated_evidence_directory(
+    root: Path,
+    *,
+    expected_source: Mapping[str, object],
+    expected_validator_binary_sha256: str,
+    expected_linux_release_archive_sha256: str,
+    expected_exact12_matrix_sha256: str,
+    expected_artifact_handoff_sha256: str,
+    expected_receipt_id: str,
+    now_unix: int,
+) -> AuthenticatedPrivacyProtocolEvidence:
+    """Historically verify deterministic sidecars without issuing a new receipt."""
+
+    require_controller_origin_authority_provisioned()
+    result, subject, artifacts = _validated_authority_request(
+        root,
+        expected_source=expected_source,
+        expected_validator_binary_sha256=expected_validator_binary_sha256,
+        expected_linux_release_archive_sha256=(
+            expected_linux_release_archive_sha256
+        ),
+        expected_exact12_matrix_sha256=expected_exact12_matrix_sha256,
+        expected_artifact_handoff_sha256=expected_artifact_handoff_sha256,
+        expected_receipt_id=expected_receipt_id,
+        now_unix=now_unix,
+    )
+    envelope_path, receipt_path = authority_sidecar_paths(root)
+    try:
+        _, envelope_payload = stable_read_relative(
+            envelope_path.parent,
+            envelope_path.name,
+            max_size=MAX_AUTHORITY_SIDECAR_BYTES,
+            return_payload=True,
+        )
+        _, receipt_payload = stable_read_relative(
+            receipt_path.parent,
+            receipt_path.name,
+            max_size=MAX_AUTHORITY_SIDECAR_BYTES,
+            return_payload=True,
+        )
+        assert envelope_payload is not None
+        assert receipt_payload is not None
+        envelope = taira_authority_client.decode_canonical_json(
+            envelope_payload, "privacy protocol authority envelope"
+        )
+        receipt = taira_authority_client.decode_canonical_json(
+            receipt_payload, "privacy protocol durable receipt"
+        )
+        authority_result = taira_authority_client.verify_receipt(
+            "privacy-protocol-origin",
+            subject,
+            authority_envelope=envelope,
+            durable_receipt=receipt,
+            artifacts=artifacts,
+        )
+    except (
+        ReleaseArtifactError,
+        taira_authority_client.TairaAuthorityClientError,
+    ) as error:
+        raise PrivacyProtocolEvidenceError(
+            f"controller-origin historical receipt verification failed: {error}"
+        ) from error
+    return AuthenticatedPrivacyProtocolEvidence(
+        result,
+        evidence_root=root,
+        authority_result=authority_result,
     )

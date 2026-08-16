@@ -29,6 +29,8 @@ const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
 /// hashes, decodes, or reserializes the JSON suffix in place of those reviewed bytes.
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
+/// Exact prefix signed only by an isolated Taira release-authority key.
+pub const TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1: &[u8] = b"iroha:taira:release-authority:v1\0";
 /// Provider implementation class carried by external-signer provenance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -120,6 +122,8 @@ pub enum SoftwareSignerRoleV1 {
     StreamToken = 11,
     /// PoP credential, commitment-root, and revocation signing.
     PopCredentials = 12,
+    /// Purpose-separated signing owned by one Taira release-authority role.
+    TairaAuthority = 13,
 }
 impl SoftwareSignerRoleV1 {
     /// Stable role label.
@@ -138,6 +142,7 @@ impl SoftwareSignerRoleV1 {
             Self::EvidenceViewer => "evidence_viewer",
             Self::StreamToken => "stream_token",
             Self::PopCredentials => "pop_credentials",
+            Self::TairaAuthority => "taira_authority",
         }
     }
     /// Exact signing domain enforced before any key operation.
@@ -156,6 +161,7 @@ impl SoftwareSignerRoleV1 {
             Self::EvidenceViewer => "sorafs.evidence-viewer.signing.v1",
             Self::StreamToken => "sorafs.stream-token.signature.v1",
             Self::PopCredentials => "sorafs.pop.issuer-signature.v1",
+            Self::TairaAuthority => "iroha.taira.release-authority.v1",
         }
     }
     /// Whether this isolated role admits the requested key algorithm.
@@ -170,7 +176,8 @@ impl SoftwareSignerRoleV1 {
             | Self::BillingStatement
             | Self::EvidenceViewer
             | Self::StreamToken
-            | Self::PopCredentials => {
+            | Self::PopCredentials
+            | Self::TairaAuthority => {
                 matches!(algorithm, SoftwareSignerKeyAlgorithmV1::Ed25519)
             }
         }
@@ -192,7 +199,8 @@ impl SoftwareSignerRoleV1 {
             | Self::BillingStatement
             | Self::EvidenceViewer
             | Self::StreamToken
-            | Self::PopCredentials => None,
+            | Self::PopCredentials
+            | Self::TairaAuthority => None,
         }
     }
 }
@@ -222,6 +230,7 @@ impl FromStr for SoftwareSignerRoleV1 {
             "evidence_viewer" => Ok(Self::EvidenceViewer),
             "stream_token" => Ok(Self::StreamToken),
             "pop_credentials" => Ok(Self::PopCredentials),
+            "taira_authority" => Ok(Self::TairaAuthority),
             _ => Err(SoftwareSignerValueParseErrorV1),
         }
     }
@@ -272,6 +281,11 @@ pub enum SoftwareSignerPurposeBindingV1 {
         /// Stable public PoP credential issuer identity.
         issuer_id: String,
     },
+    /// Exact Taira release-authority role owned by this isolated key.
+    TairaAuthority {
+        /// Stable kebab-case role label from the closed eight-role registry.
+        role: String,
+    },
 }
 impl SoftwareSignerPurposeBindingV1 {
     pub(super) fn validates_role(&self, role: SoftwareSignerRoleV1) -> bool {
@@ -306,6 +320,9 @@ impl SoftwareSignerPurposeBindingV1 {
             }
             (SoftwareSignerRoleV1::PopCredentials, Self::PopCredentials { issuer_id }) => {
                 valid_identity(issuer_id)
+            }
+            (SoftwareSignerRoleV1::TairaAuthority, Self::TairaAuthority { role }) => {
+                valid_taira_authority_role_label(role)
             }
             _ => false,
         }
@@ -559,6 +576,19 @@ pub(super) fn valid_identity(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
         && !value.to_ascii_lowercase().contains("test")
 }
+pub(super) fn valid_taira_authority_role_label(value: &str) -> bool {
+    matches!(
+        value,
+        "native-evidence"
+            | "privacy-protocol-origin"
+            | "privacy-governance"
+            | "qualification"
+            | "deploy-issuance"
+            | "rollout-observation"
+            | "public-soak-observation"
+            | "public-soak-replay-admission"
+    )
+}
 pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &str) -> bool {
     let (role_segment, instance_prefix) = match role {
         SoftwareSignerRoleV1::ProofOutcome => ("proof-outcome", None),
@@ -573,6 +603,7 @@ pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &s
         SoftwareSignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
         SoftwareSignerRoleV1::StreamToken => ("stream-token", None),
         SoftwareSignerRoleV1::PopCredentials => ("pop-credentials", None),
+        SoftwareSignerRoleV1::TairaAuthority => ("taira-authority", None),
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()

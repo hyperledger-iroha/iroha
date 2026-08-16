@@ -1,3 +1,48 @@
+fn assert_certified_fetch(
+    reducer: &Reducer,
+    outcome: &StepOutcome,
+    certificate: &QuorumCertificate,
+    manifest: Option<PayloadManifest>,
+) {
+    let sources = reducer
+        .context()
+        .roster()
+        .iter()
+        .map(|validator| validator.id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcome
+            .effects()
+            .iter()
+            .filter(|effect| matches!(effect, Effect::FetchBody { .. }))
+            .count(),
+        1
+    );
+    assert!(outcome.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: fetched_manifest,
+            certified_sources,
+            certificate: Some(fetched_certificate),
+        } if *tag == reducer.current_tag()
+            && *round == certificate.round()
+            && *subject == certificate.subject()
+            && fetched_manifest == &manifest
+            && certified_sources == &sources
+            && fetched_certificate == certificate
+    )));
+}
+fn assert_certified_fallback(reducer: &mut Reducer, certificate: &QuorumCertificate) {
+    let fallback = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the retransmission boundary retries the exact certified body");
+    assert_certified_fetch(reducer, &fallback, certificate, None);
+}
 #[test]
 fn height_context_requires_bounded_three_f_plus_one_geometry() {
     assert!(matches!(
@@ -354,7 +399,7 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         replacement_subject,
         &remote_quorum,
     );
-    let upgrade = tc_with_high(&context, 0, higher_prepare, &remote_quorum);
+    let upgrade = tc_with_high(&context, 0, higher_prepare.clone(), &remote_quorum);
     let before_upgrade = reducer.current_tag();
     let upgrade_install = only_persist(
         reducer
@@ -371,36 +416,66 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         before_upgrade.generation(),
         "the upgraded certificate starts a replacement proposal generation"
     );
+    let replacement_proposal = proposal(
+        &context,
+        1,
+        replacement_subject,
+        ProposalJustification::Timeout(upgrade),
+    );
     let replacement = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
-            proposal: proposal(
-                &context,
-                1,
-                replacement_subject,
-                ProposalJustification::Timeout(upgrade),
-            ),
+            proposal: replacement_proposal,
         })
         .expect("Set B retains the replacement proposal");
     assert!(
         replacement.effects().is_empty(),
         "a same-view timeout upgrade must reset fallback for the replacement proposal"
     );
-    let replacement_fallback = reducer
-        .step(Event::RetransmitElapsed {
-            tag: reducer.current_tag(),
-        })
-        .expect("the replacement proposal earns its own fallback boundary");
-    assert!(replacement_fallback.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            round,
-            subject,
-            certificate: None,
-            ..
-        } if *round == Round::new(context.height(), 1)
-            && *subject == replacement_subject
-    )));
+    assert_certified_fallback(&mut reducer, &higher_prepare);
+    let replacement_round = Round::new(context.height(), 1);
+    assert!(matches!(
+        reducer
+            .step(Event::BodyAvailable {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+            })
+            .expect("the replacement body becomes available after fallback")
+            .effects(),
+        [Effect::StoreBody { round, subject, .. }]
+            if *round == replacement_round && *subject == replacement_subject
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyStored {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+            })
+            .expect("the replacement body reaches validation after fallback")
+            .effects(),
+        [Effect::ValidateBody { round, subject, .. }]
+            if *round == replacement_round && *subject == replacement_subject
+    ));
+    let prepare = only_persist(
+        reducer
+            .step(Event::ValidationCompleted {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+                valid: true,
+            })
+            .expect("fallback authorizes the replacement Prepare intent"),
+    );
+    assert!(matches!(
+        prepare.record(),
+        WalRecord::PrepareIntent(vote)
+            if vote.round() == replacement_round
+                && vote.phase() == Phase::Prepare
+                && vote.subject() == replacement_subject
+                && vote.signer() == local
+    ));
 }
 #[test]
 fn retransmit_rebinds_durable_locked_validation_after_view_change() {
@@ -565,4 +640,144 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         BodyState::Validated
     );
     assert_eq!(recovered.durable_state().locked(), Some(&prepare));
+}
+#[test]
+fn live_timeout_fence_retries_the_durable_lock_instead_of_a_closed_prepare() {
+    let context = context();
+    let locked_subject = Subject::repeat(0x7d);
+    let closed_subject = Subject::repeat(0x7e);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let locked_vote = Vote::new(
+        context.id(),
+        locked_prepare.round(),
+        Phase::Commit,
+        locked_subject,
+        id(4),
+    );
+    let installed_timeout = tc_with_high(&context, 0, locked_prepare.clone(), &[1, 2, 3]);
+    let closed_prepare = qc(&context, 1, Phase::Prepare, closed_subject, &[1, 2, 3]);
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare.clone(),
+                vote: locked_vote,
+            },
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(installed_timeout),
+        ),
+    ];
+    let mut reducer = Reducer::recover(context, Some(id(4)), Generation::new(26), entries).unwrap();
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if vote == &locked_vote
+    ));
+    assert!(matches!(
+        complete_signature(&mut reducer, 0x7d).effects(),
+        [Effect::Broadcast(ConsensusMessageV2::Vote(vote))]
+            if vote.vote() == locked_vote
+    ));
+
+    let timeout = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed {
+                tag: reducer.current_tag(),
+            })
+            .expect("the live current view starts its durable timeout"),
+    );
+    assert!(matches!(
+        acknowledge(&mut reducer, &timeout).effects(),
+        [Effect::Sign {
+            message: SignableMessage::TimeoutVote(_),
+            ..
+        }]
+    ));
+    assert!(matches!(
+        complete_signature(&mut reducer, 0x7e).effects(),
+        [Effect::Broadcast(ConsensusMessageV2::TimeoutVote(_))]
+    ));
+
+    let late_prepare = reducer
+        .step(Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: closed_prepare.clone(),
+        })
+        .expect("the timeout-fenced PrepareQC remains valid control evidence");
+    assert!(
+        late_prepare
+            .effects()
+            .iter()
+            .all(|effect| !matches!(effect, Effect::FetchBody { .. })),
+        "late closed-view certification cannot recreate body acquisition"
+    );
+    let late_prepare = only_persist(late_prepare);
+    assert!(
+        acknowledge(&mut reducer, &late_prepare)
+            .effects()
+            .is_empty(),
+        "persisting late control evidence cannot create closed-view body work"
+    );
+
+    let retransmitted = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the closed view keeps durable lock recovery live");
+    assert!(retransmitted.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(certificate))
+            if certificate == &closed_prepare
+    )));
+    assert_certified_fetch(&reducer, &retransmitted, &locked_prepare, None);
+}
+#[test]
+fn future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership() {
+    let context = context();
+    let future = qc(
+        &context,
+        1,
+        Phase::Prepare,
+        Subject::repeat(0x74),
+        &[1, 2, 3],
+    );
+    let mut reducer =
+        Reducer::new(context, Some(id(4)), Generation::new(42)).expect("fresh reducer");
+    let before = reducer.clone();
+    let ignored = reducer
+        .step(Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: future.clone(),
+        })
+        .expect("a valid future PrepareQC is a harmless stutter");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(&reducer, &before);
+    assert!(reducer.durable_state().highest_prepare().is_none());
+    assert!(reducer.outbound_messages().all(|message| {
+        !matches!(
+            message,
+            ConsensusMessageV2::QuorumCertificate(certificate)
+                if certificate == &future
+        )
+    }));
+    let retransmit = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the ignored certificate created no retransmission owner");
+    assert!(retransmit.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(certificate))
+                if certificate == &future
+        )
+    }));
 }

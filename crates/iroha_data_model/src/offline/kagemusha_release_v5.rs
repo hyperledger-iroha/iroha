@@ -579,6 +579,9 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.source_tree_sha256 == [0; 32]
             || self.source_repo_dirty
             || !reviewed_source_closure_valid
+            || self.authenticated_source_seal_projection_sha256 == [0; 32]
+            || self.reviewed_cargo_binary_sha256 == [0; 32]
+            || self.reviewed_rustc_binary_sha256 == [0; 32]
             || !is_kagemusha_network_id(&self.network_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
@@ -719,6 +722,10 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             source_repo_dirty: self.source_repo_dirty,
             reviewed_source_closure_descriptor_sha256: self
                 .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: self
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: self.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: self.reviewed_rustc_binary_sha256,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -844,6 +851,11 @@ impl KagemushaRecursiveSpendCandidateV4 {
             reviewed_source_closure_descriptor_sha256: self
                 .manifest
                 .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: self
+                .manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: self.manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: self.manifest.reviewed_rustc_binary_sha256,
             network_id: self.manifest.network_id,
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
@@ -881,6 +893,11 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4,
             candidate_sha256,
             manifest_sha256,
+            authenticated_source_seal_projection_sha256: candidate
+                .manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: candidate.manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: candidate.manifest.reviewed_rustc_binary_sha256,
             generation_memory_limit_bytes: candidate.manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: candidate
                 .manifest
@@ -953,6 +970,12 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4
             || self.candidate_sha256 != candidate_sha256
             || self.manifest_sha256 != manifest_sha256
+            || self.authenticated_source_seal_projection_sha256
+                != candidate
+                    .manifest
+                    .authenticated_source_seal_projection_sha256
+            || self.reviewed_cargo_binary_sha256 != candidate.manifest.reviewed_cargo_binary_sha256
+            || self.reviewed_rustc_binary_sha256 != candidate.manifest.reviewed_rustc_binary_sha256
             || self.generation_memory_limit_bytes
                 != candidate.manifest.generation_memory_limit_bytes
             || self.generation_memory_enforcement_profile
@@ -1375,6 +1398,7 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
             return Err(KagemushaReleaseVerificationError::InvalidPolicy);
         }
         let mut all_signers = std::collections::BTreeSet::new();
+        let mut required_approvals = 0_usize;
         for (role_policy, expected_role) in self.roles.iter().zip(expected_roles) {
             let signer_count = role_policy.authorized_signers.len();
             if role_policy.role != expected_role
@@ -1393,6 +1417,10 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
             {
                 return Err(KagemushaReleaseVerificationError::InvalidPolicy);
             }
+            required_approvals += usize::from(role_policy.threshold);
+        }
+        if required_approvals > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1 {
+            return Err(KagemushaReleaseVerificationError::InvalidPolicy);
         }
         Ok(())
     }
@@ -2064,6 +2092,9 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
             || !is_kagemusha_portable_identifier(&self.generation)
+            || self.authenticated_source_seal_projection_sha256 == [0; 32]
+            || self.reviewed_cargo_binary_sha256 == [0; 32]
+            || self.reviewed_rustc_binary_sha256 == [0; 32]
             || !digests_are_distinct_and_nonzero
             || !signers_are_canonical
             || represented_roles
@@ -2098,6 +2129,12 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             || self.qualification_receipt_sha256 != release.manifest().qualification_receipt_sha256
             || self.qualified_candidate_sha256 != release.manifest().qualified_candidate_sha256
             || self.generation != release.manifest().generation
+            || self.authenticated_source_seal_projection_sha256
+                != release
+                    .manifest()
+                    .authenticated_source_seal_projection_sha256
+            || self.reviewed_cargo_binary_sha256 != release.manifest().reviewed_cargo_binary_sha256
+            || self.reviewed_rustc_binary_sha256 != release.manifest().reviewed_rustc_binary_sha256
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -2136,6 +2173,16 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                 != release.manifest().reviewed_source_closure
             || candidate.manifest.reviewed_source_closure_descriptor_sha256
                 != release.manifest().reviewed_source_closure_descriptor_sha256
+            || candidate
+                .manifest
+                .authenticated_source_seal_projection_sha256
+                != release
+                    .manifest()
+                    .authenticated_source_seal_projection_sha256
+            || candidate.manifest.reviewed_cargo_binary_sha256
+                != release.manifest().reviewed_cargo_binary_sha256
+            || candidate.manifest.reviewed_rustc_binary_sha256
+                != release.manifest().reviewed_rustc_binary_sha256
             || candidate.manifest.network_id != release.manifest().network_id
             || candidate.manifest.asset != release.manifest().asset
             || candidate.manifest.asset_scale != release.manifest().asset_scale
@@ -2335,6 +2382,14 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
         )?;
         if attestation_sha256 != self.manifest.release_attestation_sha256
             || self.promotion_record.generation != self.manifest.generation
+            || self
+                .promotion_record
+                .authenticated_source_seal_projection_sha256
+                != self.manifest.authenticated_source_seal_projection_sha256
+            || self.promotion_record.reviewed_cargo_binary_sha256
+                != self.manifest.reviewed_cargo_binary_sha256
+            || self.promotion_record.reviewed_rustc_binary_sha256
+                != self.manifest.reviewed_rustc_binary_sha256
             || self.promotion_record.qualification_receipt_sha256
                 != self.manifest.qualification_receipt_sha256
             || self.promotion_record.qualified_candidate_sha256
@@ -2458,187 +2513,113 @@ impl KagemushaRecursiveSpendReleaseRecordV5 {
         Ok(release)
     }
 }
-impl KagemushaRecursiveSpendReleaseActivationV4 {
-    /// Validate the release-bound Eq/Ep registry shape before consensus admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaReleaseVerificationError`] when a required structure, bound, authorization, or contextual binding is invalid.
-    pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
-        self.release_record.validate_structure()?;
-        let manifest_sha256 = self
-            .release_record
-            .manifest
-            .canonical_sha256()
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
-        let expected_vesta_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-            KagemushaPastaCycleParityV1::StepEq,
-            manifest_sha256,
-        );
-        let expected_pallas_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-            KagemushaPastaCycleParityV1::StepEp,
-            manifest_sha256,
-        );
-        if self.configured_policy_sha256 == [0; 32]
-            || self.configured_policy_sha256
-                != self.release_record.promotion_record.release_policy_sha256
-            || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
-            || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
-            || !self.step_eq_verifier_key_id.is_portable_registry_id()
-            || !self.step_ep_verifier_key_id.is_portable_registry_id()
-            || self.step_eq_verifier_record.version == 0
-            || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+macro_rules! impl_kagemusha_recursive_spend_release_activation {
+    ($activation:ident, $key_id:ident, $owner_id:ident, $schema_hash:ident) => {
+        impl $activation {
+            /// Validate the release-bound Eq/Ep registry shape before consensus admission.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`KagemushaReleaseVerificationError`] when release or verifier bindings differ.
+            pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
+                self.release_record.validate_structure()?;
+                let manifest_sha256 = self
+                    .release_record
+                    .manifest
+                    .canonical_sha256()
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+                let expected_vesta_verifier_key_id =
+                    $key_id(KagemushaPastaCycleParityV1::StepEq, manifest_sha256);
+                let expected_pallas_verifier_key_id =
+                    $key_id(KagemushaPastaCycleParityV1::StepEp, manifest_sha256);
+                if self.configured_policy_sha256 == [0; 32]
+                    || self.configured_policy_sha256
+                        != self.release_record.promotion_record.release_policy_sha256
+                    || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
+                    || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
+                    || !self.step_eq_verifier_key_id.is_portable_registry_id()
+                    || !self.step_ep_verifier_key_id.is_portable_registry_id()
+                    || self.step_eq_verifier_record.version == 0
+                    || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
+                {
+                    return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+                }
+                self.validate_verifier_record(
+                    &self.step_eq_verifier_record,
+                    KagemushaPastaCycleParityV1::StepEq,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                )?;
+                self.validate_verifier_record(
+                    &self.step_ep_verifier_record,
+                    KagemushaPastaCycleParityV1::StepEp,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                )?;
+                Ok(())
+            }
+            fn validate_verifier_record(
+                &self,
+                record: &VerifyingKeyRecord,
+                parity: KagemushaPastaCycleParityV1,
+                expected_curve: &str,
+            ) -> Result<(), KagemushaReleaseVerificationError> {
+                let manifest = &self.release_record.manifest;
+                let profile = manifest
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.parity == parity)
+                    .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
+                let descriptor = profile
+                    .artifacts
+                    .get(2)
+                    .filter(|artifact| {
+                        artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey
+                    })
+                    .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
+                let key = record
+                    .key
+                    .as_ref()
+                    .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let key_len = u64::try_from(key.bytes.len())
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let manifest_sha256 = manifest
+                    .canonical_sha256()
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+                let expected_owner = $owner_id(manifest_sha256);
+                let expected_schema_hash = $schema_hash(manifest, parity)
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let expected_commitment = verifying_key_commitment_v1(key)?;
+                if record.circuit_id != profile.circuit_id
+                    || record.owner_manifest_id.as_deref() != Some(expected_owner.as_str())
+                    || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
+                    || record.backend != BackendTag::Halo2IpaPasta
+                    || record.curve != expected_curve
+                    || record.public_inputs_schema_hash != expected_schema_hash
+                    || record.commitment != expected_commitment
+                    || u64::from(record.vk_len) != key_len
+                    || record.max_proof_bytes != manifest.max_proof_bytes
+                    || record.activation_height != Some(manifest.activation_height)
+                    || record.withdraw_height.is_some()
+                    || record.status != ConfidentialStatus::Active
+                    || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                    || key_len != descriptor.payload_size_bytes
+                    || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
+                {
+                    return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+                }
+                Ok(())
+            }
         }
-        self.validate_verifier_record(
-            &self.step_eq_verifier_record,
-            KagemushaPastaCycleParityV1::StepEq,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-        )?;
-        self.validate_verifier_record(
-            &self.step_ep_verifier_record,
-            KagemushaPastaCycleParityV1::StepEp,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-        )?;
-        Ok(())
-    }
-    fn validate_verifier_record(
-        &self,
-        record: &VerifyingKeyRecord,
-        parity: KagemushaPastaCycleParityV1,
-        expected_curve: &str,
-    ) -> Result<(), KagemushaReleaseVerificationError> {
-        let manifest = &self.release_record.manifest;
-        let profile = manifest
-            .profiles
-            .iter()
-            .find(|profile| profile.parity == parity)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let descriptor = profile
-            .artifacts
-            .get(2)
-            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let key = record
-            .key
-            .as_ref()
-            .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        let key_len = u64::try_from(key.bytes.len())
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        if record.circuit_id != profile.circuit_id
-            || record
-                .owner_manifest_id
-                .as_deref()
-                .is_none_or(str::is_empty)
-            || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.public_inputs_schema_hash == [0; 32]
-            || record.commitment == [0; 32]
-            || u64::from(record.vk_len) != key_len
-            || record.max_proof_bytes != manifest.max_proof_bytes
-            || record.activation_height != Some(manifest.activation_height)
-            || record.withdraw_height.is_some()
-            || record.status != ConfidentialStatus::Active
-            || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            || key_len != descriptor.payload_size_bytes
-            || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        Ok(())
-    }
+    };
 }
-impl KagemushaRecursiveSpendReleaseActivationV5 {
-    /// Validate the V5 release-bound Eq/Ep registry shape before consensus admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaReleaseVerificationError`] when release or verifier bindings differ.
-    pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
-        self.release_record.validate_structure()?;
-        let manifest_sha256 = self
-            .release_record
-            .manifest
-            .canonical_sha256()
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
-        let expected_vesta_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v5(
-            KagemushaPastaCycleParityV1::StepEq,
-            manifest_sha256,
-        );
-        let expected_pallas_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v5(
-            KagemushaPastaCycleParityV1::StepEp,
-            manifest_sha256,
-        );
-        if self.configured_policy_sha256 == [0; 32]
-            || self.configured_policy_sha256
-                != self.release_record.promotion_record.release_policy_sha256
-            || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
-            || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
-            || !self.step_eq_verifier_key_id.is_portable_registry_id()
-            || !self.step_ep_verifier_key_id.is_portable_registry_id()
-            || self.step_eq_verifier_record.version == 0
-            || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        self.validate_verifier_record(
-            &self.step_eq_verifier_record,
-            KagemushaPastaCycleParityV1::StepEq,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-        )?;
-        self.validate_verifier_record(
-            &self.step_ep_verifier_record,
-            KagemushaPastaCycleParityV1::StepEp,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-        )?;
-        Ok(())
-    }
-    fn validate_verifier_record(
-        &self,
-        record: &VerifyingKeyRecord,
-        parity: KagemushaPastaCycleParityV1,
-        expected_curve: &str,
-    ) -> Result<(), KagemushaReleaseVerificationError> {
-        let manifest = &self.release_record.manifest;
-        let profile = manifest
-            .profiles
-            .iter()
-            .find(|profile| profile.parity == parity)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let descriptor = profile
-            .artifacts
-            .get(2)
-            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let key = record
-            .key
-            .as_ref()
-            .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        let key_len = u64::try_from(key.bytes.len())
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        if record.circuit_id != profile.circuit_id
-            || record
-                .owner_manifest_id
-                .as_deref()
-                .is_none_or(str::is_empty)
-            || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.public_inputs_schema_hash == [0; 32]
-            || record.commitment == [0; 32]
-            || u64::from(record.vk_len) != key_len
-            || record.max_proof_bytes != manifest.max_proof_bytes
-            || record.activation_height != Some(manifest.activation_height)
-            || record.withdraw_height.is_some()
-            || record.status != ConfidentialStatus::Active
-            || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            || key_len != descriptor.payload_size_bytes
-            || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        Ok(())
-    }
-}
+impl_kagemusha_recursive_spend_release_activation!(
+    KagemushaRecursiveSpendReleaseActivationV4,
+    kagemusha_recursive_spend_verifier_key_id_v4,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4
+);
+impl_kagemusha_recursive_spend_release_activation!(
+    KagemushaRecursiveSpendReleaseActivationV5,
+    kagemusha_recursive_spend_verifier_key_id_v5,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v5,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v5
+);

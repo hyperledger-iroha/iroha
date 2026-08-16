@@ -1187,6 +1187,48 @@ fn first_ledger_directory_creation_fails_closed_until_parent_sync() {
     assert!(ledger.records().is_empty());
 }
 #[test]
+fn exact_empty_stutter_publishes_an_absent_frame_once() {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+
+    let root = tempfile::tempdir().expect("temporary directory");
+    let ledger_path = root.path().join(LEDGER_FILE);
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open empty store");
+    assert_eq!(empty, LifecycleLedgerV1::empty(context()));
+    assert!(!ledger_path.exists());
+
+    store
+        .persist_exact_successor(&empty, &empty)
+        .expect("publish the first empty frame");
+    assert!(ledger_path.is_file());
+    let first_frame = fs::read(&ledger_path).expect("published empty frame");
+    #[cfg(unix)]
+    let first_inode = fs::metadata(&ledger_path)
+        .expect("published empty-frame metadata")
+        .ino();
+
+    store
+        .persist_exact_successor(&empty, &empty)
+        .expect("confirm the already-published empty frame");
+    assert_eq!(
+        fs::read(&ledger_path).expect("confirmed empty frame"),
+        first_frame
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&ledger_path)
+            .expect("confirmed empty-frame metadata")
+            .ino(),
+        first_inode,
+        "an exact durable stutter must not replace the existing frame"
+    );
+
+    let (_, reopened) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("reopen empty store");
+    assert_eq!(reopened, empty);
+}
+#[test]
 fn store_roundtrip_rejects_corrupt_and_foreign_frames() {
     let root = tempfile::tempdir().expect("temporary directory");
     let (store, empty) =

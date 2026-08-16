@@ -6395,11 +6395,8 @@ mod tests {
             .build(id)
     }
 
-    fn ranked_account_fixture(
-        fixture: IterDispatchRankFixture,
-    ) -> (World, [AccountId; 3]) {
-        let domain =
-            Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
+    fn ranked_account_fixture(fixture: IterDispatchRankFixture) -> (World, [AccountId; 3]) {
+        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account_ids = [
             iroha_test_samples::gen_account_in("w").0,
             iroha_test_samples::gen_account_in("w").0,
@@ -6441,31 +6438,19 @@ mod tests {
 
     fn ranked_asset_definition_fixture(
         fixture: IterDispatchRankFixture,
-    ) -> (
-        World,
-        [iroha_data_model::asset::AssetDefinitionId; 3],
-    ) {
-        let domain =
-            Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
+    ) -> (World, [iroha_data_model::asset::AssetDefinitionId; 3]) {
+        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let (names, ranks) = match fixture {
-            IterDispatchRankFixture::Sparse => (
-                ["rose", "tulip", "peony"],
-                [Some(1), Some(2), None],
-            ),
-            IterDispatchRankFixture::Dense => (
-                ["a0", "a1", "a2"],
-                [Some(0), Some(1), Some(2)],
-            ),
+            IterDispatchRankFixture::Sparse => {
+                (["rose", "tulip", "peony"], [Some(1), Some(2), None])
+            }
+            IterDispatchRankFixture::Dense => (["a0", "a1", "a2"], [Some(0), Some(1), Some(2)]),
         };
         let first = ranked_asset_definition(names[0], ranks[0]);
         let second = ranked_asset_definition(names[1], ranks[1]);
         let third = ranked_asset_definition(names[2], ranks[2]);
-        let ids = [
-            first.id().clone(),
-            second.id().clone(),
-            third.id().clone(),
-        ];
+        let ids = [first.id().clone(), second.id().clone(), third.id().clone()];
         (
             World::with([domain], [account], [first, second, third]),
             ids,
@@ -6513,9 +6498,9 @@ mod tests {
                         SelectorTuple::<$item>::default(),
                         payload,
                     ));
-                let request = QueryRequest::Start(
-                    iroha_data_model::query::QueryWithParams::new(&query, params),
-                );
+                let request = QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
+                    &query, params,
+                ));
                 let validated = ValidQueryRequest::validate_for_client_parts(
                     request,
                     &ALICE_ID,
@@ -6545,8 +6530,8 @@ mod tests {
                     if assert_progress {
                         let mut expected_remaining = 0_u64;
                         for page in &expected_pages[page_index + 1..] {
-                            let page_len = u64::try_from(page.len())
-                                .expect("expected page length fits u64");
+                            let page_len =
+                                u64::try_from(page.len()).expect("expected page length fits u64");
                             expected_remaining = expected_remaining
                                 .checked_add(page_len)
                                 .expect("expected remaining count fits u64");
@@ -6557,10 +6542,7 @@ mod tests {
                     if has_next_page {
                         output = Some(
                             handle
-                                .handle_iter_continue(
-                                    cursor.expect("should continue"),
-                                    &ALICE_ID,
-                                )
+                                .handle_iter_continue(cursor.expect("should continue"), &ALICE_ID)
                                 .unwrap(),
                         );
                     }

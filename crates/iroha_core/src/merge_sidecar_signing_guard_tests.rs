@@ -1,4 +1,71 @@
 #[test]
+fn signing_guard_rejects_legacy_journal_without_implicit_recovery() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join(LEGACY_SIGNING_GUARD_DIRS[0])).expect("create legacy journal");
+    assert!(matches!(
+        MergeSigningGuard::open(temp.path()),
+        Err(MergeSidecarError::SigningGuard(message))
+            if message.contains("authenticated candidate-body recovery")
+    ));
+    assert!(!temp.path().join(SIGNING_GUARD_DIR).exists());
+}
+#[test]
+fn signing_guard_rejects_aggregate_oversize_before_recovery_scan() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+    let path = guard.directory.join(format!(
+        "{}.{}",
+        Hash::new(b"oversized signing guard"),
+        SIGNING_GUARD_RECORD_EXT
+    ));
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .expect("create sparse oversized artifact");
+    file.set_len(
+        u64::try_from(MAX_SIGNING_GUARD_TOTAL_BYTES)
+            .expect("aggregate bound fits u64")
+            .saturating_add(1),
+    )
+    .expect("size sparse oversized artifact");
+    drop(file);
+    drop(guard);
+    assert!(matches!(
+        MergeSigningGuard::open(temp.path()),
+        Err(MergeSidecarError::SigningGuard(message))
+            if message.contains("aggregate bytes")
+    ));
+}
+#[test]
+fn signing_guard_rejects_oversized_candidate_temp() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+    let path = guard.directory.join(format!(
+        "{}.{}",
+        Hash::new(b"oversized signing guard temp"),
+        SIGNING_GUARD_TEMP_EXT
+    ));
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .expect("create sparse oversized temp");
+    file.set_len(
+        u64::try_from(MAX_SIGNING_GUARD_RECORD_BYTES)
+            .expect("record bound fits u64")
+            .saturating_add(1),
+    )
+    .expect("size sparse oversized temp");
+    drop(file);
+    drop(guard);
+    assert!(matches!(
+        MergeSigningGuard::open(temp.path()),
+        Err(MergeSidecarError::SigningGuard(message))
+            if message.contains("unsafe signing-guard record temp")
+    ));
+}
+#[test]
 fn signing_guard_rejects_truncated_final_record() {
     let temp = tempfile::tempdir().expect("temp dir");
     let context = MergeSigningContextV1 {

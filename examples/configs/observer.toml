@@ -3,10 +3,8 @@
 
 [sumeragi]
 role = "observer"  # do not propose or vote; sync via BlockSync
-# Optional multi‑collector knobs (effective for validators; observers ignore):
-# [sumeragi.collectors]
-# k = 1                 # number of concurrent collectors per height
-# redundant_send_r = 1  # redundant fanout on timeout (validators)
+# Consensus mode, committee geometry, DA layout, and timing come from the
+# signed genesis/current height context and are not node-local switches.
 
 # Typical additional fields needed in a full config (examples):
 # [network]

@@ -10,7 +10,6 @@
 //! The definitions and proof bodies contain no proof escape hatches. See `VERIFICATION.md` for
 //! pinned execution evidence and the residual collection-extraction, adapter-contract, WAL-byte,
 //! cross-tool, and liveness boundaries that remain before a complete production-correctness claim.
-use vstd::{assert_seqs_equal, prelude::*};
 use crate::refinement::{
     BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE, BOUNDARY_RESUME_AFTER_REPLAY,
     CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL,
@@ -35,6 +34,7 @@ use crate::refinement::{
     WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
     WAL_RECORD_TIMEOUT_INTENT,
 };
+use vstd::{assert_seqs_equal, prelude::*};
 // These expressions are instantiated both as specifications and as executable Verus functions.
 // The PrepareIntent and TimeoutIntent WAL guards below are derived directly from primitive vote
 // and frozen-context fields. The remaining projected WAL certificate/proposal predicates are

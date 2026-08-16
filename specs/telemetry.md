@@ -8,14 +8,14 @@ Endpoints
 - `/v1/sumeragi/status` (Norito by default): authoritative protocol-v2 reducer status. JSON flattens the reducer fields (protocol and fingerprints, height context, height/view/phase/leader, QC and timeout references, body/persistence state, and the latest durable commit) and appends `safety_halt`, bounded lane settlement/relay/ownership/committed/session arrays, `local_peer_removed`, and `operator { view_change_install_total, busy_deferral_total, adapter_queues, tx_queue }`. Norito carries the same information as typed `SumeragiV2StatusResponse`, with reducer state under `authoritative`.
 - `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - When `nexus.enabled = false` (Iroha 2 mode), lane/dataspace sections in `/status` and `/v1/sumeragi/status` are emptied and Prometheus output omits lane/dataspace labels so single-lane deployments stay lane-free.
-- `/v1/sumeragi/telemetry` (JSON): aggregated consensus telemetry. The payload exposes collector observations under `availability.collectors`, missing-chunk totals under `rbc_backlog`, and bounded pre-session queue totals and limits under `rbc_pending`. It does not expose per-session RBC state, chunk samples, delivery probes, or a deterministic collector plan.
-- `/v1/sumeragi/pacemaker` (JSON): pacemaker timers and config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
+- `/v1/sumeragi/telemetry` (JSON): legacy-labeled aggregate transport observations. Collector/RBC-named fields are not authoritative revision-4 state and may remain zero; use authenticated `/v1/sumeragi/status` plus consensus logs for live protocol evidence.
+- `/v1/sumeragi/pacemaker` (JSON): non-authoritative legacy-labeled gauge snapshot. Its backoff/RTT/jitter fields are not revision-4 timer configuration; revision 4 derives deadlines from the signed cadence as described in `specs/sumeragi_pacemaker.md`.
 - `/v1/sumeragi/qc` (Norito by default): highest/locked QC snapshot; includes `subject_block_hash` for the highest QC when known. Set `Accept: application/json` to receive the JSON view.
 - `/v1/sumeragi/commit-qcs/{block_hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
 - `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
 - `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
 - `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
-- `/v1/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+- `/v1/sumeragi/params` (JSON): read-only snapshot of governed NPoS parameter records. It does not replace the signed revision-4 height context or the shared configuration fingerprint exposed by `/v1/sumeragi/status`.
 
 The authoritative `/v1/sumeragi/status` response carries canonical settlement,
 relay, payload-ownership, committed-lane-block, and active-session evidence; it
@@ -321,10 +321,10 @@ When the alert triggers:
    payload. If backlog is accumulating, verify gossip health and DA fetch
    telemetry (`dashboards/grafana/soranet_pq_ratchet.json` covers PQ circuit
    status) before blaming the admission tier.
-4. Confirm Torii pacemaker windows by charting
-   `sumeragi_pacemaker_backoff_ms` and `sumeragi_pacemaker_rtt_floor_ms`. A
-   sudden increase usually indicates view-change churn that will also manifest
-   as higher admission latency.
+4. Confirm the authenticated revision-4 `(height, view)` and TimeoutCertificate
+   progress in `/v1/sumeragi/status`. Correlate repeated view changes with
+   backpressure reasons and responsive committee membership; legacy
+   backoff/RTT gauges do not drive revision-4 deadlines.
 5. If latency remains elevated after clearing backlog, throttle the offending
    lane by raising `iroha_config.torii.transaction_lane.max_inflight` or
    redirecting traffic to a healthy lane using the orchestrator/CLI routing
@@ -478,27 +478,18 @@ Sumeragi additions (new series)
 - `sumeragi_bg_post_queue_depth` (gauge) — global background-post queue depth.
 - `sumeragi_bg_post_queue_depth_by_peer{peer}` (gauge) — per-collector background-post queue depth.
 
-Sumeragi pacemaker
-- Config gauges:
-  - `sumeragi_pacemaker_backoff_multiplier` — backoff multiplier applied to each view-change increment.
-  - `sumeragi_pacemaker_rtt_floor_multiplier` — multiplier for RTT-based floor.
-  - `sumeragi_pacemaker_max_backoff_ms` — maximum backoff cap applied to the pacemaker window.
-  - `sumeragi_pacemaker_jitter_frac_permille` — jitter band as permille of the window (0..=1000).
-- Runtime gauges:
-  - `sumeragi_pacemaker_backoff_ms` — current backoff window (ms) that gates the next view-change suggestion.
-  - `sumeragi_pacemaker_rtt_floor_ms` — current RTT-based floor (ms) considered when computing the backoff window; 0 when no RTT samples.
-  - `sumeragi_pacemaker_jitter_ms` — jitter magnitude applied (ms; absolute value).
+Sumeragi deadline telemetry
 
-PromQL examples
-- Pacemaker backoff trend (avg over 5m):
-  - avg_over_time(sumeragi_pacemaker_backoff_ms[5m])
-- RTT floor trend (avg over 5m):
-  - avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])
-- Verify config:
-  - max(sumeragi_pacemaker_backoff_multiplier)
-  - max(sumeragi_pacemaker_rtt_floor_multiplier)
-  - max(sumeragi_pacemaker_max_backoff_ms)
-  - max(sumeragi_pacemaker_jitter_frac_permille)
+- Revision 4 derives its view-zero deadline as ten signed cadence intervals,
+  retransmits every one fifth of that deadline, and applies linear
+  view-indexed backoff. Validate cadence and the shared configuration
+  fingerprint through authenticated `/v1/sumeragi/status`.
+- `sumeragi_pacemaker_backpressure_deferrals_total` and its reason-labelled
+  variants remain useful finite-queue observations. They do not configure or
+  report an adaptive timer.
+- The catalog still registers legacy-labeled backoff, RTT, EMA, and jitter
+  gauges. Do not use them for revision-4 alerts or rollout decisions;
+  they may remain zero until that telemetry ABI is retired separately.
 
 NEW_VIEW receipts
 - GaugeVec:
@@ -742,40 +733,35 @@ Configuration
   - `iroha_zk_halo2_verifier_budget_ms`: soft verifier time budget per proof (milliseconds).
   - `iroha_zk_halo2_verifier_max_batch`: maximum proofs accepted in a batch verification.
 
-DA/RBC (Sumeragi) configuration
-- `sumeragi.da.enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is tracked (advisory; does not gate commit); missing local payloads are fetched via RBC or block sync, and RBC remains transport/recovery while its delivery latency is still tracked.
-- `sumeragi.advanced.rbc.chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
-- `sumeragi.advanced.rbc.session_ttl_ms` (u64): inactive RBC sessions are pruned after this TTL (milliseconds) to bound memory.
-- `sumeragi.advanced.rbc.rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
+Revision-4 Sumeragi context and diagnostics
 
-Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`, `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}`, `sumeragi_rbc_mismatch_total{peer,kind}`, `sumeragi_rbc_persist_drops_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the aggregated Torii telemetry snapshot shown above. The rebroadcast-skipped counters increment whenever the core skips payload/READY rebroadcasts.
-Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`.
+- Consensus mode, cadence, committee/leader selection, quorum, and the mandatory
+  Reed-Solomon-16 DA layout are authenticated by signed genesis/current-height
+  context. There are no local DA, RBC, collector, or pacemaker switches.
+- Node-local configuration only bounds candidate blocks and ingress/runtime
+  resources under `sumeragi.block`, `sumeragi.queues`, and `sumeragi.limits`.
+  Change these bounds consistently across validators; the shared projection is
+  fingerprinted and a mismatch fails activation.
+- The view-zero deadline is ten signed cadence intervals, critical-message
+  retransmission is one fifth of that deadline, and view `v` uses a linear
+  `(v + 1)` deadline multiplier. RTT samples, EMA values, jitter, and local wall
+  clock tuning never change these deadlines.
 
-### Troubleshooting: RBC & pacemaker backpressure
+The telemetry catalog still contains legacy-labeled, non-authoritative fields
+whose names include `rbc`, `da`, or `pacemaker`. Treat them as
+transport/backpressure observations, not as evidence of configurable V1
+subprotocols. In particular, the
+`sumeragi_rbc_*` backlog/store series and `sumeragi_da_*` series may remain zero
+on the revision-4 path. Pacemaker-named backpressure counters report producer
+deferral around finite queues; they do not report an adaptive timer policy.
 
-1. **Capture live snapshots.** Start with `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi telemetry` (or an equivalently exact-`NetworkId` operator-signed `GET /v1/sumeragi/telemetry`) and archive `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These are aggregate diagnostics, so use consensus logs when you need to identify a specific height or view.
-2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate aggregate missing-chunk counts with `rbc_pending` drops and consensus logs.
-3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero in current pipelines.
-4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m])`, `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason="..."}[5m])`, `max_over_time(sumeragi_pacemaker_backpressure_deferral_age_ms{reason="..."}[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_count[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_bytes[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_age[5m])`, `max_over_time(sumeragi_pending_blocks_blocking[5m])`, `max_over_time(sumeragi_commit_inflight_queue_depth[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `max_over_time(sumeragi_tx_queue_oldest_queued_age_ms[5m])`, `increase(gossip_fallback_total[5m])`, and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
-5. **Review logs and network health.** Filter consensus logs for `rbc` and `pacemaker_backpressure_deferral` to spot repeated retries, DA restarts, or queue pressure. Cross-check P2P metrics (`p2p_queue_depth{priority=...}`, `p2p_dropped_posts`, `p2p_dropped_broadcasts`, `p2p_subscriber_queue_full_total`, `p2p_subscriber_queue_full_by_topic_total{topic=...}`, `p2p_subscriber_unrouted_total`, `p2p_subscriber_unrouted_by_topic_total{topic=...}`) and payload ingress drops (`consensus_ingress_drop_total{topic="ConsensusPayload|ConsensusChunk|BlockSync",reason="rate|bytes|rbc_session_limit|penalty"}`) to identify network bottlenecks; adjust collector fan-out, queue capacity, or baseline load accordingly.
-6. **Correlate logs automatically.** Run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
-   to list each pacemaker deferral together with nearby missing-availability entries. Adjust
-   `--window-before` / `--window-after` to match your alert window and add `--status path/to/status.json`
-   when you have a `/v1/sumeragi/status` snapshot handy. The script prints a human-readable summary
-   by default and supports `--json` for feeding structured reports into on-call automation.
-7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
-   - Freeze new client submissions via admission rate limiting.
-   - Manually inspect problematic sessions with `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
-   - Consider increasing `sumeragi.advanced.rbc.chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
+### Troubleshooting consensus transport and backpressure
 
-
-Availability collectors expose vote ingestion counters: `sumeragi_da_votes_ingested_total`, `sumeragi_da_votes_ingested_by_collector{collector_idx="..."}`, and `sumeragi_da_votes_ingested_by_peer{peer="..."}`. Availability-evidence assembly latency is recorded via the histogram `sumeragi_qc_assembly_latency_ms{kind="availability"}` with the latest observed latency mirrored in `sumeragi_qc_last_latency_ms{kind="availability"}`.
-
-Pacemaker configuration (Sumeragi)
-- `sumeragi.advanced.pacemaker.backoff_multiplier` (u32): scales each timeout backoff step (default 1).
-- `sumeragi.advanced.pacemaker.rtt_floor_multiplier` (u32): RTT floor multiplier; floor = avg_rtt * multiplier (default 2).
-- `sumeragi.advanced.pacemaker.max_backoff_ms` (u64): backoff cap in milliseconds (default 60000).
-- `sumeragi.advanced.pacemaker.jitter_frac_permille` (u32): jitter band in permille of the window (0..=1000, default 0 = off).
+1. **Capture authenticated snapshots.** Use `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi status` and `ops sumeragi telemetry`; preserve the shared configuration fingerprint, signed height context, queue depths, and the active `(height, view)`.
+2. **Check context agreement first.** A mode, cadence, roster, quorum, DA-layout, or shared-limit mismatch must be repaired through the signed genesis/height rollout or consistent validator configuration. Do not add a local bypass.
+3. **Inspect finite queues.** Correlate `sumeragi_pacemaker_backpressure_deferrals_total`, its reason-labelled variants, transaction saturation gauges, body/chunk ingress depth, and P2P queue/drop metrics. If a node-local limit is too small, change the corresponding current `sumeragi.block`, `sumeragi.queues`, or `sumeragi.limits` field consistently across validators.
+4. **Inspect transport health.** Repeated retransmission, incomplete reconstruction, or block-sync recovery should be correlated with authenticated consensus-message logs and `consensus_ingress_drop_total`. Provision bandwidth or reduce admission load before changing finite limits.
+5. **Escalate persistent stalls.** Freeze new client submissions, preserve status/telemetry and signed context evidence, and verify that at least `2f + 1` committee members remain responsive. A local RBC/DA/pacemaker knob is not a recovery mechanism in revision 4.
 
 Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.
@@ -825,7 +811,10 @@ annotations:
     No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
 ```
 
-Adjust the 140 minute window to match your deployment’s `sumeragi.npos.vrf.commit_deadline_offset_blocks + sumeragi.npos.vrf.reveal_deadline_offset_blocks` (defaults assume one-second blocks). Link alerts to the response checklist in `specs/sumeragi.md#vrf-alert-response-runbook`.
+Adjust the 140 minute window to match the governed
+`SumeragiNposParameters.vrf` commit/reveal offsets and the signed cadence. Link
+alerts to the response checklist in
+`specs/sumeragi_randomness_evidence_runbook.md`.
 The sample rule group lives at `specs/references/prometheus.rules.sumeragi_vrf.yml`; include it from your Prometheus configuration (see `specs/references/prometheus.template.yml` for an example `rule_files` entry).
 Run `scripts/check_prometheus_rules.sh` to validate the rules locally. The helper invokes `promtool check rules` if Prometheus is installed, or falls back to `docker run --rm prom/prometheus …` when Docker is available.
 ## Alerting — Consensus Membership Mismatch

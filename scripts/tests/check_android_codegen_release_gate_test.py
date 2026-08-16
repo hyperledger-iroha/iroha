@@ -48,6 +48,21 @@ def test_android_codegen_gate_uses_two_sealed_isolated_replays() -> None:
     assert "deterministic binding generation requires a clean checkout" in gate
     assert "HEAD_COMMIT=" in gate
     assert "GIT_OPTIONAL_LOCKS=0" in gate
+    assert "compgen -e" in gate
+    assert 'unset "${openapi_git_variable}"' in gate
+    for setting in (
+        "GIT_NO_LAZY_FETCH=1",
+        "GIT_NO_REPLACE_OBJECTS=1",
+        "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=core.hooksPath",
+        "GIT_CONFIG_VALUE_0=/dev/null",
+        "GIT_CONFIG_KEY_1=core.fsmonitor",
+        "GIT_CONFIG_VALUE_1=false",
+    ):
+        assert setting in gate
+    assert gate.index("compgen -e") < gate.index("git -C")
     assert gate.count('create_replay_clone "${') == 2
     assert gate.count('run_replay "${') == 2
     assert gate.count("git clone --quiet --local --no-hardlinks --no-checkout") == 1

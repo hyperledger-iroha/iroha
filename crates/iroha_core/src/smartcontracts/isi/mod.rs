@@ -1527,21 +1527,15 @@ mod tests {
 
     impl LaneRelayRejectionCase {
         fn expectation(self) -> LaneRelayRejectionExpectation {
-            use LaneRelayRejectionErrorKind::{InvalidParameter, InvariantViolation};
             use LaneRelayRejectionCase as Case;
+            use LaneRelayRejectionErrorKind::{InvalidParameter, InvariantViolation};
 
-            let (context, message_fragments): (
-                &'static str,
-                &'static [&'static str],
-            ) = match self {
+            let (context, message_fragments): (&'static str, &'static [&'static str]) = match self {
                 Case::NexusDisabled => (
                     "disabled nexus must reject verified lane relay registration",
                     &["requires nexus.enabled=true"],
                 ),
-                Case::UnknownLaneId => (
-                    "unknown lane id must be rejected",
-                    &["unknown lane id 4"],
-                ),
+                Case::UnknownLaneId => ("unknown lane id must be rejected", &["unknown lane id 4"]),
                 Case::StaleGeometryLaneId => (
                     "stale derived geometry must not register verified relay state",
                     &["unknown lane id 4"],
@@ -1618,10 +1612,7 @@ mod tests {
                     "zero manifest root must be rejected",
                     &["manifest_root cannot be zeroed"],
                 ),
-                Case::ExpiredProofBlob => (
-                    "expired proof must be rejected",
-                    &["proof expired"],
-                ),
+                Case::ExpiredProofBlob => ("expired proof must be rejected", &["proof expired"]),
                 Case::MissingFastpqBinding => (
                     "missing fastpq binding must be rejected",
                     &["missing fastpq_binding"],
@@ -1656,10 +1647,9 @@ mod tests {
                     "a structurally valid proof without a final QC must not write relay state",
                     &["lane relay finality authentication failed", "QC missing"],
                 ),
-                Case::MalformedExistingState => (
-                    "malformed existing state must be rejected",
-                    &["stored"],
-                ),
+                Case::MalformedExistingState => {
+                    ("malformed existing state must be rejected", &["stored"])
+                }
                 Case::ConflictingExistingState => (
                     "conflicting existing state must be rejected",
                     &["conflicting verified lane relay"],
@@ -1685,27 +1675,17 @@ mod tests {
                 Case::StaleGeometryLaneId => b"register-lane-relay-stale-geometry-lane",
                 Case::LaneDataspaceMismatch => b"register-lane-relay-lane-dsid-mismatch",
                 Case::UnknownDataspaceId => b"register-lane-relay-unknown-dsid",
-                Case::ProofManifestRootMismatch => {
-                    b"register-lane-relay-proof-manifest-mismatch"
-                }
+                Case::ProofManifestRootMismatch => b"register-lane-relay-proof-manifest-mismatch",
                 Case::ProofDataspaceMismatch => b"register-lane-relay-proof-dsid-mismatch",
                 Case::StaleFastpqHeight => b"register-lane-relay-stale-fastpq-height",
                 Case::ZeroLikeFastpqDigest => b"register-lane-relay-zero-like-fastpq-digest",
-                Case::EnvelopeBlockHeightMismatch => {
-                    b"register-lane-relay-block-height-mismatch"
-                }
-                Case::SettlementLaneMismatch => {
-                    b"register-lane-relay-settlement-lane-mismatch"
-                }
+                Case::EnvelopeBlockHeightMismatch => b"register-lane-relay-block-height-mismatch",
+                Case::SettlementLaneMismatch => b"register-lane-relay-settlement-lane-mismatch",
                 Case::SettlementDataspaceMismatch => {
                     b"register-lane-relay-settlement-dsid-mismatch"
                 }
-                Case::SettlementHashMismatch => {
-                    b"register-lane-relay-settlement-hash-mismatch"
-                }
-                Case::SettlementTotalsMismatch => {
-                    b"register-lane-relay-settlement-totals-mismatch"
-                }
+                Case::SettlementHashMismatch => b"register-lane-relay-settlement-hash-mismatch",
+                Case::SettlementTotalsMismatch => b"register-lane-relay-settlement-totals-mismatch",
                 Case::MismatchedFastpqDigest => b"register-lane-relay-digest-mismatch",
                 Case::MismatchedClaimDigest => b"register-lane-relay-claim-mismatch",
                 Case::FutureFastpqHeight => b"register-lane-relay-future-height",
@@ -1935,10 +1915,7 @@ mod tests {
             }
             Case::ZeroLikeFastpqDigest => {
                 envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-                    proof_digest: iroha_crypto::Hash::prehashed([
-                        0;
-                        iroha_crypto::Hash::LENGTH
-                    ]),
+                    proof_digest: iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]),
                     verified_at_height: state_transaction.block_height(),
                 }))
             }
@@ -1987,15 +1964,9 @@ mod tests {
                     .receipts
                     .push(LaneSettlementReceipt {
                         source_id: [0xA5; 32],
-                        local_amount: "0.000001"
-                            .parse()
-                            .expect("valid settlement quantity"),
-                        xor_due: "0.000001"
-                            .parse()
-                            .expect("valid settlement quantity"),
-                        xor_after_haircut: "0.000001"
-                            .parse()
-                            .expect("valid settlement quantity"),
+                        local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                        xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                        xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
                         xor_variance: "0".parse().expect("valid settlement quantity"),
                         timestamp_ms: 1_700_000_001_000,
                     });
@@ -2044,14 +2015,14 @@ mod tests {
         let error_message = match (expectation.kind, &err) {
             (
                 LaneRelayRejectionErrorKind::InvalidParameter,
-                InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message),
-                ),
-            ) => message,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    message,
+                )),
+            ) => message.as_str(),
             (
                 LaneRelayRejectionErrorKind::InvariantViolation,
                 InstructionExecutionError::InvariantViolation(message),
-            ) => message,
+            ) => message.as_ref(),
             _ => panic!("unexpected verified lane relay rejection: {err:?}"),
         };
         let mut message_matches = true;

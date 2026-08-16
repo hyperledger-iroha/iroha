@@ -25,6 +25,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 TAIRA_CONFIG_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/config.toml"
+TAIRA_README_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/README.md"
 DEFAULT_TAIRA_CONFIG_PATH = (
     MODULE_PATH.parents[1] / "defaults/kagami/iroha3-taira/config.toml"
 )
@@ -127,9 +128,124 @@ def test_taira_templates_require_no_backend_offline_enrollment() -> None:
     assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in config_text
     assert "operation_registry_max_entries = 4096" in config_text
     assert "operation_registry_max_bytes = 524288" in config_text
-    assert "[settlement.offline]" not in config_text
+    assert "\n[settlement.offline]\n" not in config_text
     assert "kagemusha_release_policy_path" not in config_text
     assert "kagemusha_artifact_dir" not in config_text
+    assert "--kagemusha-release-root" in config_text
+
+
+def test_taira_kagemusha_release_docs_preserve_both_production_boundaries() -> None:
+    readme = TAIRA_README_PATH.read_text(encoding="utf-8")
+
+    assert "cargo run" not in readme
+    assert "--kagemusha-release-catalog" not in readme
+    assert "--kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1" in readme
+    assert "/srv/iroha-kagemusha/taira-v4-r1/seals/" in readme
+    assert "/etc/iroha/taira-validator/kagemusha-qualified" not in readme
+    assert (
+        "KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami" in readme
+    )
+    assert (
+        "KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>'"
+        in readme
+    )
+    assert (
+        "export KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256"
+        in readme
+    )
+    assert (
+        "readonly KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256"
+        in readme
+    )
+    pinned_invocation_prefix = (
+        "assert_kagemusha_v4_kagami_custody || exit 1\n"
+        "if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \\\n"
+        '  "${KAGEMUSHA_V4_KAGAMI_BIN}" \\\n'
+        "  kagemusha "
+    )
+    for subcommand in (
+        "prepare-taira-release-roster-v4",
+        "prepare-release-circuit-params-v4",
+        "prepare-activation-v4",
+    ):
+        assert pinned_invocation_prefix + subcommand in readme
+    assert readme.count(pinned_invocation_prefix) == 3
+    assert readme.count("assert_kagemusha_v4_kagami_custody || exit 1") == 6
+    pinned_invocation_postcheck = (
+        "then\n"
+        "  KAGEMUSHA_COMMAND_STATUS=0\n"
+        "else\n"
+        "  KAGEMUSHA_COMMAND_STATUS=$?\n"
+        "fi\n"
+        "assert_kagemusha_v4_kagami_custody || exit 1\n"
+        'test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || '
+        'exit "${KAGEMUSHA_COMMAND_STATUS}"'
+    )
+    assert readme.count(pinned_invocation_postcheck) == 3
+    for pinned_invocation_suffix in (
+        "--output /absolute/private/path/taira-release-roster.norito\n"
+        + pinned_invocation_postcheck,
+        "--output-dir /absolute/private/path/kagemusha-release-inputs/"
+        "circuit-params-v4\n"
+        + pinned_invocation_postcheck,
+        '| /usr/bin/tee "${PREPARE_REPORT}"\n' + pinned_invocation_postcheck,
+    ):
+        assert pinned_invocation_suffix in readme
+    assert 'path.resolve(strict=True)' in readme
+    assert "metadata.st_uid != 0" in readme
+    assert "stat.S_IMODE(metadata.st_mode) & 0o022" in readme
+    assert "before.st_nlink != 1" in readme
+    assert "digest.hexdigest() != expected_sha256" in readme
+    assert "inherits the exported read-only `KAGEMUSHA_V4_KAGAMI_BIN`" in readme
+    assert "kagemusha prepare-activation-v4" in readme
+    report_validation = readme.index("if ! /usr/bin/jq -e")
+    report_extraction = readme.index(
+        'INSTRUCTIONS_HASH="$(/usr/bin/jq -er \'.instructions_hash\''
+    )
+    assert report_validation < report_extraction
+    report_contract = readme[report_validation:report_extraction]
+    assert '.status == "prepared"' in report_contract
+    assert '.manifest_sha256 == $manifest_sha256' in report_contract
+    assert '.verifier_version == $verifier_version' in report_contract
+    assert ".instruction_count == 1" in report_contract
+    assert (
+        ".device_attestation_policy_state_sha256 == $device_policy_state_sha256"
+        in report_contract
+    )
+    assert "REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256" in report_contract
+    assert "PREPARED_REPORT_LINE" in report_contract
+    assert 'test("^[0-9a-f]{64}$")' in report_contract
+    instructions_hash_contract = report_contract[
+        report_contract.index("(.instructions_hash |") :
+    ]
+    assert 'test("^[0-9a-f]{64}$")' in instructions_hash_contract
+    assert '(test("^0{64}$") | not)' in instructions_hash_contract
+    assert "execution_policy_hash" in readme
+    assert "/usr/local/libexec/iroha-taira-release-controller-v1" in readme
+    assert 'prepare-reset -- \\\n' in readme
+    assert 'GENESIS="${SIGNED_GENESIS}"' in readme
+    assert 'IROHAD_BIN="${IROHAD_BIN:?' in readme
+    assert (
+        'VALIDATOR_CONFIG="${RESET_BUNDLE}/rendered/${VALIDATOR_SLUG}/config.toml"'
+        in readme
+    )
+    assert 'BOUND_GENESIS_MANIFEST="${RESET_BUNDLE}/genesis.json"' in readme
+    assert ".irohad_sha256" in readme
+    assert "--genesis-manifest-json" in readme
+    assert "ACTIVATION_HEIGHT=2" not in readme
+    assert "ACTIVATION_SUBMISSION_MARGIN_BLOCKS" in readme
+    assert "MAX_COMMITTED_HEIGHT" in readme
+    assert "CLI_INSTRUCTIONS_HASH" in readme
+    assert "--fee-payer authority" in readme
+    assert "ledger multisig propose" in readme
+    assert "ledger multisig approve" in readme
+    assert "tx status" in readme
+    assert "ops sumeragi status" in readme
+    assert "app zk vk get" in readme
+    assert "/v1/offline/readiness" in readme
+    assert "POST /v1/offline/top-up" in readme
+    assert "POST /v1/offline/redeem" in readme
+    assert "terminal `applied`" in readme
 
 
 def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
@@ -983,6 +1099,12 @@ def test_render_bundle_binds_exact_genesis_hash_after_signing(tmp_path: Path) ->
     assert MODULE.GENESIS_EXPECTED_HASH_PLACEHOLDER not in config
 
 
+def test_private_genesis_staging_hash_is_canonical_and_marker_bearing() -> None:
+    staging_hash = MODULE.GENESIS_EXPECTED_HASH_PLACEHOLDER
+    assert MODULE.GENESIS_EXPECTED_HASH_RE.fullmatch(staging_hash)
+    assert int(staging_hash[-2:], 16) & 1 == 1
+
+
 @pytest.mark.parametrize("expected_hash", ["00" * 32, "AA" * 31 + "01", "short"])
 def test_render_bundle_rejects_invalid_genesis_hash(
     tmp_path: Path, expected_hash: str
@@ -1061,6 +1183,251 @@ def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> N
     assert 'cache_directory = "/srv/iroha/taira-validator/manifests"' in config
     assert "kagemusha_release_policy_path" not in config
     assert 'envelopes_dir = "/srv/iroha/taira-validator/sorafs_admission"' in config
+
+
+def test_render_bundle_opt_in_rewrites_complete_kagemusha_catalog_paths(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    install_root = Path("/srv/iroha/taira-validator")
+    release_root = Path("/srv/iroha-kagemusha/taira")
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        install_root=install_root,
+        kagemusha_release_root=release_root,
+    )
+
+    config_path = output_dir / "taira-validator-1" / "config.toml"
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    offline = config["settlement"]["offline"]
+    assert offline == {
+        "kagemusha_release_policy_path": (
+            "/srv/iroha-kagemusha/taira/policy/release-policy-v1.norito"
+        ),
+        "kagemusha_artifact_dir": "/srv/iroha-kagemusha/taira/catalog",
+        "kagemusha_catalog_qualification_seal_path": (
+            "/srv/iroha-kagemusha/taira/seals/catalog-qualification-v1.norito"
+        ),
+        "kagemusha_max_decoded_bytes": 256 * MODULE.MIB,
+    }
+    assert not (output_dir / "taira-validator-1" / "taira-release").exists()
+    assert not (output_dir / "taira-validator-1" / "kagemusha-qualified").exists()
+
+
+def test_render_bundle_genesis_staging_omits_only_kagemusha_qualification_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    release_root = Path("/srv/iroha-kagemusha/taira")
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    monkeypatch.setattr(MODULE, "_blake3_token_hash", lambda *_args: "blake3:" + "11" * 32)
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        install_root=Path("/srv/iroha/taira-validator"),
+        kagemusha_release_root=release_root,
+        include_kagemusha_qualification_seal=False,
+    )
+
+    config = tomllib.loads(
+        (output_dir / "taira-validator-1" / "config.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    offline = config["settlement"]["offline"]
+    assert offline["kagemusha_release_policy_path"] == str(
+        release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    )
+    assert offline["kagemusha_artifact_dir"] == str(
+        release_root / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+    )
+    assert "kagemusha_catalog_qualification_seal_path" not in offline
+    assert offline["kagemusha_max_decoded_bytes"] == MODULE.KAGEMUSHA_MAX_DECODED_BYTES
+
+
+def test_render_bundle_opt_in_replaces_existing_kagemusha_catalog_settings(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    install_root = Path("/srv/iroha/taira-validator")
+    release_root = Path("/srv/iroha-kagemusha/taira")
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG
+        + "\n[settlement.offline]\n"
+        + 'kagemusha_release_policy_path = "/stale/policy"\n'
+        + 'kagemusha_artifact_dir = "/stale/catalog"\n'
+        + 'kagemusha_catalog_qualification_seal_path = "/stale/seal"\n'
+        + "kagemusha_max_decoded_bytes = 1\n",
+        encoding="utf-8",
+    )
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        install_root=install_root,
+        kagemusha_release_root=release_root,
+    )
+
+    config_path = output_dir / "taira-validator-1" / "config.toml"
+    offline = tomllib.loads(config_path.read_text(encoding="utf-8"))["settlement"][
+        "offline"
+    ]
+    assert offline["kagemusha_release_policy_path"] == str(
+        release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    )
+    assert offline["kagemusha_artifact_dir"] == str(
+        release_root / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+    )
+    assert offline["kagemusha_catalog_qualification_seal_path"] == str(
+        release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+    )
+    assert offline["kagemusha_max_decoded_bytes"] == MODULE.KAGEMUSHA_MAX_DECODED_BYTES
+
+
+@pytest.mark.parametrize(
+    "managed_settings",
+    (
+        'kagemusha_release_policy_path = "/stale/policy"\n',
+        (
+            'kagemusha_release_policy_path = "/stale/policy"\n'
+            'kagemusha_artifact_dir = "/stale/catalog"\n'
+            'kagemusha_catalog_qualification_seal_path = "/stale/seal"\n'
+        ),
+    ),
+)
+def test_render_bundle_requires_explicit_opt_in_for_managed_kagemusha_paths(
+    tmp_path: Path, managed_settings: str
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    base_config_path.write_text(
+        BASE_CONFIG + "\n[settlement.offline]\n" + managed_settings,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match="managed Kagemusha release paths without"
+    ):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            install_root=Path("/srv/iroha/taira-validator"),
+        )
+
+
+def test_render_bundle_opt_in_keeps_kagemusha_paths_outside_bundle_root(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    bundle_root = tmp_path / "private-reset"
+    release_root = Path("/srv/iroha-kagemusha/taira")
+    bundle_root.mkdir(mode=0o700)
+    output_dir = bundle_root / "rendered"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        bundle_root=bundle_root,
+        kagemusha_release_root=release_root,
+    )
+
+    validator_root = output_dir / "taira-validator-1"
+    config = tomllib.loads((validator_root / "config.toml").read_text(encoding="utf-8"))
+    offline = config["settlement"]["offline"]
+    assert offline["kagemusha_release_policy_path"] == str(
+        release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    )
+    assert offline["kagemusha_artifact_dir"] == str(
+        release_root / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+    )
+    assert offline["kagemusha_catalog_qualification_seal_path"] == str(
+        release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+    )
+
+
+def test_render_bundle_rejects_noncanonical_or_overlapping_kagemusha_release_roots(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    install_root = Path("/srv/iroha/taira-validator")
+    _write_roster(roster_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    for index, invalid_root in enumerate(
+        (
+            Path("relative/kagemusha"),
+            Path("/"),
+            Path("/srv/iroha/../kagemusha"),
+            Path("//srv/iroha-kagemusha"),
+            Path("/srv/iroha-kagemusha\ninjected"),
+            Path("/srv/iroha"),
+            install_root,
+            install_root / "kagemusha",
+        )
+    ):
+        with pytest.raises(ValueError, match="kagemusha_release_root"):
+            MODULE.render_bundle(
+                base_config_path,
+                roster_path,
+                tmp_path / f"invalid-release-root-{index}",
+                install_root=install_root,
+                kagemusha_release_root=invalid_root,
+            )
+
+
+def test_render_bundle_rejects_kagemusha_release_root_overlapping_output_dir(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "rendered"
+    _write_roster(roster_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    for release_root in (output_dir, output_dir / "release", tmp_path):
+        with pytest.raises(ValueError, match="kagemusha_release_root"):
+            MODULE.render_bundle(
+                base_config_path,
+                roster_path,
+                output_dir,
+                install_root=Path("/srv/iroha/taira-validator"),
+                kagemusha_release_root=release_root,
+            )
 
 
 def test_render_bundle_rejects_relative_install_root(tmp_path: Path) -> None:
@@ -1920,9 +2287,15 @@ def test_main_supports_single_validator_render(tmp_path: Path) -> None:
             str(output_dir),
             "--only",
             "taira-validator-2",
+            "--kagemusha-release-root",
+            "/srv/iroha-kagemusha/taira",
         ]
     )
 
     assert exit_code == 0
-    assert (output_dir / "taira-validator-2" / "config.toml").exists()
+    rendered_config = output_dir / "taira-validator-2" / "config.toml"
+    assert rendered_config.exists()
+    assert "kagemusha_catalog_qualification_seal_path" in rendered_config.read_text(
+        encoding="utf-8"
+    )
     assert not (output_dir / "taira-validator-1" / "config.toml").exists()

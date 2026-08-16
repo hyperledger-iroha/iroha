@@ -20,7 +20,6 @@ use crate::zk::{
     },
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
@@ -40,6 +39,8 @@ use iroha_data_model::{
         KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendQualificationReceiptV4,
         KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
         KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
+        kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+        kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},
     state_path::StatePath,
@@ -73,8 +74,6 @@ use std::{
 };
 pub(crate) const TERMINAL_RELEASE_STATE_KEY_PREFIX_V4: &str = "kagemusha_terminal_release_v4_";
 const VERIFIER_OWNER_MANIFEST_PREFIX_V4: &str = "kagemusha-v4-";
-const VERIFIER_IDENTITY_SCHEMA_V4: &str = "kagemusha.offline.recursive_spend.verifier_identity.v4";
-const VERIFIER_IDENTITY_VERSION_V4: u16 = 4;
 const STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
 const STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
 const MAX_POLICY_BYTES: usize = 64 * 1024;
@@ -145,18 +144,6 @@ const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
 /// Extra allocator/metadata headroom applied to decoded catalog estimates.
 const DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4: u64 = 5;
 const DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4: u64 = 4;
-/// Canonical identity committed by each V4 verifier registry record.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct KagemushaTerminalVerifierIdentityV4 {
-    schema: String,
-    version: u16,
-    manifest_sha256: [u8; 32],
-    parity: KagemushaPastaCycleParityV1,
-    circuit_id: String,
-    circuit_params_sha256: [u8; 32],
-    compiled_protocol_structure_sha256: [u8; 32],
-    public_input_limbs: u32,
-}
 /// Readiness-safe identity derived only from an authenticated V4 release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KagemushaAuthenticatedArtifactSetV4 {
@@ -241,6 +228,9 @@ struct KagemushaCatalogSealedReleaseQualificationV1 {
     source_commit: String,
     source_tree_sha256: [u8; 32],
     reviewed_source_closure_descriptor_sha256: [u8; 32],
+    authenticated_source_seal_projection_sha256: [u8; 32],
+    reviewed_cargo_binary_sha256: [u8; 32],
+    reviewed_rustc_binary_sha256: [u8; 32],
     benchmark_evidence_sha256: [u8; 32],
     cryptographic_review_sha256: [u8; 32],
     promotion_record_sha256: [u8; 32],
@@ -360,440 +350,7 @@ pub struct KagemushaReleaseCatalogV4 {
     configured_policy_sha256: Option<[u8; 32]>,
     releases: BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,
 }
-impl KagemushaReleaseCatalogV4 {
-    /// Return an unconfigured, always-unready catalog.
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::default()
-    }
-    /// Whether a canonical policy and artifact directory were configured.
-    #[must_use]
-    pub const fn is_configured(&self) -> bool {
-        self.configured_policy_sha256.is_some()
-    }
-    /// Digest of the configured canonical Norito policy, when configured.
-    #[must_use]
-    pub const fn configured_policy_sha256(&self) -> Option<[u8; 32]> {
-        self.configured_policy_sha256
-    }
-    /// Load an optional immutable verifier cache.
-    ///
-    /// An omitted policy/artifact pair produces the explicit empty catalog. The cache is not an
-    /// offline-capability switch and is not an asset catalog; every deployment and asset retains
-    /// the protocol primitives when it is empty. A partially configured pair or authentication
-    /// failure is rejected only when an operator explicitly configures this cache.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when only one catalog path is configured or when the configured catalog
-    /// or qualification seal cannot be authenticated.
-    pub fn from_offline_config(
-        config: &iroha_config::parameters::actual::Offline,
-    ) -> Result<Self, String> {
-        match (
-            config.kagemusha_release_policy_path.as_deref(),
-            config.kagemusha_artifact_dir.as_deref(),
-        ) {
-            (None, None) => Ok(Self::empty()),
-            (Some(policy_path), Some(artifact_dir)) => {
-                if let Some(seal_path) = config.kagemusha_catalog_qualification_seal_path.as_deref()
-                {
-                    Self::load_with_decoded_budget_and_qualification_seal(
-                        policy_path,
-                        artifact_dir,
-                        config.kagemusha_max_decoded_bytes,
-                        seal_path,
-                    )
-                } else {
-                    Self::load_with_decoded_budget(
-                        policy_path,
-                        artifact_dir,
-                        config.kagemusha_max_decoded_bytes,
-                    )
-                }
-            }
-            _ => Err(
-                "Kagemusha V4 release policy and artifact directory must be configured together"
-                    .to_owned(),
-            ),
-        }
-    }
-    pub(crate) fn get(&self, manifest_sha256: &[u8; 32]) -> Option<&Arc<KagemushaCachedReleaseV4>> {
-        self.releases.get(manifest_sha256)
-    }
-    /// Number of authenticated releases retained by this process.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.releases.len()
-    }
-    /// Whether this catalog contains no authenticated releases.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.releases.is_empty()
-    }
-    /// Deterministically authenticate every manifest-digest subdirectory.
-    ///
-    /// Both configured paths must be canonical absolute paths. Every directory component is opened
-    /// relative to its already pinned parent and symlinks are rejected at every level.
-    ///
-    /// All filesystem access, hashing, framing checks, Halo2 verifier parsing,
-    /// and allocation-free proving-key structural validation complete before
-    /// the returned immutable catalog is published. Full proving-key parsing is
-    /// deferred until an actual prover operation needs that parity.
-    pub fn load(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
-        Self::load_with_decoded_budget(
-            policy_path,
-            artifact_dir,
-            DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4,
-        )
-    }
-    /// Authenticate a catalog under an explicit decoded-resident memory ceiling.
-    pub fn load_with_decoded_budget(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-    ) -> Result<Self, String> {
-        validate_kagemusha_catalog_decoded_budget_v4(max_decoded_bytes)?;
-        #[cfg(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        ))]
-        {
-            Self::load_descriptor_relative(policy_path, artifact_dir, max_decoded_bytes)
-        }
-        #[cfg(not(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        )))]
-        {
-            let _ = (policy_path, artifact_dir, max_decoded_bytes);
-            Err(
-                "Kagemusha V4 descriptor-relative catalog loading is unsupported on this platform"
-                    .to_owned(),
-            )
-        }
-    }
-    /// Fully authenticate a catalog and produce its root-trusted restart seal.
-    ///
-    /// This constructor always executes complete artifact hashing and Eq/Ep proving-key structural
-    /// qualification before it emits a seal. It also requires the configured inputs and current
-    /// executable to be rooted in root-owned, non-writable, symlink-free path chains.
-    pub fn load_and_build_qualification_seal(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-    ) -> Result<(Self, KagemushaCatalogQualificationSealV1), String> {
-        validate_kagemusha_catalog_decoded_budget_v4(max_decoded_bytes)?;
-        #[cfg(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        ))]
-        {
-            Self::load_and_build_qualification_seal_for_trusted_uid(
-                policy_path,
-                artifact_dir,
-                max_decoded_bytes,
-                0,
-            )
-        }
-        #[cfg(not(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        )))]
-        {
-            let _ = (policy_path, artifact_dir, max_decoded_bytes);
-            Err("Kagemusha V4 qualification seals are unsupported on this platform".to_owned())
-        }
-    }
-    /// Load a fully qualified catalog through a persistent root-trusted seal.
-    ///
-    /// Seal absence or any path, stat, build, digest, inventory, or qualified
-    /// metadata mismatch fails closed. The fast path never refreshes the seal
-    /// and never streams a proving-key payload.
-    pub fn load_with_decoded_budget_and_qualification_seal(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-        seal_path: &Path,
-    ) -> Result<Self, String> {
-        validate_kagemusha_catalog_decoded_budget_v4(max_decoded_bytes)?;
-        #[cfg(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        ))]
-        {
-            Self::load_with_qualification_seal_for_trusted_uid(
-                policy_path,
-                artifact_dir,
-                max_decoded_bytes,
-                seal_path,
-                0,
-            )
-        }
-        #[cfg(not(all(
-            unix,
-            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-        )))]
-        {
-            let _ = (policy_path, artifact_dir, max_decoded_bytes, seal_path);
-            Err("Kagemusha V4 qualification seals are unsupported on this platform".to_owned())
-        }
-    }
-    #[cfg(all(
-        unix,
-        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-    ))]
-    fn load_descriptor_relative(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-    ) -> Result<Self, String> {
-        Self::load_descriptor_relative_with_qualification(
-            policy_path,
-            artifact_dir,
-            max_decoded_bytes,
-            None,
-        )
-    }
-    #[cfg(all(
-        unix,
-        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-    ))]
-    fn load_descriptor_relative_with_qualification(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-        qualification_seal: Option<&KagemushaCatalogQualificationSealV1>,
-    ) -> Result<Self, String> {
-        let (policy_parent_path, policy_file_name) =
-            absolute_file_parent_and_name(policy_path, "release policy")?;
-        let policy_parent =
-            CatalogDirectory::open_path(policy_parent_path, "release policy parent")?;
-        let mut policy_file = policy_parent.open_file(policy_file_name, "release policy")?;
-        let policy_bytes =
-            read_bounded_opened_file(&mut policy_file, MAX_POLICY_BYTES, "release policy")?;
-        let policy = decode_trusted_policy(&policy_bytes)?;
-        let policy_sha256: [u8; 32] = Sha256::digest(&policy_bytes).into();
-        if qualification_seal.is_some_and(|seal| seal.configured_policy_sha256 != policy_sha256) {
-            return Err(
-                "Kagemusha V4 qualification seal configured-policy digest mismatch".to_owned(),
-            );
-        }
-        let artifact_root = CatalogDirectory::open_path(artifact_dir, "artifact root")?;
-        let directory_names = artifact_root.entry_names("artifact root")?;
-        ensure_catalog_release_count(directory_names.len())?;
-        if let Some(seal) = qualification_seal {
-            let sealed_names = seal
-                .releases
-                .iter()
-                .map(|release| hex::encode(release.manifest_sha256))
-                .collect::<Vec<_>>();
-            if sealed_names != directory_names {
-                return Err("Kagemusha V4 qualification seal release inventory mismatch".to_owned());
-            }
-        }
-        let mut releases = BTreeMap::new();
-        let mut aggregate_catalog_bytes = 0_u64;
-        let mut aggregate_decoded_bytes = 0_u64;
-        for directory_name in &directory_names {
-            let file_name = directory_name.as_str();
-            let manifest_sha256 = parse_manifest_directory_name(file_name)?;
-            let directory = artifact_root
-                .open_directory(directory_name, &format!("release directory `{file_name}`"))?;
-            let remaining_catalog_bytes = MAX_CATALOG_AGGREGATE_BYTES_V4
-                .checked_sub(aggregate_catalog_bytes)
-                .ok_or_else(|| {
-                    "Kagemusha V4 catalog aggregate byte accounting overflowed".to_owned()
-                })?;
-            let remaining_decoded_bytes = max_decoded_bytes
-                .checked_sub(aggregate_decoded_bytes)
-                .ok_or_else(|| {
-                    "Kagemusha V4 decoded catalog memory accounting overflowed".to_owned()
-                })?;
-            let sealed_release = qualification_seal.and_then(|seal| {
-                seal.releases
-                    .iter()
-                    .find(|release| release.manifest_sha256 == manifest_sha256)
-            });
-            if qualification_seal.is_some() && sealed_release.is_none() {
-                return Err("Kagemusha V4 qualification seal omits a catalog release".to_owned());
-            }
-            let (release, release_bytes, release_decoded_bytes) = load_release_directory(
-                &directory,
-                manifest_sha256,
-                &policy,
-                policy_sha256,
-                remaining_catalog_bytes,
-                remaining_decoded_bytes,
-                sealed_release,
-            )?;
-            aggregate_catalog_bytes =
-                add_catalog_release_bytes(aggregate_catalog_bytes, release_bytes)?;
-            aggregate_decoded_bytes = aggregate_decoded_bytes
-                .checked_add(release_decoded_bytes)
-                .ok_or_else(|| {
-                    "Kagemusha V4 decoded catalog memory accounting overflowed".to_owned()
-                })?;
-            artifact_root.verify_directory_entry(directory_name, &directory)?;
-            if releases
-                .insert(manifest_sha256, Arc::new(release))
-                .is_some()
-            {
-                return Err("Kagemusha V4 artifact catalog repeats a manifest digest".to_owned());
-            }
-        }
-        if artifact_root.entry_names("artifact root")? != directory_names {
-            return Err("Kagemusha V4 artifact inventory changed while it was loaded".to_owned());
-        }
-        artifact_root.verify_path_identity()?;
-        policy_file.verify_unchanged()?;
-        policy_parent.verify_path_identity()?;
-        if releases.is_empty() {
-            return Err(
-                "configured Kagemusha V4 artifact directory contains no releases".to_owned(),
-            );
-        }
-        Ok(Self {
-            configured_policy_sha256: Some(policy_sha256),
-            releases,
-        })
-    }
-    #[cfg(all(
-        unix,
-        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-    ))]
-    fn load_and_build_qualification_seal_for_trusted_uid(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-        trusted_uid: u32,
-    ) -> Result<(Self, KagemushaCatalogQualificationSealV1), String> {
-        let effective_uid = rustix::process::geteuid().as_raw();
-        if effective_uid != trusted_uid {
-            return Err(format!(
-                "Kagemusha V4 qualification seal creation requires effective uid {trusted_uid}, found {effective_uid}"
-            ));
-        }
-        let catalog = Self::load_descriptor_relative(policy_path, artifact_dir, max_decoded_bytes)?;
-        let seal = build_kagemusha_catalog_qualification_seal_v1(
-            policy_path,
-            artifact_dir,
-            &catalog,
-            trusted_uid,
-        )?;
-        verify_kagemusha_catalog_sealed_paths_v1(&seal.paths, trusted_uid)?;
-        Ok((catalog, seal))
-    }
-    #[cfg(all(
-        unix,
-        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-    ))]
-    fn load_with_qualification_seal_for_trusted_uid(
-        policy_path: &Path,
-        artifact_dir: &Path,
-        max_decoded_bytes: u64,
-        seal_path: &Path,
-        trusted_uid: u32,
-    ) -> Result<Self, String> {
-        let seal =
-            read_root_trusted_kagemusha_catalog_qualification_seal_v1(seal_path, trusted_uid)?;
-        seal.validate_for_configured_runtime(policy_path, artifact_dir)?;
-        verify_kagemusha_catalog_sealed_paths_v1(&seal.paths, trusted_uid)?;
-        let catalog = Self::load_descriptor_relative_with_qualification(
-            policy_path,
-            artifact_dir,
-            max_decoded_bytes,
-            Some(&seal),
-        )?;
-        verify_kagemusha_catalog_sealed_paths_v1(&seal.paths, trusted_uid)?;
-        Ok(catalog)
-    }
-    /// Build the exact governed activation payload for one authenticated release.
-    ///
-    /// This is the only production constructor for the consensus payload. It projects both inline
-    /// verifier records from the immutable, qualified pinned startup source, so an operator cannot
-    /// substitute release fields, key bytes, commitments, schemas, activation heights, or policy
-    /// identity. Consensus still enforces that `verifier_version` is the next atomic Eq/Ep version
-    /// when the resulting instruction is executed.
-    pub fn build_activation(
-        &self,
-        manifest_sha256: [u8; 32],
-        verifier_version: u32,
-    ) -> Result<KagemushaRecursiveSpendReleaseActivationV4, String> {
-        if verifier_version == 0 {
-            return Err("Kagemusha V4 verifier version must be nonzero".to_owned());
-        }
-        let configured_policy_sha256 = self.configured_policy_sha256.ok_or_else(|| {
-            "Kagemusha V4 activation requires a configured release policy".to_owned()
-        })?;
-        let cached = self.get(&manifest_sha256).ok_or_else(|| {
-            "Kagemusha V4 activation release is absent from the authenticated catalog".to_owned()
-        })?;
-        let release = cached.resolved.release();
-        let binding = KagemushaRecursiveSpendArtifactBindingV4 {
-            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            generation: release.manifest().generation.clone(),
-            manifest_sha256,
-        };
-        let step_eq_verifier_record = cached.activation_record(
-            &binding,
-            KagemushaPastaCycleParityV1::StepEq,
-            verifier_version,
-        )?;
-        let step_ep_verifier_record = cached.activation_record(
-            &binding,
-            KagemushaPastaCycleParityV1::StepEp,
-            verifier_version,
-        )?;
-        let activation = KagemushaRecursiveSpendReleaseActivationV4 {
-            release_record: cached.release_record.clone(),
-            configured_policy_sha256,
-            step_eq_verifier_key_id:
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    KagemushaPastaCycleParityV1::StepEq,
-                    manifest_sha256,
-                ),
-            step_eq_verifier_record,
-            step_ep_verifier_key_id:
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    KagemushaPastaCycleParityV1::StepEp,
-                    manifest_sha256,
-                ),
-            step_ep_verifier_record,
-        };
-        activation
-            .validate_structure()
-            .map_err(|error| format!("constructed Kagemusha V4 activation is invalid: {error}"))?;
-        Ok(activation)
-    }
-    pub(crate) fn resolve_binding(
-        &self,
-        binding: &KagemushaRecursiveSpendArtifactBindingV4,
-    ) -> Result<&Arc<KagemushaCachedReleaseV4>, String> {
-        binding
-            .validate()
-            .map_err(|error| format!("invalid Kagemusha V4 artifact binding: {error}"))?;
-        let cached = self.get(&binding.manifest_sha256).ok_or_else(|| {
-            "Kagemusha V4 release is not present in the immutable startup catalog".to_owned()
-        })?;
-        if cached.resolved.release().manifest().generation != binding.generation {
-            return Err("Kagemusha V4 release generation and digest disagree".to_owned());
-        }
-        Ok(cached)
-    }
-    pub(crate) fn resolve_activation_records(
-        &self,
-        step_eq_record: &VerifyingKeyRecord,
-        step_ep_record: &VerifyingKeyRecord,
-    ) -> Result<&Arc<KagemushaCachedReleaseV4>, String> {
-        let manifest_sha256 = activation_manifest_sha256(step_eq_record, step_ep_record)?;
-        let cached = self.get(&manifest_sha256).ok_or_else(|| {
-            "active Kagemusha V4 release is absent from the immutable startup catalog".to_owned()
-        })?;
-        cached.validate_verifier_records(step_eq_record, step_ep_record)?;
-        Ok(cached)
-    }
-}
+include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");
 impl KagemushaCachedReleaseV4 {
     pub(crate) fn release_record(
         &self,
@@ -2059,6 +1616,10 @@ fn build_kagemusha_catalog_qualification_seal_v1(
             source_tree_sha256: manifest.source_tree_sha256,
             reviewed_source_closure_descriptor_sha256: manifest
                 .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
             benchmark_evidence_sha256: manifest.benchmark_evidence_sha256,
             cryptographic_review_sha256: manifest.cryptographic_review_sha256,
             promotion_record_sha256: Sha256::digest(promotion_bytes).into(),
@@ -2167,6 +1728,9 @@ impl KagemushaCatalogQualificationSealV1 {
                 || release.source_commit.is_empty()
                 || release.source_tree_sha256 == [0; 32]
                 || release.reviewed_source_closure_descriptor_sha256 == [0; 32]
+                || release.authenticated_source_seal_projection_sha256 == [0; 32]
+                || release.reviewed_cargo_binary_sha256 == [0; 32]
+                || release.reviewed_rustc_binary_sha256 == [0; 32]
                 || release.benchmark_evidence_sha256 == [0; 32]
                 || release.cryptographic_review_sha256 == [0; 32]
                 || release.promotion_record_sha256 == [0; 32]
@@ -2992,6 +2556,10 @@ fn validate_sealed_release_qualification_v1(
         || sealed.source_tree_sha256 != manifest.source_tree_sha256
         || sealed.reviewed_source_closure_descriptor_sha256
             != manifest.reviewed_source_closure_descriptor_sha256
+        || sealed.authenticated_source_seal_projection_sha256
+            != manifest.authenticated_source_seal_projection_sha256
+        || sealed.reviewed_cargo_binary_sha256 != manifest.reviewed_cargo_binary_sha256
+        || sealed.reviewed_rustc_binary_sha256 != manifest.reviewed_rustc_binary_sha256
         || sealed.benchmark_evidence_sha256 != manifest.benchmark_evidence_sha256
         || sealed.cryptographic_review_sha256 != manifest.cryptographic_review_sha256
         || sealed.promotion_record_sha256 != <[u8; 32]>::from(Sha256::digest(promotion_bytes))
@@ -3464,9 +3032,8 @@ pub(crate) fn verifier_owner_manifest_id(
     binding
         .validate()
         .map_err(|error| format!("invalid Kagemusha V4 artifact binding: {error}"))?;
-    Ok(format!(
-        "{VERIFIER_OWNER_MANIFEST_PREFIX_V4}{}",
-        hex::encode(binding.manifest_sha256)
+    Ok(kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
+        binding.manifest_sha256,
     ))
 }
 /// Derive the release- and layout-bound public-input identity stored in a V4
@@ -3475,25 +3042,8 @@ pub(crate) fn verifier_public_inputs_schema_hash(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     parity: KagemushaPastaCycleParityV1,
 ) -> Result<[u8; 32], String> {
-    manifest.validate().map_err(|error| error.to_string())?;
-    let manifest_bytes = norito::to_bytes(manifest)
-        .map_err(|error| format!("failed to encode Kagemusha V4 manifest: {error}"))?;
-    let profile = profile(manifest, parity)?;
-    let identity = KagemushaTerminalVerifierIdentityV4 {
-        schema: VERIFIER_IDENTITY_SCHEMA_V4.to_owned(),
-        version: VERIFIER_IDENTITY_VERSION_V4,
-        manifest_sha256: Sha256::digest(manifest_bytes).into(),
-        parity,
-        circuit_id: profile.circuit_id.clone(),
-        circuit_params_sha256: profile
-            .circuit_params_sha256()
-            .map_err(|error| error.to_string())?,
-        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
-        public_input_limbs: profile.circuit_params.public_input_limbs,
-    };
-    let bytes = norito::to_bytes(&identity)
-        .map_err(|error| format!("failed to encode Kagemusha V4 verifier identity: {error}"))?;
-    Ok(Hash::new(bytes).into())
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4(manifest, parity)
+        .map_err(|error| error.to_string())
 }
 fn decode_trusted_policy(bytes: &[u8]) -> Result<KagemushaRecursiveSpendReleasePolicyV1, String> {
     if bytes.is_empty() || bytes.len() > MAX_POLICY_BYTES || bytes.iter().all(|byte| *byte == 0) {
@@ -3721,6 +3271,34 @@ mod tests {
                 .is_err()
         );
         let (authenticated, promotion) = authenticated_candidate_binding_release();
+        let candidate = authenticated
+            .manifest()
+            .immutable_candidate()
+            .expect("fixture candidate");
+        promotion
+            .validate_against_candidate_and_authenticated_release(&candidate, &authenticated)
+            .expect("matching promotion provenance");
+        let mut wrong_projection_promotion = promotion.clone();
+        wrong_projection_promotion.authenticated_source_seal_projection_sha256[0] ^= 1;
+        assert!(
+            wrong_projection_promotion
+                .validate_against_candidate_and_authenticated_release(&candidate, &authenticated)
+                .is_err()
+        );
+        let mut wrong_cargo_promotion = promotion.clone();
+        wrong_cargo_promotion.reviewed_cargo_binary_sha256[0] ^= 1;
+        assert!(
+            wrong_cargo_promotion
+                .validate_against_candidate_and_authenticated_release(&candidate, &authenticated)
+                .is_err()
+        );
+        let mut wrong_rustc_promotion = promotion.clone();
+        wrong_rustc_promotion.reviewed_rustc_binary_sha256[0] ^= 1;
+        assert!(
+            wrong_rustc_promotion
+                .validate_against_candidate_and_authenticated_release(&candidate, &authenticated)
+                .is_err()
+        );
         let promotion_bytes =
             norito::encode_canonical(&promotion).expect("canonical promotion fixture");
         for parity in [
@@ -3758,6 +3336,39 @@ mod tests {
         assert!(
             validate_sealed_release_qualification_v1(
                 &stale_source,
+                &authenticated,
+                &promotion_bytes,
+                authenticated.manifest().qualification_receipt_sha256,
+            )
+            .is_err()
+        );
+        let mut stale_projection = seal.releases[0].clone();
+        stale_projection.authenticated_source_seal_projection_sha256[0] ^= 1;
+        assert!(
+            validate_sealed_release_qualification_v1(
+                &stale_projection,
+                &authenticated,
+                &promotion_bytes,
+                authenticated.manifest().qualification_receipt_sha256,
+            )
+            .is_err()
+        );
+        let mut stale_cargo = seal.releases[0].clone();
+        stale_cargo.reviewed_cargo_binary_sha256[0] ^= 1;
+        assert!(
+            validate_sealed_release_qualification_v1(
+                &stale_cargo,
+                &authenticated,
+                &promotion_bytes,
+                authenticated.manifest().qualification_receipt_sha256,
+            )
+            .is_err()
+        );
+        let mut stale_rustc = seal.releases[0].clone();
+        stale_rustc.reviewed_rustc_binary_sha256[0] ^= 1;
+        assert!(
+            validate_sealed_release_qualification_v1(
+                &stale_rustc,
                 &authenticated,
                 &promotion_bytes,
                 authenticated.manifest().qualification_receipt_sha256,
@@ -4445,6 +4056,80 @@ mod tests {
         assert!(!catalog.is_configured());
         assert_eq!(catalog.configured_policy_sha256(), None);
         assert!(catalog.is_empty());
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn staged_genesis_authenticates_only_policy_while_runtime_requires_nonempty_catalog() {
+        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let root = canonical_temporary_root(&temporary);
+        let policy = write_test_policy(&root);
+        let policy_bytes = std::fs::read(&policy).expect("read test release policy");
+        let expected_policy_sha256: [u8; 32] = Sha256::digest(policy_bytes).into();
+        let mut config = iroha_config::parameters::actual::Offline::default();
+        config.kagemusha_release_policy_path = Some(policy);
+        config.kagemusha_artifact_dir = Some(root.join("not-yet-generated-catalog"));
+        config.kagemusha_catalog_qualification_seal_path = None;
+
+        let trusted_uid = rustix::process::geteuid().as_raw();
+        let staged =
+            KagemushaReleaseCatalogV4::load_policy_only_for_genesis_staging_for_trusted_uid(
+                config
+                    .kagemusha_release_policy_path
+                    .as_deref()
+                    .expect("configured test policy"),
+                config
+                    .kagemusha_artifact_dir
+                    .as_deref()
+                    .expect("configured future artifact directory"),
+                trusted_uid,
+            )
+            .expect("staged genesis must bind the authenticated policy before release generation");
+        assert!(staged.is_configured());
+        assert!(staged.is_empty());
+        assert_eq!(
+            staged.configured_policy_sha256(),
+            Some(expected_policy_sha256)
+        );
+
+        let artifact_dir = config
+            .kagemusha_artifact_dir
+            .as_deref()
+            .expect("configured future artifact directory");
+        std::fs::create_dir(artifact_dir).expect("create stale empty artifact directory");
+        let stale_artifact_error =
+            KagemushaReleaseCatalogV4::load_policy_only_for_genesis_staging_for_trusted_uid(
+                config
+                    .kagemusha_release_policy_path
+                    .as_deref()
+                    .expect("configured test policy"),
+                artifact_dir,
+                trusted_uid,
+            )
+            .err()
+            .expect("staged genesis must reject even an empty stale artifact directory");
+        assert!(stale_artifact_error.contains("must not exist"));
+        std::fs::remove_dir(artifact_dir).expect("remove stale empty artifact directory");
+
+        let mut sealed_staging = config.clone();
+        sealed_staging.kagemusha_catalog_qualification_seal_path =
+            Some(root.join("not-yet-generated-qualification-seal.norito"));
+        let sealed_staging_error =
+            KagemushaReleaseCatalogV4::from_offline_config_for_genesis_staging(&sealed_staging)
+                .err()
+                .expect("staged genesis must reject a future seal path");
+        assert!(sealed_staging_error.contains("must omit"));
+
+        std::fs::create_dir(artifact_dir).expect("create empty runtime artifact directory");
+        let runtime = KagemushaReleaseCatalogV4::from_offline_config(&config)
+            .err()
+            .expect("runtime must not accept a policy-only staged catalog");
+        assert!(
+            runtime.contains("contains no releases"),
+            "unexpected runtime error: {runtime}"
+        );
     }
     #[test]
     fn production_catalog_has_no_eager_artifact_materializer_path() {

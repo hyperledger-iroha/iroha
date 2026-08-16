@@ -1727,7 +1727,10 @@ request leaf is the exact source-isolated authenticated network corridor.  Its
 production refinement must remain tied to the configuration-derived reserve
 for every bounded local producer; no fixed caller count is assumed here.  The
 composition theorem is deductive, but does not promote that production premise
-or the progress-witness ledger entry before strict TLAPS verification.
+or establish that production premise. The model progress-witness row is
+`tlaps_proved` and the production-refinement row is `cross_tool_proved`;
+release acceptance still requires fresh exact-source strict and cross-tool
+evidence.
 ***************************************************************************)
 
 HistoricalLockedBodyRecoveryOutcome(node, qc) ==

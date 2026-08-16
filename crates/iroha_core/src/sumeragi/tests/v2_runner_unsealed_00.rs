@@ -102,6 +102,132 @@ fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
     assert!(canonical_executed_block_recovery_batches(&duplicated, 3).is_err());
 }
 #[test]
+fn canonical_body_recovery_only_inserted_responses_advance_the_requester() {
+    assert!(
+        !canonical_recovery_ingress_advances_requester(false, V2LaneIngressOutcome::Inserted,),
+        "serving another peer's valid request is not progress on our outstanding request"
+    );
+    assert!(
+        !canonical_recovery_ingress_advances_requester(true, V2LaneIngressOutcome::Rejected,),
+        "a poisoned exact response must wait for the ordinary retry cadence"
+    );
+    assert!(!canonical_recovery_ingress_advances_requester(
+        true,
+        V2LaneIngressOutcome::Duplicate,
+    ));
+    assert!(canonical_recovery_ingress_advances_requester(
+        true,
+        V2LaneIngressOutcome::Inserted,
+    ));
+}
+#[test]
+fn canonical_body_recovery_flushes_owned_effects_after_local_completion() {
+    assert!(!canonical_recovery_source_work_remains(false, 0));
+    assert!(
+        canonical_recovery_source_work_remains(false, 1),
+        "a source-owned response must flush after the final local body arrives"
+    );
+    assert!(canonical_recovery_source_work_remains(true, 0));
+}
+#[test]
+fn canonical_body_recovery_dispatch_drains_old_output_before_new_reservations() {
+    let source = include_str!("../v2_runner/canonical_recovery_ingress.rs");
+    let dispatch = source
+        .split_once("fn dispatch_canonical_executed_block_recovery_effects(")
+        .expect("canonical recovery dispatch exists")
+        .1;
+    let cancel = dispatch
+        .find("apply_retired_canonical_recovery_requests(recovery, services)")
+        .expect("dispatch cancels superseded service-owned requests");
+    let retry = dispatch
+        .find(".retry_pending_exact_output()")
+        .expect("dispatch retries exact-output ownership");
+    let stale = dispatch
+        .find("if is_request && !is_current_request")
+        .expect("dispatch retires a stale requester effect");
+    let reserve = dispatch
+        .find(".can_retain_lane_work_effect(&effect)")
+        .expect("dispatch reserves current output");
+    assert!(
+        cancel < retry && retry < stale && stale < reserve,
+        "superseded service/source requests must clear before a new exact reservation"
+    );
+}
+#[test]
+fn historical_recovery_cancels_completed_requests_before_exact_output_retry() {
+    let source = include_str!("../v2_runner.rs");
+    let retry = source
+        .split_once("fn retry_exact_output_and_apply_sidecar_admissions(")
+        .expect("exact-output retry helper exists")
+        .1;
+    let cancel = retry
+        .find("apply_retired_historical_recovery_requests(lane_work, services)")
+        .expect("retry applies historical cancellation ownership");
+    let sidecar_cancel = retry
+        .find("apply_retired_merge_sidecar_requests(lane_work, services)")
+        .expect("retry applies sidecar cancellation ownership");
+    let close_cancel = retry
+        .find("apply_acknowledged_merge_sidecar_closes(lane_work, services)")
+        .expect("retry applies cumulative Close cancellation ownership");
+    let drive = retry
+        .find(".retry_pending_exact_output()")
+        .expect("retry drives retained exact output");
+    assert!(
+        cancel < sidecar_cancel && sidecar_cancel < close_cancel && close_cancel < drive,
+        "retired requests and acknowledged Closes must be cancelled before transport retry"
+    );
+}
+#[test]
+fn canonical_body_recovery_successor_request_gets_a_fresh_retry_deadline() {
+    let started = Instant::now();
+    let interval = Duration::from_secs(5);
+    let inherited = deadline_after(started, interval);
+    let sent_at = deadline_after(started, Duration::from_millis(4_999));
+    let mut deadline = inherited;
+    refresh_canonical_recovery_retry_deadline(&mut deadline, sent_at, interval, false);
+    assert_eq!(
+        deadline, inherited,
+        "a no-op must not consume a retry interval"
+    );
+    refresh_canonical_recovery_retry_deadline_after_progress(
+        &mut deadline,
+        sent_at,
+        interval,
+        false,
+    );
+    assert_eq!(
+        deadline, sent_at,
+        "progress blocked by effect capacity must wake the next service turn"
+    );
+    refresh_canonical_recovery_retry_deadline_after_progress(
+        &mut deadline,
+        sent_at,
+        interval,
+        true,
+    );
+    assert_eq!(deadline, deadline_after(sent_at, interval));
+    assert!(
+        deadline > inherited,
+        "a successor chunk cannot inherit the expiring prefix deadline"
+    );
+    let handed_off_at = deadline_after(sent_at, Duration::from_millis(1));
+    refresh_canonical_recovery_retry_deadline(&mut deadline, handed_off_at, interval, true);
+    assert_eq!(
+        deadline,
+        deadline_after(handed_off_at, interval),
+        "transport handoff owns the full retry interval"
+    );
+    assert_eq!(
+        canonical_recovery_idle_wait(started, started),
+        IDLE_POLL,
+        "an expired retry under transport backpressure must poll instead of spinning"
+    );
+    assert_eq!(
+        canonical_recovery_idle_wait(deadline_after(started, Duration::from_millis(1)), started,),
+        Duration::from_millis(1)
+    );
+}
+#[test]
 fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
     let (mut services, _) = super::super::v2_worker::tests::fixture();
     assert!(!services.exact_output_restart_required_for_test());
@@ -1414,6 +1540,87 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
         );
     }
     assert_eq!(admitted.len(), 4);
+}
+#[test]
+fn finalized_rollover_drains_source_effects_after_handoff_reopens_capacity() {
+    let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+    let mut lane_work = fixture.adapter;
+    let mut services =
+        super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+            Arc::clone(&fixture.kura),
+            fixture.context,
+            &fixture.validators,
+            fixture.local_validator,
+        );
+    services
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install one shared exact-output slot");
+    services.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 17,
+        })
+    });
+    let (receipt, artifact) =
+        super::super::v2_worker::tests::durable_finality_fixture(&services, &fixture.validators);
+    let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+        &artifact,
+        Hash::new(b"rollover source-effect capacity witness"),
+    );
+    let local = fixture.request.responder.clone();
+    let remote = fixture.request.requester.clone();
+    let outbound = |sequence: u64| {
+        let mut request = fixture.request.clone();
+        request.requester = local.clone();
+        request.responder = remote.clone();
+        request.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
+            NonZeroU64::new(sequence).expect("non-zero rollover request sequence"),
+        );
+        request.request_id = request.canonical_request_id();
+        V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: remote.clone(),
+            reply_routes: None,
+            message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
+        }
+    };
+    let current = outbound(100);
+    let mut retained = 0_u64;
+    while services
+        .can_retain_lane_work_effect(&current)
+        .expect("inspect exact-output rollover capacity")
+    {
+        assert!(matches!(
+            dispatch_lane_work_effect(&services, outbound(retained.saturating_add(1)))
+                .expect("retain one actor-backpressured predecessor request"),
+            LaneWorkEffectDispatch::Complete
+        ));
+        retained = retained.saturating_add(1);
+        assert!(retained < 8, "the exact-output fixture remains bounded");
+    }
+    assert_ne!(retained, 0, "the fixture must retain predecessor output");
+    assert!(
+        services
+            .has_pending_exact_output()
+            .expect("inspect retained predecessor output")
+    );
+    assert!(lane_work.requeue_effect(current));
+
+    drain_finalized_lane_work_output(
+        &mut lane_work,
+        &services,
+        &receipt,
+        &artifact,
+        &lane_authority,
+        1,
+    )
+    .expect("durable handoff frees capacity for every retained source effect");
+    assert_eq!(lane_work.effect_count(), 0);
+    assert!(
+        !services
+            .has_pending_exact_output()
+            .expect("all finalized exact output crosses durable handoff")
+    );
 }
 #[test]
 fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {

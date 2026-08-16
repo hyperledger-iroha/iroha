@@ -39,12 +39,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitAgendaProposal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalAction, AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
-    };
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
     };
     fn proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {

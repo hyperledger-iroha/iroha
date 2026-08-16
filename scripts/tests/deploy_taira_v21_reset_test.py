@@ -412,6 +412,7 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         runner=runner,
     )
 
+    assert MODULE.CONFIG_CHECK_TIMEOUT_SECONDS == 30
     assert [command for command, _kwargs in calls] == [
         [
             str(binary),
@@ -2037,6 +2038,31 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         "apply_reset",
         lambda *args, **kwargs: pytest.fail("dry run called apply_reset"),
     )
+    dry_run_authority = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="verified",
+        authority_envelope={},
+        durable_receipt={},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, apply, **_kwargs: (
+            events.append(f"authority:{apply}") or dry_run_authority
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE.taira_authority_client,
+        "verify_receipt",
+        lambda *_args, **_kwargs: pytest.fail("dry run historically verified a lease"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_finalize_deploy_lease",
+        lambda *_args, **_kwargs: pytest.fail("dry run finalized a lease"),
+    )
     monkeypatch.setattr(
         MODULE,
         "exclusive_deployment_lock",
@@ -2076,7 +2102,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     assert report["boi_artifact_inventory_sha256"] == "2" * 64
     assert report["boi_qualified_inventory_sha256"] == "3" * 64
     assert report["boi_qualification_receipt_id"] == "4" * 64
-    assert events == ["admission-verify", "capture", "archive-recheck"]
+    assert events == [
+        "admission-verify",
+        "capture",
+        "archive-recheck",
+        "authority:False",
+    ]
 
 
 def test_deployment_admission_requires_and_binds_qualified_boi_result(
@@ -2225,13 +2256,12 @@ def test_admission_failure_precedes_every_deployment_preflight(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=False,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=apply,
     )
 
     with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE._execute_after_provisioned_authority_contracts(
-            args, ops=MODULE.SystemOps()
-        )
+        MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps())
 
     assert events == ["admission-verify"]
 
@@ -2296,6 +2326,37 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
 
     monkeypatch.setattr(MODULE, "apply_reset", apply)
 
+    consumed_lease = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="authorized",
+        authority_envelope={"schema": "test-deploy-envelope"},
+        durable_receipt={"schema": "test-deploy-receipt"},
+    )
+    finalization = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="finalized",
+        authority_envelope={"schema": "test-final-envelope"},
+        durable_receipt={"schema": "test-final-receipt"},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, apply, **_kwargs: (
+            events.append(f"authority:{apply}") or consumed_lease
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_finalize_deploy_lease",
+        lambda *_args, outcome, **_kwargs: (
+            events.append(f"finalize:{outcome}") or finalization
+        ),
+    )
+
     @contextlib.contextmanager
     def consume(_admission):
         events.append("consume-enter")
@@ -2317,6 +2378,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
 
     monkeypatch.setattr(MODULE, "exclusive_deployment_lock", lock)
     monkeypatch.setattr(MODULE, "consume_admission_receipt", consume)
+    monkeypatch.setattr(MODULE, "build_operator_http_getter", lambda *_args: object())
     args = argparse.Namespace(
         bundle=Path("/bundle"),
         binary=Path("/binary"),
@@ -2339,12 +2401,11 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=True,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=True,
     )
 
-    assert MODULE._execute_after_provisioned_authority_contracts(
-        args, ops=MODULE.SystemOps()
-    ) == {
+    assert MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps()) == {
         "admission_archive_sha256": "0" * 64,
         "admission_receipt_consumed": True,
         "admission_receipt_id": "f" * 64,
@@ -2352,6 +2413,12 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         "boi_artifact_inventory_sha256": "2" * 64,
         "boi_qualified_inventory_sha256": "3" * 64,
         "boi_qualification_receipt_id": "4" * 64,
+        "deploy_authority_final_status": "finalized",
+        "deploy_authority_operation_id": "7" * 64,
+        "deploy_authority_result_receipt_sha256": hashlib.sha256(
+            finalization.durable_receipt_bytes
+        ).hexdigest(),
+        "deploy_authority_status": "authorized",
     }
     assert events == [
         "admission-verify",
@@ -2363,10 +2430,12 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         "capture:True",
         "recheck-inputs",
         "recheck-admission-evidence",
+        "authority:True",
         "consume-enter",
         "apply",
         "rollout-start",
         "consume-exit",
+        "finalize:success",
         "lock-exit",
     ]
 

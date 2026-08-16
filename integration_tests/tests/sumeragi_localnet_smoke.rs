@@ -90,8 +90,7 @@ static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
-const SOAK_BLOCK_TIME_MS: u64 = 100;
-const SOAK_COMMIT_TIME_MS: u64 = 100;
+const SOAK_BLOCK_CADENCE_MS: u64 = 100;
 const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
 const SOAK_SUBMIT_BATCH: u64 = 200;
@@ -102,8 +101,8 @@ const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(90);
 const SOAK_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const THROUGHPUT_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const THROUGHPUT_BLOCK_TIME_MS: u64 = 1_000;
-const THROUGHPUT_COMMIT_TIME_MS: u64 = 1_000;
+const THROUGHPUT_BLOCK_CADENCE_MS: u64 = 1_000;
+const THROUGHPUT_COMMIT_SLO_BASE_MS: u64 = 1_000;
 const THROUGHPUT_BLOCK_MAX_TXS: u64 = 10_000;
 const THROUGHPUT_LANE_TEU_FLOOR: i64 = 1;
 const THROUGHPUT_LANE_TEU_CAPACITY: i64 = 1_000_000_000;
@@ -137,8 +136,7 @@ const REALISTIC_30TPS_DURATION_SECS: u64 = 7_200;
 // block-cadence checks.
 const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 0;
 const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
-const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 400;
-const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
+const REALISTIC_30TPS_BLOCK_CADENCE_MS: u64 = 400;
 const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 128;
 const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 64;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
@@ -148,12 +146,10 @@ const REALISTIC_30TPS_STALL_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_STALL_SECS";
 const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const REALISTIC_30TPS_STATUS_RECOVERY_POLL_TIMEOUT: Duration = Duration::from_secs(2);
-const REALISTIC_30TPS_BAD_PEER_ROTATE_SECS: u64 = 60;
-const REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_BAD_PEER_ROTATE_SECS";
-const REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS: u64 = 900;
-const REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV: &str =
-    "IROHA_REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS";
-const REALISTIC_30TPS_FAULT_KINDS_ENV: &str = "IROHA_REALISTIC_30TPS_FAULT_KINDS";
+const REALISTIC_30TPS_OUTAGE_ROTATE_SECS: u64 = 60;
+const REALISTIC_30TPS_OUTAGE_ROTATE_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_OUTAGE_ROTATE_SECS";
+const REALISTIC_30TPS_OUTAGE_RECOVERY_SECS: u64 = 900;
+const REALISTIC_30TPS_OUTAGE_RECOVERY_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_OUTAGE_RECOVERY_SECS";
 const REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_RECOVERY_BOUND_SECS";
 const REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV: &str =
     "IROHA_REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE";
@@ -1200,12 +1196,12 @@ async fn npos_localnet_realistic_30tps_2h() -> Result<()> {
     .await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running 4-peer NPoS localnet regression (30 TPS for 2 hours, rotating Byzantine peer)"]
+#[ignore = "long-running 4-peer NPoS localnet regression (30 TPS for 2 hours, rotating validator outage)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-async fn npos_localnet_realistic_30tps_2h_rotating_byzantine_peer() -> Result<()> {
+async fn npos_localnet_realistic_30tps_2h_rotating_validator_outage() -> Result<()> {
     run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Npos,
-        stringify!(npos_localnet_realistic_30tps_2h_rotating_byzantine_peer),
+        stringify!(npos_localnet_realistic_30tps_2h_rotating_validator_outage),
         Some(Realistic30TpsRotatingFaultConfig::from_env()?),
     )
     .await
@@ -1232,116 +1228,6 @@ impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Realistic30TpsFaultKind {
-    ConflictingReady,
-    DuplicateInits,
-    DropValidatorChunks,
-}
-const REALISTIC_30TPS_DEFAULT_FAULT_KINDS: [Realistic30TpsFaultKind; 3] = [
-    Realistic30TpsFaultKind::ConflictingReady,
-    Realistic30TpsFaultKind::DuplicateInits,
-    Realistic30TpsFaultKind::DropValidatorChunks,
-];
-impl Realistic30TpsFaultKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ConflictingReady => "conflicting-ready",
-            Self::DuplicateInits => "duplicate-inits",
-            Self::DropValidatorChunks => "drop-validator-chunks",
-        }
-    }
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "conflicting-ready"
-            | "conflicting_ready"
-            | "rbc-conflicting-ready"
-            | "rbc_conflicting_ready" => Some(Self::ConflictingReady),
-            "duplicate-inits"
-            | "duplicate_inits"
-            | "rbc-duplicate-inits"
-            | "rbc_duplicate_inits" => Some(Self::DuplicateInits),
-            "drop-validator-chunks"
-            | "drop_validator_chunks"
-            | "rbc-drop-validator-chunks"
-            | "rbc_drop_validator_chunks" => Some(Self::DropValidatorChunks),
-            _ => None,
-        }
-    }
-    fn layer(self, peer_count: usize) -> ConfigLayer {
-        let mut layer = Table::new();
-        let mut rbc = Table::new();
-        match self {
-            Self::ConflictingReady => {
-                rbc.insert(
-                    "conflicting_ready_mask".to_string(),
-                    TomlValue::Integer(realistic_30tps_validator_mask(peer_count)),
-                );
-            }
-            Self::DuplicateInits => {
-                rbc.insert("duplicate_inits".to_string(), TomlValue::Boolean(true));
-            }
-            Self::DropValidatorChunks => {
-                rbc.insert(
-                    "drop_validator_mask".to_string(),
-                    TomlValue::Integer(realistic_30tps_validator_mask(peer_count)),
-                );
-            }
-        }
-        let mut debug = Table::new();
-        debug.insert("rbc".to_string(), TomlValue::Table(rbc));
-        let mut sumeragi = Table::new();
-        sumeragi.insert("debug".to_string(), TomlValue::Table(debug));
-        layer.insert("sumeragi".to_string(), TomlValue::Table(sumeragi));
-        ConfigLayer(layer)
-    }
-}
-fn default_realistic_30tps_fault_kinds() -> Vec<Realistic30TpsFaultKind> {
-    REALISTIC_30TPS_DEFAULT_FAULT_KINDS.to_vec()
-}
-fn parse_realistic_30tps_fault_kinds(raw: &str) -> Result<Vec<Realistic30TpsFaultKind>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
-        return Ok(default_realistic_30tps_fault_kinds());
-    }
-    let mut kinds = Vec::new();
-    for name in trimmed
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let kind = Realistic30TpsFaultKind::parse(name).ok_or_else(|| {
-            eyre!(
-                "unsupported {REALISTIC_30TPS_FAULT_KINDS_ENV} entry `{name}`; expected one of conflicting-ready, duplicate-inits, drop-validator-chunks"
-            )
-        })?;
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
-    }
-    ensure!(
-        !kinds.is_empty(),
-        "{REALISTIC_30TPS_FAULT_KINDS_ENV} must configure at least one fault kind"
-    );
-    Ok(kinds)
-}
-fn realistic_30tps_fault_kinds_from_env() -> Result<Vec<Realistic30TpsFaultKind>> {
-    match std::env::var(REALISTIC_30TPS_FAULT_KINDS_ENV) {
-        Ok(raw) => parse_realistic_30tps_fault_kinds(&raw),
-        Err(std::env::VarError::NotPresent) => Ok(default_realistic_30tps_fault_kinds()),
-        Err(err) => Err(eyre!(
-            "failed to read {REALISTIC_30TPS_FAULT_KINDS_ENV}: {err}"
-        )),
-    }
-}
-fn realistic_30tps_fault_kind_at(
-    fault_kinds: &[Realistic30TpsFaultKind],
-    window_index: usize,
-) -> Option<Realistic30TpsFaultKind> {
-    fault_kinds
-        .get(window_index % fault_kinds.len().max(1))
-        .copied()
 }
 fn realistic_30tps_peer_index_at(peer_count: usize, window_index: usize) -> Option<usize> {
     (peer_count > 0).then_some(window_index % peer_count)
@@ -1404,7 +1290,6 @@ struct Realistic30TpsRotatingFaultConfig {
     recovery_bound: Option<Duration>,
     strict_rotation_convergence: bool,
     convergence_total_bound: Option<Duration>,
-    fault_kinds: Vec<Realistic30TpsFaultKind>,
 }
 impl Realistic30TpsRotatingFaultConfig {
     fn from_env() -> Result<Self> {
@@ -1414,15 +1299,15 @@ impl Realistic30TpsRotatingFaultConfig {
         Ok(Self {
             rotate_interval: Duration::from_secs(
                 env_or_default(
-                    REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV,
-                    REALISTIC_30TPS_BAD_PEER_ROTATE_SECS,
+                    REALISTIC_30TPS_OUTAGE_ROTATE_SECS_ENV,
+                    REALISTIC_30TPS_OUTAGE_ROTATE_SECS,
                 )
                 .max(1),
             ),
             recovery_timeout: Duration::from_secs(
                 env_or_default(
-                    REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV,
-                    REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS,
+                    REALISTIC_30TPS_OUTAGE_RECOVERY_SECS_ENV,
+                    REALISTIC_30TPS_OUTAGE_RECOVERY_SECS,
                 )
                 .max(1),
             ),
@@ -1431,7 +1316,6 @@ impl Realistic30TpsRotatingFaultConfig {
             convergence_total_bound: realistic_30tps_convergence_total_bound_from_env(
                 recovery_bound,
             )?,
-            fault_kinds: realistic_30tps_fault_kinds_from_env()?,
         })
     }
     fn recovery_wait_timeout(&self) -> Duration {
@@ -1611,7 +1495,6 @@ struct Realistic30TpsRotatingFaultController {
     final_target_approved: u64,
     current_peer: Option<usize>,
     next_peer: usize,
-    next_fault_index: usize,
     next_rotation_at: Option<Instant>,
     fault_windows: Vec<Realistic30TpsFaultWindow>,
     status_recovery_samples: Vec<Realistic30TpsStatusRecoverySample>,
@@ -1633,7 +1516,6 @@ impl Realistic30TpsRotatingFaultController {
             final_target_approved,
             current_peer: None,
             next_peer: 0,
-            next_fault_index: 0,
             next_rotation_at: None,
             fault_windows: Vec::new(),
             status_recovery_samples: Vec::new(),
@@ -1644,14 +1526,9 @@ impl Realistic30TpsRotatingFaultController {
     async fn start(&mut self, network: &Network) -> Result<()> {
         ensure!(
             network.peers().len() >= REALISTIC_30TPS_PEERS,
-            "rotating Byzantine 30 TPS soak requires at least {REALISTIC_30TPS_PEERS} peers"
+            "rotating validator-outage 30 TPS soak requires at least {REALISTIC_30TPS_PEERS} peers"
         );
-        ensure!(
-            !self.config.fault_kinds.is_empty(),
-            "rotating Byzantine 30 TPS soak requires at least one fault kind"
-        );
-        let fault_kind = self.next_fault_kind();
-        self.poison_peer(network, 0, fault_kind, "initial rotating Byzantine peer")
+        self.take_peer_offline(network, 0, "initial rotating validator outage")
             .await?;
         self.next_peer = 1 % network.peers().len();
         self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
@@ -1669,12 +1546,16 @@ impl Realistic30TpsRotatingFaultController {
     }
     async fn rotate(&mut self, network: &Network) -> Result<()> {
         if let Some(current_peer) = self.current_peer {
-            self.heal_peer(network, current_peer, "heal rotating Byzantine peer", true)
-                .await?;
+            self.heal_peer(
+                network,
+                current_peer,
+                "heal rotating validator outage",
+                true,
+            )
+            .await?;
         }
         let next_peer = self.next_peer % network.peers().len();
-        let fault_kind = self.next_fault_kind();
-        self.poison_peer(network, next_peer, fault_kind, "rotate Byzantine peer")
+        self.take_peer_offline(network, next_peer, "rotate validator outage")
             .await?;
         self.next_peer = (next_peer + 1) % network.peers().len();
         self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
@@ -1687,7 +1568,7 @@ impl Realistic30TpsRotatingFaultController {
             self.heal_peer(
                 network,
                 current_peer,
-                "heal final rotating Byzantine peer",
+                "heal final rotating validator outage",
                 false,
             )
             .await?;
@@ -1701,14 +1582,14 @@ impl Realistic30TpsRotatingFaultController {
                 )
                 .await
                 .wrap_err_with(|| {
-                    format!("heal final rotating Byzantine peer: peer {current_peer} bounded convergence")
+                    format!("heal final rotating validator outage: peer {current_peer} bounded convergence")
                 })?;
                 self.convergence_windows.push(convergence_window);
             }
         }
         ensure!(
             realistic_fault_windows_have_no_overlap(&self.fault_windows),
-            "rotating Byzantine fault windows overlapped: {:?}",
+            "rotating validator-outage windows overlapped: {:?}",
             self.fault_windows
         );
         if self.config.requires_bounded_convergence() {
@@ -1717,20 +1598,9 @@ impl Realistic30TpsRotatingFaultController {
                     &self.fault_windows,
                     &self.convergence_windows
                 ),
-                "strict rotating Byzantine fault windows started before healed peers converged: windows={:?}, convergence={:?}",
+                "strict rotating validator-outage windows started before healed peers converged: windows={:?}, convergence={:?}",
                 self.fault_windows,
                 self.convergence_windows
-            );
-        }
-        if self.fault_windows.len() >= self.config.fault_kinds.len() {
-            ensure!(
-                realistic_fault_windows_observed_all_kinds(
-                    &self.fault_windows,
-                    &self.config.fault_kinds
-                ),
-                "rotating Byzantine fault windows did not observe every configured fault kind: windows={:?}, configured={:?}",
-                &self.fault_windows,
-                &self.config.fault_kinds
             );
         }
         Ok(())
@@ -1754,44 +1624,33 @@ impl Realistic30TpsRotatingFaultController {
             .find(|window| window.peer_index == peer_index && window.ended_ms.is_none())
             .map_or("unknown", |window| window.fault)
     }
-    fn next_fault_kind(&mut self) -> Realistic30TpsFaultKind {
-        let kind = realistic_30tps_fault_kind_at(&self.config.fault_kinds, self.next_fault_index)
-            .expect("fault kind list checked before rotation starts");
-        self.next_fault_index = self.next_fault_index.saturating_add(1);
-        kind
-    }
-    async fn poison_peer(
+    async fn take_peer_offline(
         &mut self,
         network: &Network,
         peer_index: usize,
-        fault_kind: Realistic30TpsFaultKind,
         context: &str,
     ) -> Result<()> {
-        let peer_count = network.peers().len();
-        let fault_layer = fault_kind.layer(peer_count);
-        let mut layers = self.base_layers.clone();
-        layers.push(fault_layer);
         let peer = network
             .peers()
             .get(peer_index)
-            .ok_or_else(|| eyre!("bad peer index {peer_index} missing"))?;
+            .ok_or_else(|| eyre!("validator index {peer_index} missing"))?;
+        ensure!(
+            peer.shutdown_if_started().await,
+            "{context}: validator {peer_index} ({}) was not running",
+            peer.mnemonic()
+        );
+        ensure!(
+            !peer.is_running(),
+            "{context}: validator {peer_index} ({}) remained running after shutdown",
+            peer.mnemonic()
+        );
         self.fault_windows.push(Realistic30TpsFaultWindow {
             peer_index,
             mnemonic: peer.mnemonic().to_owned(),
-            fault: fault_kind.as_str(),
+            fault: "process-outage",
             started_ms: unix_timestamp_ms(),
             ended_ms: None,
         });
-        restart_realistic_30tps_peer(
-            network,
-            peer_index,
-            &layers,
-            false,
-            self.config.recovery_wait_timeout(),
-            context,
-            None,
-        )
-        .await?;
         self.current_peer = Some(peer_index);
         Ok(())
     }
@@ -2561,15 +2420,6 @@ async fn wait_for_realistic_post_heal_consensus_progress(
         sleep(Duration::from_millis(200)).await;
     }
 }
-fn realistic_30tps_validator_mask(peer_count: usize) -> i64 {
-    if peer_count == 0 {
-        0
-    } else if peer_count >= 63 {
-        i64::MAX
-    } else {
-        (1_i64 << peer_count) - 1
-    }
-}
 fn realistic_fault_windows_have_no_overlap(windows: &[Realistic30TpsFaultWindow]) -> bool {
     let mut sorted: Vec<_> = windows.iter().collect();
     sorted.sort_by_key(|window| window.started_ms);
@@ -2581,14 +2431,6 @@ fn realistic_fault_windows_have_no_overlap(windows: &[Realistic30TpsFaultWindow]
         last_end = window.ended_ms.unwrap_or(u64::MAX);
     }
     true
-}
-fn realistic_fault_windows_observed_all_kinds(
-    windows: &[Realistic30TpsFaultWindow],
-    fault_kinds: &[Realistic30TpsFaultKind],
-) -> bool {
-    fault_kinds
-        .iter()
-        .all(|kind| windows.iter().any(|window| window.fault == kind.as_str()))
 }
 fn realistic_strict_fault_windows_start_after_convergence(
     windows: &[Realistic30TpsFaultWindow],
@@ -2639,16 +2481,11 @@ async fn run_realistic_30tps_localnet(
         "IROHA_REALISTIC_30TPS_TARGET_BLOCKS",
         REALISTIC_30TPS_TARGET_BLOCKS,
     );
-    let block_time_ms = env_or_default(
-        "IROHA_REALISTIC_30TPS_BLOCK_TIME_MS",
-        REALISTIC_30TPS_BLOCK_TIME_MS,
+    let block_cadence_ms = env_or_default(
+        "IROHA_REALISTIC_30TPS_BLOCK_CADENCE_MS",
+        REALISTIC_30TPS_BLOCK_CADENCE_MS,
     )
     .max(1);
-    let commit_time_ms = env_or_default(
-        "IROHA_REALISTIC_30TPS_COMMIT_TIME_MS",
-        REALISTIC_30TPS_COMMIT_TIME_MS,
-    )
-    .max(block_time_ms);
     let stall_threshold = realistic_30tps_stall_threshold(rotating_fault.as_ref());
     let max_avg_secs_per_block = realistic_max_avg_secs_per_block(rotating_fault.is_some());
     let submit_parallelism = env_or_default_usize(
@@ -2735,7 +2572,7 @@ async fn run_realistic_30tps_localnet(
         .with_peers(REALISTIC_30TPS_PEERS)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_block_cadence(Duration::from_millis(block_time_ms))
+        .with_block_cadence(Duration::from_millis(block_cadence_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(
                 std::num::NonZeroU64::new(block_max_txs).expect("checked non-zero"),
@@ -2768,53 +2605,6 @@ async fn run_realistic_30tps_localnet(
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
-                .write(
-                    ["sumeragi", "advanced", "worker", "parallel_ingress"],
-                    false,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "worker",
-                        "vote_burst_cap_with_payload_backlog",
-                    ],
-                    1_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    1_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_multiplier",
-                    ],
-                    1_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_floor_ms",
-                    ],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "block", "fast_finality_max_transactions"],
-                    i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
-                    10_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
-                    10_000_i64,
-                )
                 .write(["nexus", "fusion", "floor_teu"], THROUGHPUT_LANE_TEU_FLOOR)
                 .write(
                     ["nexus", "fusion", "exit_teu"],
@@ -2937,8 +2727,7 @@ async fn run_realistic_30tps_localnet(
             let target_approved = baseline_approved.saturating_add(total_txs);
             artifacts.recipe = Some(ThroughputArtifactRecipe {
                 peers: network.peers().len() as u64,
-                block_time_ms,
-                commit_time_ms,
+                block_cadence_ms,
                 block_max_txs,
                 warmup_blocks: 0,
                 steady_blocks: target_blocks,
@@ -2985,12 +2774,9 @@ async fn run_realistic_30tps_localnet(
                 } else {
                     String::new()
                 },
-                rng_seed,
-                snapshot_mode: snapshot_mode.to_owned(),
-                snapshot_create_every_ms,
-                rbc_encoding: "plain".to_owned(),
-                rbc_data_shards: 0,
-                rbc_parity_shards: 0,
+            rng_seed,
+            snapshot_mode: snapshot_mode.to_owned(),
+            snapshot_create_every_ms,
             });
             let mut fault_controller = if let Some(config) = rotating_fault {
                 let mut controller = Realistic30TpsRotatingFaultController::new(
@@ -3001,7 +2787,7 @@ async fn run_realistic_30tps_localnet(
                 controller
                     .start(&network)
                     .await
-                    .wrap_err("failed to start rotating Byzantine peer controller")?;
+                    .wrap_err("failed to start rotating validator-outage controller")?;
                 artifacts.fault_windows = controller.fault_windows().to_vec();
                 Some(controller)
             } else {
@@ -3090,14 +2876,13 @@ async fn run_realistic_30tps_localnet(
                 }
             };
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, signed_block_cadence_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
                 total_txs,
                 target_blocks,
-                block_time_ms,
-                commit_time_ms,
+                block_cadence_ms,
                 block_max_txs,
                 load_kind.as_str(),
                 if load_kind == Realistic30TpsLoadKind::Transfer {
@@ -3133,12 +2918,11 @@ async fn run_realistic_30tps_localnet(
             );
             if let Some(controller) = fault_controller.as_ref() {
                 eprintln!(
-                    "realistic localnet rotating Byzantine recipe: rotate_interval={:?}, recovery_bound={:?}, strict_rotation_convergence={}, convergence_total_bound={:?}, fault_kinds={:?}, initial_fault_windows={:?}",
+                    "realistic localnet rotating validator-outage recipe: rotate_interval={:?}, recovery_bound={:?}, strict_rotation_convergence={}, convergence_total_bound={:?}, initial_fault_windows={:?}",
                     controller.config.rotate_interval,
                     controller.config.recovery_bound,
                     controller.config.strict_rotation_convergence,
                     controller.config.convergence_total_bound,
-                    controller.config.fault_kinds,
                     controller.fault_windows()
                 );
             }
@@ -3164,12 +2948,12 @@ async fn run_realistic_30tps_localnet(
                             let _ = submit_handle.await;
                             if let Err(heal_err) = controller.stop_and_heal(&network).await {
                                 eprintln!(
-                                    "failed to heal rotating Byzantine peer after load rotation error: {heal_err:?}"
+                                    "failed to heal rotating validator outage after load rotation error: {heal_err:?}"
                                 );
                             }
                             sync_realistic_fault_artifacts(controller, &mut artifacts);
                             return Err(err.wrap_err(
-                                "rotating Byzantine peer controller failed during load",
+                                "rotating validator-outage controller failed during load",
                             ));
                         }
                     };
@@ -3257,7 +3041,7 @@ async fn run_realistic_30tps_localnet(
                     if let Some(controller) = fault_controller.as_mut() {
                         if let Err(err) = controller.stop_and_heal(&network).await {
                             eprintln!(
-                                "failed to heal rotating Byzantine peer after load stall: {err:?}"
+                                "failed to heal rotating validator outage after load stall: {err:?}"
                             );
                         }
                         sync_realistic_fault_artifacts(controller, &mut artifacts);
@@ -3330,12 +3114,12 @@ async fn run_realistic_30tps_localnet(
                             sync_realistic_fault_artifacts(controller, &mut artifacts);
                             if let Err(heal_err) = controller.stop_and_heal(&network).await {
                                 eprintln!(
-                                    "failed to heal rotating Byzantine peer after drain rotation error: {heal_err:?}"
+                                    "failed to heal rotating validator outage after drain rotation error: {heal_err:?}"
                                 );
                             }
                             sync_realistic_fault_artifacts(controller, &mut artifacts);
                             return Err(err.wrap_err(
-                                "rotating Byzantine peer controller failed during drain",
+                                "rotating validator-outage controller failed during drain",
                             ));
                         }
                     };
@@ -3414,7 +3198,7 @@ async fn run_realistic_30tps_localnet(
                     if let Some(controller) = fault_controller.as_mut() {
                         if let Err(err) = controller.stop_and_heal(&network).await {
                             eprintln!(
-                                "failed to heal rotating Byzantine peer after drain stall: {err:?}"
+                                "failed to heal rotating validator outage after drain stall: {err:?}"
                             );
                         }
                         sync_realistic_fault_artifacts(controller, &mut artifacts);
@@ -3434,7 +3218,7 @@ async fn run_realistic_30tps_localnet(
                 controller
                     .stop_and_heal(&network)
                     .await
-                    .wrap_err("failed to heal final rotating Byzantine peer")?;
+                    .wrap_err("failed to heal final rotating validator outage")?;
                 sync_realistic_fault_artifacts(controller, &mut artifacts);
                 wait_for_min_txs_approved(&network, target_approved, Duration::from_secs(60))
                     .await
@@ -3941,15 +3725,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
-                .write(["network", "disconnect_on_post_overflow"], false)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                );
+                .write(["network", "disconnect_on_post_overflow"], false);
         });
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
@@ -4152,9 +3928,8 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-    let soak_block_time_ms = env_or_default("IROHA_SOAK_BLOCK_TIME_MS", SOAK_BLOCK_TIME_MS);
-    let soak_commit_time_ms =
-        env_or_default("IROHA_SOAK_COMMIT_TIME_MS", SOAK_COMMIT_TIME_MS).max(soak_block_time_ms);
+    let soak_block_cadence_ms =
+        env_or_default("IROHA_SOAK_BLOCK_CADENCE_MS", SOAK_BLOCK_CADENCE_MS);
     let soak_max_secs_per_block = env_or_default_f64("IROHA_SOAK_MAX_SEC_PER_BLOCK", 1.0);
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     // Extend TTL so early transactions do not expire during the soak run.
@@ -4166,7 +3941,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_block_cadence(Duration::from_millis(soak_block_time_ms))
+        .with_block_cadence(Duration::from_millis(soak_block_cadence_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
@@ -4192,47 +3967,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
-                .write(["network", "disconnect_on_post_overflow"], false)
-                // Match the sustained-load DA quorum profile used by the other soak cases.
-                .write(
-                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    7_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_multiplier",
-                    ],
-                    3_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_floor_ms",
-                    ],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    1_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                )
-                // Keep soak timing deterministic for perf assertions by pinning pacing at 1.0x.
-                .write(
-                    ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
-                    10_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
-                    10_000_i64,
-                );
+                .write(["network", "disconnect_on_post_overflow"], false);
         });
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
@@ -4243,9 +3978,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         else {
             return Ok(());
         };
-        eprintln!(
-            "localnet soak timing profile: block_time_ms={soak_block_time_ms}, commit_time_ms={soak_commit_time_ms}"
-        );
+        eprintln!("localnet soak signed block cadence: {soak_block_cadence_ms} ms");
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_non_empty = baseline_statuses
@@ -4422,11 +4155,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         "IROHA_TEST_CLIENT_TTL_MS",
         THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
     );
-    let throughput_rbc_encoding =
-        std::env::var("IROHA_THROUGHPUT_RBC_ENCODING").unwrap_or_else(|_| "plain".to_owned());
-    let throughput_rbc_data_shards = env_or_default("IROHA_THROUGHPUT_RBC_DATA_SHARDS", 4);
-    let throughput_rbc_parity_shards = env_or_default("IROHA_THROUGHPUT_RBC_PARITY_SHARDS", 2);
-    let throughput_rbc_encoding_for_config = throughput_rbc_encoding.clone();
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_auto_populated_trusted_peers()
@@ -4436,12 +4164,8 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
         )))
         .with_permissioned_consensus()
-        .with_config_layer(move |layer| {
-            let layer = layer
-                .write(
-                    ["sumeragi", "advanced", "rbc", "encoding"],
-                    throughput_rbc_encoding_for_config.as_str(),
-                )
+        .with_config_layer(|layer| {
+            let _ = layer
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -4468,28 +4192,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ["nexus", "fusion", "exit_teu"],
                     THROUGHPUT_LANE_TEU_CAPACITY,
                 )
-                // Give DA quorum extra breathing room under sustained load.
-                .write(
-                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    7_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_multiplier",
-                    ],
-                    3_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    5_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                )
                 // Lift Torii limits for sustained local throughput runs.
                 .write(
                     ["torii", "preauth_allow_cidrs"],
@@ -4512,17 +4214,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
-            if throughput_rbc_encoding_for_config == "rs16" {
-                let _ = layer
-                    .write(
-                        ["sumeragi", "advanced", "rbc", "data_shards"],
-                        i64::try_from(throughput_rbc_data_shards).unwrap_or(i64::MAX),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "rbc", "parity_shards"],
-                        i64::try_from(throughput_rbc_parity_shards).unwrap_or(i64::MAX),
-                    );
-            }
         });
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
@@ -4589,8 +4280,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let total_txs = warmup_txs.saturating_add(steady_txs);
         artifacts.recipe = Some(ThroughputArtifactRecipe {
             peers: network.peers().len() as u64,
-            block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
-            commit_time_ms: THROUGHPUT_COMMIT_TIME_MS,
+            block_cadence_ms: THROUGHPUT_BLOCK_CADENCE_MS,
             block_max_txs: THROUGHPUT_BLOCK_MAX_TXS,
             warmup_blocks,
             steady_blocks,
@@ -4612,9 +4302,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
             snapshot_mode: "disabled".to_owned(),
             snapshot_create_every_ms: 0,
-            rbc_encoding: throughput_rbc_encoding.clone(),
-            rbc_data_shards: throughput_rbc_data_shards,
-            rbc_parity_shards: throughput_rbc_parity_shards,
         });
         let slo_p95_ms = env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_SLO_P95_MS);
         let slo_p99_ms = env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_SLO_P99_MS);
@@ -4644,10 +4331,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             "network must have at least one peer"
         );
         eprintln!(
-            "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, rbc_encoding={}, rbc_data_shards={}, rbc_parity_shards={}, baseline_non_empty={}, baseline_approved={}",
+            "localnet throughput recipe: peers={}, signed_block_cadence_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
             network.peers().len(),
-            THROUGHPUT_BLOCK_TIME_MS,
-            THROUGHPUT_COMMIT_TIME_MS,
+            THROUGHPUT_BLOCK_CADENCE_MS,
             THROUGHPUT_BLOCK_MAX_TXS,
             warmup_blocks,
             steady_blocks,
@@ -4657,9 +4343,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             submit_parallelism,
             queue_soft_limit,
             rng_seed,
-            throughput_rbc_encoding,
-            throughput_rbc_data_shards,
-            throughput_rbc_parity_shards,
             baseline_non_empty,
             baseline_approved,
         );
@@ -4823,7 +4506,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             .map(|status| status.commit_time_ms)
             .max()
             .unwrap_or_default();
-        let max_commit_time_allowed = THROUGHPUT_COMMIT_TIME_MS
+        let max_commit_time_allowed = THROUGHPUT_COMMIT_SLO_BASE_MS
             .saturating_mul(THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER);
         let mut min_commit_time_ms = u64::MAX;
         let mut sum_commit_time_ms = 0_u128;
@@ -5102,28 +4785,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     ["nexus", "fusion", "exit_teu"],
                     THROUGHPUT_LANE_TEU_CAPACITY,
                 )
-                // Give DA quorum extra breathing room under sustained load.
-                .write(
-                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    7_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "da",
-                        "availability_timeout_multiplier",
-                    ],
-                    3_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    5_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                )
                 // Lift Torii limits for sustained local throughput runs.
                 .write(
                     ["torii", "preauth_allow_cidrs"],
@@ -5210,8 +4871,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let total_txs = warmup_txs.saturating_add(steady_txs);
         artifacts.recipe = Some(ThroughputArtifactRecipe {
             peers: network.peers().len() as u64,
-            block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
-            commit_time_ms: THROUGHPUT_COMMIT_TIME_MS,
+            block_cadence_ms: THROUGHPUT_BLOCK_CADENCE_MS,
             block_max_txs: THROUGHPUT_BLOCK_MAX_TXS,
             warmup_blocks,
             steady_blocks,
@@ -5233,9 +4893,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
             snapshot_mode: "disabled".to_owned(),
             snapshot_create_every_ms: 0,
-            rbc_encoding: "plain".to_owned(),
-            rbc_data_shards: 4,
-            rbc_parity_shards: 2,
         });
         let slo_p95_ms =
             env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_NPOS_SLO_P95_MS);
@@ -5267,10 +4924,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             "network must have at least one peer"
         );
         eprintln!(
-            "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
+            "localnet throughput recipe: peers={}, signed_block_cadence_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
             network.peers().len(),
-            THROUGHPUT_BLOCK_TIME_MS,
-            THROUGHPUT_COMMIT_TIME_MS,
+            THROUGHPUT_BLOCK_CADENCE_MS,
             THROUGHPUT_BLOCK_MAX_TXS,
             warmup_blocks,
             steady_blocks,
@@ -5427,7 +5083,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             .map(|status| status.commit_time_ms)
             .max()
             .unwrap_or_default();
-        let max_commit_time_allowed = THROUGHPUT_COMMIT_TIME_MS
+        let max_commit_time_allowed = THROUGHPUT_COMMIT_SLO_BASE_MS
             .saturating_mul(THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER);
         let mut min_commit_time_ms = u64::MAX;
         let mut sum_commit_time_ms = 0_u128;
@@ -6168,37 +5824,36 @@ async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() 
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-    remove_env_var(REALISTIC_30TPS_FAULT_KINDS_ENV);
     remove_env_var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV);
     remove_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV);
     remove_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV);
-    set_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV, "7");
+    set_env_var(REALISTIC_30TPS_OUTAGE_ROTATE_SECS_ENV, "7");
     assert_eq!(
         Realistic30TpsRotatingFaultConfig::from_env()
             .expect("rotating fault config")
             .rotate_interval,
         Duration::from_secs(7)
     );
-    set_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV, "0");
+    set_env_var(REALISTIC_30TPS_OUTAGE_ROTATE_SECS_ENV, "0");
     assert_eq!(
         Realistic30TpsRotatingFaultConfig::from_env()
             .expect("rotating fault config")
             .rotate_interval,
-        Duration::from_secs(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS)
+        Duration::from_secs(REALISTIC_30TPS_OUTAGE_ROTATE_SECS)
     );
-    set_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV, "240");
+    set_env_var(REALISTIC_30TPS_OUTAGE_RECOVERY_SECS_ENV, "240");
     assert_eq!(
         Realistic30TpsRotatingFaultConfig::from_env()
             .expect("rotating fault config")
             .recovery_timeout,
         Duration::from_secs(240)
     );
-    set_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV, "0");
+    set_env_var(REALISTIC_30TPS_OUTAGE_RECOVERY_SECS_ENV, "0");
     assert_eq!(
         Realistic30TpsRotatingFaultConfig::from_env()
             .expect("rotating fault config")
             .recovery_timeout,
-        Duration::from_secs(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS)
+        Duration::from_secs(REALISTIC_30TPS_OUTAGE_RECOVERY_SECS)
     );
     assert_eq!(
         Realistic30TpsRotatingFaultConfig::from_env()
@@ -6240,8 +5895,8 @@ async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() 
     );
     set_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV, "maybe");
     assert!(Realistic30TpsRotatingFaultConfig::from_env().is_err());
-    remove_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV);
-    remove_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_OUTAGE_ROTATE_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_OUTAGE_RECOVERY_SECS_ENV);
     remove_env_var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV);
     remove_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV);
     remove_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV);
@@ -6255,11 +5910,10 @@ async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
     remove_env_var(REALISTIC_30TPS_STALL_SECS_ENV);
     let config = Realistic30TpsRotatingFaultConfig {
         rotate_interval: Duration::from_secs(60),
-        recovery_timeout: Duration::from_secs(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS),
+        recovery_timeout: Duration::from_secs(REALISTIC_30TPS_OUTAGE_RECOVERY_SECS),
         recovery_bound: None,
         strict_rotation_convergence: false,
         convergence_total_bound: None,
-        fault_kinds: default_realistic_30tps_fault_kinds(),
     };
     assert_eq!(
         realistic_30tps_stall_threshold(None),
@@ -6282,69 +5936,14 @@ async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
     remove_env_var(REALISTIC_30TPS_STALL_SECS_ENV);
 }
 #[test]
-fn realistic_30tps_fault_kind_parsing_accepts_default_matrix_and_rejects_unknown() -> Result<()> {
-    assert_eq!(
-        parse_realistic_30tps_fault_kinds("default")?,
-        default_realistic_30tps_fault_kinds()
-    );
-    assert_eq!(
-        parse_realistic_30tps_fault_kinds(
-            "conflicting-ready, duplicate-inits, drop-validator-chunks"
-        )?,
-        default_realistic_30tps_fault_kinds()
-    );
-    assert!(parse_realistic_30tps_fault_kinds("conflicting-ready,unknown").is_err());
-    Ok(())
-}
-fn realistic_30tps_fault_layer_rbc(layer: &ConfigLayer) -> &Table {
-    layer
-        .as_ref()
-        .get("sumeragi")
-        .and_then(TomlValue::as_table)
-        .and_then(|value| value.get("debug"))
-        .and_then(TomlValue::as_table)
-        .and_then(|value| value.get("rbc"))
-        .and_then(TomlValue::as_table)
-        .expect("fault layer should include sumeragi.debug.rbc")
-}
-#[test]
-fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
-    let conflicting_ready = Realistic30TpsFaultKind::ConflictingReady.layer(4);
-    let rbc = realistic_30tps_fault_layer_rbc(&conflicting_ready);
-    assert_eq!(rbc.len(), 1);
-    assert_eq!(
-        rbc.get("conflicting_ready_mask")
-            .and_then(TomlValue::as_integer),
-        Some(0b1111)
-    );
-    let duplicate_inits = Realistic30TpsFaultKind::DuplicateInits.layer(4);
-    let rbc = realistic_30tps_fault_layer_rbc(&duplicate_inits);
-    assert_eq!(rbc.len(), 1);
-    assert_eq!(
-        rbc.get("duplicate_inits").and_then(TomlValue::as_bool),
-        Some(true)
-    );
-    let drop_validator_chunks = Realistic30TpsFaultKind::DropValidatorChunks.layer(4);
-    let rbc = realistic_30tps_fault_layer_rbc(&drop_validator_chunks);
-    assert_eq!(rbc.len(), 1);
-    assert_eq!(
-        rbc.get("drop_validator_mask")
-            .and_then(TomlValue::as_integer),
-        Some(0b1111)
-    );
-}
-#[test]
-fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap() -> Result<()> {
-    let fault_kinds = default_realistic_30tps_fault_kinds();
+fn realistic_30tps_outage_rotation_cycles_peers_without_overlap() -> Result<()> {
     let windows = (0..6)
         .map(|idx| {
-            let kind = realistic_30tps_fault_kind_at(&fault_kinds, idx)
-                .expect("default fault kind sequence");
             Ok(Realistic30TpsFaultWindow {
                 peer_index: realistic_30tps_peer_index_at(REALISTIC_30TPS_PEERS, idx)
                     .expect("peer sequence"),
                 mnemonic: format!("peer{idx}"),
-                fault: kind.as_str(),
+                fault: "process-outage",
                 started_ms: u64::try_from(idx)? * 60_000,
                 ended_ms: Some(u64::try_from(idx + 1)? * 60_000),
             })
@@ -6362,20 +5961,9 @@ fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap
             .iter()
             .map(|window| window.fault)
             .collect::<Vec<_>>(),
-        vec![
-            "conflicting-ready",
-            "duplicate-inits",
-            "drop-validator-chunks",
-            "conflicting-ready",
-            "duplicate-inits",
-            "drop-validator-chunks"
-        ]
+        vec!["process-outage"; 6]
     );
     assert!(realistic_fault_windows_have_no_overlap(&windows));
-    assert!(realistic_fault_windows_observed_all_kinds(
-        &windows,
-        &fault_kinds
-    ));
     Ok(())
 }
 #[test]
@@ -6419,13 +6007,6 @@ fn realistic_30tps_snapshot_settings_enable_read_write_for_rotating_faults() {
             REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_CREATE_EVERY_MS
         )
     );
-}
-#[test]
-fn realistic_30tps_validator_mask_covers_roster_bits() {
-    assert_eq!(realistic_30tps_validator_mask(0), 0);
-    assert_eq!(realistic_30tps_validator_mask(1), 0b1);
-    assert_eq!(realistic_30tps_validator_mask(4), 0b1111);
-    assert_eq!(realistic_30tps_validator_mask(63), i64::MAX);
 }
 #[test]
 fn realistic_30tps_catch_up_target_uses_leading_statuses() -> Result<()> {
@@ -6810,7 +6391,7 @@ fn realistic_status_recovery_summary_distinguishes_startup_bound_from_convergenc
     let within = Realistic30TpsStatusRecoverySample {
         peer_index: 0,
         mnemonic: "peer0".to_string(),
-        context: "heal rotating Byzantine peer".to_string(),
+        context: "heal rotating validator outage".to_string(),
         restart_started_ms: 10,
         status_wait_started_ms: 12,
         ended_ms: 72,
@@ -7523,7 +7104,7 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         status_recovery_samples: vec![Realistic30TpsStatusRecoverySample {
             peer_index: 2,
             mnemonic: "peer2".to_string(),
-            context: "heal rotating Byzantine peer".to_string(),
+            context: "heal rotating validator outage".to_string(),
             restart_started_ms: 170,
             status_wait_started_ms: 172,
             ended_ms: 210,
@@ -8682,8 +8263,7 @@ struct PeerLogInfo {
 #[derive(Clone, Debug)]
 struct ThroughputArtifactRecipe {
     peers: u64,
-    block_time_ms: u64,
-    commit_time_ms: u64,
+    block_cadence_ms: u64,
     block_max_txs: u64,
     warmup_blocks: u64,
     steady_blocks: u64,
@@ -8705,9 +8285,6 @@ struct ThroughputArtifactRecipe {
     rng_seed: u64,
     snapshot_mode: String,
     snapshot_create_every_ms: u64,
-    rbc_encoding: String,
-    rbc_data_shards: u64,
-    rbc_parity_shards: u64,
 }
 #[derive(Clone, Debug)]
 struct ThroughputArtifactSlo {
@@ -8923,12 +8500,8 @@ fn write_throughput_artifacts(
         let mut recipe_map = Map::new();
         recipe_map.insert("peers".to_string(), Value::from(recipe.peers));
         recipe_map.insert(
-            "block_time_ms".to_string(),
-            Value::from(recipe.block_time_ms),
-        );
-        recipe_map.insert(
-            "commit_time_ms".to_string(),
-            Value::from(recipe.commit_time_ms),
+            "signed_block_cadence_ms".to_string(),
+            Value::from(recipe.block_cadence_ms),
         );
         recipe_map.insert(
             "block_max_txs".to_string(),
@@ -8995,18 +8568,6 @@ fn write_throughput_artifacts(
         recipe_map.insert(
             "snapshot_create_every_ms".to_string(),
             Value::from(recipe.snapshot_create_every_ms),
-        );
-        recipe_map.insert(
-            "rbc_encoding".to_string(),
-            Value::from(recipe.rbc_encoding.clone()),
-        );
-        recipe_map.insert(
-            "rbc_data_shards".to_string(),
-            Value::from(recipe.rbc_data_shards),
-        );
-        recipe_map.insert(
-            "rbc_parity_shards".to_string(),
-            Value::from(recipe.rbc_parity_shards),
         );
         summary.insert("recipe".to_string(), Value::Object(recipe_map));
     }

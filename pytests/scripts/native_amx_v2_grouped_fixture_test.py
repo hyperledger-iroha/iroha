@@ -165,7 +165,7 @@ def _validate_qc(qc: dict[str, Any], expected_phase: str) -> None:
     if used_bits:
         padding_mask = 0xFF ^ ((1 << used_bits) - 1)
         assert bitmap[-1] & padding_mask == 0
-    assert sum(bin(byte).count("1") for byte in bitmap) >= quorum
+    assert sum(bin(byte).count("1") for byte in bitmap) == quorum
 
     signature = qc["bls_aggregate_signature"]
     assert len(signature) == BLS_PROOF_BYTES
@@ -855,6 +855,7 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         "coherent_duplicate_validator_set",
         "coherent_over_quorum_requirement",
         "under_quorum_bitmap",
+        "over_quorum_bitmap",
         "out_of_range_bitmap",
         "zero_pop",
         "long_pop",

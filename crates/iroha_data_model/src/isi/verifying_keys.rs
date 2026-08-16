@@ -58,10 +58,10 @@ impl_decode_verifying_key_instruction!(UpdateVerifyingKey);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{proof::VerifyingKeyRecord, zk::BackendTag};
     use crate::isi::test_support::{
         assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
     };
+    use crate::{proof::VerifyingKeyRecord, zk::BackendTag};
     fn key_id(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new("halo2/ipa", name)
     }

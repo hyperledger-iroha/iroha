@@ -44,7 +44,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "fa8fc59f626da66e5b0ec76894fafe037619070f05a5833868ba954d7a9fa17b"
+        "0dc98e8799acf15729f4cb42c79b754232fbda6091558ec87c2bd2765a6ffc48"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     bootstrap_completion = evidence["bootstrap_completion"]
@@ -507,15 +507,28 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "sdk-dependency-bundle-manifest.json"
     )
     runtime_probe_manifest = Path(evidence["runtime_tool_probe_manifest"])
+    invocation_root = release_root.parent
+    artifact_root = invocation_root / "output"
+    pruned_build_roots = {
+        *(invocation_root / name for name in (
+            "runtime", "sdk-inputs", "sdk-work", "target",
+        )),
+        *(artifact_root / name for name in (
+            "home", "tmp", "cache", "cargo-home",
+        )),
+    }
+    for path in pruned_build_roots:
+        if path.exists():
+            shutil.rmtree(path)
+    runtime_probe_manifest_bytes = runtime_probe_manifest.read_bytes()
+    runtime_probe_manifest.unlink()
     retained_private_source = run_writer(
         evidence, output, writer, replay_existing=True
     )
     assert retained_private_source.returncode == 1
     assert "survived acknowledgment pruning" in retained_private_source.stderr
     private_sdk_manifest_bytes = private_sdk_manifest.read_bytes()
-    runtime_probe_manifest_bytes = runtime_probe_manifest.read_bytes()
     private_sdk_manifest.unlink()
-    runtime_probe_manifest.unlink()
     evidence_directory = Path(evidence["bootstrap_evidence_dir"])
     runner_logs = tuple(
         evidence_directory / name
@@ -525,6 +538,12 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         path.chmod(0o400)
     replayed = run_writer(evidence, output, writer, replay_existing=True)
     assert replayed.returncode == 0, replayed.stderr
+    recreated_target = invocation_root / "target"
+    recreated_target.mkdir(mode=0o700)
+    recreated = run_writer(evidence, output, writer, replay_existing=True)
+    assert recreated.returncode == 1
+    assert "survived retained-release pruning" in recreated.stderr
+    recreated_target.rmdir()
     private_sdk_manifest.write_bytes(private_sdk_manifest_bytes)
     private_sdk_manifest.chmod(0o400)
     runtime_probe_manifest.write_bytes(runtime_probe_manifest_bytes)
@@ -556,12 +575,15 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         candidate_root=evidence["bootstrap_candidate_root"],
         release_root=release_root,
         bootstrap_runtime_contracts=[],
+        private_build_roots_available=False,
     )
     directory_paths = {
         contract.path
         for contract in contracts
         if isinstance(contract, module.DirectoryContract)
     }
+    assert {invocation_root, artifact_root} <= directory_paths
+    assert pruned_build_roots.isdisjoint(directory_paths)
 
     family_specs = (
         (
@@ -680,6 +702,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             candidate_root=evidence["bootstrap_candidate_root"],
             release_root=release_root,
             bootstrap_runtime_contracts=[],
+            private_build_roots_available=False,
         )
 
 def private_output(tmp_path: Path) -> tuple[Path, Path]:

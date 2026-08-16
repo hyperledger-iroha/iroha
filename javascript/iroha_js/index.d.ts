@@ -3882,7 +3882,6 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiHttpError"
   | "TransactionStatusError"
   | "TransactionTimeoutError"
-  | "__sumeragiNativeAmxTestHelpers"
   | "buildConnectWebSocketUrl"
   | "buildIdentifierRequestForPolicy"
   | "buildSorafsOrderbookEventsWebSocketUrl"
@@ -5361,13 +5360,6 @@ export function isStatusQueueStalled(
   stallThresholdMs: number | string | bigint,
 ): boolean;
 
-export const __sumeragiNativeAmxTestHelpers: Readonly<{
-  computeDescriptorHash(value: unknown): string;
-  computeParticipantSettlementHash(value: unknown): string;
-  computeProposalHash(value: unknown): string;
-  computeValidatorSetHash(value: unknown): string;
-}>;
-
 export interface ToriiNetworkTimeNow {
   timestampMs: number;
   offsetMs: number;
@@ -5648,10 +5640,9 @@ export interface ToriiSumeragiV2BlockSubject {
   payload_hash: string;
 }
 
-export interface ToriiSumeragiV2MergeCarrierCommitment {
-  version: 1;
-  entry_hash: string;
-}
+export interface ToriiSumeragiV2LaneFinalityManifestCommitment { root: string; leaf_count: number; }
+
+export interface ToriiSumeragiV2MergeCarrierCommitment { version: 1; entry_hash: string; }
 
 export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
@@ -5662,6 +5653,7 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   native_amx_application_manifest_version: number;
   native_amx_application_manifest_root: string;
   native_amx_application_manifest_count: number;
+  lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;
   merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
   executed_block_wire_len: ToriiU64;
   executed_block_wire_hash: string;

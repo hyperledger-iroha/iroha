@@ -3,7 +3,9 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
 #[test]
 fn kotodama_state_scalar_reads_durable() {
-    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/001.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile scalar state reader");
@@ -18,7 +20,9 @@ fn kotodama_state_scalar_reads_durable() {
 }
 #[test]
 fn kotodama_state_struct_helper_param_reads_flattened_fields() {
-    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/002.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile struct state helper");
@@ -54,8 +58,12 @@ fn run_named_struct_order(source: &str) -> (i64, i64) {
 }
 #[test]
 fn out_of_order_named_struct_fields_match_explicit_source_order_at_runtime() {
-    let named = include_str!("../fixtures/koto_v1/kotodama_state_scalar/003.ko").strip_suffix('\n').expect("fixture sentinel newline");
-    let explicit = include_str!("../fixtures/koto_v1/kotodama_state_scalar/004.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let named = include_str!("../fixtures/koto_v1/kotodama_state_scalar/003.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/kotodama_state_scalar/004.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let named = run_named_struct_order(named);
     let explicit = run_named_struct_order(explicit);
     assert_eq!(named, explicit, "named and explicit forms must agree");

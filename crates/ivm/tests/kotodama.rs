@@ -231,7 +231,9 @@ fn tuple_var_member_access() {
 }
 #[test]
 fn call_function_with_tuple_return() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/001.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple-returning call");
@@ -243,14 +245,18 @@ fn call_function_with_tuple_return() {
 }
 #[test]
 fn quantity_arithmetic_compiles_without_implicit_conversion() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/002.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     Compiler::new()
         .compile_source(src)
         .expect("compile quantity arithmetic");
 }
 #[test]
 fn negative_quantity_conversion_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/003.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/003.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("negative quantity literal should fail");
@@ -258,7 +264,9 @@ fn negative_quantity_conversion_is_rejected() {
 }
 #[test]
 fn fractional_quantity_literal_is_accepted_contextually() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/004.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/004.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     Compiler::new()
         .compile_source(src)
         .expect("fractional quantity literal should compile in quantity context");
@@ -266,7 +274,9 @@ fn fractional_quantity_literal_is_accepted_contextually() {
 #[test]
 fn decimal_literal_rejects_int_annotation() {
     let prog = parse(
-        include_str!("../fixtures/koto_v1/kotodama/005.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+        include_str!("../fixtures/koto_v1/kotodama/005.ko")
+            .strip_suffix('\n')
+            .expect("fixture sentinel newline"),
     )
     .expect("parse decimal literal");
     let err = analyze(&prog).expect_err("expected decimal literal type error");
@@ -279,7 +289,9 @@ fn decimal_literal_rejects_int_annotation() {
 }
 #[test]
 fn implicit_quantity_to_int_conversion_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/006.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/006.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("implicit quantity-to-int conversion must fail");
@@ -326,14 +338,18 @@ fn many_string_literals_load_under_wide_guard() {
 }
 #[test]
 fn pointer_constructors_compile() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/007.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/007.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     test_compiler()
         .compile_source(src)
         .expect("compile typed pointer constructors");
 }
 #[test]
 fn public_function_without_authorization_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/008.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/008.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("missing permission should be rejected");
@@ -344,7 +360,9 @@ fn public_function_without_authorization_rejected() {
 }
 #[test]
 fn register_peer_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/009.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/009.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("missing permission should be rejected");
@@ -355,7 +373,9 @@ fn register_peer_requires_permission() {
 }
 #[test]
 fn register_account_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/010.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/010.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("missing permission should be rejected");
@@ -366,7 +386,9 @@ fn register_account_requires_permission() {
 }
 #[test]
 fn trigger_management_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/011.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/011.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("missing permission should be rejected");
@@ -377,14 +399,18 @@ fn trigger_management_requires_permission() {
 }
 #[test]
 fn public_function_with_permission_is_allowed() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/012.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/012.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     Compiler::new()
         .compile_source(src)
         .expect("permission attribute should allow privileged call");
 }
 #[test]
 fn removed_in_memory_map_type_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/013.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/013.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("in-memory Map must be rejected");
@@ -395,7 +421,9 @@ fn removed_in_memory_map_type_is_rejected() {
 }
 #[test]
 fn parse_for_each_map_and_builtins() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/014.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/014.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = parse(src).expect_err("bare StateMap iteration must be rejected");
     assert!(
         err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
@@ -415,18 +443,24 @@ fn literal_range_for_loop_is_bounded() {
 }
 #[test]
 fn state_map_take_two_is_bounded() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/015.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/015.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     analyze(&prog).expect("StateMap take(2) is compiler-bounded");
 }
 #[test]
 fn removed_bounded_attribute_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/016.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/016.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     parse(src).expect_err("legacy bounded attributes are not V1 syntax");
 }
 #[test]
 fn parse_and_type_bounded_map_take_one_ok() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/017.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/017.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -434,7 +468,9 @@ fn parse_and_type_bounded_map_take_one_ok() {
 }
 #[test]
 fn compile_domain_literal_emits_tlv_domainid() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/018.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/018.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
     assert!(
@@ -445,7 +481,9 @@ fn compile_domain_literal_emits_tlv_domainid() {
 #[test]
 fn compile_register_domain_emits_syscall_0x10() {
     use ivm::encoding;
-    let src = include_str!("../fixtures/koto_v1/kotodama/019.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/019.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
     // Expected sys encoding for SCALL with imm8=0x10 (SYSCALL_REGISTER_DOMAIN)
@@ -459,7 +497,9 @@ fn compile_register_domain_emits_syscall_0x10() {
 #[test]
 fn compile_zk_verify_batch_emits_syscall_0x64() {
     // Ensure the Kotodama intrinsic lowers to SCALL 0x64.
-    let src = include_str!("../fixtures/koto_v1/kotodama/020.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/020.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
     let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x64);
@@ -472,7 +512,9 @@ fn compile_zk_verify_batch_emits_syscall_0x64() {
 #[test]
 fn compile_blob_literal_emits_tlv_blob() {
     // Ensure a bytes literal emits the canonical bytes TLV (wire type 0x0006).
-    let src = include_str!("../fixtures/koto_v1/kotodama/021.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/021.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let bytes = Compiler::new().compile_source(src).expect("compile ok");
     assert!(
         bytes.windows(2).any(|w| w == [0x00, 0x06]),
@@ -481,7 +523,9 @@ fn compile_blob_literal_emits_tlv_blob() {
 }
 #[test]
 fn semantic_typed_pointers_and_authority() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/022.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/022.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let res = analyze(&prog);
     assert!(
@@ -533,7 +577,9 @@ fn compile_emits_block_height_syscall() {
 }
 #[test]
 fn compile_emits_extended_sysvar_helpers() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/023.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/023.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -569,7 +615,9 @@ fn semantic_rejects_extended_sysvar_helper_args() {
 }
 #[test]
 fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/024.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/024.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let error = test_compiler()
         .compile_source(src)
         .expect_err("raw query bridge must be rejected");
@@ -604,7 +652,9 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
 }
 #[test]
 fn compile_emits_core_query_get_helpers() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/025.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/025.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -712,7 +762,9 @@ fn semantic_rejects_typed_query_get_helper_args() {
 }
 #[test]
 fn compile_emits_zk_vrf_read_helpers() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/026.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/026.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -801,7 +853,9 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
 }
 #[test]
 fn compile_emits_state_introspection_helpers() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/027.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/027.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -852,7 +906,9 @@ fn semantic_rejects_legacy_name_state_path_carriers() {
 }
 #[test]
 fn compile_emits_extended_hash_syscalls() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/028.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/028.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -902,7 +958,9 @@ fn compile_emits_resolve_account_alias_syscall() {
 }
 #[test]
 fn parse_and_type_bounded_map_take_one() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/029.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/029.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -911,7 +969,9 @@ fn parse_and_type_bounded_map_take_one() {
 #[test]
 fn for_each_map_mutation_is_rejected() {
     // Mutation of the iterated map inside the loop must be rejected.
-    let src = include_str!("../fixtures/koto_v1/kotodama/030.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/030.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("should reject mutation during iteration");
     assert_eq!(err.code(), "E_ITER_MUTATION");
@@ -977,7 +1037,9 @@ fn compile_and_run_add() {
 }
 #[test]
 fn state_allocations_do_not_clobber_params() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/031.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/031.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = Compiler::new().compile_source(src).expect("compile failed");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
@@ -1018,7 +1080,9 @@ fn statement_call_sugar_is_rejected() {
 #[test]
 fn pointer_constructors_accept_string_variables() {
     // Use variables bound to string literals; constructors should work
-    let src = include_str!("../fixtures/koto_v1/kotodama/032.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/032.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile pointer from vars");
@@ -1067,7 +1131,9 @@ fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
 #[test]
 fn triple_nested_struct_field_access() {
     // Deeply nested struct fields: d.c.b.a.x
-    let src = include_str!("../fixtures/koto_v1/kotodama/033.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/033.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile triple nested access");
@@ -1080,7 +1146,9 @@ fn triple_nested_struct_field_access() {
 #[test]
 fn triple_nested_struct_field_mixed_named_numeric_access() {
     // Mixed access: d.c.0.a.x where D { (B, int) c }
-    let src = include_str!("../fixtures/koto_v1/kotodama/034.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/034.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile mixed named/numeric access");
@@ -1092,28 +1160,36 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
 }
 #[test]
 fn invalid_numeric_on_struct_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/035.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/035.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field '0' on struct A"));
 }
 #[test]
 fn invalid_named_on_tuple_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/036.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/036.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field 'a' on tuple"));
 }
 #[test]
 fn invalid_numeric_tuple_index_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/037.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/037.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("tuple index 3 out of bounds"));
 }
 #[test]
 fn tuple_index_on_non_tuple_reports_type() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/038.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/038.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(
@@ -1123,14 +1199,18 @@ fn tuple_index_on_non_tuple_reports_type() {
 }
 #[test]
 fn tuple_index_on_non_tuple_int_reports_type() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/039.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/039.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("tuple index on non-tuple type int"));
 }
 #[test]
 fn unknown_field_on_struct_reports_available_fields() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/040.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/040.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(
@@ -1140,14 +1220,18 @@ fn unknown_field_on_struct_reports_available_fields() {
 }
 #[test]
 fn invalid_named_on_non_struct_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/041.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/041.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field 'foo' on type int"));
 }
 #[test]
 fn invalid_indexing_on_non_map_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/042.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/042.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(
@@ -1158,7 +1242,9 @@ fn invalid_indexing_on_non_map_reports_error() {
 #[test]
 fn method_call_sugar_receiver_and_arg() {
     // a.method(b) sugar: receiver prepended as first arg
-    let src = include_str!("../fixtures/koto_v1/kotodama/043.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/043.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile method sugar");
@@ -1182,21 +1268,27 @@ fn semantic_type_enforcement_for_typed_syscalls() {
 }
 #[test]
 fn range_end_less_than_start_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/044.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/044.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected end<start rejection");
     assert!(err.message().contains("end >= start"));
 }
 #[test]
 fn range_non_integer_args_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/045.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/045.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected non-integer rejection");
     assert!(err.message().contains("range(start, end)"));
 }
 #[test]
 fn dynamic_state_map_take_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/046.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/046.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect_err("dynamic state-map bounds must be rejected");
@@ -1207,7 +1299,9 @@ fn dynamic_state_map_take_is_rejected() {
 }
 #[test]
 fn dynamic_state_map_range_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/047.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/047.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect_err("dynamic state-map bounds must be rejected");
@@ -1287,7 +1381,9 @@ fn manifest_code_hash_reflects_literals() {
 #[test]
 fn manifest_includes_entrypoints_and_features() {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-    let src = include_str!("../fixtures/koto_v1/kotodama/048.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/048.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with entrypoints");
@@ -1316,7 +1412,9 @@ fn manifest_includes_entrypoints_and_features() {
 #[test]
 fn manifest_includes_trigger_descriptors() {
     use iroha_data_model::{events::EventFilterBox, trigger::action::Repeats};
-    let src = include_str!("../fixtures/koto_v1/kotodama/049.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/049.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with triggers");
@@ -1339,7 +1437,9 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         asset::id::{AssetDefinitionId, AssetId},
     };
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-    let src = include_str!("../fixtures/koto_v1/kotodama/050.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/050.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with ISI hints");
@@ -1379,7 +1479,9 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 }
 #[test]
 fn production_manifest_accepts_authority_placeholder_isi_access() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/051.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/051.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("production compile must accept authority placeholder access");
@@ -1417,7 +1519,9 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
 }
 #[test]
 fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/052.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/052.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("parameter-dependent asset transfers have bounded coarse hints");
@@ -1468,7 +1572,9 @@ fn source_localization_blocks_are_rejected() {
 #[test]
 fn lexer_block_comments_and_number_literals() {
     // Block comments and hex/binary/underscored numbers
-    let src = include_str!("../fixtures/koto_v1/kotodama/053.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/053.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse with comments and literals");
     let _typed = analyze(&prog).expect("analyze literals");
 }
@@ -1481,7 +1587,9 @@ fn compound_assignments_typecheck() {
 }
 #[test]
 fn canonical_host_calls_typecheck_and_removed_map_does_not() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/054.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/054.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse ledger::asset::transfer");
     analyze(&prog).expect("analyze ledger::asset::transfer");
     let src2 = "module RemovedMap { fn make() -> int { return std::map::new(); } }";
@@ -1490,7 +1598,9 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
 }
 #[test]
 fn indirect_sensitive_calls_require_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/055.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/055.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new().compile_source(src).unwrap_err();
     assert!(
         err.contains("authorize"),
@@ -1499,7 +1609,9 @@ fn indirect_sensitive_calls_require_permission() {
 }
 #[test]
 fn while_loops_are_rejected_in_v1() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/056.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/056.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("while loops must be rejected");
@@ -1712,7 +1824,9 @@ fn typed_json_access_spills_are_handled() {
 }
 #[test]
 fn raw_json_codec_aliases_are_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/059.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/059.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("raw JSON codec aliases are not part of Kotodama V1");
@@ -1731,7 +1845,9 @@ fn compile_and_run_poseidon_register_forms() {
 }
 #[test]
 fn unbounded_state_map_iteration_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/061.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/061.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new().compile_source(src).unwrap_err();
     assert!(
         err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
@@ -1740,7 +1856,9 @@ fn unbounded_state_map_iteration_is_rejected() {
 }
 #[test]
 fn unbounded_state_map_iteration_cannot_infer_a_limit() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/062.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/062.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let err = Compiler::new().compile_source(src).unwrap_err();
     assert!(
         err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
@@ -1937,7 +2055,9 @@ fn parse_burn_asset_builtin() {
 #[test]
 fn parse_register_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = include_str!("../fixtures/koto_v1/kotodama/063.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/063.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -1951,7 +2071,9 @@ fn parse_register_asset_builtin() {
 #[test]
 fn parse_create_new_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = include_str!("../fixtures/koto_v1/kotodama/064.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/064.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -1964,7 +2086,9 @@ fn parse_create_new_asset_builtin() {
 }
 #[test]
 fn parse_register_asset_rejects_bare_name_literal() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/065.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/065.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).expect_err("bare asset names should be rejected");
     assert!(
@@ -2034,7 +2158,9 @@ fn compile_unary_ops() {
 }
 #[test]
 fn in_memory_map_methods_are_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/066.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/066.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse map methods");
     let error = analyze(&prog).expect_err("in-memory Map methods must be rejected");
     assert!(
@@ -2045,7 +2171,9 @@ fn in_memory_map_methods_are_rejected() {
 #[test]
 fn ir_lower_contains_method_state_map() {
     use ivm::kotodama::ir::Instr;
-    let src = include_str!("../fixtures/koto_v1/kotodama/067.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/067.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse contains");
     let typed = analyze(&prog).expect("analyze contains");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2067,7 +2195,9 @@ fn ir_lower_contains_method_state_map() {
 }
 #[test]
 fn ephemeral_keys_take2_helper_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/068.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/068.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse keys_take2");
     let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
     assert!(
@@ -2077,7 +2207,9 @@ fn ephemeral_keys_take2_helper_is_rejected() {
 }
 #[test]
 fn ephemeral_keys_values_take2_helper_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/069.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/069.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse keys_values_take2");
     let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
     assert!(
@@ -2088,7 +2220,9 @@ fn ephemeral_keys_values_take2_helper_is_rejected() {
 #[test]
 fn ir_tuple_pack_and_get_general() {
     use ivm::kotodama::ir::Instr;
-    let src = include_str!("../fixtures/koto_v1/kotodama/070.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/070.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse tuple pack/get");
     let typed = analyze(&prog).expect("analyze tuple pack/get");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2123,7 +2257,9 @@ fn ir_tuple_pack_and_get_general() {
 }
 #[test]
 fn typed_vrf_syscalls_are_present() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/071.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/071.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile vrf intrinsic");
@@ -2140,7 +2276,9 @@ fn typed_vrf_syscalls_are_present() {
 }
 #[test]
 fn raw_pointer_codec_alias_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/072.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let src = include_str!("../fixtures/koto_v1/kotodama/072.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("raw pointer codec aliases are not part of Kotodama V1");

@@ -699,10 +699,9 @@ impl Reducer {
         let mut body_work = BTreeMap::new();
         let mut pending_prepare = BTreeMap::new();
         if let Some(certificate) = retryable_prepare {
-            // Replay restores an undecided open-current-view high PrepareQC as the exact
-            // Missing-body authority without emitting constructor work. Retransmission derives
-            // FetchBody after ResumeAfterReplay; closed/old highs, locks, and Decisions retain
-            // their narrower recovery paths.
+            // Replay restores an undecided open-current-view high PrepareQC as exact Missing-body
+            // authority without constructor work. Retransmission derives FetchBody after replay;
+            // closed/old highs, locks, and Decisions retain narrower recovery paths.
             body_work.insert(
                 (certificate.round(), certificate.subject()),
                 BodyWork {
@@ -975,11 +974,9 @@ impl Reducer {
     /// Returns an error for malformed authenticated input, an invalid
     /// certificate, failed persistence, or an impossible durable-state change.
     pub fn step(&mut self, event: Event) -> Result<StepOutcome, ReducerError> {
-        // The candidate transition is always private until the executable
-        // refinement gate accepts its exact state/effect projection.  Even an
-        // error path passes through the same gate as an empty stutter before
-        // returning, so no `Reducer::step` exit bypasses the production kernel
-        // verified in `verus_proofs.rs`.
+        // The candidate transition stays private until the executable refinement gate accepts its
+        // exact state/effect projection. Even errors pass through it as empty stutters, so no
+        // `Reducer::step` exit bypasses the production kernel verified in `verus_proofs.rs`.
         let audit_event = event.clone();
         let mut next = self.clone();
         match next.step_in_place(event) {
@@ -1073,11 +1070,9 @@ impl Reducer {
                 && self.body_state(locked.round(), locked.subject()) == BodyState::Validated
                 && !progress_witness
             {
-                // A current-view validated lock must own its exact same-round
-                // Commit append. For a historical TC-promoted lock, the
-                // installed predecessor timeout is instead the typed witness
-                // which authorizes unchanged body re-proposal; it never
-                // authorizes a new Commit for the closed round.
+                // A current-view validated lock owns its exact same-round Commit append. For a
+                // historical TC-promoted lock, the installed predecessor timeout instead authorizes
+                // unchanged body re-proposal; it never authorizes a new Commit for the closed round.
                 return Some(ProgressWitnessViolation::LockedCommitOrphaned);
             }
         }
@@ -1090,9 +1085,8 @@ impl Reducer {
             if state == BodyState::Invalid {
                 return Some(ProgressWitnessViolation::DecidedBodyInvalid);
             }
-            // Every non-invalid body stage has a deterministic retransmission
-            // effect (fetch, store, validate, or apply), so retaining the exact
-            // stage is itself the reducer-owned reconstruction witness.
+            // Every non-invalid body stage has deterministic retransmission (fetch, store,
+            // validate, or apply), so the exact stage is the reducer-owned reconstruction witness.
             if !self
                 .body_work
                 .contains_key(&(body_round, decision.subject()))
@@ -3882,6 +3876,7 @@ impl Reducer {
         }
         let signatures = ordered
             .into_iter()
+            .take(self.context.minimum_signer_count())
             .map(|signer| {
                 let signed = pool
                     .get(&signer)
@@ -3950,14 +3945,19 @@ impl Reducer {
     }
     fn on_retransmit_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
         let current_view = self.durable.current_view();
-        if self
-            .candidate
-            .as_ref()
-            .is_some_and(|proposal| proposal.round().view() == current_view)
-            || self
-                .pending_prepare
-                .values()
-                .any(|certificate| certificate.round().view() == current_view)
+        let current_round = Round::new(self.context.height(), current_view);
+        let current_view_open = self.durable.timeout_intent(current_round).is_none();
+        // Closed-view PrepareQCs remain retransmittable control evidence, but
+        // must not reacquire body ownership ahead of the durable lock forever.
+        if current_view_open
+            && (self
+                .candidate
+                .as_ref()
+                .is_some_and(|proposal| proposal.round() == current_round)
+                || self
+                    .pending_prepare
+                    .values()
+                    .any(|certificate| certificate.round() == current_round))
         {
             self.fallback_active = true;
         }
@@ -3995,7 +3995,7 @@ impl Reducer {
         if let Some(certificate) = self
             .pending_prepare
             .values()
-            .find(|certificate| certificate.round().view() == self.durable.current_view())
+            .find(|certificate| current_view_open && certificate.round() == current_round)
             .cloned()
         {
             let round = certificate.round();
@@ -4042,7 +4042,7 @@ impl Reducer {
                 return Ok(StepOutcome::applied(effects));
             }
         }
-        if let Some(proposal) = self.candidate.clone() {
+        if current_view_open && let Some(proposal) = self.candidate.clone() {
             let round = proposal.round();
             let subject = proposal.manifest().subject();
             match self.body_state(round, subject) {
@@ -4210,7 +4210,7 @@ impl Reducer {
         let Some(pool) = self.timeout_votes.get(&round) else {
             return Ok(None);
         };
-        let (quorum, _) = Quorum::from_iter(
+        let (quorum, ordered) = Quorum::from_iter(
             &self.context,
             pool.values().map(|signed| signed.vote().signer()),
         )?;
@@ -4221,7 +4221,13 @@ impl Reducer {
             Option<CertificateRef>,
             (Option<QuorumCertificate>, Vec<SignatureShare>),
         > = BTreeMap::new();
-        for signed in pool.values() {
+        for signer in ordered
+            .into_iter()
+            .take(self.context.minimum_signer_count())
+        {
+            let signed = pool
+                .get(&signer)
+                .expect("ordered timeout signer originated in the vote pool");
             let vote = signed.vote();
             grouped
                 .entry(vote.highest_prepare_ref())
@@ -4954,118 +4960,6 @@ mod source_link_tests {
     }
     include!("tests/reducer_timeout_and_projection.rs");
     include!("tests/v2_core_reducer_primitive_projection.rs");
-    #[test]
-    fn enter_view_without_a_lock_carries_and_fetches_nothing() {
-        let (before, event) = pending_timeout_install(None);
-        let mut after = before.clone();
-        let outcome = after
-            .step_in_place(event.clone())
-            .expect("materialize lock-free persisted-TC candidate");
-        assert!(matches!(
-            outcome.effects(),
-            [Effect::EnterView {
-                protected_lock: None,
-                ..
-            }]
-        ));
-        let projection = before.transition_projection(&event, &after, outcome.effects());
-        assert!(refinement::accepts(projection));
-        let mut nonzero_absent_context = projection;
-        nonzero_absent_context
-            .enter_view
-            .effect_protected_lock
-            .context_id
-            .word0 = 1;
-        assert!(!refinement::accepts(nonzero_absent_context));
-        let mut nonzero_absent_subject = projection;
-        nonzero_absent_subject
-            .enter_view
-            .effect_protected_lock
-            .subject
-            .word3 = 1;
-        assert!(!refinement::accepts(nonzero_absent_subject));
-        let mut invented = projection;
-        invented.enter_view.effect_protected_lock.present = true;
-        invented.enter_view.effect_protected_lock.context_id =
-            Reducer::context_identity_projection(before.context.id());
-        invented.enter_view.effect_protected_lock.height = before.context.height();
-        invented.enter_view.effect_protected_lock.phase = 1;
-        invented.enter_view.effect_protected_lock.subject =
-            Reducer::subject_identity_projection(Subject::repeat(0xb5));
-        assert!(!refinement::accepts(invented));
-        let mut invented_prepare_control_state = after;
-        invented_prepare_control_state.outbound_control.insert(
-            OutboundControlClass::PrepareQc,
-            ConsensusMessageV2::TimeoutCertificate(timeout_certificate(&before.context, 0, None)),
-        );
-        let invented_prepare_control_projection = before.transition_projection(
-            &event,
-            &invented_prepare_control_state,
-            outcome.effects(),
-        );
-        assert!(
-            invented_prepare_control_projection
-                .enter_view
-                .prepare_control_slot_present_after
-        );
-        assert!(
-            !invented_prepare_control_projection
-                .enter_view
-                .retained_prepare_qc_after
-                .present
-        );
-        assert!(!refinement::accepts(invented_prepare_control_projection));
-        assert!(!before.transition_refines(
-            &event,
-            &invented_prepare_control_state,
-            outcome.effects()
-        ));
-    }
-    #[test]
-    fn enter_view_effect_cannot_substitute_an_equal_reference_certificate() {
-        let fixture = reducer();
-        let subject = Subject::repeat(0xb6);
-        let high = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb7);
-        let substitute = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb8);
-        assert_eq!(high.reference(), substitute.reference());
-        assert_ne!(high, substitute);
-        let (before, event) = pending_timeout_install(Some(high));
-        let mut after = before.clone();
-        let outcome = after
-            .step_in_place(event.clone())
-            .expect("materialize persisted-TC candidate");
-        let mut effects = outcome.into_effects();
-        let Some(Effect::EnterView { protected_lock, .. }) = effects.first_mut() else {
-            panic!("first install effect must enter the view")
-        };
-        *protected_lock = Some(substitute);
-        let projection = before.transition_projection(&event, &after, &effects);
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.evidence_class,
-            CERTIFICATE_EVIDENCE_FOREIGN
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.signer_bitmap,
-            projection.enter_view.durable_lock_after.signer_bitmap
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.signer_count,
-            projection.enter_view.durable_lock_after.signer_count
-        );
-        assert_eq!(
-            projection
-                .enter_view
-                .effect_protected_lock
-                .signer_bitmap_count,
-            projection.enter_view.durable_lock_after.signer_bitmap_count
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.voting_power,
-            projection.enter_view.durable_lock_after.voting_power
-        );
-        assert!(!refinement::accepts(projection));
-        assert!(!before.transition_refines(&event, &after, &effects));
-    }
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
         assert!(MAX_VOTING_ROSTER_LEN <= u128::BITS as usize);

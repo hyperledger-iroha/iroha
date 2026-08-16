@@ -1073,9 +1073,9 @@ fn verify_decoded(
             .checked_add(entry.power)
             .ok_or_else(|| "proof signed power overflows u64".to_owned())?;
     }
-    if signer_count < expectations.min_signers {
+    if signer_count != expectations.min_signers {
         return Err(format!(
-            "proof signer count {signer_count} is below expected min_signers {}",
+            "proof signer count mismatch: expected exactly {}, got {signer_count}",
             expectations.min_signers
         ));
     }

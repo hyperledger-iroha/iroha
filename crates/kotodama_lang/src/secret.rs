@@ -679,7 +679,9 @@ mod tests {
     }
     #[test]
     fn commitments_are_the_explicit_declassification_boundary() {
-        let source = include_str!("../fixtures/koto_v1/secret/001.ko").strip_suffix('\n').expect("fixture sentinel newline");
+        let source = include_str!("../fixtures/koto_v1/secret/001.ko")
+            .strip_suffix('\n')
+            .expect("fixture sentinel newline");
         let program = parse(source).expect("commitment fixture should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)
@@ -703,43 +705,57 @@ mod tests {
     #[test]
     fn public_secret_return_is_rejected() {
         let error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/002.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/002.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_PUBLIC_RETURN");
     }
     #[test]
     fn secret_control_flow_is_rejected() {
         let error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/003.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/003.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_ARITHMETIC");
     }
     #[test]
     fn secret_logs_and_host_writes_are_rejected() {
         let log_error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/004.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/004.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(log_error.code, "E_SECRET_LOG");
         let host_error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/005.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/005.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(host_error.code, "E_SECRET_STATE_SINK");
     }
     #[test]
     fn secret_state_keys_and_values_are_rejected() {
         let key_error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/006.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/006.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(key_error.code, "E_SECRET_STATE_KEY");
         let value_error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/007.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/007.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(value_error.code, "E_SECRET_STATE_WRITE");
     }
     #[test]
     fn commitment_operands_cannot_mix_public_and_secret_values() {
         let error = analyze_error(
-            include_str!("../fixtures/koto_v1/secret/008.ko").strip_suffix('\n').expect("fixture sentinel newline"),
+            include_str!("../fixtures/koto_v1/secret/008.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_MIXED_COMMITMENT");
     }

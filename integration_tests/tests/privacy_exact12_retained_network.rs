@@ -655,8 +655,7 @@ async fn wait_for_exact_v2_commit_subject(
                             && certificate.certificate.proposal_round.height == expected_height;
                         let exact_quorum = certificate.validator_count > 0
                             && certificate.min_signers > 0
-                            && certificate.signer_count >= certificate.min_signers
-                            && certificate.signer_count <= certificate.validator_count
+                            && certificate.signer_count == certificate.min_signers
                             && certificate.signed_power <= certificate.total_power
                             && u128::from(certificate.signed_power) * 3
                                 > u128::from(certificate.total_power) * 2;

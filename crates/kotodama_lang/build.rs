@@ -13,10 +13,8 @@ const TRANSLATION_LANGUAGE_COUNT: usize = 76;
 const TRANSLATION_MESSAGE_COUNT: usize = 15;
 const DIAGNOSTIC_EXPLANATIONS_SPEC_PATH: &str =
     "src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv";
-const COMPILE_FAIL_CASES_SPEC_PATH: &str =
-    "src/assets/diagnostics_v1/compile_fail_cases_v1.tsv";
-const SECRET_REJECT_CASES_SPEC_PATH: &str =
-    "src/assets/diagnostics_v1/secret_reject_cases_v1.tsv";
+const COMPILE_FAIL_CASES_SPEC_PATH: &str = "src/assets/diagnostics_v1/compile_fail_cases_v1.tsv";
+const SECRET_REJECT_CASES_SPEC_PATH: &str = "src/assets/diagnostics_v1/secret_reject_cases_v1.tsv";
 const DIAGNOSTIC_EXPLANATIONS_ASSET: &str =
     include_str!("src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv");
 const COMPILE_FAIL_CASES_ASSET: &str =
@@ -53,9 +51,9 @@ fn decode_table_field(raw: &str, path: &str, line: usize, column: usize) -> Stri
             decoded.push(character);
             continue;
         }
-        let escaped = characters.next().unwrap_or_else(|| {
-            panic!("{path}:{line}:{column} ends with an incomplete escape")
-        });
+        let escaped = characters
+            .next()
+            .unwrap_or_else(|| panic!("{path}:{line}:{column} ends with an incomplete escape"));
         decoded.push(match escaped {
             '\\' => '\\',
             'n' => '\n',
@@ -146,11 +144,16 @@ fn write_diagnostic_tables(out_dir: &Path) {
         assert!(
             row[0]
                 .chars()
-                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'),
+                .all(|character| character.is_ascii_uppercase()
+                    || character.is_ascii_digit()
+                    || character == '_'),
             "invalid diagnostic code `{}`",
             row[0]
         );
-        assert!(seen_codes.insert(row[0].clone()), "duplicate diagnostic code");
+        assert!(
+            seen_codes.insert(row[0].clone()),
+            "duplicate diagnostic code"
+        );
         writeln!(
             &mut generated,
             "    DiagnosticExplanation {{ code: {:?}, phase: DiagnosticPhase::{}, summary: {:?}, help: {:?} }},",
@@ -179,7 +182,10 @@ fn write_diagnostic_tables(out_dir: &Path) {
          const CASES: &[CompileFailCase] = &[\n",
     );
     for row in compile_fail_cases {
-        assert!(seen_names.insert(row[0].clone()), "duplicate compile-fail case name");
+        assert!(
+            seen_names.insert(row[0].clone()),
+            "duplicate compile-fail case name"
+        );
         assert!(is_diagnostic_phase(&row[2]), "unknown compile-fail phase");
         let line = row[5]
             .parse::<usize>()
@@ -213,7 +219,10 @@ fn write_diagnostic_tables(out_dir: &Path) {
          const REJECT_CASES: &[RejectCase] = &[\n",
     );
     for row in reject_cases {
-        assert!(seen_names.insert(row[0].clone()), "duplicate secret-flow case name");
+        assert!(
+            seen_names.insert(row[0].clone()),
+            "duplicate secret-flow case name"
+        );
         assert!(
             row[1].contains(&row[3]),
             "secret-flow primary text is absent from the source fixture"

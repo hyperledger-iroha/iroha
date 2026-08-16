@@ -277,6 +277,9 @@ if [[ -z "$connect_timeout" || -z "$max_time" ]]; then
   echo "curl timeout flags were not provided" >&2
   exit 91
 fi
+if [[ -n "${MOCK_CURL_DELAY_SECONDS:-}" ]]; then
+  sleep "$MOCK_CURL_DELAY_SECONDS"
+fi
 
 scenario="${MOCK_SCENARIO:-}"
 validator_index=""
@@ -1206,9 +1209,9 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
-      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
+      "${release_operator_args[@]}" \
       --skip-write-canary \
       >"${root}/release-without-fleet-output.log" 2>&1; then
   echo "public release without validator fleet unexpectedly succeeded" >&2
@@ -1228,10 +1231,10 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
-      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
+      "${release_operator_args[@]}" \
       --skip-write-canary \
       >"${root}/release-without-sha-output.log" 2>&1; then
   echo "public release without exact git SHA unexpectedly succeeded" >&2
@@ -1244,10 +1247,10 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
-      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
+      "${release_operator_args[@]}" \
       --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
       --skip-write-canary \
       >"${root}/release-without-dpn-output.log" 2>&1; then
@@ -1262,10 +1265,10 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_STATE_DIR="${root}/state" \
     VALIDATOR_PROGRESS_SAMPLES=2 \
     "$release_script" \
-      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
+      "${release_operator_args[@]}" \
       --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
       --expected-dpn-validator-release-commit dddddddddddddddddddddddddddddddddddddddd \
       --skip-write-canary \
@@ -1430,6 +1433,51 @@ make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --deadline-seconds 0 \
+      --skip-write-canary \
+      >"${root}/invalid-deadline-output.log" 2>&1; then
+  echo "invalid rollout deadline case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-deadline-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'ROLLOUT_DEADLINE_SECONDS must be a positive integer' \
+  "${root}/invalid-deadline-output.log"
+
+root="$(make_temp_dir)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    MOCK_CURL_DELAY_SECONDS=2 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --deadline-seconds 2 \
+      --skip-write-canary \
+      >"${root}/deadline-output.log" 2>&1; then
+  echo "absolute rollout deadline case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/deadline-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout exceeded its absolute 2-second deadline' \
+  "${root}/deadline-output.log"
+if ! awk 'NF != 2 || $1 < 1 || $1 > 2 || $2 < 1 || $2 > 2 { exit 1 }' \
+    "${root}/state/curl_timeouts"; then
+  echo "absolute deadline case did not clamp curl timeout flags to the remaining budget" >&2
+  cat "${root}/state/curl_timeouts" >&2
+  exit 1
+fi
+
+root="$(make_temp_dir)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
     POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=abc \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
       --skip-local \
@@ -1510,7 +1558,9 @@ cleanup_paths+=("$root")
 make_fake_repo "$root"
 rm -f "${root}/mockbin/iroha"
 mkdir -p "${root}/tmp"
-if ! PATH="${root}/mockbin:/usr/bin:/bin" \
+mkdir -p "${root}/pythonbin"
+ln -s "$(command -v python3)" "${root}/pythonbin/python3"
+if ! PATH="${root}/mockbin:${root}/pythonbin:/usr/bin:/bin" \
     TMPDIR="${root}/tmp/" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \

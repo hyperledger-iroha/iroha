@@ -5515,13 +5515,12 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
             &entry.activation_height,
         );
     }
-    append(
-        &mut preimage,
-        "nexus.dataspace_catalog.count",
-        &u64::try_from(nexus.dataspace_catalog.entries().len())
-            .expect("dataspace catalog length fits in u64"),
-    );
-    for entry in nexus.dataspace_catalog.entries() {
+    let mut dataspaces = nexus.dataspace_catalog.entries().iter().collect::<Vec<_>>();
+    dataspaces.sort_unstable_by_key(|entry| entry.id);
+    let dataspace_count =
+        u64::try_from(dataspaces.len()).expect("dataspace catalog length fits in u64");
+    append(&mut preimage, "nexus.dataspace_catalog.count", &dataspace_count);
+    for entry in dataspaces {
         append(&mut preimage, "nexus.dataspace.id", &entry.id);
         append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
         append(

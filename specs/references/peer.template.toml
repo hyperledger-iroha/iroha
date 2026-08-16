@@ -48,7 +48,7 @@ expected_hash = "<exact signed genesis block hash>"
 # public_address =
 # block_gossip_period_ms = 10_000  # clamped to >= 100ms
 # block_gossip_max_period_ms = 30_000 # clamped to >= block_gossip_period_ms
-# block_gossip_size = 4  # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, NEW_VIEW)
+# block_gossip_size = 4  # fanout cap for block-sync gossip (peer samples and block-sync updates)
 # peer_gossip_period_ms = 1_000   # clamped to >= 100ms
 # peer_gossip_max_period_ms = 30_000 # clamped to >= peer_gossip_period_ms
 # transaction_gossip_period_ms = 1_000  # clamped to >= 100ms
@@ -87,11 +87,10 @@ expected_hash = "<exact signed genesis block hash>"
 # consensus_ingress_burst = 300
 # consensus_ingress_bytes_per_sec = 67_108_864
 # consensus_ingress_bytes_burst = 134_217_728
-# Critical recovery/coordination + payload delivery (BlockCreated, Proposal, QcVote/Qc,
-# VrfCommit/VrfReveal, FetchPendingBlock, RbcInit/RbcReady/RbcDeliver, Evidence) use the
-# critical caps; bulk payload frames (BlockSyncUpdate/ExecWitness/RbcChunk/BlockSync) use a
-# separate bucket seeded from the standard caps, scaled by block_time vs 2s (1s -> 2x),
-# and skip penalty cooldowns.
+# Revision-4 Proposal/Vote/QC/timeout, PayloadManifest/PayloadChunk,
+# body/certificate recovery, and VRF traffic use the critical policy;
+# CertifiedBodyResponse and BlockSync traffic use the bulk policy. These local
+# resource caps do not alter the signed full-committee quorum or mandatory RS16 layout.
 # consensus_ingress_critical_rate_per_sec = 300
 # consensus_ingress_critical_burst = 300
 # consensus_ingress_critical_bytes_per_sec = 134_217_728
@@ -105,124 +104,38 @@ expected_hash = "<exact signed genesis block hash>"
 # disconnect_on_post_overflow = true
 
 ## Consensus settings (Sumeragi)
-## Participation role and collector settings for consensus.
-## - role: "validator" (proposes, votes, commits) or "observer" (sync-only, no votes)
-## - consensus_mode: "permissioned" (default) or "npos"
-## - collectors.k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
-## - collectors.redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
-## - collectors.parallel_topology_fanout: additional topology fanout alongside collectors (0 disables).
-##   Tooling seeds on-chain defaults as 2f+1 based on validator count; config fallback remains 1 if parameters are absent.
-##
-## Note: K and r are also stored on-chain in `SumeragiParameters`/`sumeragi_npos_parameters`. At startup, nodes adopt the
-## on-chain values (and log a mismatch if config differs). Ensure operator configs and on-chain
-## parameters are aligned to avoid inconsistent pacing. Invalid values (`k == 0` or `r == 0`)
-## are rejected at startup; collector selection is floored to commit quorum (bounded by non-leader
-## peers), and votes only fall back to the full commit topology when collectors are disabled or
-## local-only.
+## Participation role and finite node-local bounds for revision-4 consensus.
+## Consensus mode, cadence, committee/leader selection, quorum, and the mandatory
+## Reed-Solomon-16 DA layout come from signed genesis/current-height context. They
+## have no mutable local switches.
 [sumeragi]
 # role = "validator"
-# consensus_mode = "permissioned"
+# role = "observer" # sync-only; omit to use the validator default
 
-[sumeragi.collectors]
-# k = 1
-# redundant_send_r = 3 # example for 4 validators (2f+1)
-# parallel_topology_fanout = 1
+[sumeragi.block]
+# max_transactions = 512
+# max_payload_bytes = 16777216
+# proposal_queue_scan_multiplier = 4
 
-[sumeragi.advanced.queues]
-# votes = 8192          # vote channel capacity
-# block_payload = 128   # block payload capacity (proposal backpressure if saturated)
-# rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
-# blocks = 256          # block message capacity (block sync updates, params, etc.)
-# control = 1024        # control/background/lane channel capacity
+[sumeragi.queues]
+# commands = 1024
+# authenticated_non_validator_sources = 2
+# bodies = 163
+# body_bytes = 242221056
+# body_source_bytes = 34603008
+# chunks = 2048
+# ready_bodies = 128
 
-[sumeragi.advanced.worker]
-# iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
-# iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
-# tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
-# parallel_ingress = true              # run per-queue ingress threads with a ticketed gate
-# validation_worker_threads = 0        # pre-vote validation worker threads (0 = auto)
-# validation_work_queue_cap = 0        # validation work queue per worker (0 = auto)
-# validation_result_queue_cap = 0      # validation result queue (0 = auto)
-# qc_verify_worker_threads = 0         # QC verify worker threads (0 = auto)
-# qc_verify_work_queue_cap = 0         # QC verify work queue per worker (0 = auto)
-# qc_verify_result_queue_cap = 0       # QC verify result queue (0 = auto)
-# validation_pending_cap = 8192        # deferred vote-validation backlog cap
-
-[sumeragi.advanced.pacemaker]
-# pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
-# active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
-# rbc_backlog_session_soft_limit = 8 # allow proposals with <= N backlog sessions (0 = strict)
-# rbc_backlog_chunk_soft_limit = 256  # allow proposals with <= N missing chunks (0 = strict)
-# backoff_multiplier = 1             # view-timeout backoff multiplier
-# rtt_floor_multiplier = 2           # RTT floor multiplier for pacemaker backoff
-# max_backoff_ms = 10000             # max pacemaker backoff window
-# jitter_frac_per_mille = 0          # jitter band size as permille of backoff window (0 disables)
-
-[sumeragi.advanced.pacing_governor]
-# window_blocks = 20
-# view_change_pressure_permille = 200   # view-change increments per block (permille)
-# view_change_clear_permille = 50
-# commit_spacing_pressure_permille = 1300 # avg commit spacing vs target (permille)
-# commit_spacing_clear_permille = 1100
-# step_up_bps = 1000
-# step_down_bps = 100
-# min_factor_bps = 10000
-# max_factor_bps = 20000
-
-[sumeragi.persistence]
-# commit_inflight_timeout_ms = 30000
-# commit_work_queue_cap = 1            # commit worker queue capacity
-# commit_result_queue_cap = 1          # commit worker result queue capacity
-
-[sumeragi.recovery]
-# missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology
-
-[sumeragi.gating]
-# membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed
-# membership_mismatch_fail_closed = false    # drop consensus messages from mismatched peers
-# consensus_future_height_window = 8         # drop consensus messages beyond this height delta (0 disables)
-# consensus_future_view_window = 8           # drop consensus messages beyond this view delta (0 disables)
-# invalid_sig_penalty_threshold = 3          # invalid signatures before temporary suppression (0 disables)
-# invalid_sig_penalty_window_ms = 5000
-# invalid_sig_penalty_cooldown_ms = 15000
-
-[sumeragi.da]
-# enabled = true                       # commit waits for availability evidence when enabled
-# max_commitments_per_block = 16       # max DA commitments per block
-# max_proof_openings_per_block = 128   # max DA proof openings per block
-
-[sumeragi.advanced.da]
-# quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 3 * commit_time)
-# availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
-# availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
-
-[sumeragi.npos]
-# epoch_length_blocks = 3600           # validator set epoch length
-# use_stake_snapshot_roster = true     # hydrate roster from stake snapshots
-# advanced.npos.timeouts.*_ms derive from the effective block time when omitted
-# vrf.* windows/deadlines derive from epoch_length_blocks when omitted
-
-#[sumeragi.advanced.npos.timeouts]
-# propose_ms = 350
-# prevote_ms = 450
-# precommit_ms = 550
-# exec_ms = 150
-# witness_ms = 150
-# commit_ms = 850
-# da_ms = 750
-# aggregator_ms = 120
-
-#[sumeragi.npos.vrf]
-# commit_window_blocks = 100
-# reveal_window_blocks = 40
-# commit_deadline_offset_blocks = 100
-# reveal_deadline_offset_blocks = 140
-
-[sumeragi.advanced.rbc]
-# chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
-# chunk_max_bytes = 262144          # RBC chunk size cap (bytes)
-# payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick
-# pending_session_limit = 256       # max pending RBC sessions before INIT
+## `[sumeragi.limits]` exposes finite lane, merge, recovery, and Native AMX
+## service bounds. Defaults are suitable for the reference profile; consult
+## `specs/references/configuration.md` before overriding one.
+[sumeragi.keys]
+# activation_lead_blocks = 1
+# overlap_grace_blocks = 8
+# expiry_grace_blocks = 0
+# require_hsm = false
+# allowed_algorithms = ["bls_normal"]
+# allowed_hsm_providers = ["pkcs11", "softkey", "yubihsm"]
 
 [torii]
 # address =

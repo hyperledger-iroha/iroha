@@ -1,4 +1,4 @@
-name: Publish (Taira Dual-Target Archive)
+name: Taira Full Release/Reset (exceptional)
 
 on:
   workflow_dispatch:
@@ -29,10 +29,80 @@ env:
   TAIRA_CONTROLLER_ROOT: /usr/local/libexec/iroha-taira-release-controller-v1.d
 
 jobs:
+  # GitHub leaves an unmatched self-hosted job queued for up to 24 hours.  A
+  # few consecutive dispatches used to turn that into roughly 100 hours with
+  # no checkout or build step ever starting.  Keep the release workflow's
+  # global serialization, but fail the active dispatch within the promised
+  # wall-clock budget and report every runner label that did not start.
+  rollout-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 31
+    permissions:
+      actions: write
+      contents: none
+    steps:
+      - name: Enforce the 30-minute rollout budget
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 30 * 60))
+          last_activity=$SECONDS
+          previous_state=""
+          while (( SECONDS < deadline )); do
+            jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")"
+            if jq -e '.jobs[] | select(.name == "macos-publish" and .conclusion == "success")' \
+              <<<"$jobs" >/dev/null; then
+              exit 0
+            fi
+            if jq -e '.jobs[] | select(.name != "rollout-budget" and .status == "completed" and (.conclusion | IN("failure", "cancelled", "timed_out", "action_required", "stale")))' \
+              <<<"$jobs" >/dev/null; then
+              exit 0
+            fi
+            state="$(jq -c '[.jobs[] | select(.name != "rollout-budget") | {name,status,conclusion,runner_name}]' <<<"$jobs")"
+            if [[ "$state" != "$previous_state" ]] || jq -e '.jobs[] | select(.name != "rollout-budget" and .status == "in_progress")' <<<"$jobs" >/dev/null; then
+              previous_state="$state"
+              last_activity=$SECONDS
+            elif (( SECONDS - last_activity >= 2 * 60 )); then
+              echo "::error::No Taira job ran for two minutes; a required self-hosted runner is unavailable"
+              jq -r '.jobs[] | select(.status != "completed") | "::error::queued job=\(.name) runner=\(if (.runner_name // "") == "" then "unassigned" else .runner_name end) labels=\(.labels | join(","))"' <<<"$jobs"
+              gh api --method POST \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
+              exit 1
+            fi
+            sleep 15
+          done
+
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")"
+          echo "::error::Taira rollout exceeded the 30-minute build-and-deploy budget"
+          jq -r '.jobs[] | select(.status != "completed") | "::error::pending job=\(.name) status=\(.status) runner=\(if (.runner_name // "") == "" then "unassigned" else .runner_name end) labels=\(.labels | join(","))"' \
+            <<<"$jobs"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
+          exit 1
+
+  # The release implementation deliberately contains fail-closed authority
+  # stubs until independent brokers and replay journals are installed.  Detect
+  # those source barriers on a hosted runner before reserving native builders.
+  release-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Refuse builds while release authorities are source-disabled
+        run: python3 -I -S scripts/check_taira_release_prerequisites.py
+
   # This job reads four explicitly public files.  It has no checkout and cannot
   # sign, build, qualify, deploy, or publish.  Its protected environment must
   # contain only the public input path and controller/host trust pins.
   public-privacy-input:
+    needs: release-readiness
     environment: taira-validator-public-input
     runs-on: [self-hosted, Linux, ARM64, taira-public-input]
     timeout-minutes: 30
@@ -147,17 +217,45 @@ jobs:
         shell: bash
         env:
           TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_BUILD_CACHE_ROOT: ${{ vars.TAIRA_LINUX_BUILD_CACHE_ROOT }}
+          TAIRA_NATIVE_BUILD_JOBS: ${{ vars.TAIRA_NATIVE_BUILD_JOBS || '6' }}
         run: |
           set -Eeuo pipefail
           test "$(uname -s)" = Linux
           test "$(uname -m)" = aarch64
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          [[ "$TAIRA_NATIVE_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]
+          (( TAIRA_NATIVE_BUILD_JOBS <= 16 ))
+          cache_root="${TAIRA_BUILD_CACHE_ROOT:-$RUNNER_TOOL_CACHE/iroha-taira-linux-build}"
+          [[ "$cache_root" == /* ]]
+          test ! -L "$cache_root"
+          test ! -L "$cache_root/cargo-target"
+          mkdir -p "$cache_root/cargo-target"
+          test ! -L "$cache_root"
+          test ! -L "$cache_root/cargo-target"
+          chmod 0700 "$cache_root" "$cache_root/cargo-target"
+          cache_root="$(cd "$cache_root" && pwd -P)"
           source_root="$RUNNER_TEMP/taira-linux-source"
           bash configs/soranexus/taira/prepare_taira_release_source.sh \
             --workspace "$GITHUB_WORKSPACE" \
             --output-dir "$source_root" \
             --validator-release-ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
             --validator-lock-sha256 "$DPN_VALIDATOR_LOCK_SHA256"
+          source_manifest="$(/usr/bin/python3 -I -S - "$source_root/taira-source-identity-v1.json" <<'PY'
+          import json, re, sys
+          value=json.load(open(sys.argv[1], encoding="ascii"))["source"]["workspace_source_manifest_sha256"]
+          if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None: raise SystemExit("invalid reconstructed source identity")
+          print(value)
+          PY
+          )"
+          rustc_identity="$(rustc -Vv | /usr/bin/python3 -I -S -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+          cache_key="$source_manifest-$TAIRA_INPUT_VALIDATOR_RELEASE_REF-$rustc_identity"
+          target_root="$cache_root/cargo-target/$cache_key"
+          test ! -L "$target_root"
+          if [[ ! -e "$target_root" ]]; then mkdir -m 0700 "$target_root"; fi
+          test -d "$target_root"
+          test ! -L "$target_root"
+          chmod 0700 "$target_root"
           output_dir="$RUNNER_TEMP/taira-linux-unsigned"
           mkdir -m 0700 "$output_dir"
           privacy_handoff="$RUNNER_TEMP/taira-public-privacy-input"
@@ -172,6 +270,8 @@ jobs:
             "$privacy_input/privacy_bootstrap_plan.json"
           clean_build_env=(
             env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C
+            "CARGO_BUILD_JOBS=$TAIRA_NATIVE_BUILD_JOBS"
+            "CARGO_TARGET_DIR=$target_root"
             "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
             "IROHA_VALIDATOR_LOCK_SHA256=$DPN_VALIDATOR_LOCK_SHA256"
             "IROHA_VALIDATOR_BUILD_PROVENANCE=$source_root/validator-build-provenance-v1.json"
@@ -375,8 +475,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # This build has no dependency on Linux authority bytes.  Qualification is
+  # the first cross-target consumer, so start both expensive native builds in
+  # parallel and compare their identities there.
   macos-native-build:
-    needs: linux-native-authority
+    needs: release-readiness
     runs-on: [self-hosted, macOS, ARM64, taira-untrusted-build]
     timeout-minutes: 360
     steps:
@@ -392,26 +495,48 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Download the signed Linux archive for cross-target privacy binding
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/taira-macos-privacy-linux-authority
       - name: Reconstruct and compile inert macOS binaries
         shell: bash
         env:
           TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_BUILD_CACHE_ROOT: ${{ vars.TAIRA_MACOS_BUILD_CACHE_ROOT }}
+          TAIRA_NATIVE_BUILD_JOBS: ${{ vars.TAIRA_NATIVE_BUILD_JOBS || '6' }}
         run: |
           set -Eeuo pipefail
           test "$(uname -s)" = Darwin; test "$(uname -m)" = arm64
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          [[ "$TAIRA_NATIVE_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]
+          (( TAIRA_NATIVE_BUILD_JOBS <= 16 ))
+          cache_root="${TAIRA_BUILD_CACHE_ROOT:-$RUNNER_TOOL_CACHE/iroha-taira-macos-build}"
+          [[ "$cache_root" == /* ]]
+          test ! -L "$cache_root"
+          test ! -L "$cache_root/cargo-target"
+          mkdir -p "$cache_root/cargo-target"
+          test ! -L "$cache_root"
+          test ! -L "$cache_root/cargo-target"
+          chmod 0700 "$cache_root" "$cache_root/cargo-target"
+          cache_root="$(cd "$cache_root" && pwd -P)"
           source_root="$RUNNER_TEMP/taira-macos-source"
           bash configs/soranexus/taira/prepare_taira_release_source.sh \
             --workspace "$GITHUB_WORKSPACE" --output-dir "$source_root" \
             --validator-release-ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
             --validator-lock-sha256 "$DPN_VALIDATOR_LOCK_SHA256"
-          target_root="$RUNNER_TEMP/taira-macos-target"; mkdir -m 0700 "$target_root"
-          clean=(env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF")
+          source_manifest="$(/usr/bin/python3 -I -S - "$source_root/taira-source-identity-v1.json" <<'PY'
+          import json, re, sys
+          value=json.load(open(sys.argv[1], encoding="ascii"))["source"]["workspace_source_manifest_sha256"]
+          if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None: raise SystemExit("invalid reconstructed source identity")
+          print(value)
+          PY
+          )"
+          rustc_identity="$(rustc -Vv | /usr/bin/python3 -I -S -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+          cache_key="$source_manifest-$TAIRA_INPUT_VALIDATOR_RELEASE_REF-$rustc_identity"
+          target_root="$cache_root/cargo-target/$cache_key"
+          test ! -L "$target_root"
+          if [[ ! -e "$target_root" ]]; then mkdir -m 0700 "$target_root"; fi
+          test -d "$target_root"
+          test ! -L "$target_root"
+          chmod 0700 "$target_root"
+          clean=(env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS="$TAIRA_NATIVE_BUILD_JOBS" "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF")
           for name in CARGO_HOME RUSTUP_HOME; do if [[ -n "${!name:-}" ]]; then clean+=("$name=${!name}"); fi; done
           "${clean[@]}" cargo build --locked --release -p irohad \
             --bin iroha3d --bin sorafs_external_software_signer \
@@ -420,8 +545,8 @@ jobs:
           jindo_messages="$RUNNER_TEMP/taira-jindo-driver.jsonl"
           action_messages="$RUNNER_TEMP/taira-action-driver.jsonl"
           "${clean[@]}" cargo test --locked --release -p integration_tests --test network_functional --features "zk-stark privacy-release-evidence" --no-run --message-format=json >"$network_messages"
-          "${clean[@]}" cargo test --locked --release -p iroha_core --lib --no-run --message-format=json >"$jindo_messages"
-          "${clean[@]}" cargo build --locked --release -p iroha_core --bin privacy_exact12_action_driver --features privacy-release-evidence --message-format=json >"$action_messages"
+          "${clean[@]}" cargo test --locked --release -p iroha_core --lib --features "privacy-release-evidence,iroha-core-tests" --no-run --message-format=json >"$jindo_messages"
+          "${clean[@]}" cargo build --locked --release -p iroha_core --bin privacy_exact12_action_driver --features "privacy-release-evidence,iroha-core-tests" --message-format=json >"$action_messages"
           network_driver="$(/usr/bin/python3 -I -S - "$network_messages" network_functional "$target_root" <<'PY'
           import json,os,stat,sys
           from pathlib import Path
@@ -626,7 +751,7 @@ jobs:
             --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" \
             --restart-generation "$generation" \
             --source-identity "$mac_stage/taira-source-identity-v1.json" \
-            --output "$stage" --health-timeout-seconds 900
+            --output "$stage" --health-timeout-seconds 240
       - name: Upload secret-free qualification result
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -940,7 +1065,7 @@ jobs:
           # until iroha.taira.deploy-authenticated-run-nonce.v1 and
           # iroha.taira.complete-source-identity-attestation.v1 are installed.
           # Workflow IDs and caller-echoed source fields cannot bypass either.
-          args=(--bundle "$reset" --binary "$mac_stage/bin/iroha3d" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --boi-qualified-handoff-root "$boi_stage" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --trusted-boi-qualification-public-key "$TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH" --trusted-boi-qualification-signing-fingerprint "$TAIRA_TRUSTED_BOI_QUALIFICATION_SIGNING_FINGERPRINT" --expected-boi-qualification-host-id "$EXPECTED_BOI_QUALIFICATION_HOST_ID" --expected-boi-qualification-installation-id "$EXPECTED_BOI_QUALIFICATION_INSTALLATION_ID" --expected-boi-qualification-controller-digest "$EXPECTED_BOI_QUALIFICATION_CONTROLLER_DIGEST" --expected-workflow-run-id "$GITHUB_RUN_ID" --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 900)
+          args=(--bundle "$reset" --binary "$mac_stage/bin/iroha3d" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --boi-qualified-handoff-root "$boi_stage" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --trusted-boi-qualification-public-key "$TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH" --trusted-boi-qualification-signing-fingerprint "$TAIRA_TRUSTED_BOI_QUALIFICATION_SIGNING_FINGERPRINT" --expected-boi-qualification-host-id "$EXPECTED_BOI_QUALIFICATION_HOST_ID" --expected-boi-qualification-installation-id "$EXPECTED_BOI_QUALIFICATION_INSTALLATION_ID" --expected-boi-qualification-controller-digest "$EXPECTED_BOI_QUALIFICATION_CONTROLLER_DIGEST" --expected-workflow-run-id "$GITHUB_RUN_ID" --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 240)
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" >"$RUNNER_TEMP/deploy-preflight.json"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" --apply >"$RUNNER_TEMP/deploy-applied.json"
           /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" <<'PY'

@@ -101,11 +101,10 @@ class CrossToolClaimContract:
     verus_source: str
     production_sources: tuple[str, ...]
     proof_mode: str = "legacy_requires_builder"
-    # The exact proof/kernel/call-site contract is intentionally optional while
-    # the corresponding ledger entry is specified_unproved.  Promotion is
-    # fail-closed until every field is supplied and source validation below
-    # proves the exact normalized shape.  This lets the ledger describe future
-    # work without accepting placeholder proofs such as `ensures true`.
+    # The schema permits incomplete synthetic/dormant contracts, but release
+    # promotion is fail-closed until every field is supplied and source
+    # validation below proves the exact normalized shape. Placeholder proofs
+    # such as `ensures true` are never accepted.
     verus_parameters: str | None = None
     verus_requires: str | None = None
     verus_ensures: str | None = None

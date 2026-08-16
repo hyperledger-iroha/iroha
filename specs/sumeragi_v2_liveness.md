@@ -10,11 +10,13 @@ The first-release target is therefore conditional:
 > height eventually decides and every responsive validator eventually applies
 > the decision and activates its successor height.
 
-This remains the conditional protocol target and paper argument. The checked-in
-ledger is precommitted with `machine_checked_completion: true`, but that status
-declaration is not proof evidence; the claim remains open until the strict
-TLAPS, pinned Verus, cross-tool, trace, and release-receipt wave validates one
-immutable candidate.
+This remains the conditional revision-4 protocol target and paper argument.
+The checked-in `machine_checked_completion: true` flag belongs to the
+legacy/revision-3-rooted deductive ledger. That status declaration is not proof
+evidence and does not replace the separate revision-4 exact-cardinality
+TLAPS/TLC/mutation corridor; the claim remains open until fresh same-source
+formal, cross-tool, trace, and release-receipt evidence validates one immutable
+candidate.
 
 The runtime premise is per validator. Each non-crashing responsive validator
 in the active-height or exact historical-recovery corridor must have an
@@ -748,8 +750,8 @@ argument remains conditional on publication of a ready exact receipt. The
 current `ReplyWriterDeadlineModelObligation` proof script targets local actor
 termination, and `ConditionalResponsiveWriterCursorLiveness` targets cursor
 advance under `ResponsiveWriterReceiptAssumption`; both have source proof
-bodies and are deductively classified support for the still-unpromoted
-production progress refinement. Deriving that assumption from
+bodies and are deductively classified support for the promoted production
+progress target. Deriving that assumption from
 `ResponsiveReplyWriterSpec` is the SANY-clean
 `ResponsiveStrongFairnessToReceiptResidual` proof target. Its chain retains
 outstanding ownership, applies weak fairness to reconnect and first dispatch,
@@ -1328,10 +1330,10 @@ certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
 `d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
-Nine of those legs execute the separate 525-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 526 TSV lines and has SHA-256
-`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
-The 319-test core group includes grouped Native prevote-budget rejection before
+Nine of those legs execute the separate 527-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 528 TSV lines and has SHA-256
+`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
+The 321-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1651,32 +1653,35 @@ predate the authority-gated active-state fence, the V3 two-slot
 compaction/persistence relation, bootstrap adoption, validation-before-cleanup
 ordering, and the root trust boundary, so they are not current evidence. The
 control partition and `NoRolloverFailure` remain specification structure only.
-The conditional rollover declaration is not promoted while its final
-persistence relation and downstream rotating-leader dependency remain
-unproved. Both typed-handoff declarations remain source-bound support leaves
+The conditional rollover declaration is source-bound support for the promoted
+successor target, while its final persistence relation and downstream
+rotating-leader proof still require fresh release evidence. Both typed-handoff
+declarations remain source-bound support leaves
 consumed transitively by the top-level successor-activation production-
-refinement debt; they are not independent ledger rows and do not establish
+refinement target; they are not independent ledger rows and do not establish
 filesystem or Rust refinement, recovery, eventual finality validation, network
 or writer progress, repeated rollover, or end-to-end liveness. Fresh strict
 safety-and-liveness validation remains pending.
 
 The strict proof-run counts in the following paragraphs are retained
 historical submodule evidence, not current aggregate source-manifest-bound
-release evidence. The pre-precommit 54-entry top-level proof-ledger snapshot
-reported 35 `tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope` entry, with `machine_checked_completion: false`. Sixteen
+release evidence. The canonical 54-entry top-level proof ledger records 44
+`tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope` entry, with no `specified_unproved` rows and
+`machine_checked_completion: true`. Sixteen
 source-bound decomposition leaves remain checked transitively through their
 reviewed consumers and are not independent ledger rows. The legacy-named
 locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
-Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly
-unproved; no bounded model or source-fidelity check promotes them. The
+Decision/higher-Prepare supersession. Its target and the production cross-tool
+targets are promoted, but no bounded model or source-fidelity check supplies
+the fresh release evidence they require. The
 aggregate temporal module gives
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
 bodies and classifies them as deductively proved support leaves. They are not
-independent ledger rows; downstream wrappers cannot promote their consumers
-without fresh strict evidence for the complete dependency closure.
+independent ledger rows; release cannot accept their consumers without fresh
+strict evidence for the complete dependency closure.
 
 The adequate-leader residual is target-local rather than aggregate: another
 validator's Decision is not terminal for the indexed target. Its occurrence
@@ -1693,11 +1698,11 @@ recovery, or historical runner. Each classification is action-local. The five
 exact off-scheduler convergence leaves have source proof bodies over immutable
 owner identity, finite prefixes, admission/coalescing, and the nonphysical
 response gate. Their composition does not count replenishment itself as
-progress; fresh strict TLAPS is still required before their consumer is
-promoted.
+progress; fresh strict TLAPS is still required before release accepts their
+consumer.
 Independently, `ResponsiveStrongFairnessToReceiptResidual` and the conditional
 cursor theorem have source proof bodies and remain source-bound support for the
-unpromoted production progress refinement; a stale receipt cannot attest the
+promoted production progress target; a stale receipt cannot attest the
 final dependency closure. An honest
 validator outside `Responsive` may retain activation queued before GST;
 neither the formal fairness premise nor the conditional release target promises
@@ -1705,8 +1710,9 @@ its local-worker progress. The action-by-action safety
 induction is strict-green at 7,826/7,826 obligations, and the downstream
 `SumeragiV2Proofs` module is strict-green at 565/565; historical TC-lock
 authorization and its dependent direct-or-installed-authorization timeout
-theorem are therefore ledgered `tlaps_proved`. The remaining debt is the
-asynchronous ownership/fairness and multi-height liveness composition.
+theorem are therefore ledgered `tlaps_proved`. The remaining release work is
+fresh evidence for the promoted asynchronous ownership/fairness and
+multi-height liveness targets.
 The protected Stage-4 service-rank slice is strict-green at exactly 196/196
 TLAPS obligations. It establishes scheduler-wide exact ownership, coalesced
 causal successors, class-specific causal-capacity debt, independent fair
@@ -1730,11 +1736,12 @@ checker mutation-tests action deletion, quantifier drift, frame
 misclassification, claim or theorem weakening, unreviewed helper theorems, and
 any TLC-only duplicate variable or fairness relation. The full Core `Next`
 disjunction is intentionally kept out of individual fairness targets to avoid
-re-evaluating unrelated Core branches. This closes only the fair-action
-refinement entry; it does not complete the 18 remaining deductive obligations.
-This is not the complete protected-rank proof: progress-relevant Normal
-proposal/Prepare work and a productive, decreasing deadlock theorem are still
-missing, so no ledger status is promoted. Formal entrypoints now share a
+re-evaluating unrelated Core branches. That historical run closed only the
+fair-action refinement entry; at that checkpoint it did not complete the then-
+outstanding protected-rank, Normal proposal/Prepare, or productive-deadlock
+targets. Those targets are now recorded `tlaps_proved` in the legacy ledger,
+while fresh same-source release evidence remains required. Formal entrypoints
+now share a
 working-Java resolver which rejects an invalid explicit runtime and skips the
 macOS stub; the selected canonical binary remains hash-bound in release
 evidence.
@@ -1783,7 +1790,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 860 exact production
 liveness tests and executes all 40 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 525-test
+profile additionally records nine G-UNIT legs executing a separate 527-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1948,10 +1955,11 @@ legs. Three Kura recovery regressions and the governance-unlock audit bring the
 activation guard and two deferred-canonical-carrier completion regressions
 produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
 of the duplicate inline network-simulation rows, the historical inventory
-contained 856 tests across 40 modules and 88 legs. The four exact retired-
+contained 856 tests across 40 modules and 89 legs. The four exact retired-
 attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
-regressions bring the current inventory to 860 tests across those 40 modules
-and 88 legs.
+regressions bring the current inventory to 860 tests across those 40 modules.
+Removing the obsolete MKHE lifecycle G-UNIT leg leaves the current corridor at
+88 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1979,11 +1987,11 @@ geometry. Request gates form the second bounded responder table. Crash recovery
 restores exactly those bounds from the marker-selected V3 snapshot.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
-unbounded broadcast admission. The integration filter remains a five-test
+unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 88-leg, 860-production-test corridor plus 525 G-UNIT tests; execution
+audited 88-leg, 860-production-test corridor plus 527 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2003,7 +2011,7 @@ classifications. They validate the release machinery; they are not substitutes
 for the 24-hour validator soak.
 
 Both profiles require one clean committed source identity before their first
-Cargo command, bind the ignored workspace `Cargo.lock` as an explicit build
+Cargo command, bind the tracked workspace `Cargo.lock` as an explicit build
 input, and reject unresolved index entries and every active merge,
 cherry-pick, revert, mailbox-apply, rebase, sequencer, or bisect operation.
 Administrative paths are resolved through `git rev-parse --git-path`, so an
@@ -2021,7 +2029,7 @@ corridor.
 
 Before any network attempt, the gate requires the complete source-manifest and
 seal contract suite to pass. It covers content and ordering, deletions,
-symlinks, executable modes, ignored `Cargo.lock` drift, unresolved entries,
+symlinks, executable modes, tracked `Cargo.lock` drift, unresolved entries,
 every active Git operation, linked-worktree locality, clean HEAD/index/worktree
 identity, missing or symlinked lockfiles, detached-source reproduction, and a
 cooperative ordinary-write attempt against a read-only source tree. Source
@@ -2062,7 +2070,7 @@ its tree must resolve, the index tree must equal HEAD, tracked files must be
 unchanged, and no non-ignored untracked path may exist. It recreates that exact
 commit in an independent local clone made with no local object sharing, no
 hardlinks, and no alternates; verifies that the mirror shares no Git-object
-inode with the candidate; copies and re-hashes the ignored `Cargo.lock`; and
+inode with the candidate; re-hashes the tracked `Cargo.lock` in both; and
 requires the pre-seal mirror identity to equal the original candidate identity.
 It rechecks the original identity after mirror creation, redirects `target`,
 temporary files, caches, evidence, and retained localnets outside the source,
@@ -2316,7 +2324,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 88 pre-network corridor legs and
-their exact 860-test production inventory, the separate 525-test G-UNIT
+their exact 860-test production inventory, the separate 527-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

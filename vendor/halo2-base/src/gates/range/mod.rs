@@ -1,4 +1,6 @@
 use crate::{
+    AssignedValue, Context,
+    QuantumCell::{self, Constant, Existing, Witness},
     gates::flex_gate::{FlexGateConfig, GateInstructions, MAX_PHASE},
     halo2_proofs::{
         circuit::{Layouter, Value},
@@ -8,12 +10,10 @@ use crate::{
         poly::Rotation,
     },
     utils::{
-        biguint_to_fe, bit_length, decompose_fe_to_u64_limbs, fe_to_biguint, modulus,
-        BigPrimeField, ScalarField,
+        BigPrimeField, ScalarField, biguint_to_fe, bit_length, decompose_fe_to_u64_limbs,
+        fe_to_biguint, modulus,
     },
     virtual_region::lookups::LookupAnyManager,
-    AssignedValue, Context,
-    QuantumCell::{self, Constant, Existing, Witness},
 };
 
 use super::flex_gate::{FlexGateConfigParams, GateChip};
@@ -76,7 +76,10 @@ impl<F: ScalarField> RangeConfig<F> {
     ) -> Self {
         assert!(lookup_bits <= F::S as usize);
         // sanity check: only create lookup table if there are lookup_advice columns
-        assert!(!num_lookup_advice.is_empty(), "You are creating a RangeConfig but don't seem to need a lookup table, please double-check if you're using lookups correctly. Consider setting lookup_bits = None in BaseConfigParams");
+        assert!(
+            !num_lookup_advice.is_empty(),
+            "You are creating a RangeConfig but don't seem to need a lookup table, please double-check if you're using lookups correctly. Consider setting lookup_bits = None in BaseConfigParams"
+        );
 
         let lookup = meta.lookup_table_column();
 
@@ -108,10 +111,19 @@ impl<F: ScalarField> RangeConfig<F> {
             lookup_advice.push(columns);
         }
 
-        let mut config = Self { lookup_advice, q_lookup, lookup, lookup_bits, gate };
+        let mut config = Self {
+            lookup_advice,
+            q_lookup,
+            lookup,
+            lookup_bits,
+            gate,
+        };
         config.create_lookup(meta);
 
-        log::debug!("Poisoned rows after RangeConfig::configure {}", meta.minimum_rows());
+        log::debug!(
+            "Poisoned rows after RangeConfig::configure {}",
+            meta.minimum_rows()
+        );
         config.gate.max_rows = (1 << gate_params.k) - meta.minimum_rows();
         assert!(
             (1 << lookup_bits) <= config.gate.max_rows,
@@ -316,7 +328,10 @@ pub trait RangeInstructions<F: ScalarField> {
         let a_val = fe_to_biguint(a.value());
         let (div, rem) = a_val.div_mod_floor(&b);
         let [div, rem] = [div, rem].map(|v| biguint_to_fe(&v));
-        ctx.assign_region([Witness(rem), Constant(biguint_to_fe(&b)), Witness(div), a], [0]);
+        ctx.assign_region(
+            [Witness(rem), Constant(biguint_to_fe(&b)), Witness(div), a],
+            [0],
+        );
         let rem = ctx.get(-4);
         let div = ctx.get(-2);
         // Constrain that a_num_bits fulfills `div < 2 ** a_num_bits / b`.
@@ -392,7 +407,13 @@ pub trait RangeInstructions<F: ScalarField> {
         let x_fe = self.gate().pow_of_two()[b_num_bits];
         let [div, div_hi, div_lo, rem] = [div, div_hi, div_lo, rem].map(|v| biguint_to_fe(&v));
         ctx.assign_region(
-            [Witness(div_lo), Witness(div_hi), Constant(x_fe), Witness(div), Witness(rem)],
+            [
+                Witness(div_lo),
+                Witness(div_hi),
+                Constant(x_fe),
+                Witness(div),
+                Witness(rem),
+            ],
             [0],
         );
         let [div_lo, div_hi, div, rem] = [-5, -4, -2, -1].map(|i| ctx.get(i));
@@ -404,10 +425,14 @@ pub trait RangeInstructions<F: ScalarField> {
         }
 
         let (bcr0_hi, bcr0_lo) = {
-            let bcr0 = self.gate().mul_add(ctx, Existing(b), Existing(div_lo), Existing(rem));
+            let bcr0 = self
+                .gate()
+                .mul_add(ctx, Existing(b), Existing(div_lo), Existing(rem));
             self.div_mod(ctx, Existing(bcr0), x.clone(), a_num_bits)
         };
-        let bcr_hi = self.gate().mul_add(ctx, Existing(b), Existing(div_hi), Existing(bcr0_hi));
+        let bcr_hi = self
+            .gate()
+            .mul_add(ctx, Existing(b), Existing(div_hi), Existing(bcr0_hi));
 
         let (a_hi, a_lo) = self.div_mod(ctx, a, x, a_num_bits);
         ctx.constrain_equal(&bcr_hi, &a_hi);
@@ -434,7 +459,10 @@ pub trait RangeInstructions<F: ScalarField> {
         let two = F::from(2u64);
         let h_v = F::from_bytes_le(&(a_big >> 1usize).to_bytes_le());
 
-        ctx.assign_region([Witness(bit_v), Witness(h_v), Constant(two), Existing(a)], [0]);
+        ctx.assign_region(
+            [Witness(bit_v), Witness(h_v), Constant(two), Existing(a)],
+            [0],
+        );
         let half = ctx.get(-3);
         let bit = ctx.get(-4);
 
@@ -485,7 +513,12 @@ impl<F: ScalarField> RangeChip<F> {
         }
         let gate = GateChip::new();
 
-        Self { gate, lookup_bits, lookup_manager, limb_bases }
+        Self {
+            gate,
+            lookup_bits,
+            lookup_manager,
+            limb_bases,
+        }
     }
 
     fn add_cell_to_lookup(&self, ctx: &Context<F>, a: AssignedValue<F>) {
@@ -533,8 +566,10 @@ impl<F: ScalarField> RangeChip<F> {
             let limbs = decompose_fe_to_u64_limbs(a.value(), num_limbs, self.lookup_bits)
                 .into_iter()
                 .map(|x| Witness(F::from(x)));
-            let row_offset = ctx.advice.len() as isize;
-            let acc = self.gate.inner_product(ctx, limbs, self.limb_bases[..num_limbs].to_vec());
+            let row_offset = ctx.advice_len() as isize;
+            let acc = self
+                .gate
+                .inner_product(ctx, limbs, self.limb_bases[..num_limbs].to_vec());
             // the inner product above must equal `a`
             ctx.constrain_equal(&a, &acc);
             // we fetch the cells to lookup by getting the indices where `limbs` were assigned in `inner_product`. Because `limb_bases[0]` is 1, the progression of indices is 0,1,4,...,4+3*i

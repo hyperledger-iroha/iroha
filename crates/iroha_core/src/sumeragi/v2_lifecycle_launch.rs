@@ -2401,10 +2401,11 @@ impl ProductionLifecycleOwnerV1 {
     /// construction. Success leaves only the body-store instance identity in
     /// the lifecycle owner. This transition never publishes adapter status.
     #[allow(clippy::result_large_err)]
+    #[inline(never)]
     pub(in crate::sumeragi) fn launch(
         mut self,
         inputs: ProductionLifecycleLaunchInputsV1,
-    ) -> Result<LaunchedProductionLifecycleV1, ProductionLifecycleLaunchErrorV1> {
+    ) -> Result<Box<LaunchedProductionLifecycleV1>, ProductionLifecycleLaunchErrorV1> {
         let construction_guard = Arc::clone(&inputs.output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
@@ -2585,7 +2586,7 @@ impl ProductionLifecycleOwnerV1 {
             .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
         self.body_store_identity = Some(body_store_identity);
         construction.complete();
-        Ok(LaunchedProductionLifecycleV1 {
+        Ok(Box::new(LaunchedProductionLifecycleV1 {
             owner: self,
             executor,
             services,
@@ -2601,7 +2602,7 @@ impl ProductionLifecycleOwnerV1 {
                 },
             ),
             leader_wire_ingress_binding,
-        })
+        }))
     }
 }
 

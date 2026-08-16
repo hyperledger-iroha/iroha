@@ -22,11 +22,8 @@ where
     assert_eq!(decoded, value);
 }
 
-pub(super) fn assert_registry_decodes<T>(
-    registry: &InstructionRegistry,
-    wire_id: &str,
-    value: T,
-) where
+pub(super) fn assert_registry_decodes<T>(registry: &InstructionRegistry, wire_id: &str, value: T)
+where
     T: Instruction + Encode + 'static + norito::core::NoritoSerialize,
     for<'de> T: norito::core::NoritoDeserialize<'de>,
 {
@@ -93,9 +90,9 @@ mod tests {
         for source in TYPE_NAME_CONSUMERS {
             assert!(!source.contains("fn assert_slice_roundtrip"));
             assert!(!source.contains("fn assert_registry_decodes"));
-            assert!(source.contains(
-                "assert_registry_decodes_type_name as assert_registry_decodes"
-            ));
+            assert!(
+                source.contains("assert_registry_decodes_type_name as assert_registry_decodes")
+            );
             slice_calls += source.matches("assert_slice_roundtrip(").count();
             registry_calls += source.matches("assert_registry_decodes(").count();
         }

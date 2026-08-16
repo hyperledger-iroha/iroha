@@ -744,6 +744,7 @@ on:
       - "kotlin/core-jvm/**"
       - "python/iroha_torii_client/**"
       - "specs/offline_kagemusha*.md"
+      - "specs/sdk/swift/readiness/*kagemusha*.md"
       - "artifacts/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
@@ -753,6 +754,11 @@ on:
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
+      - "scripts/*kagemusha*.py"
+      - "scripts/*kagemusha*.sh"
+      - "scripts/tests/*kagemusha*_test.py"
+      - "pytests/scripts/*kagemusha*_test.py"
+      - "configs/soranexus/taira/**"
       - "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs"
       - "scripts/run_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab.sh"
@@ -796,6 +802,12 @@ jobs:
             python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
           )
           python -m pip install --no-deps "${wheel_dir}"/iroha_python-*.whl
+      - name: Enforce the Kagemusha Python SDK boundary
+        env:
+          KAGEMUSHA_RECURSIVE_SPEND_PYTHON_BIN: python
+        run: |
+          ci/check_kagemusha_recursive_spend_python_sdk.sh
+          ci/check_kagemusha_recursive_spend_python_sdk.sh --self-test
       - run: ci/check_connect_norito_bridge_header.sh
       - run: ci/check_connect_norito_bridge_header.sh --self-test
       - run: python3 scripts/check_swift_offline_device_attestation_fixture.py
@@ -808,6 +820,17 @@ jobs:
       - run: ci/check_kagemusha_recursive_spend_policy.sh
       - run: ci/check_kagemusha_recursive_spend_policy.sh --self-test
       - run: python -m unittest scripts.tests.check_android_device_lab_slot_test
+      - name: Run Kagemusha release-tool regression suites
+        run: >-
+          python -m pytest -q
+          scripts/tests/build_kagemusha_v4_candidate_bundle_test.py
+          scripts/tests/check_kagemusha_candidate_ios_evidence_test.py
+          scripts/tests/kagemusha_source_tree_seal_test.py
+          scripts/tests/kagemusha_staged_resource_guard_test.py
+          scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py
+          scripts/tests/stage_kagemusha_candidate_android_lab_test.py
+          pytests/scripts/run_kagemusha_v4_generation_test.py
+          pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py
       - run: python -m pytest -q python/iroha_torii_client/tests/test_client.py
 
   rust:
@@ -819,6 +842,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
       - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core offline_device_attestation_policy --lib
+      - run: cargo test -p iroha_core device_registration_ --lib
+      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt
       - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
       - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
       - run: cargo test -p iroha_core sequential_append_paths --lib
@@ -831,12 +857,17 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami harden_private_tree
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
+      - run: cargo test -p iroha_kagami --bin kagami atomic_activation_policy_
+      - run: cargo test -p iroha_kagami --bin kagami atomic_activation_rejects_noncanonical_app_policy_text
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
       - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
+      - run: cargo test -p iroha_torii offline_commands --lib -- --nocapture
+      - run: cargo test -p iroha_config settlement_offline_tests -- --nocapture
+      - run: cargo test -p iroha_config torii_kagemusha_commands_tests -- --nocapture
       - run: cargo test -p connect_norito_bridge recursive_spend_v4
       - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
 

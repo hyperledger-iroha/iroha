@@ -243,7 +243,11 @@ test("published recipe documentation exactly matches the portable allowlist", ()
   assert.deepEqual(recipeRecipes.sort(), [...PORTABLE_RECIPES].sort());
 });
 
-test("package smoke rejects every non-portable or missing required recipe", () => {
+test("package smoke rejects every non-portable or missing required artifact", () => {
+  const requiredLazyPaths = [
+    "dist/smartContractDeploymentSubmit.js",
+    "dist/sumeragiTyped.js",
+  ];
   const requiredPaths = [
     "package.json",
     "browser.d.ts",
@@ -251,6 +255,7 @@ test("package smoke rejects every non-portable or missing required recipe", () =
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
+    "sumeragi-typed.d.ts",
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",
@@ -260,6 +265,7 @@ test("package smoke rejects every non-portable or missing required recipe", () =
     "dist/privacyCapabilities.js",
     "dist/sorafsOrderbookSubmission.js",
     "dist/sorafsOrderbookSubmission.d.ts",
+    ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
     "scripts/build-dist.mjs",
@@ -269,13 +275,16 @@ test("package smoke rejects every non-portable or missing required recipe", () =
   };
   assert.doesNotThrow(() => validatePackPaths(metadata));
 
-  for (const recipe of PORTABLE_RECIPES) {
+  for (const requiredPath of [...PORTABLE_RECIPES, ...requiredLazyPaths]) {
     assert.throws(
       () =>
         validatePackPaths({
-          files: metadata.files.filter((entry) => entry.path !== recipe),
+          files: metadata.files.filter((entry) => entry.path !== requiredPath),
         }),
-      new RegExp(`missing required tar entry: ${recipe.replace(".", "\\.")}`, "u"),
+      new RegExp(
+        `missing required tar entry: ${requiredPath.replaceAll(".", "\\.")}`,
+        "u",
+      ),
     );
   }
   for (const forbidden of [

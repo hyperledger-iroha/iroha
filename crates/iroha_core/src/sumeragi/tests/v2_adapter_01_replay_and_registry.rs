@@ -676,7 +676,7 @@ fn busy_deferred_input_blocks_terminal_readiness_until_serviced() {
     assert!(adapter.ready_to_finish());
 }
 #[test]
-fn saturated_normal_lane_retains_exact_local_proposal_completion() {
+fn saturated_normal_lane_suppresses_exact_serviced_local_proposal_retry() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
     assert!(startup.is_empty());
@@ -698,15 +698,13 @@ fn saturated_normal_lane_retains_exact_local_proposal_completion() {
         .local_proposal_ready(proposal_tag, manifest.clone(), &durable, &validated)
         .expect("persist the local proposal before signing")
         .into_effects();
-    let sign_tag = match sign.as_slice() {
-        [
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Proposal(_),
-            },
-        ] => *tag,
-        effects => panic!("unexpected local proposal effects: {effects:?}"),
-    };
+    assert!(matches!(
+        sign.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        },]
+    ));
     let deferred_vote = wire::Vote {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -743,120 +741,45 @@ fn saturated_normal_lane_retains_exact_local_proposal_completion() {
         saturated_inputs.push_back(distinct_filler);
     }
     adapter.deferred_inputs = saturated_inputs;
+    let next_ordinal_before_retry = adapter.deferred_admission_ordinals.next_for_test();
     let first_retry = adapter
         .local_proposal_ready(proposal_tag, manifest.clone(), &durable, &validated)
-        .expect("trusted local completion bypasses saturated normal ingress");
+        .expect("exact serviced retry is suppressed before the Busy fence");
     assert_eq!(
         first_retry.disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
-    assert_eq!(
-        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
-        (1, 1),
-        "the full manifest and both receipts have exactly one completion owner"
-    );
-    assert!(matches!(
-        adapter.deferred_completions.front(),
-        Some(DeferredInput {
-            event: reducer::Event::LocalProposalReady { .. },
-            priority: DeferredPriority::Completion,
-            ..
-        })
-    ));
-    let first_completion_ordinal = adapter
-        .deferred_completions
-        .front()
-        .expect("first completion retains an exact owner")
-        .admission_ordinal;
-    let next_ordinal_before_duplicate = adapter.deferred_admission_ordinals.next_for_test();
-    let exact_retry = adapter
-        .local_proposal_ready(proposal_tag, manifest, &durable, &validated)
-        .expect("an exact retry coalesces with its existing owner");
-    assert_eq!(
-        exact_retry.disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-    );
-    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
-    assert_eq!(
-        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
-        (1, 1),
-        "an exact retry cannot duplicate completion ownership"
-    );
-    assert_eq!(
-        adapter
-            .deferred_completions
-            .front()
-            .expect("duplicate retains the original owner")
-            .admission_ordinal,
-        first_completion_ordinal,
-        "an exact duplicate must not mint or reset its admission ordinal"
-    );
-    assert_eq!(
-        adapter.deferred_admission_ordinals.next_for_test(),
-        next_ordinal_before_duplicate,
-        "duplicate coalescing must not consume an actor ordinal"
-    );
-    let completed = adapter
-        .signature_completed(sign_tag, vec![0x81; 96])
-        .expect("signature completion drains the retained proposal retry")
-        .into_effects();
-    assert!(completed.iter().any(|effect| matches!(
-        effect,
-        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::Proposal(_),
-            ..
-        })
-    )));
-    let prepare_sign_tag = completed
-        .iter()
-        .find_map(|effect| match effect {
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Vote(vote),
-            } if vote.phase == wire::GlobalPhase::Prepare && vote.subject == proposed_subject => {
-                Some(*tag)
-            }
-            _ => None,
-        })
-        .expect("proposal completion opens its serialized Prepare signature");
-    assert_eq!(
-        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
-        (1, 1),
-        "the retry remains owned while the causally next signature is outstanding"
-    );
-    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
-    let prepare_completed = adapter
-        .signature_completed(prepare_sign_tag, vec![0x82; 96])
-        .expect("Prepare signature releases all deferred reducer work")
-        .into_effects();
-    assert!(prepare_completed.iter().any(|effect| matches!(
-        effect,
-        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::Vote(vote),
-            ..
-        }) if vote.phase == wire::GlobalPhase::Prepare
-            && vote.subject == proposed_subject
-    )));
-    assert_eq!(
-        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
-        (1, 1),
-        "signature completion cannot concatenate a second reducer macro-step"
-    );
-    assert!(adapter.deferred_work_is_serviceable());
-    assert!(
-        adapter
-            .drain_deferred()
-            .expect("service the retained local completion in its own turn")
-            .is_empty()
-    );
     assert_eq!(
         adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
         (0, 0),
-        "one explicit deferred turn retires the sole completion owner"
+        "a serviced retry must not mint a deferred completion owner"
     );
-    assert!(adapter.deferred_inputs.len() <= MAX_DEFERRED_INPUTS);
-    assert!(adapter.ingress_ready());
+    assert!(adapter.deferred_completions.is_empty());
+    assert_eq!(
+        adapter.deferred_admission_ordinals.next_for_test(),
+        next_ordinal_before_retry,
+        "serviced suppression must not consume an actor ordinal"
+    );
+    let exact_retry = adapter
+        .local_proposal_ready(proposal_tag, manifest, &durable, &validated)
+        .expect("a repeated serviced retry remains suppressed");
+    assert_eq!(
+        exact_retry.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+    );
+    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (0, 0),
+        "a repeated serviced retry cannot create completion ownership"
+    );
+    assert!(adapter.deferred_completions.is_empty());
+    assert_eq!(
+        adapter.deferred_admission_ordinals.next_for_test(),
+        next_ordinal_before_retry,
+        "repeated serviced suppression must not consume an actor ordinal"
+    );
     assert!(!adapter.fail_closed);
 }
 #[test]
@@ -1128,7 +1051,7 @@ fn vote_signed_callback_is_restart_scoped_before_control_delivery() {
     );
 }
 #[test]
-fn recovered_validation_authority_uses_locked_proposal_round() {
+fn recovered_validation_authority_uses_locked_certificate_round() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
@@ -1163,7 +1086,7 @@ fn recovered_validation_authority_uses_locked_proposal_round() {
     let locked_subject = subject(0xAA);
     let wire_prepare = wire::QuorumCertificate {
         round: certificate_round,
-        proposal_round,
+        proposal_round: certificate_round,
         phase: wire::GlobalPhase::Prepare,
         subject: locked_subject,
         execution_commitment: execution_commitment(0xAA),
@@ -1214,8 +1137,8 @@ fn recovered_validation_authority_uses_locked_proposal_round() {
         .recovered_validation_authority(&[])
         .expect("mint the recovered lock frontier");
     assert_eq!(authority.len(), 1);
-    assert!(authority.authorizes(proposal_round, locked_subject));
-    assert!(!authority.authorizes(certificate_round, locked_subject));
+    assert!(authority.authorizes(certificate_round, locked_subject));
+    assert!(!authority.authorizes(proposal_round, locked_subject));
 }
 #[test]
 fn timeout_signed_callback_is_restart_scoped_before_control_delivery() {
@@ -1782,13 +1705,17 @@ fn wal_record_authority_rejects_forged_certificates_in_every_record_variant() {
         }],
     };
     let proposal_round = wire::ConsensusRound { view: 1, ..round };
-    let proposal_subject = subject(0xD8);
+    let proposal_payload = b"chunk";
+    let mut proposal_subject = subject(0xD8);
+    proposal_subject.payload_hash = Hash::new(proposal_payload);
+    let proposal_chunks = wire::encode_payload_chunks(context.da_layout, proposal_payload)
+        .expect("encode canonical fixture chunks");
     let proposal_manifest = wire::PayloadManifest::derive(
         &context,
         proposal_round,
         proposal_subject,
-        5,
-        &[b"chunk".to_vec()],
+        u64::try_from(proposal_payload.len()).expect("fixture payload length fits u64"),
+        &proposal_chunks,
     )
     .expect("valid fixture manifest");
     let proposal = wire::Proposal {
@@ -1863,13 +1790,18 @@ fn wal_record_authority_rejects_forged_certificates_in_every_record_variant() {
         height: successor.height,
         view: 0,
     };
-    let successor_subject = subject(0xD9);
+    let successor_payload = b"chunk";
+    let mut successor_subject = subject(0xD9);
+    successor_subject.payload_hash = Hash::new(successor_payload);
+    successor_subject.parent_block_hash = Some(certified_subject.block_hash);
+    let successor_chunks = wire::encode_payload_chunks(successor.da_layout, successor_payload)
+        .expect("encode canonical successor fixture chunks");
     let successor_manifest = wire::PayloadManifest::derive(
         &successor,
         successor_round,
         successor_subject,
-        5,
-        &[b"chunk".to_vec()],
+        u64::try_from(successor_payload.len()).expect("fixture payload length fits u64"),
+        &successor_chunks,
     )
     .expect("valid successor fixture manifest");
     let parent_proposal = wire::Proposal {

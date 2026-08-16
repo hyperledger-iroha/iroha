@@ -62,6 +62,7 @@ impl Reducer {
             return Ok(StepOutcome::applied(effects));
         }
         if current
+            && !view_closed
             && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
             && self.local_certified_candidate_body_eligible()
         {

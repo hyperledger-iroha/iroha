@@ -30,6 +30,9 @@ paths = {
     "data_model_component": Path(
         "crates/iroha_data_model/src/offline/kagemusha_model.rs"
     ),
+    "data_model_verifier": Path(
+        "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
+    ),
     "rust": Path("crates/connect_norito_bridge/src/lib.rs"),
     "rust_platform_jni": Path("crates/connect_norito_bridge/src/platform_jni.rs"),
     "rust_platform_jni_part_1": Path(
@@ -116,6 +119,27 @@ if texts["data_model"].count(data_model_include) != 1:
 texts["data_model"] = texts["data_model"].replace(
     data_model_include,
     texts["data_model_component"],
+    1,
+)
+data_model_verifier_module = "mod kagemusha_release_verifier;"
+if texts["data_model"].count(data_model_verifier_module) != 1:
+    raise SystemExit(
+        f"{paths['data_model']}: expected exactly one reviewed "
+        f"{paths['data_model_verifier'].name} module"
+    )
+for marker in (
+    "const VERIFIER_IDENTITY_SCHEMA_V4",
+    "pub fn kagemusha_recursive_spend_verifier_key_id_v4",
+):
+    if texts["data_model_verifier"].count(marker) != 1:
+        raise SystemExit(
+            f"{paths['data_model_verifier']}: expected exactly one {marker!r}"
+        )
+texts["data_model"] = texts["data_model"].replace(
+    data_model_verifier_module,
+    "mod kagemusha_release_verifier {\n"
+    + texts["data_model_verifier"]
+    + "\n}",
     1,
 )
 
@@ -1274,6 +1298,16 @@ if mode == "--self-test":
             "// reviewed Kagemusha model component detached",
         ),
         "expected exactly one reviewed kagemusha_model.rs include",
+    )
+
+    run_negative(
+        "reviewed release-verifier component cannot detach",
+        lambda fixture: replace_once(
+            fixture / paths["data_model_verifier"],
+            "const VERIFIER_IDENTITY_SCHEMA_V4",
+            "const DETACHED_VERIFIER_IDENTITY_SCHEMA_V4",
+        ),
+        "expected exactly one 'const VERIFIER_IDENTITY_SCHEMA_V4'",
     )
 
     run_negative(

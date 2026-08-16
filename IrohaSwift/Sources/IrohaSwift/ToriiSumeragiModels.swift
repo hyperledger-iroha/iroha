@@ -122,6 +122,45 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
     }
 }
 
+/// Exact Merkle root and non-zero leaf count of canonical lane-finality statements.
+public struct ToriiSumeragiV2LaneFinalityManifestCommitment:
+    Decodable, Sendable, Equatable
+{
+    public static let maximumLeafCount: UInt64 = 1024
+
+    public let root: String
+    public let leafCount: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case root
+        case leafCount = "leaf_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: ["root", "leaf_count"],
+            context: "Sumeragi v2 lane-finality manifest commitment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        root = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .root),
+            key: .root,
+            container: container,
+            field: "Sumeragi v2 lane-finality manifest root"
+        )
+        leafCount = try container.decode(UInt64.self, forKey: .leafCount)
+        guard leafCount > 0, leafCount <= Self.maximumLeafCount else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .leafCount,
+                in: container,
+                debugDescription:
+                    "Sumeragi v2 lane-finality manifest leaf_count exceeds the non-empty bound"
+            )
+        }
+    }
+}
+
 /// Exact merge-ledger entry identity authenticated by Sumeragi v2 finality.
 public struct ToriiSumeragiV2MergeCarrierCommitment: Decodable, Sendable, Equatable {
     public static let canonicalVersion: UInt16 = 1
@@ -173,6 +212,7 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: String
     public let nativeAmxApplicationManifestCount: UInt32
+    public let laneFinalityManifest: ToriiSumeragiV2LaneFinalityManifestCommitment?
     public let mergeCarrier: ToriiSumeragiV2MergeCarrierCommitment?
     public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: String
@@ -187,6 +227,7 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             "native_amx_application_manifest_version"
         case nativeAmxApplicationManifestRoot = "native_amx_application_manifest_root"
         case nativeAmxApplicationManifestCount = "native_amx_application_manifest_count"
+        case laneFinalityManifest = "lane_finality_manifest"
         case mergeCarrier = "merge_carrier"
         case executedBlockWireLen = "executed_block_wire_len"
         case executedBlockWireHash = "executed_block_wire_hash"
@@ -201,6 +242,7 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
+                "lane_finality_manifest",
                 "merge_carrier",
                 "executed_block_wire_len",
                 "executed_block_wire_hash",
@@ -279,6 +321,20 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                     "Sumeragi v2 Native AMX application-manifest count/root projection is not canonical"
             )
         }
+        guard container.contains(.laneFinalityManifest) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.laneFinalityManifest,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "Sumeragi v2 lane_finality_manifest is mandatory on the wire"
+                )
+            )
+        }
+        laneFinalityManifest = try container.decodeIfPresent(
+            ToriiSumeragiV2LaneFinalityManifestCommitment.self,
+            forKey: .laneFinalityManifest
+        )
         guard container.contains(.mergeCarrier) else {
             throw DecodingError.keyNotFound(
                 CodingKeys.mergeCarrier,
@@ -710,7 +766,7 @@ public struct ToriiSumeragiV2CommitQcStatus: Decodable, Sendable, Equatable {
               (validatorCount - 1) % 3 == 0,
               signerCount <= validatorCount,
               minSigners == validatorCount - (validatorCount - 1) / 3,
-              signerCount >= minSigners,
+              signerCount == minSigners,
               totalPower == UInt64(validatorCount),
               signedPower == UInt64(signerCount)
         else {

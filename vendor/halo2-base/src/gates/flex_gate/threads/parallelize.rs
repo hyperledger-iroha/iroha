@@ -1,6 +1,6 @@
 use rayon::prelude::*;
 
-use crate::{utils::ScalarField, Context};
+use crate::{Context, utils::ScalarField};
 
 use super::SinglePhaseCoreManager;
 
@@ -18,10 +18,14 @@ where
 {
     // to prevent concurrency issues with context id, we generate all the ids first
     let thread_count = builder.thread_count();
-    let mut ctxs =
-        (0..input.len()).map(|i| builder.new_context(thread_count + i)).collect::<Vec<_>>();
-    let outputs: Vec<_> =
-        input.into_par_iter().zip(ctxs.par_iter_mut()).map(|(input, ctx)| f(ctx, input)).collect();
+    let mut ctxs = (0..input.len())
+        .map(|i| builder.new_context(thread_count + i))
+        .collect::<Vec<_>>();
+    let outputs: Vec<_> = input
+        .into_par_iter()
+        .zip(ctxs.par_iter_mut())
+        .map(|(input, ctx)| f(ctx, input))
+        .collect();
     // we collect the new threads to ensure they are a FIXED order, otherwise the circuit will not be deterministic
     builder.threads.append(&mut ctxs);
 

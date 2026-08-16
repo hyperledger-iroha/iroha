@@ -7,7 +7,7 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=55
+readonly expected_negative_control_count=56
 readonly source_closure_resolver="${repo_root}/ci/resolve_sumeragi_v2_sdk_source_closure.py"
 readonly source_closure_manifest="${repo_root}/ci/sumeragi_v2_sdk_source_closure.json"
 
@@ -515,7 +515,7 @@ case "$surface" in
     assert_openapi_replay_marker
     ;;
   python)
-    observed_test_count=62
+    observed_test_count=63
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
@@ -532,7 +532,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=60
+    observed_test_count=61
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1

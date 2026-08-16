@@ -212,15 +212,15 @@ impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         domain::DomainId,
         kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
         name::Name,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
     use std::str::FromStr as _;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

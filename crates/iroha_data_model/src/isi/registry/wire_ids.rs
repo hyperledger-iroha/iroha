@@ -443,9 +443,10 @@ pub(super) const ALL: &[BuiltInWireId] = &[
 ];
 /// Register every built-in instruction using its canonical typed codec constructor.
 pub(super) fn register_all() -> InstructionRegistry {
-    ALL.iter().fold(InstructionRegistry::new(), |registry, entry| {
-        (entry.register)(registry)
-    })
+    ALL.iter()
+        .fold(InstructionRegistry::new(), |registry, entry| {
+            (entry.register)(registry)
+        })
 }
 /// Apply every canonical built-in wire identifier after all constructors are registered.
 pub(super) fn remap_all(registry: InstructionRegistry) -> InstructionRegistry {

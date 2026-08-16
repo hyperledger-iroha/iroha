@@ -1707,10 +1707,16 @@ THEOREM ResponsiveReceiptQuorumBuildsValidTc ==
     /\ StrongInductiveInvariant
     /\ ReceivedTimeoutVotePoolInvariant
     /\ ResponsiveTimeoutReceiptQuorumAt(target, roundView)
-    => TCValid(TC(context, roundView,
-                   TimeoutVotesAt(target, roundView)))
-BY ResponsiveReceiptsMakeDualQuorum,
-   TimeoutPoolMakesVotesDisjoint,
+    /\ ExactCertificateQuorum(
+         CurrentEpoch,
+         TimeoutSignerSet(
+           CanonicalTimeoutVotes(
+             CurrentEpoch, TimeoutVotesAt(target, roundView))))
+    => TCValid(
+         TC(context, roundView,
+            CanonicalTimeoutVotes(
+              CurrentEpoch, TimeoutVotesAt(target, roundView))))
+BY TimeoutPoolMakesVotesDisjoint,
    SameViewCertificateUniqueness,
    SMTT(60)
    DEF StrongInductiveInvariant, Safety, TypeInvariant,
@@ -1719,6 +1725,6 @@ BY ResponsiveReceiptsMakeDualQuorum,
        ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
        TimeoutVotesAt, TimeoutSignerSet, TimeoutHighsConflictFree,
        AuthenticatedHighRef, HighRefValid, TC, TCValid,
-       TimeoutVoteAt, CurrentVoters, CurrentEpoch
+       CanonicalTimeoutVotes, TimeoutVoteAt, CurrentVoters, CurrentEpoch
 
 =============================================================================

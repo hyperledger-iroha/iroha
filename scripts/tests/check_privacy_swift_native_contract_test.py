@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -75,6 +78,78 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             source.index('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only'),
             source.index('"${SWIFT_BIN}" test'),
         )
+        blocker = "external-lock requalification"
+        self.assertIn(blocker, source)
+        for invocation in (
+            'DEVELOPER_DIR="$(xcode-select -p)"',
+            "xcodebuild -version",
+            'bash "${APPLE_ARTIFACT_CHECKER}" --apple-only',
+            '"${SWIFTC_BIN}" --version',
+            '"${SWIFT_BIN}" test',
+        ):
+            self.assertLess(source.index(blocker), source.index(invocation))
+
+    def test_swift_requalification_blocker_stops_direct_execution(self) -> None:
+        source = read("ci/check_privacy_swift_sdk.sh")
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root, artifact, scratch, tools = (
+                base / name for name in ("repo", "artifact", "scratch", "bin")
+            )
+            for directory in (root / "scripts", artifact, scratch, tools):
+                directory.mkdir(parents=True)
+            (artifact / "NoritoBridge.xcframework").mkdir()
+            tracked, release, log = root / "Cargo.lock", base / "Cargo.lock", base / "calls"
+            tracked.write_text("tracked\n", encoding="utf-8")
+            release.write_text("release\n", encoding="utf-8")
+            fake_python = tools / "python"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                encoding="utf-8",
+            )
+            (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
+            tool_stub = (
+                '#!/usr/bin/env bash\necho "${0##*/}" >>"$PRIVACY_TEST_LOG"\n'
+                '[[ "${0##*/}" == xcode-select ]] && echo /Applications/Xcode.app/Contents/Developer\n'
+            )
+            for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
+                (tools / name).write_text(tool_stub, encoding="utf-8")
+            (root / "scripts/check_mobile_sdk_artifacts.sh").write_text(
+                '#!/usr/bin/env bash\necho artifact-checker >>"$PRIVACY_TEST_LOG"\n',
+                encoding="utf-8",
+            )
+            for executable in (*tools.iterdir(), root / "scripts/check_mobile_sdk_artifacts.sh"):
+                executable.chmod(0o700)
+            environment = {
+                **os.environ,
+                "PATH": f"{tools}:{os.environ['PATH']}",
+                "PRIVACY_TEST_LOG": str(log),
+                "PRIVACY_SWIFT_SDK_ROOT": str(root),
+                "PRIVACY_SWIFT_SDK_SWIFTC_BIN": str(tools / "swiftc"),
+                "PRIVACY_SWIFT_SDK_SWIFT_BIN": str(tools / "swift"),
+                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(artifact),
+                "MOBILE_SDK_SWIFT_SCRATCH_DIR": str(scratch),
+                "MOBILE_SDK_PYTHON_BINARY": str(fake_python),
+                "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(release),
+            }
+            gate = base / "gate.sh"
+            gate.write_text(source, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(gate)], env=environment, text=True, capture_output=True
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("external-lock requalification", result.stderr)
+            self.assertFalse(log.exists(), "blocker allowed artifact/Xcode execution")
+
+            marker = source.index("external-lock requalification")
+            exit_at = source.index("exit 1", marker)
+            gate.write_text(source[:exit_at] + ": # negative control" + source[exit_at + 6 :], encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(gate)], env=environment, text=True, capture_output=True
+            )
+            self.assertIn("xcode-select", log.read_text(encoding="utf-8"))
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
         source = read("IrohaSwift/Package.swift")

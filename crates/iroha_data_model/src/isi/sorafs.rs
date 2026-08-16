@@ -23,6 +23,8 @@ use crate::sorafs::{
         ReserveProviderTermsV1,
     },
 };
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
 isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
@@ -208,10 +210,7 @@ impl crate::seal::Instruction for UnregisterProviderOwner {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct EstablishSorafsProviderOwnerV1 {
     /// Provider identifier that must not already have an owner.
@@ -231,10 +230,7 @@ pub struct EstablishSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct RebindSorafsProviderOwnerV1 {
     /// Provider identifier whose owner will be replaced.
@@ -256,10 +252,7 @@ pub struct RebindSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct RemoveSorafsProviderOwnerV1 {
     /// Provider identifier whose owner will be removed.
@@ -279,10 +272,7 @@ pub struct RemoveSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(
@@ -654,10 +644,7 @@ impl crate::seal::Instruction for DecideSorafsReserveAppeal {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairClaimV1 {
     /// Requested lease duration measured from the committing block time.
     pub lease_duration_ms: u64,
@@ -676,10 +663,7 @@ pub struct SorafsRepairClaimV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairRenewV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -700,10 +684,7 @@ pub struct SorafsRepairRenewV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairCompleteV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -725,10 +706,7 @@ pub struct SorafsRepairCompleteV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairFailV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -750,10 +728,7 @@ pub struct SorafsRepairFailV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairEscalateV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -775,10 +750,7 @@ pub struct SorafsRepairEscalateV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "action", content = "value", rename_all = "snake_case")
@@ -861,10 +833,7 @@ impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SorafsPdpProofOutcomeSubmissionV1 {
     /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
@@ -883,10 +852,7 @@ pub struct SorafsPdpProofOutcomeSubmissionV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SorafsPotrProofOutcomeSubmissionV1 {
     /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
@@ -908,10 +874,7 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(

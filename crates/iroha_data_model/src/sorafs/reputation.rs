@@ -2645,22 +2645,26 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             &self.0.source_time_unix_ms,
             &self.0.payload,
         ];
-        let leading_len = leading_fields.into_iter().try_fold(0usize, |total, field| {
-            let field_len = field.encoded_len_exact()?;
-            total
-                .checked_add(norito::core::len_prefix_len(field_len))?
-                .checked_add(field_len)
-        })?;
+        let leading_len = leading_fields
+            .into_iter()
+            .try_fold(0usize, |total, field| {
+                let field_len = field.encoded_len_exact()?;
+                total
+                    .checked_add(norito::core::len_prefix_len(field_len))?
+                    .checked_add(field_len)
+            })?;
         let digest_len = self.0.authority_policy_digest.len();
         let leading_len = leading_len
             .checked_add(norito::core::len_prefix_len(digest_len))?
             .checked_add(digest_len)?;
-        trailing_fields.into_iter().try_fold(leading_len, |total, field| {
-            let field_len = field.encoded_len_exact()?;
-            total
-                .checked_add(norito::core::len_prefix_len(field_len))?
-                .checked_add(field_len)
-        })
+        trailing_fields
+            .into_iter()
+            .try_fold(leading_len, |total, field| {
+                let field_len = field.encoded_len_exact()?;
+                total
+                    .checked_add(norito::core::len_prefix_len(field_len))?
+                    .checked_add(field_len)
+            })
     }
 }
 fn source_id(domain: &[u8], native_id: [u8; 32]) -> ReputationJournalSourceIdV1 {

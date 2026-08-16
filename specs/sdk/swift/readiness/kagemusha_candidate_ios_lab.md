@@ -10,7 +10,11 @@ The accepted testnet policy is
 attestation are intentionally not part of this Taira-testnet policy because
 they can require network access. Evidence must state `app_attest_used:false`;
 it must never fabricate an attestation. A production policy must define its
-own hardware-attestation requirement.
+own hardware-attestation requirement. The production-readiness promotion gate
+therefore rejects this testnet receipt. The distinct
+[`kagemusha_production_ios_evidence.md`](kagemusha_production_ios_evidence.md)
+contract now verifies the safe App Attest assertion substrate, but remains
+fail-closed until its documented Apple-chain and freshness checks are complete.
 
 ## Preconditions
 

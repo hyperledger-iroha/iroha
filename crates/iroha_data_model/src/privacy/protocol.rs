@@ -5,10 +5,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PrivacyP256PointV1(
     /// The exact 33-byte compressed SEC1 value.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -53,10 +50,7 @@ impl AsRef<[u8; 33]> for PrivacyP256PointV1 {
 }
 /// Canonical twisted-ElGamal ciphertext `(C_L, C_R)` over P-256.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyP256CiphertextV1 {
     /// `C_L = pk^r`.
@@ -66,10 +60,7 @@ pub struct PrivacyP256CiphertextV1 {
 }
 /// Governed policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPolicyNamespaceV1 {
     /// Exact policy identity.
@@ -77,10 +68,7 @@ pub struct PrivacyPolicyNamespaceV1 {
 }
 /// Pool namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPoolNamespaceV1 {
     /// Exact pool identity.
@@ -88,10 +76,7 @@ pub struct PrivacyPoolNamespaceV1 {
 }
 /// Issuer, admitted-identity registry, and policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     /// Exact credential issuer.
@@ -106,10 +91,7 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
 /// This scope owns the single CA-membership root derived from a complete
 /// trust store. It deliberately excludes certificate-policy identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyTrustAnchorNamespaceV1 {
     /// Exact trust-anchor issuer.
@@ -119,10 +101,7 @@ pub struct PrivacyTrustAnchorNamespaceV1 {
 ///
 /// This scope owns policy-specific statement state and the corresponding issuer CRL root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
     /// Exact trust-anchor issuer.
@@ -132,10 +111,7 @@ pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
 }
 /// Governed parameter namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyParameterNamespaceV1 {
     /// Exact parameter-set identity.
@@ -143,10 +119,7 @@ pub struct PrivacyParameterNamespaceV1 {
 }
 /// Issuer and selective-disclosure policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyIssuerPolicyNamespaceV1 {
     /// Exact credential issuer.
@@ -156,10 +129,7 @@ pub struct PrivacyIssuerPolicyNamespaceV1 {
 }
 /// Pool and private-program namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPoolProgramNamespaceV1 {
     /// Exact private-note pool.
@@ -169,10 +139,7 @@ pub struct PrivacyPoolProgramNamespaceV1 {
 }
 /// Protocol-specific portion of a replay, output, or root namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "scope", content = "value", deny_unknown_fields)
@@ -213,10 +180,7 @@ pub enum PrivacyNamespaceComponentV1 {
 }
 /// Closed namespace for one protocol's replay, output, and root state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyNamespaceV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -457,10 +421,7 @@ pub enum PrivacyNamespaceValidationError {
 }
 /// Authority responsible for advancing one root role after initialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "management", content = "value", deny_unknown_fields)
@@ -473,10 +434,7 @@ pub enum PrivacyRootManagementV1 {
 }
 /// Semantic role of one canonical root inside a protocol namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "role", content = "value", deny_unknown_fields)
@@ -564,10 +522,7 @@ impl PrivacyRootRoleV1 {
 }
 /// Governance payload publishing one canonical privacy root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyRootPublicationV1 {
     /// Exact protocol-scoped root namespace.
@@ -688,10 +643,7 @@ pub enum PrivacyRootPublicationValidationError {
 /// pinned Orchard V3 empty-tree root and installs it at [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`],
 /// so governance cannot choose an alternate accumulator origin.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyOrchardPoolBootstrapV1 {
     /// Stable Orchard pool identifier.
@@ -794,10 +746,7 @@ pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
 /// the exact encodings; the native FCMP++ engine performs the curve, subgroup, and non-identity
 /// checks before governance or proof admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpOutputTupleV1 {
     /// One-time output key `O`.
@@ -872,10 +821,7 @@ pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
 /// Odd layer counts identify Selene roots and even layer counts identify Helios roots. The layer
 /// count is cryptographically significant and cannot be inferred from the compressed point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpTreeRootV1 {
     /// Number of alternating curve-tree layers.
@@ -938,10 +884,7 @@ pub enum PrivacyFcmpTreeRootValidationErrorV1 {
 /// compare those bytes exactly. `C~` and the key image `L` remain
 /// statement-only public inputs to the complete relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpInputPublicV1 {
     /// Rerandomized output key `O~`.
@@ -1050,10 +993,7 @@ pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
 /// The output identifier is a ledger index only. The statement and native curve tree always retain
 /// and consume the corresponding full `(O, I, C)` tuple.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpEncryptedOutputV1 {
     /// Cryptographic recipient identity.
@@ -1068,10 +1008,7 @@ pub struct PrivacyFcmpEncryptedOutputV1 {
 }
 /// Immutable governance payload for one FCMP++ complete-output-set pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpPoolBootstrapV1 {
     /// Stable FCMP++ output-set identifier.
@@ -1083,10 +1020,7 @@ pub struct PrivacyFcmpPoolBootstrapV1 {
 }
 /// Immutable governance payload for one private-IVM program pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
     /// Stable private-note pool identifier.
@@ -1104,10 +1038,7 @@ pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
 }
 /// Immutable governance payload for one PQ-MASP note pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPqMaspPoolBootstrapV1 {
     /// Stable PQ-MASP note-pool identifier.
@@ -1123,10 +1054,7 @@ pub struct PrivacyPqMaspPoolBootstrapV1 {
 /// the complete canonical genesis commitment set at epoch one, preventing governance from selecting
 /// an alternate accumulator origin.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "protocol", content = "bootstrap", deny_unknown_fields)
@@ -1444,10 +1372,7 @@ pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
 }
 /// One canonical encrypted account in a PGC account-state bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPgcAccountV1 {
     /// Canonical compressed P-256 account public key.
@@ -1472,10 +1397,7 @@ pub enum PrivacyPgcAccountPointV1 {
 /// exact decode and require byte-for-byte canonical re-encoding before core
 /// derives [`PrivacyPgcBootstrapProofDigestV1`] for persisted provenance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PrivacyPgcBootstrapProofBytesV1 {
     /// Exact native proof encoding.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1561,10 +1483,7 @@ pub enum PrivacyPgcBootstrapProofValidationError {
 }
 /// Governed bootstrap payload for a complete PGC encrypted account table.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPgcAccountBootstrapV1 {
     /// Exact Anonymous PGC pool namespace.
@@ -1740,10 +1659,7 @@ pub enum PrivacyLimitFieldV1 {
 /// the Taira hard ceilings. Raising a ceiling requires an explicit data-model
 /// release so old validators cannot silently admit a larger resource surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusLimitsV1 {
     /// Maximum privacy actions in one transaction.
@@ -2050,10 +1966,7 @@ pub enum PrivacyConsensusLimitsTighteningErrorV1 {
 }
 /// Scheduled successor for the singleton chain-wide privacy policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusPolicyTighteningV1 {
     /// Exact block which admitted this schedule.
@@ -2085,10 +1998,7 @@ impl PrivacyConsensusPolicyTighteningV1 {
 }
 /// Singleton chain-wide privacy admission policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusPolicyV1 {
     /// Limits effective for the current committed state.
@@ -2254,10 +2164,7 @@ fn validate_privacy_policy_schedule_heights_v1(
 }
 /// Proposed lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProposedLifecycleV1 {
     /// Height at which the proposal became canonical.
@@ -2267,10 +2174,7 @@ pub struct PrivacyProposedLifecycleV1 {
 }
 /// Active lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyActiveLifecycleV1 {
     /// Height at which the proposal became canonical.
@@ -2282,10 +2186,7 @@ pub struct PrivacyActiveLifecycleV1 {
 }
 /// Suspended lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacySuspendedLifecycleV1 {
     /// Height at which the proposal became canonical.
@@ -2297,10 +2198,7 @@ pub struct PrivacySuspendedLifecycleV1 {
 }
 /// Retired lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyRetiredLifecycleV1 {
     /// Height at which the proposal became canonical.
@@ -2312,10 +2210,7 @@ pub struct PrivacyRetiredLifecycleV1 {
 }
 /// Governed lifecycle of a protocol activation record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "state", content = "record", deny_unknown_fields)
@@ -2564,10 +2459,7 @@ pub enum PrivacyLifecycleTransitionError {
 }
 /// Assurance classification for a first-release privacy activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "assurance", content = "value", deny_unknown_fields)
@@ -2579,10 +2471,7 @@ pub enum PrivacyAssuranceV1 {
 }
 /// Activation-specific Anonymous PGC policy limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AnonymousPgcActivationLimitsV1 {
     /// Maximum anonymity-set size `n` for this activation.
@@ -2592,10 +2481,7 @@ pub struct AnonymousPgcActivationLimitsV1 {
 }
 /// Activation-specific `VeRange` aggregation policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VeRangeActivationLimitsV1 {
     /// Maximum aggregation count `T` admitted by this activation.
@@ -2603,10 +2489,7 @@ pub struct VeRangeActivationLimitsV1 {
 }
 /// Activation-specific ZK-AMS admission and provisioning policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ZkAmsActivationLimitsV1 {
     /// Maximum ordered admission anchors in one batch settlement.
@@ -2616,10 +2499,7 @@ pub struct ZkAmsActivationLimitsV1 {
 }
 /// Activation-specific Jindo batched univariate-opening policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct JindoActivationLimitsV1 {
     /// Maximum polynomial commitments per statement.
@@ -2627,10 +2507,7 @@ pub struct JindoActivationLimitsV1 {
 }
 /// Activation-specific Orchard action policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct OrchardActivationLimitsV1 {
     /// Maximum one-to-one spend/output actions per statement.
@@ -2638,10 +2515,7 @@ pub struct OrchardActivationLimitsV1 {
 }
 /// Activation-specific FCMP++ transfer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct FcmpActivationLimitsV1 {
     /// Maximum consumed outputs per transfer.
@@ -2651,10 +2525,7 @@ pub struct FcmpActivationLimitsV1 {
 }
 /// Activation-specific native IVM private-note policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IvmPrivateNoteActivationLimitsV1 {
     /// Maximum consumed notes per action.
@@ -2664,10 +2535,7 @@ pub struct IvmPrivateNoteActivationLimitsV1 {
 }
 /// Activation-specific PQ-MASP policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PqMaspActivationLimitsV1 {
     /// Maximum consumed notes per action.
@@ -2677,10 +2545,7 @@ pub struct PqMaspActivationLimitsV1 {
 }
 /// Protocol-specific governed limits carried by an activation record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "protocol", content = "limits", deny_unknown_fields)
@@ -3082,10 +2947,7 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
 }
 /// Scheduled component-wise tightening for one protocol activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProtocolLimitsTighteningV1 {
     /// Exact block which admitted this schedule.
@@ -3134,10 +2996,7 @@ pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
 }
 /// Governed activation record for one exact privacy protocol implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProtocolActivationRecordV1 {
     /// Exact protocol identity.
@@ -3292,10 +3151,7 @@ pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
 /// deliberately contains no lifecycle or readiness boolean: governance state
 /// is carried separately by [`PrivacyCapabilityRowV1::activation`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyCompiledProfileSnapshotV1 {
     /// Closed protocol identity.
@@ -3432,10 +3288,7 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
 }
 /// Typed failure canonicalizing a compiled public-statement schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "schema_error", content = "detail", deny_unknown_fields)
@@ -3450,10 +3303,7 @@ pub enum PrivacyCompiledStatementSchemaErrorV1 {
 }
 /// Typed reason why one closed protocol has no executable compiled profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "reason", content = "detail", deny_unknown_fields)
@@ -3471,10 +3321,7 @@ pub enum PrivacyCompiledProfileUnavailableReasonV1 {
 }
 /// Closed result of obtaining one locally compiled privacy profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", deny_unknown_fields)
@@ -3493,10 +3340,7 @@ pub enum PrivacyCompiledProfileResultV1 {
 /// It describes only what the current binary was compiled to execute. Authoritative readiness comes
 /// exclusively from a committed [`PrivacyExact12CapabilityManifestV1`] returned by Torii.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyCompiledProfileCatalogRowV1 {
     /// Closed protocol identity for this row.
@@ -3552,10 +3396,7 @@ pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
 /// governance state and not evidence that a protocol is live on any network.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.compiled-profile-catalog.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyCompiledProfileCatalogV1 {
     /// Exact catalog schema version.
@@ -3652,10 +3493,7 @@ pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
 }
 /// One protocol row in the canonical public capability snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyCapabilityRowV1 {
     /// Closed protocol identity for this row.
@@ -3986,10 +3824,7 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
 /// discriminant order. The ordering rule makes missing, duplicate, and
 /// reordered rows fail closed without accepting aliases.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyCapabilitySnapshotV1 {
     /// Exact snapshot schema version.

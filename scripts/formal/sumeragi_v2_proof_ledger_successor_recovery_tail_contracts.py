@@ -1546,8 +1546,8 @@ if decided_subject.is_some() {
         ),
         (
             "runtime",
-            "body_available_rebind_rejects_two_persistent_roots_before_mutation",
-            "rejects two durable roots before either serialized owner changes",
+            "body_available_rejects_second_persistent_lifecycle_before_mutation",
+            "rejects a second durable producer lifecycle before the original owner changes",
         ),
         (
             "runtime",
@@ -3738,13 +3738,38 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "adapter",
         proposal_factory,
-        "recovered local-Proposal owner factory handoff",
+        "recovered local-Proposal owner factory dispatch",
         (
             "RecoveredWalStartupAuthorityV1::ControlSign(control)",
+            "Self::open_recovered_control_authority_branch(",
+            "verified, adapter, effects, control, body_store,",
+        ),
+    )
+    proposal_control = item(
+        "adapter", "open_recovered_control_authority_branch"
+    )
+    require_order(
+        "adapter",
+        proposal_control,
+        "recovered local-Proposal owner projection handoff",
+        (
             "RecoveredLifecycleLocalProposalAttemptV1::from_control(&control)",
-            "project_recovered_wal_control_sign(&verified, control,)",
-            "PreparedRecoveredWalStartupAuthorityV1::ControlSign { projection: projected, local_proposal_attempt, }",
-            "PreparedRecoveredWalStartupAuthorityV1::ControlSign { projection: control, local_proposal_attempt, }",
+            "project_recovered_wal_control_sign(&verified, control)",
+            "Self::ensure_recovered_body_store_context(&body_store, &verified)",
+            "Self::open_recovered_control_projection_branch(",
+            "projected, local_proposal_attempt, body_store,",
+        ),
+    )
+    proposal_projection = item(
+        "adapter", "open_recovered_control_projection_branch"
+    )
+    require_order(
+        "adapter",
+        proposal_projection,
+        "recovered local-Proposal owner factory handoff",
+        (
+            "Self::open_recovered_non_apply_stores(",
+            "ProductionLifecycleOwnerV1::open_recovered_control_startup(",
             "ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt( adapter, effects, local_proposal_attempt, )",
         ),
     )

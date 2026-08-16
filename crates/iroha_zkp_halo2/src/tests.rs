@@ -394,8 +394,8 @@ fn standalone_norito_decoders_are_bounded_exact_and_alignment_safe() {
 }
 #[test]
 fn standalone_params_wire_never_carries_generator_material() {
-    #[derive(norito::derive::NoritoSerialize)]
     #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
+    #[derive(norito::derive::NoritoSerialize)]
     struct RetiredInlineParams {
         version: u16,
         curve_id: u16,

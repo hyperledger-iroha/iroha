@@ -507,6 +507,49 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         verified_successor.verified_predecessor_context(),
         Some(&parent_context)
     );
+    let conflicting_commitment = execution_commitment(0x22);
+    assert_ne!(conflicting_commitment, parent_qc.execution_commitment);
+    let conflicting_preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject: parent_subject,
+        execution_commitment: conflicting_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let conflicting_shares = keys[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), &conflicting_preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let conflicting_refs = conflicting_shares
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let mut conflicting_parent_qc = parent_qc.clone();
+    conflicting_parent_qc.execution_commitment = conflicting_commitment;
+    conflicting_parent_qc.aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&conflicting_refs)
+            .expect("aggregate conflicting parent CommitQC");
+    verify_quorum_certificate(&parent_context, &conflicting_parent_qc, &proofs)
+        .expect("conflicting parent CommitQC remains independently valid");
+    let mut conflicting_successor = successor.clone();
+    conflicting_successor.parent_commit_qc = Some(conflicting_parent_qc);
+    assert!(matches!(
+        VerifiedHeightContext::successor(
+            conflicting_successor,
+            proofs.clone(),
+            &artifact,
+            &receipt,
+            &proofs,
+        ),
+        Err(AdapterError::ParentContextMismatch)
+    ));
     let mut substituted_execution_policy = successor.clone();
     substituted_execution_policy.execution_policy_hash =
         Hash::new(b"substituted successor execution policy");
@@ -591,6 +634,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         view: 0,
     };
     let mut proposal_subject = subject(0x72);
+    proposal_subject.parent_block_hash = Some(parent_subject.block_hash);
     let proposal_body = b"parent-auth-body".to_vec();
     proposal_subject.payload_hash = Hash::new(&proposal_body);
     let manifest = encode_payload(&successor, proposal_round, proposal_subject, &proposal_body)
@@ -618,7 +662,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
     let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("successor-safety.wal"),
         verified_successor.clone(),
-        None,
+        Some(proposer),
         reducer::Generation::new(2),
         [0x62; 32],
         fingerprints(),

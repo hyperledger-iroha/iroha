@@ -666,11 +666,11 @@ impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_primitives::numeric::Numeric;
     use crate::isi::test_support::{
         assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

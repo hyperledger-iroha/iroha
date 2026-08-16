@@ -9,9 +9,9 @@ hand to SREs.
 
 | Scenario label | Peers | Purpose |
 |----------------|-------|---------|
-| `peers4` | 4 | Baseline `f = 1` finality, queue-pressure, and DA recovery run. |
-| `peers7` | 7 | Exercises Set A/B fallback and DA availability with `f = 2`. |
-| `peers10` | 10 | Exercises the larger proxy-tail/fallback path and DA/RBC pressure with `f = 3`. |
+| `peers4` | 4 | Baseline `f = 1` finality and finite queue-pressure run. |
+| `peers7` | 7 | Exercises signed Set A/B geometry with `f = 2`. |
+| `peers10` | 10 | Exercises the larger signed committee and queue load with `f = 3`. |
 
 Revision 4 admits only exact `3f + 1` validator counts from 4 through 31.
 The matrix runner rejects custom 5-, 6-, 8-, or otherwise nonconforming peer
@@ -19,9 +19,9 @@ counts before starting Cargo or creating partial scenario evidence.
 
 The stress scenarios executed for each row map to
 `integration_tests/tests/sumeragi_npos_performance.rs` (baseline finality,
-queue backpressure, DA/RBC store pressure, and chunk loss). The runner names
-only tests that exist in the revision-4 harness; retired V1 collector-retry and
-pacemaker-jitter test names are rejected by omission.
+and transaction-queue backpressure). The runner names only tests that exist in
+the revision-4 harness; retired V1 global RBC, collector-retry, and adaptive
+pacemaker test names are rejected by omission.
 
 ### Running the Matrix
 

@@ -19,8 +19,8 @@ import {
   buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
-  __sumeragiNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
+import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
 import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
 import {
   resolveToriiClientConfig,
@@ -722,6 +722,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     native_amx_application_manifest_root:
       NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
     native_amx_application_manifest_count: 0,
+    lane_finality_manifest: null,
     merge_carrier: null,
     executed_block_wire_len: 123,
     executed_block_wire_hash: fakeSumeragiHash(0x37),
@@ -11214,51 +11215,45 @@ test("getSumeragiStatusTyped rejects invalid Native AMX application manifests", 
   }
 });
 
-test("getSumeragiStatusTyped requires an exact merge carrier projection", async () => {
+test("getSumeragiStatusTyped requires exact lane-finality and merge projections", async () => {
+  const commitmentOf = (value) => value.last_commit_qc.certificate.execution_commitment;
   const ordinary = createSumeragiV2StatusPayload();
   let status = await sumeragiClientForPayload(ordinary).getSumeragiStatusTyped();
-  assert.equal(status.last_commit_qc.certificate.execution_commitment.merge_carrier, null);
-
-  const carried = createSumeragiV2StatusPayload();
-  carried.last_commit_qc.certificate.execution_commitment.merge_carrier = {
-    version: 1,
-    entry_hash: fakeSumeragiHash(0x39),
-  };
-  status = await sumeragiClientForPayload(carried).getSumeragiStatusTyped();
   assert.deepEqual(
-    status.last_commit_qc.certificate.execution_commitment.merge_carrier,
-    { version: 1, entry_hash: fakeSumeragiHash(0x39) },
+    [commitmentOf(status).lane_finality_manifest, commitmentOf(status).merge_carrier],
+    [null, null],
   );
-
-  const mutations = [
-    (commitment) => { delete commitment.merge_carrier; },
-    (commitment) => { commitment.merge_carrier = "carrier"; },
-    (commitment) => {
-      commitment.merge_carrier = { version: 2, entry_hash: fakeSumeragiHash(0x39) };
-    },
-    (commitment) => {
-      commitment.merge_carrier = { entry_hash: fakeSumeragiHash(0x39) };
-    },
-    (commitment) => {
-      commitment.merge_carrier = { version: 1 };
-    },
-    (commitment) => {
-      commitment.merge_carrier = { version: 1, entry_hash: "not-a-hash" };
-    },
-    (commitment) => {
-      commitment.merge_carrier = {
-        version: 1,
-        entry_hash: fakeSumeragiHash(0x39),
-        future: true,
-      };
-    },
+  const carried = createSumeragiV2StatusPayload();
+  Object.assign(commitmentOf(carried), {
+    lane_finality_manifest: { root: fakeSumeragiHash(0x38), leaf_count: 1 },
+    merge_carrier: { version: 1, entry_hash: fakeSumeragiHash(0x39) },
+  });
+  status = await sumeragiClientForPayload(carried).getSumeragiStatusTyped();
+  assert.deepEqual(commitmentOf(status).lane_finality_manifest, {
+    root: fakeSumeragiHash(0x38), leaf_count: 1,
+  });
+  assert.deepEqual(commitmentOf(status).merge_carrier, {
+    version: 1, entry_hash: fakeSumeragiHash(0x39),
+  });
+  const invalidCases = [
+    ["lane_finality_manifest", undefined],
+    ["lane_finality_manifest", { leaf_count: 1 }],
+    ["lane_finality_manifest", { root: fakeSumeragiHash(0x38), leaf_count: 0 }],
+    ["lane_finality_manifest", { root: fakeSumeragiHash(0x38), leaf_count: 1025 }],
+    ["merge_carrier", undefined],
+    ["merge_carrier", "carrier"],
+    ["merge_carrier", { version: 2, entry_hash: fakeSumeragiHash(0x39) }],
+    ["merge_carrier", { entry_hash: fakeSumeragiHash(0x39) }],
+    ["merge_carrier", { version: 1 }],
+    ["merge_carrier", { version: 1, entry_hash: "not-a-hash" }],
+    ["merge_carrier", { version: 1, entry_hash: fakeSumeragiHash(0x39), future: true }],
   ];
-  for (const mutate of mutations) {
+  for (const [field, value] of invalidCases) {
     const payload = createSumeragiV2StatusPayload();
-    mutate(payload.last_commit_qc.certificate.execution_commitment);
-    await assert.rejects(
-      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
-    );
+    const commitment = commitmentOf(payload);
+    if (value === undefined) delete commitment[field];
+    else commitment[field] = value;
+    await assert.rejects(() => sumeragiClientForPayload(payload).getSumeragiStatusTyped());
   }
 });
 
@@ -11370,6 +11365,7 @@ test("Sumeragi execution commitment declarations expose current mandatory fields
     "native_amx_application_manifest_version: number;",
     "native_amx_application_manifest_root: string;",
     "native_amx_application_manifest_count: number;",
+    "lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;",
     "merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;",
     "executed_block_wire_len: ToriiU64;",
   ]) {
@@ -11381,6 +11377,7 @@ test("Sumeragi execution commitment declarations expose current mandatory fields
   assert.ok(carrierMatch, "missing ToriiSumeragiV2MergeCarrierCommitment declaration");
   assert.match(carrierMatch[1], /version: 1;/u);
   assert.match(carrierMatch[1], /entry_hash: string;/u);
+  assert.match(declarations, /ToriiSumeragiV2LaneFinalityManifestCommitment \{[^}]*root: string;[^}]*leaf_count: number;/u);
 });
 
 test("getSumeragiStatusTyped preserves exact proposal rounds", async () => {
@@ -11754,14 +11751,12 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   assert.equal(bootstrapStatus.last_committed_height, 9);
   assert.equal(bootstrapStatus.last_committed_subject, null);
   assert.equal(bootstrapStatus.last_commit_qc, null);
-
   const wrongSubject = createSumeragiV2StatusPayload();
   wrongSubject.last_commit_qc.certificate.subject.block_hash = fakeSumeragiHash(0x77);
   await assert.rejects(
     () => sumeragiClientForPayload(wrongSubject).getSumeragiStatusTyped(),
     /does not certify the committed subject/,
   );
-
   const wrongHeight = createSumeragiV2StatusPayload();
   wrongHeight.last_commit_qc.certificate.round.height = 8;
   wrongHeight.last_commit_qc.certificate.proposal_round.height = 8;
@@ -11769,7 +11764,6 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
     () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
     /does not certify the committed subject/,
   );
-
   const missingProposalRound = createSumeragiV2StatusPayload();
   delete missingProposalRound.last_commit_qc.certificate.proposal_round;
   await assert.rejects(
@@ -11799,14 +11793,18 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
     () => sumeragiClientForPayload(futureProposalRound).getSumeragiStatusTyped(),
     /proposal_round must equal round/,
   );
-
   const underpowered = createSumeragiV2StatusPayload();
   underpowered.last_commit_qc.signed_power = 2;
   await assert.rejects(
     () => sumeragiClientForPayload(underpowered).getSumeragiStatusTyped(),
-    /does not satisfy its frozen dual quorum/,
+    /exact frozen certificate quorum/,
   );
-
+  const overcomplete = createSumeragiV2StatusPayload();
+  Object.assign(overcomplete.last_commit_qc, { signer_count: 4, signed_power: 4 });
+  await assert.rejects(
+    () => sumeragiClientForPayload(overcomplete).getSumeragiStatusTyped(),
+    /exact frozen certificate quorum/,
+  );
   const weightedNpos = createSumeragiV2StatusPayload();
   weightedNpos.height_context.mode = { mode: "npos", details: null };
   weightedNpos.height_context.quorum.total_power = 5;
@@ -11814,7 +11812,6 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
     () => sumeragiClientForPayload(weightedNpos).getSumeragiStatusTyped(),
     /quorum is not canonical/,
   );
-
   const invalidGeometry = createSumeragiV2StatusPayload();
   invalidGeometry.height_context.validator_count = 5;
   invalidGeometry.height_context.quorum.min_signers = 4;
@@ -11823,7 +11820,6 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
     () => sumeragiClientForPayload(invalidGeometry).getSumeragiStatusTyped(),
     /quorum is not canonical/,
   );
-
   const missingQc = createSumeragiV2StatusPayload({ last_commit_qc: null });
   await assert.rejects(
     () => sumeragiClientForPayload(missingQc).getSumeragiStatusTyped(),
@@ -12198,7 +12194,7 @@ test("getSumeragiDiagnosticsTyped rejects nested receipt identity and QC tamperi
         native_amx_receipts: [underQuorum],
       })],
     })).getSumeragiDiagnosticsTyped(),
-    /signers_bitmap does not meet quorum/,
+    /signers_bitmap does not carry the exact quorum/,
   );
 
   const malformedPop = createNativeAmxReceiptFixture();
@@ -12291,15 +12287,17 @@ test("getSumeragiDiagnosticsTyped rejects adversarial lane evidence", async () =
     () => sumeragiDiagnosticsClientForPayload(ownershipPayload).getSumeragiDiagnosticsTyped(),
     /accepted_candidate_indices must be strictly ordered/,
   );
-
-  const committedPayload = createSumeragiDiagnosticsPayload({
-    committed_lane_blocks: [createCommittedLaneBlock({ commit_qc_signer_count: 2 })],
-  });
-  await assert.rejects(
-    () => sumeragiDiagnosticsClientForPayload(committedPayload).getSumeragiDiagnosticsTyped(),
-    /impossible certified quorum/,
-  );
-
+  for (const field of ["prepare_qc_signer_count", "commit_qc_signer_count"]) {
+    for (const signerCount of [2, 4]) {
+      const committedPayload = createSumeragiDiagnosticsPayload({
+        committed_lane_blocks: [createCommittedLaneBlock({ [field]: signerCount })],
+      });
+      await assert.rejects(
+        () => sumeragiDiagnosticsClientForPayload(committedPayload).getSumeragiDiagnosticsTyped(),
+        /impossible certified quorum/,
+      );
+    }
+  }
   const mismatchedPayloadFlag = createSumeragiDiagnosticsPayload({
     committed_lane_blocks: [createCommittedLaneBlock({
       execution_status: "awaiting_executable_payload",
@@ -12310,7 +12308,6 @@ test("getSumeragiDiagnosticsTyped rejects adversarial lane evidence", async () =
     () => sumeragiDiagnosticsClientForPayload(mismatchedPayloadFlag).getSumeragiDiagnosticsTyped(),
     /execution_status disagrees with executable_payload_available/,
   );
-
   const sessionPayload = createSumeragiDiagnosticsPayload({
     lane_block_sessions: [createLaneBlockSession({ prepare_vote_count: 5 })],
   });

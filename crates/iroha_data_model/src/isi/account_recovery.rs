@@ -166,6 +166,7 @@ impl_decode_one_field!(FinalizeAccountRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::{
         account::{
             AccountAlias, AccountAliasDomain, AccountController, AccountRecoveryPolicy,
@@ -174,7 +175,6 @@ mod tests {
         nexus::DataSpaceId,
     };
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use std::num::NonZeroU64;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

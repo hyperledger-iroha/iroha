@@ -180,6 +180,7 @@ impl crate::seal::Instruction for CompareAndSetPrimaryAccountAlias {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::assert_slice_roundtrip;
     use crate::{
         alias_setup::{
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
@@ -192,7 +193,6 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use crate::isi::test_support::assert_slice_roundtrip;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked alias ISI fixture keypair");

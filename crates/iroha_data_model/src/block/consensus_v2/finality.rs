@@ -831,6 +831,20 @@ mod tests {
         decoded.validate().expect("roundtrip remains valid");
     }
     #[test]
+    fn artifact_rejects_commit_qc_signer_superset() {
+        let mut artifact = artifact();
+        artifact.commit_qc.signers.push(3);
+        assert_eq!(
+            artifact.validate(),
+            Err(V2FinalityValidationError::InvalidCommitCertificate(
+                ValidationError::SignerCountMismatch {
+                    expected: 3,
+                    actual: 4,
+                }
+            ))
+        );
+    }
+    #[test]
     fn artifact_rejects_legacy_v3_layout() {
         let mut legacy = artifact();
         legacy.format_version = 3;

@@ -5,6 +5,8 @@
 //! relay payloads deterministically. Pending in-memory envelopes omit authority;
 //! authoritative use resolves the compact reference against Kura's verified
 //! Sumeragi-v2 finality artifact and checks the statement inclusion proof.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     asset::AssetDefinitionId,
     block::{
@@ -50,10 +52,7 @@ fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
 }
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneRelayEnvelope {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -104,10 +103,7 @@ pub struct LaneRelayEnvelope {
 /// Validators can therefore derive and sign it before either proof is attached,
 /// while every merge-relevant effect remains committed by the resulting QC.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneFinalityStatement {
     /// Statement format version.
     pub version: u8,
@@ -139,10 +135,7 @@ pub struct LaneFinalityStatement {
 /// The full finality artifact remains in Kura. Persisted relay state carries
 /// only its hash, global height, and an `O(log lanes)` inclusion proof.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneFinalityAuthorityV1 {
     /// Authority format version; exactly one in the first release.
@@ -182,10 +175,7 @@ impl Ord for LaneFinalityStatement {
 }
 /// Presence state for structurally valid relay `FastPQ` metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "status", content = "state")]
 pub enum LaneRelayFastpqMaterialStatus {
     /// The relay carries no structurally valid `FastPQ` metadata.
@@ -207,10 +197,7 @@ impl Ord for LaneRelayEnvelope {
 }
 /// Stable business-facing reference for a previously verified lane relay envelope.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneRelayEnvelopeRef {
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
@@ -236,10 +223,7 @@ impl LaneRelayEnvelopeRef {
 }
 /// Verified relay record persisted for restricted-source business effects.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VerifiedLaneRelayRecord {
     /// Canonical relay reference used by business flows.
     pub relay_ref: LaneRelayEnvelopeRef,
@@ -269,10 +253,7 @@ pub struct VerifiedLaneRelayRecord {
 }
 /// Proof-backed cross-lane spend allocation for one sponsor-program vault asset.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VerifiedFeeSponsorVaultAllocation {
     /// Exact sponsor program authorized to consume the allocation.
     pub program_id: FeeSponsorProgramId,
@@ -308,10 +289,7 @@ pub struct VerifiedFeeSponsorVaultAllocation {
 }
 /// `FastPQ` proof metadata attached to a lane relay envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneFastpqProofMaterial {
     /// Deterministic digest of the proof payload.
     pub proof_digest: Hash,
@@ -364,10 +342,7 @@ pub fn lane_relay_fastpq_claim_digest(
 }
 /// Canonical source-ledger claim authorized by a sponsor-vault spend lease.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorVaultAllocationClaim {
     /// Exact sponsor program authorized to spend the allocation.
@@ -443,10 +418,7 @@ pub fn fee_sponsor_vault_allocation_claim_digest(
 /// required for consensus, but it provides a stable Norito-encoded bundle that operators can
 /// export when investigating invalid or conflicting relay proofs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneRelayEvidenceBundle {
     /// Lane relay envelope that triggered the failure.
     pub envelope: LaneRelayEnvelope,
@@ -460,10 +432,7 @@ pub struct LaneRelayEvidenceBundle {
 ///
 /// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneRelayEmergencyValidatorSet {
     /// Live consensus peers temporarily allowed to fill missing lane-relay committee slots.
     pub peers: Vec<PeerId>,
@@ -868,11 +837,10 @@ impl LaneRelayEnvelope {
                 .try_add(&receipt.xor_variance)
                 .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
         }
-        if !settlement.receipts.is_empty()
-            && (total_local_amount != settlement.total_local_amount
-                || total_xor_due != settlement.total_xor_due
-                || total_xor_after_haircut != settlement.total_xor_after_haircut
-                || total_xor_variance != settlement.total_xor_variance)
+        if total_local_amount != settlement.total_local_amount
+            || total_xor_due != settlement.total_xor_due
+            || total_xor_after_haircut != settlement.total_xor_after_haircut
+            || total_xor_variance != settlement.total_xor_variance
         {
             return Err(LaneRelayError::SettlementTotalsMismatch);
         }
@@ -1680,6 +1648,30 @@ mod tests {
             .verify()
             .expect_err("mismatched receipt totals must fail verification");
         assert_eq!(err, LaneRelayError::SettlementTotalsMismatch);
+    }
+    #[test]
+    fn verify_requires_zero_totals_when_settlement_receipts_are_empty() {
+        let mut envelope = build_envelope(6);
+        envelope.settlement_commitment.receipts.clear();
+        envelope.settlement_commitment.tx_count = 0;
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("empty-receipt settlement hashes");
+        assert_eq!(
+            envelope
+                .verify()
+                .expect_err("empty receipts cannot authenticate nonzero aggregate totals"),
+            LaneRelayError::SettlementTotalsMismatch
+        );
+
+        envelope.settlement_commitment.total_local_amount = Quantity::zero();
+        envelope.settlement_commitment.total_xor_due = Quantity::zero();
+        envelope.settlement_commitment.total_xor_after_haircut = Quantity::zero();
+        envelope.settlement_commitment.total_xor_variance = Quantity::zero();
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("zero-valued empty settlement hashes");
+        envelope
+            .verify()
+            .expect("empty receipts with zero aggregate totals remain valid");
     }
     #[test]
     fn settlement_tx_count_covers_union_of_receipt_sources() {

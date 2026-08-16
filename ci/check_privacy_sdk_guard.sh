@@ -904,10 +904,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "2b374ca01219f9abab30726b9a46c57a7598926b889c4995ae762c9af6fd4d27",
+        "privacy_swift_sdk_parse": "7f7765d55844744f84df43017b29fe1539e42b700ce86f6e16507cec6a243ecf",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "527591fa158d75bd9349106e6382dbbf09a87e77b4f60bb640fc2b871aa51b27",
-        "privacy_javascript_sdk_tests": "17b52dcc4caff1134d2b9e1731d76f39b71d33cc360038bcf81e8120cf93fbfc",
+        "privacy_csharp_sdk_tests": "9d449aa16a205b2faf73847b2e863c18c673d51e831efb83396d9e196d021604",
+        "privacy_javascript_sdk_tests": "2a4fe6a4326a2987e8093b5a2a8919b3265364af8ec40287f6ad8d33db701112",
     }
 
     require(
@@ -2096,7 +2096,9 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL"
         in lock_helper_source
         and "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME" in lock_helper_source
-        and "IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=absent"
+        and "PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256"
+        in lock_helper_source
+        and "PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256"
         in lock_helper_source
         and '"CARGO",' in lock_helper_source
         and "privacy SDK CI Cargo selector must be absent before wrapper selection"
@@ -2112,7 +2114,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "printf '%s\\n' \"${cargo_wrapper_directory}\""
         )
         == 1,
-        "privacy SDK CI helper must generate only the authenticated external lock and install toolchain/wrapper PATH ordering",
+        "privacy SDK CI helper must preserve the tracked root, authenticate the distinct external release lock, and install toolchain/wrapper PATH ordering",
         errors,
     )
     require(

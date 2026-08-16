@@ -50,6 +50,16 @@ test("npm package surface includes exact license and no backup documentation", (
 
   const manifest = readPackManifest();
   const packagedPaths = manifest.files.map((entry) => entry.path);
+  for (const lazyChunk of [
+    "dist/smartContractDeploymentSubmit.js",
+    "dist/sumeragiTyped.js",
+  ]) {
+    assert.equal(
+      packagedPaths.filter((entry) => entry === lazyChunk).length,
+      1,
+      `package must contain exactly one ${lazyChunk}`,
+    );
+  }
   assert.equal(
     packagedPaths.filter((entry) => entry === "LICENSE").length,
     1,

@@ -10,8 +10,7 @@ use std::{
 };
 const DEFAULT_CUDA_GENCODE: &str = "arch=compute_86,code=sm_86";
 const ISO20022_SCHEMA_SPEC_PATH: &str = "src/assets/iso20022_schema_v1/schema_v1.tsv";
-const ISO20022_SCHEMA_ASSET: &str =
-    include_str!("src/assets/iso20022_schema_v1/schema_v1.tsv");
+const ISO20022_SCHEMA_ASSET: &str = include_str!("src/assets/iso20022_schema_v1/schema_v1.tsv");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CudaPtxMode {
     Bundled,
@@ -75,9 +74,7 @@ fn decode_table_field(raw: &str, line: usize, column: usize) -> Result<String, B
             continue;
         }
         let escaped = characters.next().ok_or_else(|| {
-            format!(
-                "{ISO20022_SCHEMA_SPEC_PATH}:{line}:{column} ends with an incomplete escape"
-            )
+            format!("{ISO20022_SCHEMA_SPEC_PATH}:{line}:{column} ends with an incomplete escape")
         })?;
         decoded.push(match escaped {
             '\\' => '\\',
@@ -108,9 +105,7 @@ fn iso_field_kind(kind: &str, values: &str) -> Result<String, Box<dyn Error>> {
         "identifier:bic" => Some("FieldKind::Identifier(IdentifierKind::Bic)"),
         "identifier:mic" => Some("FieldKind::Identifier(IdentifierKind::Mic)"),
         "identifier:iban" => Some("FieldKind::Identifier(IdentifierKind::Iban)"),
-        "identifier:currency" => {
-            Some("FieldKind::Identifier(IdentifierKind::Currency)")
-        }
+        "identifier:currency" => Some("FieldKind::Identifier(IdentifierKind::Currency)"),
         "enum" => None,
         _ => return Err(format!("unknown ISO 20022 field kind `{kind}`").into()),
     };
@@ -146,9 +141,7 @@ fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
     if lines.next() != Some("ivm-iso20022-schema-v1\t19\t193\t183") {
         return Err("unexpected ISO 20022 schema version/count header".into());
     }
-    if lines.next()
-        != Some("record\towner\tkey\trequirement\tmax_occurs\tkind\tvalues\ttarget")
-    {
+    if lines.next() != Some("record\towner\tkey\trequirement\tmax_occurs\tkind\tvalues\ttarget") {
         return Err("unexpected ISO 20022 schema column header".into());
     }
     let mut schemas = Vec::<IsoSchema>::with_capacity(19);
@@ -172,7 +165,9 @@ fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
         match columns[0].as_str() {
             "schema" => {
                 if columns[3..].iter().any(|value| value != "-") {
-                    return Err(format!("schema record on line {line} has non-sentinel fields").into());
+                    return Err(
+                        format!("schema record on line {line} has non-sentinel fields").into(),
+                    );
                 }
                 let owner = &columns[1];
                 if !owner
@@ -189,10 +184,10 @@ fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
                     || parts.next().is_some()
                     || !message_types.insert(message_type.clone())
                 {
-                    return Err(
-                        format!("invalid or duplicate ISO 20022 message type `{message_type}`")
-                            .into(),
-                    );
+                    return Err(format!(
+                        "invalid or duplicate ISO 20022 message type `{message_type}`"
+                    )
+                    .into());
                 }
                 schemas.push(IsoSchema {
                     owner: owner.clone(),
@@ -209,12 +204,16 @@ fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
                     return Err(format!("field record on line {line} is outside its owner").into());
                 }
                 if !matches!(columns[3].as_str(), "required" | "optional") {
-                    return Err(format!("field record on line {line} has invalid requirement").into());
+                    return Err(
+                        format!("field record on line {line} has invalid requirement").into(),
+                    );
                 }
                 if columns[4] != "none" {
                     let maximum = columns[4].parse::<usize>()?;
                     if maximum == 0 {
-                        return Err(format!("field record on line {line} has a zero maximum").into());
+                        return Err(
+                            format!("field record on line {line} has a zero maximum").into()
+                        );
                     }
                 }
                 iso_field_kind(&columns[5], &columns[6])?;
@@ -238,9 +237,7 @@ fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
                 let schema = schemas
                     .last_mut()
                     .ok_or("ISO 20022 alias appears before its schema record")?;
-                if columns[1] != schema.owner
-                    || columns[3..7].iter().any(|value| value != "-")
-                {
+                if columns[1] != schema.owner || columns[3..7].iter().any(|value| value != "-") {
                     return Err(format!("alias record on line {line} is outside its owner").into());
                 }
                 if schema.aliases.iter().any(|(alias, _)| alias == &columns[2]) {

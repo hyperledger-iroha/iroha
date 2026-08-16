@@ -2177,9 +2177,9 @@ pub enum MergeLedgerCommitError {
         /// Signer index whose PoP failed.
         signer: u32,
     },
-    /// Merge QC does not meet the quorum threshold.
-    #[error("merge ledger qc quorum not met: observed={observed}, required={required}")]
-    MergeQCInsufficientQuorum {
+    /// Merge QC does not carry exactly the canonical signer count.
+    #[error("merge ledger qc signer count mismatch: expected exactly {required}, got {observed}")]
+    MergeQCSignerCountMismatch {
         /// Number of signers observed.
         observed: usize,
         /// Minimum quorum required.
@@ -26646,7 +26646,7 @@ impl State {
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = iroha_config::parameters::defaults::nexus::ENABLED;
-        let lane_incarnations = derive_static_lane_incarnations(&network_id, &nexus.lane_catalog);
+        let lane_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
         let lane_incarnation_lineage = lane_incarnations
             .iter()
             .map(|(&lane_id, &incarnation)| {
@@ -27150,8 +27150,7 @@ impl State {
         Ok(s)
     }
     pub(crate) fn reseed_static_lane_incarnations(&mut self) {
-        let incarnations =
-            derive_static_lane_incarnations(&self.network_id, &self.nexus.get_mut().lane_catalog);
+        let incarnations = derive_static_lane_incarnations(&self.nexus.get_mut().lane_catalog);
         let activation_heights = incarnations
             .keys()
             .copied()
@@ -27221,7 +27220,7 @@ impl State {
     #[cfg(test)]
     pub(crate) fn reseed_static_lane_incarnations_for_tests(&self) {
         let lane_catalog = self.nexus.read().lane_catalog.clone();
-        let incarnations = derive_static_lane_incarnations(&self.network_id, &lane_catalog);
+        let incarnations = derive_static_lane_incarnations(&lane_catalog);
         let activation_heights = incarnations
             .keys()
             .copied()
@@ -40369,8 +40368,8 @@ impl State {
             }
         }
         let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
-        if signers.len() < required {
-            return Err(MergeLedgerCommitError::MergeQCInsufficientQuorum {
+        if signers.len() != required {
+            return Err(MergeLedgerCommitError::MergeQCSignerCountMismatch {
                 observed: signers.len(),
                 required,
             });
@@ -40660,7 +40659,7 @@ impl State {
                 "configured-primary replay preflight mismatch: expected {durable_hash}, attempted {configured_hash}"
             )));
         }
-        let geometry = configured_primary_replay_geometry(network_id, configured_lane_catalog)?;
+        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
         let lineage_root = lane_incarnation_lineage_root(network_id, &geometry.lineage);
         kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
             &geometry.lane_config,
@@ -40700,8 +40699,7 @@ impl State {
             configured_lane_catalog,
         )?;
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
-        let geometry =
-            configured_primary_replay_geometry(&self.network_id, configured_lane_catalog)?;
+        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
         self.kura
             .establish_or_verify_configured_primary_geometry_anchor(
                 geometry.lane_config.primary(),
@@ -40792,15 +40790,14 @@ impl State {
                     "restored Nexus runtime has no physical primary incarnation".to_owned(),
                 )
             })?;
-        let expected_incarnation =
-            derive_static_lane_incarnations(&self.network_id, &configured_primary_catalog)
-                .get(&LaneId::SINGLE)
-                .copied()
-                .ok_or_else(|| {
-                    LaneLifecycleError::ConfiguredCatalogBaseline(
-                        "configured primary catalog has no physical primary incarnation".to_owned(),
-                    )
-                })?;
+        let expected_incarnation = derive_static_lane_incarnations(&configured_primary_catalog)
+            .get(&LaneId::SINGLE)
+            .copied()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured primary catalog has no physical primary incarnation".to_owned(),
+                )
+            })?;
         if incarnation != expected_incarnation {
             return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
                 "restored physical primary lane zero incarnation mismatch: expected {expected_incarnation}, restored {incarnation}"
@@ -41122,8 +41119,7 @@ impl State {
             &previous_lane_incarnation_activation_heights,
             &previous_lane_incarnation_lineage,
         )?;
-        let static_incarnations =
-            derive_static_lane_incarnations(&self.network_id, &nexus.lane_catalog);
+        let static_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
         let updated_catalog_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog);
         let mut updated_lane_incarnations = BTreeMap::new();
@@ -43569,7 +43565,7 @@ struct ConfiguredPrimaryReplayGeometry {
     lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     primary_incarnation: Hash,
 }
-const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
+const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
 const CONFIG_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:config:v1\0";
 const LIFECYCLE_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:lifecycle:v1\0";
 const LANE_INCARNATION_LINEAGE_ROOT_DOMAIN: &[u8] =
@@ -43622,17 +43618,20 @@ fn synthetic_lane_lifecycle_header_hash(
         encoded.as_slice(),
     ]))
 }
-fn derive_static_lane_incarnations(
-    network_id: &iroha_data_model::NetworkId,
-    catalog: &LaneCatalog,
-) -> BTreeMap<LaneId, Hash> {
+/// Derive the generation-zero lane identities committed by genesis.
+///
+/// Exact network identity is deliberately absent: `NetworkId` is the final signed-genesis hash,
+/// while these values participate in the Nexus/AMX commitment embedded in that same signed block.
+/// Including it would require a cryptographic fixed point. Transactions and live height and
+/// availability carriers authenticate `NetworkId` separately, while later lifecycle derivation
+/// remains network-bound, so this non-circular genesis seed does not weaken replay protection.
+pub(crate) fn derive_static_lane_incarnations(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
     let catalog_hash = merge_lane_catalog_hash(catalog);
     catalog
         .lanes()
         .iter()
         .map(|lane| {
             let encoded = (
-                network_id.clone(),
                 catalog_hash,
                 lane.id,
                 lane_without_autoscale_drain_metadata(lane),
@@ -43646,7 +43645,6 @@ fn derive_static_lane_incarnations(
         .collect()
 }
 fn configured_primary_replay_geometry(
-    network_id: &iroha_data_model::NetworkId,
     configured_lane_catalog: &LaneCatalog,
 ) -> Result<ConfiguredPrimaryReplayGeometry, LaneLifecycleError> {
     let primary = configured_lane_catalog
@@ -43660,7 +43658,7 @@ fn configured_primary_replay_geometry(
         })?;
     let catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
         .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
-    let incarnations = derive_static_lane_incarnations(network_id, &catalog);
+    let incarnations = derive_static_lane_incarnations(&catalog);
     let primary_incarnation = incarnations.get(&LaneId::SINGLE).copied().ok_or_else(|| {
         LaneLifecycleError::ConfiguredCatalogBaseline(
             "configured primary catalog does not contain lane zero".to_owned(),
@@ -53690,7 +53688,7 @@ mod tiered_snapshot_diff_tests {
             Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
                 .expect("initialize authenticated SCCP archive Kura");
         let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
-        let incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog);
+        let incarnations = derive_static_lane_incarnations(&catalog);
         let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
         kura.establish_or_verify_configured_primary_geometry_anchor(
             lane_config.primary(),

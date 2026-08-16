@@ -1,28 +1,28 @@
 use crate::{
+    AssignedValue, ContextCell,
     halo2_proofs::{
         arithmetic::Field,
         circuit::{Layouter, SimpleFloorPlanner},
         dev::MockProver,
         halo2curves::bn256::Fr,
-        plonk::{keygen_pk, keygen_vk, Assigned, Circuit, ConstraintSystem, Error, FirstPhase},
+        plonk::{Assigned, Circuit, ConstraintSystem, Error, FirstPhase, keygen_pk, keygen_vk},
     },
     virtual_region::{
         copy_constraints::EXTERNAL_CELL_TYPE_ID, lookups::basic::BasicDynLookupConfig,
     },
-    AssignedValue, ContextCell,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use test_log::test;
 
 use crate::{
     gates::{
-        flex_gate::{threads::SinglePhaseCoreManager, FlexGateConfig, FlexGateConfigParams},
         GateChip, GateInstructions,
+        flex_gate::{FlexGateConfig, FlexGateConfigParams, threads::SinglePhaseCoreManager},
     },
     utils::{
+        ScalarField,
         fs::gen_srs,
         testing::{check_proof, gen_proof},
-        ScalarField,
     },
     virtual_region::manager::VirtualRegionManager,
 };
@@ -60,7 +60,13 @@ impl<F: ScalarField, const CYCLES: usize> RAMCircuit<F, CYCLES> {
     ) -> Self {
         let cpu = SinglePhaseCoreManager::new(witness_gen_only, Default::default());
         let mem_access = vec![];
-        Self { memory, ptrs, cpu, mem_access, params }
+        Self {
+            memory,
+            ptrs,
+            cpu,
+            mem_access,
+            params,
+        }
     }
 
     fn compute(&mut self) {
@@ -129,8 +135,10 @@ impl<F: ScalarField, const CYCLES: usize> Circuit<F> for RAMCircuit<F, CYCLES> {
                 cell: Some(ContextCell::new(EXTERNAL_CELL_TYPE_ID, 0, i)),
             };
             let value = Assigned::Trivial(*value);
-            let value =
-                AssignedValue { value, cell: Some(ContextCell::new(EXTERNAL_CELL_TYPE_ID, 1, i)) };
+            let value = AssignedValue {
+                value,
+                cell: Some(ContextCell::new(EXTERNAL_CELL_TYPE_ID, 1, i)),
+            };
             [idx, value]
         });
 
@@ -149,7 +157,9 @@ impl<F: ScalarField, const CYCLES: usize> Circuit<F> for RAMCircuit<F, CYCLES> {
         layouter.assign_region(
             || "copy constraints",
             |mut region| {
-                self.cpu.copy_manager.assign_raw(&config.cpu.constants, &mut region);
+                self.cpu
+                    .copy_manager
+                    .assign_raw(&config.cpu.constants, &mut region);
                 Ok(())
             },
         )
@@ -176,7 +186,9 @@ fn test_ram_mock() {
         num_fixed: 1,
     };
     circuit.params.num_lu_sets = CYCLES / usable_rows + 1;
-    MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    MockProver::run(k, &circuit, vec![])
+        .unwrap()
+        .assert_satisfied();
 }
 
 #[test]
@@ -209,7 +221,10 @@ fn test_ram_mock_failed_access() {
         num_fixed: 1,
     };
     circuit.params.num_lu_sets = CYCLES / usable_rows + 1;
-    MockProver::run(k, &circuit, vec![]).unwrap().verify().unwrap();
+    MockProver::run(k, &circuit, vec![])
+        .unwrap()
+        .verify()
+        .unwrap();
 }
 
 #[test]

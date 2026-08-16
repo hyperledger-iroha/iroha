@@ -6,6 +6,8 @@
 //! envelopes describe DNS/route pushes, guard/exit selection, and metering receipts so exit
 //! gateways can emit deterministic Norito payloads for governance.
 use super::RelayId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
 use blake3;
 use core::fmt;
@@ -48,10 +50,7 @@ pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
 /// quote and session identifiers makes address uniqueness an explicit protocol invariant instead of
 /// an accidental property of a truncated hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnAddressSlotV1(u32);
 impl VpnAddressSlotV1 {
     /// Construct a slot after checking the V1 allocation range.
@@ -620,10 +619,7 @@ pub struct VpnCoverPlanEntryV1 {
 }
 /// Exit class advertised for billing/telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "exit_class", content = "value", rename_all = "kebab-case")]
 pub enum VpnExitClassV1 {
     /// Standard exit class (balanced latency/bandwidth).
@@ -850,10 +846,7 @@ pub struct VpnUsageVoucherEnvelopeV1 {
 }
 /// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnTariffV1 {
     /// Maximum nominal escrowed lease fee.
     pub lease_fee: Quantity,
@@ -866,10 +859,7 @@ pub struct VpnTariffV1 {
 }
 /// Durable quote policy needed to reconstruct VPN sessions and receipts from WSV.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnQuotePolicyV1 {
     /// Exit class selected by the client and priced by the quote.
     pub exit_class: VpnExitClassV1,
@@ -923,10 +913,7 @@ pub struct VpnQuotePolicyV1 {
 /// inside this body. The client submits the signed body as one opaque policy
 /// decision instead of reconstructing security-sensitive fields locally.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnQuoteBodyV1 {
     /// Exact genesis-derived network on which this quote may open a lease.
     pub network_id: NetworkId,
@@ -962,10 +949,7 @@ pub struct VpnQuoteBodyV1 {
 }
 /// Operator signature over a canonical, domain-separated VPN quote body.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnSignedQuoteV1 {
     /// Complete quote body covered by the operator signature.
     pub body: VpnQuoteBodyV1,
@@ -1092,10 +1076,7 @@ impl VpnTariffV1 {
 }
 /// Lifecycle status for an on-chain VPN lease escrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum VpnLeaseStatusV1 {
     /// XOR is locked in protocol custody and awaiting settlement or timeout refund.
@@ -1107,10 +1088,7 @@ pub enum VpnLeaseStatusV1 {
 }
 /// On-chain VPN lease escrow record.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnLeaseRecordV1 {
     /// Canonical chain/client/quote-derived lease identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1192,10 +1170,7 @@ impl VpnLeaseRecordV1 {
 }
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]

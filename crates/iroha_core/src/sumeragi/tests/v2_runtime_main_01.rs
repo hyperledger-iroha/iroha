@@ -1721,7 +1721,11 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
             .expect("retain exact authenticated retransmission behind its signer"),
         RuntimeStep::Idle
     ));
-    assert_eq!(runtime.ingress.next_class, CommandClass::Completion);
+    assert_eq!(
+        runtime.ingress.next_class,
+        CommandClass::Progress,
+        "exact fence-completion bypass is cursor-neutral after the preceding Completion turns"
+    );
     let deadline = start + runtime.round_timeout();
     assert!(matches!(
         runtime

@@ -260,6 +260,12 @@ barriers into multi-second stalls.
   legacy testnet Homebrew supervisor whose same-framework Python.app rewrite,
   remaining argv, parent/UID, child, and rollback identity all match exactly;
   it is refused by default.
+- `scripts/deploy_taira_testnet_update.py`: is the small routine-update
+  controller for this testnet. A preinstalled root-owned copy changes only the
+  content-addressed `iroha3d` path and its supervisor stat seal, restarts one
+  peer at a time, and preserves every live config, genesis, working directory,
+  and storage inode. It is deliberately separate from release admission and
+  fresh-reset tooling.
 - `scripts/migrate_taira_peer_supervision.py`: creates a sealed, read-only
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
@@ -726,31 +732,333 @@ recomputes the consensus fingerprint, atomically replaces only the rendered
 genesis key, or validator private keys into the checkout, template, rendered
 genesis JSON, or Actions storage.
 
-## Optional Kagemusha application proof material
+## Kagemusha production release material
 
 The ABI-21/V4 `cash_handoff_v1` protocol is available on every compatible
-Iroha deployment without a bootstrap switch. Applications that submit a
-particular Kagemusha top-up or redemption may still prepare authenticated
-release and verifier material for that operation. Such material is
-application data: it does not activate offline support, enroll an asset, or
-participate in node startup, `/health`, `/readyz`, or Taira cutover.
+Iroha deployment without a bootstrap switch. A production Kagemusha top-up or
+redemption still authenticates one exact release and its verifier material.
+That material does not enable offline support or enroll an asset, but a
+validator configured to use the production catalog must have the complete
+qualified catalog before it starts. The default Taira render omits those paths,
+so unpublished artifacts cannot break ordinary startup, `/health`, or
+`/readyz`.
+
+For a fresh production reset, the ordering is strict. Install the reviewed
+canonical release policy first, but do not generate or install a release and
+do not create a qualification seal yet. The authenticated genesis must
+directly grant the account that will execute activation both
+`CanActivateKagemushaRecursiveReleaseV4` and
+`CanManageOfflineDeviceAttestationPolicy`. Compose and sign the final genesis
+with that explicit account and the policy-only staging context; the composer
+rejects a missing grant, a later revoke, or a policy change during signing.
+Only the resulting signed-genesis hash is the release `NetworkId`. Generate
+the exact-network release after that hash exists, install it on all four
+validators, qualify it with each validator's exact installed `iroha3d`, and
+only then start any validator process. Starting from a config without the
+same policy digest or starting before qualification is unsupported.
+
+The release root and policy file must already exist at the canonical paths
+below. The catalog and qualification seal must both be absent at this stage;
+an empty or stale catalog is rejected rather than silently ignored. Run the
+composer only through the installed release controller. Every other external
+input path in this command must be the exact path pre-authorized by the
+root-owned runner trust record; the controller separately accepts the
+Kagemusha release root only when that absolute canonical directory and every
+ancestor are root-owned and not group- or world-writable:
+
+```bash
+ACTIVATION_AUTHORITY="${ACTIVATION_AUTHORITY:?set the genesis-authorized executing account}"
+TAIRA_CONTROLLER_COMMAND=/usr/local/libexec/iroha-taira-release-controller-v1
+TAIRA_CONTROLLER_ROOT=/usr/local/libexec/iroha-taira-release-controller-v1.d
+EXPECTED_LAUNCHER_SHA256="${EXPECTED_LAUNCHER_SHA256:?set the installed launcher digest}"
+EXPECTED_CONTROLLER_DIGEST="${EXPECTED_CONTROLLER_DIGEST:?set the installed closure digest}"
+EXPECTED_CONTROLLER_VERSION="${EXPECTED_CONTROLLER_VERSION:?set the installed controller version}"
+EXPECTED_HOST_ID="${EXPECTED_HOST_ID:?set the attested qualification host ID}"
+EXPECTED_INSTALLATION_ID="${EXPECTED_INSTALLATION_ID:?set the attested installation ID}"
+SOURCE_COMMIT="${SOURCE_COMMIT:?set the exact release source commit}"
+
+test "$(shasum -a 256 "${TAIRA_CONTROLLER_COMMAND}" | awk '{print $1}')" = \
+  "${EXPECTED_LAUNCHER_SHA256}"
+CONTROLLER_COMMON=(
+  --expected-launcher-sha256 "${EXPECTED_LAUNCHER_SHA256}"
+  --expected-controller-digest "${EXPECTED_CONTROLLER_DIGEST}"
+  --expected-version "${EXPECTED_CONTROLLER_VERSION}"
+  --expected-host-id "${EXPECTED_HOST_ID}"
+  --expected-installation-id "${EXPECTED_INSTALLATION_ID}"
+  --expected-uid 0
+  --source-commit "${SOURCE_COMMIT}"
+  --platform macos
+  --role macos-qualification
+)
+CONTROLLER_ATTESTATION="$(sudo -n "${TAIRA_CONTROLLER_COMMAND}" \
+  attest "${CONTROLLER_COMMON[@]}")"
+CONTROLLER_RUNTIME_ROOT="$(/usr/bin/python3 -I -S -c \
+  'import json,sys; print(json.load(sys.stdin)["runtime_root"])' \
+  <<<"${CONTROLLER_ATTESTATION}")"
+RESET_BUNDLE="${CONTROLLER_RUNTIME_ROOT}/taira-reset-kagemusha-v4-r1"
+test ! -e "${RESET_BUNDLE}"
+
+sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
+  prepare-reset -- \
+  --source-bundle /absolute/private/path/admitted-source-reset \
+  --source-bundle-sha256 "${SOURCE_BUNDLE_SHA256}" \
+  --privacy-release-dir /absolute/private/path/authenticated-privacy-release \
+  --genesis-external-signer /absolute/reviewed/path/genesis-external-signer \
+  --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
+  --onboarding-token-hash-tool /absolute/reviewed/path/onboarding-token-hash-tool \
+  --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1 \
+  --kagemusha-activation-authority "${ACTIVATION_AUTHORITY}" \
+  --irohad-sha256 "${IROHAD_SHA256}" \
+  --source-commit "${SOURCE_COMMIT}" \
+  --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
+  --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
+  --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
+  --controller-manifest \
+    "${TAIRA_CONTROLLER_ROOT}/authority-controller-v1.json" \
+  --controller-digest "${EXPECTED_CONTROLLER_DIGEST}" \
+  --output-bundle "${RESET_BUNDLE}"
+
+GENESIS_EXPECTED_HASH="$(jq -er '.genesis_expected_hash' \
+  "${RESET_BUNDLE}/reset-manifest.json")"
+test -n "${GENESIS_EXPECTED_HASH}"
+```
+
+The first private renderer pass contains the policy and artifact paths but no
+seal path, and uses only a canonical marker-bearing staging hash while the
+external signer computes the final hash. The signer authenticates the policy
+without opening the not-yet-generated artifact directory. The second pass
+embeds the final genesis hash and adds the future seal path. Both passes bind
+the same policy digest, recorded as `kagemusha_release_policy_sha256` in the
+reset manifest; changing the policy after signing makes the reset fail. The
+composer also requires the derived policy, catalog, qualification-seal, and
+decoded-byte-limit fields to match on all four rendered configs. It records
+that canonical object and its SHA-256 as `kagemusha_config_projection` and
+`kagemusha_config_projection_sha256` in the reset manifest.
+
+Select and validate the release heights before producing the roster or any
+candidate bytes. A fresh reset starts with height-one genesis committed, but
+height 2 leaves no safe interval in which to start four validators, collect
+evidence, and execute threshold approval. Pick an explicit operational margin
+and fail unless activation is beyond that margin. For an already-running
+chain, replace `RESET_COMMITTED_HEIGHT=1` with the maximum
+`.last_committed_height` captured from all four validators. The activation and
+withdrawal heights are authenticated release inputs; never edit or reuse the
+roster or generated release after either value becomes stale.
+
+```bash
+RESET_COMMITTED_HEIGHT=1
+ACTIVATION_SUBMISSION_MARGIN_BLOCKS="${ACTIVATION_SUBMISSION_MARGIN_BLOCKS:?set a reviewed positive submission margin}"
+ACTIVATION_HEIGHT="${ACTIVATION_HEIGHT:?set a reviewed activation height}"
+WITHDRAWAL_HEIGHT="${WITHDRAWAL_HEIGHT:?set a reviewed withdrawal height}"
+
+/usr/bin/python3 -I -S - \
+  "${RESET_COMMITTED_HEIGHT}" \
+  "${ACTIVATION_SUBMISSION_MARGIN_BLOCKS}" \
+  "${ACTIVATION_HEIGHT}" \
+  "${WITHDRAWAL_HEIGHT}" <<'PY'
+import sys
+
+labels = (
+    "reset committed height",
+    "activation submission margin",
+    "activation height",
+    "withdrawal height",
+)
+try:
+    current, margin, activation, withdrawal = map(int, sys.argv[1:])
+except ValueError as error:
+    raise SystemExit(f"release height is not an integer: {error}")
+if any(
+    value < 0 or value > 2**64 - 1
+    for value in (current, margin, activation, withdrawal)
+):
+    raise SystemExit("release height is outside the u64 range")
+if margin == 0:
+    raise SystemExit("activation submission margin must be positive")
+if activation <= current + margin:
+    raise SystemExit(
+        f"activation height {activation} is not beyond committed height "
+        f"{current} plus the {margin}-block submission margin"
+    )
+if withdrawal <= activation:
+    raise SystemExit("withdrawal height must be greater than activation height")
+values = (current, margin, activation, withdrawal)
+print(", ".join(f"{label}={value}" for label, value in zip(labels, values)))
+PY
+```
 
 First seal the rendered public validator keys and PoPs into the release-bound
 top-up roster. The input config may contain runtime secrets, but the command
-reads only `trusted_peers_pop` and emits only the public canonical roster:
+reads only `trusted_peers_pop` and emits only the public canonical roster.
+Use one independently reviewed Kagami executable for this command, circuit
+parameter construction, activation preparation, and the production readiness
+gate. The path and SHA-256 below are public release inputs, not secrets. Keep
+them in the same operator shell for the complete workflow; do not rebuild or
+replace Kagami between steps.
+
+Before and after every invocation, the helper below requires a canonical
+absolute non-symlink path, a root-owned and non-group/world-writable directory
+chain, and a root-owned, single-link, executable regular file whose bytes match
+the independently reviewed SHA-256. The descriptor and pathname metadata must
+also remain identical across each check:
 
 ```bash
-cargo run -p iroha_kagami --bin kagami -- \
+KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami
+KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>'
+export KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256
+readonly KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256
+
+assert_kagemusha_v4_kagami_custody() {
+  /usr/bin/python3 -I -S - \
+    "${KAGEMUSHA_V4_KAGAMI_BIN}" \
+    "${KAGEMUSHA_V4_KAGAMI_SHA256}" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+raw_path, expected_sha256 = sys.argv[1:]
+if (
+    re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    or expected_sha256 == "0" * 64
+):
+    raise SystemExit("Kagami SHA-256 pin is not canonical")
+
+path = Path(raw_path)
+try:
+    resolved = path.resolve(strict=True)
+except OSError as error:
+    raise SystemExit(f"Kagami path cannot be resolved: {error}")
+if not path.is_absolute() or resolved != path:
+    raise SystemExit("Kagami path must be canonical, absolute, and symlink-free")
+
+current = Path(path.anchor)
+directories = [current]
+for component in path.parts[1:-1]:
+    current /= component
+    directories.append(current)
+for directory in directories:
+    metadata = directory.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise SystemExit(f"Kagami path component is not a real directory: {directory}")
+    if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise SystemExit(f"Kagami path component lacks production custody: {directory}")
+
+before = path.lstat()
+if (
+    stat.S_ISLNK(before.st_mode)
+    or not stat.S_ISREG(before.st_mode)
+    or before.st_uid != 0
+    or stat.S_IMODE(before.st_mode) & 0o022
+    or not stat.S_IMODE(before.st_mode) & 0o111
+    or before.st_nlink != 1
+    or before.st_size <= 0
+    or before.st_size > 512 * 1024 * 1024
+):
+    raise SystemExit("Kagami executable lacks production custody")
+
+fingerprint = (
+    before.st_dev,
+    before.st_ino,
+    before.st_nlink,
+    before.st_mode,
+    before.st_size,
+    before.st_mtime_ns,
+    before.st_ctime_ns,
+    before.st_uid,
+    before.st_gid,
+)
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    opened = os.fstat(descriptor)
+    opened_fingerprint = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_nlink,
+        opened.st_mode,
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+        opened.st_uid,
+        opened.st_gid,
+    )
+    if not os.path.samestat(before, opened) or opened_fingerprint != fingerprint:
+        raise SystemExit("Kagami executable changed while it was opened")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < opened.st_size:
+        chunk = os.pread(descriptor, min(1024 * 1024, opened.st_size - offset), offset)
+        if not chunk:
+            raise SystemExit("Kagami executable became truncated while it was hashed")
+        digest.update(chunk)
+        offset += len(chunk)
+    after_descriptor = os.fstat(descriptor)
+    after_path = path.lstat()
+    after_descriptor_fingerprint = (
+        after_descriptor.st_dev,
+        after_descriptor.st_ino,
+        after_descriptor.st_nlink,
+        after_descriptor.st_mode,
+        after_descriptor.st_size,
+        after_descriptor.st_mtime_ns,
+        after_descriptor.st_ctime_ns,
+        after_descriptor.st_uid,
+        after_descriptor.st_gid,
+    )
+    after_path_fingerprint = (
+        after_path.st_dev,
+        after_path.st_ino,
+        after_path.st_nlink,
+        after_path.st_mode,
+        after_path.st_size,
+        after_path.st_mtime_ns,
+        after_path.st_ctime_ns,
+        after_path.st_uid,
+        after_path.st_gid,
+    )
+    if (
+        after_descriptor_fingerprint != fingerprint
+        or after_path_fingerprint != fingerprint
+        or digest.hexdigest() != expected_sha256
+    ):
+        raise SystemExit("Kagami executable changed or differs from its reviewed SHA-256")
+finally:
+    os.close(descriptor)
+PY
+}
+
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
-  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
+  --network-id "${GENESIS_EXPECTED_HASH}" \
+  --withdrawal-height "${WITHDRAWAL_HEIGHT}" \
   --output /absolute/private/path/taira-release-roster.norito
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
 
 mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
-cargo run --locked --target-dir /absolute/private/path/kagami-target \
-  -p iroha_kagami --bin kagami -- \
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
   kagemusha prepare-release-circuit-params-v4 \
   --output-dir /absolute/private/path/kagemusha-release-inputs/circuit-params-v4
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
 ```
 
 The circuit-parameter command is the official constructor for both reviewed
@@ -771,21 +1079,32 @@ and mode identity, zero untracked files, present-empty tracked gitlink directori
 and the separately bound root `Cargo.lock`) before
 building the exact candidate binary and entering the non-raiseable 64 GiB /
 half-physical-RAM generation guard. Its polling stop uses process-tree RSS and
-its final gate uses the direct child's kernel peak RSS; macOS footprint remains
-diagnostic only. Keep at least 16 GiB free on its pinned
+the greater of process-tree RSS or physical footprint on macOS; its final gate
+independently uses the direct child's kernel peak RSS. Keep at least 16 GiB free on its pinned
 disk-backed output filesystem for the raw proving-key spools and framed
 artifact copy.
 Retain the helper's canonical JSON report. The reviewed source closure and its
 digest are release inputs; the report's `source_commit` must equal the verified
 `HEAD`, `source_repo_dirty` must be `false`, and any working-tree change fails
 closed with no dirty-closure compatibility path.
+Pass direct Cargo and rustc toolchain binaries, not the `~/.cargo/bin` rustup
+proxies, and bind both to independently reviewed SHA-256 pins. The selected
+Cargo home is cache-only, must contain no `config` or `config.toml`, and the
+sealed build runs offline with a fixed `HOME` and `PATH`.
 
 ```bash
 python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
+  --cargo /absolute/direct/toolchain/bin/cargo \
+  --cargo-sha256 '<reviewed-64-lowercase-hex>' \
+  --rustc /absolute/direct/toolchain/bin/rustc \
+  --rustc-sha256 '<reviewed-64-lowercase-hex>' \
+  --cargo-home /absolute/owner-controlled/cache-only-cargo-home \
   --target-dir /absolute/private/path/kagemusha-sealed-target \
   --reviewed-source-closure /absolute/private/path/reviewed-source-closure.json \
   --reviewed-source-closure-sha256 '<64-lowercase-hex>' \
+  --authenticated-source-seal-projection /absolute/private/path/authenticated-source-seal-projection.json \
+  --authenticated-source-seal-projection-sha256 '<64-lowercase-hex>' \
   > /absolute/private/path/sealed-kagemusha-candidate-build.json
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -794,15 +1113,15 @@ python3 scripts/run_kagemusha_v4_generation.py \
   /absolute/path/from/sealed-build-report/kagemusha_recursive_spend_v4_bundle \
   generate-candidate \
   --out-dir /absolute/private/path/taira-release-candidate \
-  --chain-id fc56984b-2be7-431d-840e-21514d1883f0 \
+  --network-id "${GENESIS_EXPECTED_HASH}" \
   --asset-definition-id 7ZepsJTHCVLKsrFFNZGSRGZgvBhv \
   --asset-scale 2 \
   --generation production-gate-real-artifacts-v4 \
   --parameter-generation production-gate-real-artifacts-v4 \
   --source-commit '<source_commit-from-sealed-build-report>' \
   --source-tree-sha256 '<source_tree_sha256-from-sealed-build-report>' \
-  --activation-height 2 \
-  --withdrawal-height 1000000000 \
+  --activation-height "${ACTIVATION_HEIGHT}" \
+  --withdrawal-height "${WITHDRAWAL_HEIGHT}" \
   --step-eq-circuit-params /absolute/private/path/kagemusha-release-inputs/circuit-params-v4/step-eq-circuit-params.norito \
   --step-ep-circuit-params /absolute/private/path/kagemusha-release-inputs/circuit-params-v4/step-ep-circuit-params.norito \
   --topup-finality-roster /absolute/private/path/taira-release-roster.norito
@@ -811,10 +1130,45 @@ python3 scripts/run_kagemusha_v4_generation.py \
   finalize-release \
   --candidate-dir /absolute/private/path/taira-release-candidate \
   --out-dir /absolute/private/path/taira-final-release \
-  --release-policy /absolute/private/path/release-policy-v1.norito \
+  --release-policy /srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
   --release-attestation /absolute/private/path/release-attestation-v4.norito \
   --benchmark-evidence /absolute/private/path/benchmark-evidence-v1.json \
   --cryptographic-review /absolute/private/path/cryptographic-review-v4.norito
+```
+
+Before accepting the finalized release, a separately authenticated controller
+must install the exact reviewed checkout under a root-owned,
+non-group/world-writable path and verify the readiness-gate digest before
+execution. Pre-create `/var/lib/iroha/kagemusha-readiness-v1` as root mode
+`0700` (macOS controllers use
+`/private/var/db/iroha-kagemusha-readiness-v1`). The allowed-signers and
+revocation files below are the exact policies bound by the authenticated
+source-seal projection. Both are mandatory and digest pinned; use an explicitly
+pinned empty revocation file when the reviewed policy has no revoked keys.
+Promotion does not consult the invoking account's Git configuration. The gate
+inherits the exported read-only `KAGEMUSHA_V4_KAGAMI_BIN` and
+`KAGEMUSHA_V4_KAGAMI_SHA256` verified above, so it authenticates the same
+executable used to construct the roster, circuit parameters, and activation:
+
+```bash
+KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256='<reviewed-revocation-64-lowercase-hex>' \
+KAGEMUSHA_V4_RELEASE_POLICY_PATH=/srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
+KAGEMUSHA_V4_ARTIFACT_ROOT=/srv/iroha-kagemusha/taira-v4-r1/catalog \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/absolute/root-custodied/ios-device-evidence \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID='<reviewed-key-id>' \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/absolute/root-custodied/ios-evidence-ed25519.pub.pem \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/absolute/root-custodied/production-ios-policy-v1.json \
+  /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 `generate-candidate` is the only command accepted by the guarded runner; do not
@@ -827,21 +1181,438 @@ candidate-preserving validation command and retain the existing
 role/header/key-substitution plus atomic-publication regressions as the
 negative gate.
 `finalize-release` authenticates the supplied policy, attestation, physical
-benchmark, and signed cryptographic review, then copies the exact candidate
-bytes into a new sixteen-file release directory without regenerating proof
-material. Provision the same policy as
-`taira-release/release-policy-v1.norito` and install that finalized directory
-as `taira-release/catalog/<manifest_sha256>/`, where `manifest_sha256` is the
-lowercase digest recorded by the finalized `manifest.norito.sha256`.
+benchmark, signed cryptographic review, and
+`recursive-step-two-qualification-v4.norito` receipt, then copies the exact
+candidate bytes into a new seventeen-file release directory without
+regenerating proof material. Provision the same policy as
+`/srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito` and install that
+finalized directory as
+`/srv/iroha-kagemusha/taira-v4-r1/catalog/<manifest_sha256>/`, where
+`manifest_sha256` is the lowercase digest recorded by the finalized
+`manifest.norito.sha256`.
 
-Build a fresh Taira reset from the ordinary signed genesis and validator bundle
-workflow. `render_taira_validator_bundle.py` rewrites the checked-in peer-1
-baseline with the complete `trusted_peers` / `trusted_peers_pop` roster, the
-five-dataspace catalog, and the operator-provided runtime credentials.
-It rejects the retired offline enrollment fields in secrets rather than
-turning them into node configuration. Use
-`scripts/prepare_taira_empty_reset_bundle.py` to clone an admitted source bundle
-into new empty validator storage; do not use the retired
+Install into a new versioned root; do not replace an existing release in place.
+Every directory in the release path must be root-owned mode `0755`. Install the
+policy and all seventeen finalized files as root-owned mode `0444`, and verify
+that the manifest-digest sidecar equals the release directory name. These are
+public release bytes, not runtime secrets. Never recursively `chown` this tree
+to the validator user.
+
+For a standalone render outside the reset composer, wait until the immutable
+bytes exist on every validator before opting newly rendered configs into the
+production catalog. The fresh reset flow above already emitted the equivalent
+final configs; retain those exact files so their signed policy identity does
+not drift:
+
+```bash
+python3 scripts/render_taira_validator_bundle.py \
+  --roster configs/soranexus/taira/validator_roster.local.toml \
+  --secrets configs/soranexus/taira/validator_secrets.local.toml \
+  --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators" \
+  --install-root /etc/iroha/taira-validator \
+  --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1
+```
+
+The opt-in adds these absolute paths without copying or inventing release
+bytes:
+
+- `/srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito`
+- `/srv/iroha-kagemusha/taira-v4-r1/catalog`
+- `/srv/iroha-kagemusha/taira-v4-r1/seals/catalog-qualification-v1.norito`
+
+The authenticated policy digest, rather than the mutable presence of a cache
+path or seal file, participates in `execution_policy_hash`. Consequently, a
+config rendered with the production catalog must not be started against chain
+state signed without that exact policy identity. The supported source-side
+path is the fresh compatible reset composed above, unless governance has
+separately approved and implemented an explicit consensus-context migration.
+This is not an in-place config rollout.
+
+Install the policy and manifest-digest release directory at the first two
+paths. Keep the qualification-seal directory separate from the policy parent,
+artifact directory, and executable directory. On each validator, use the
+exact canonical installed executable selected by that validator's service and
+the config, signed genesis, and bound genesis manifest emitted by the same
+reset bundle. Verify all four byte identities against `reset-manifest.json`
+before executing the binary. The final reset config carries the expected hash
+inline; the composer does not emit or require a separate
+`genesis.expected_hash` file. Run the full one-time qualification as root; the
+configured seal destination must not already exist:
+
+```bash
+RESET_MANIFEST="${RESET_BUNDLE}/reset-manifest.json"
+VALIDATOR_SLUG="${VALIDATOR_SLUG:?set taira-validator-1 through taira-validator-4}"
+VALIDATOR_CONFIG="${RESET_BUNDLE}/rendered/${VALIDATOR_SLUG}/config.toml"
+SIGNED_GENESIS="${RESET_BUNDLE}/genesis.signed.nrt"
+BOUND_GENESIS_MANIFEST="${RESET_BUNDLE}/genesis.json"
+IROHAD_BIN="${IROHAD_BIN:?set the exact canonical executable used by this validator service}"
+RELEASE_ROOT=/srv/iroha-kagemusha/taira-v4-r1
+QUALIFICATION_SEAL="${RELEASE_ROOT}/seals/catalog-qualification-v1.norito"
+
+test "${IROHAD_BIN}" = "$(/usr/bin/python3 -I -S -c \
+  'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+  "${IROHAD_BIN}")"
+test -x "${IROHAD_BIN}"
+test "$(shasum -a 256 "${IROHAD_BIN}" | awk '{print $1}')" = \
+  "$(jq -er '.irohad_sha256' "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${VALIDATOR_CONFIG}" | awk '{print $1}')" = \
+  "$(jq -er --arg slug "${VALIDATOR_SLUG}" '.configs[$slug]' \
+    "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${SIGNED_GENESIS}" | awk '{print $1}')" = \
+  "$(jq -er '.signed_genesis_sha256' "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${BOUND_GENESIS_MANIFEST}" | awk '{print $1}')" = \
+  "$(jq -er '.bound_genesis_manifest_sha256' "${RESET_MANIFEST}")"
+test "$(jq -er '.kagemusha_release_root' "${RESET_MANIFEST}")" = \
+  "${RELEASE_ROOT}"
+sudo test ! -e "${QUALIFICATION_SEAL}"
+
+sudo env GENESIS="${SIGNED_GENESIS}" \
+  "${IROHAD_BIN}" \
+  --sora \
+  --config "${VALIDATOR_CONFIG}" \
+  --genesis-manifest-json "${BOUND_GENESIS_MANIFEST}" \
+  --check-config \
+  --write-kagemusha-catalog-qualification-seal "${QUALIFICATION_SEAL}"
+
+sudo chmod 0444 "${QUALIFICATION_SEAL}"
+```
+
+The Kagemusha release root must be outside `/etc/iroha/taira-validator` and
+outside any reset bundle because the deployment workflow assigns those trees
+to the validator user. Never include the release root in that recursive
+`chown`. The policy, catalog, executable, and seal path chains must be
+canonical, symlink-free, root-owned, and not group- or world-writable. On
+macOS, use an equivalent root-controlled path such as
+`/Library/SORA/Taira/kagemusha-v4-r1`. The seal authenticates the canonical
+`${IROHAD_BIN}` identity/build as well as the qualified catalog; a binary
+replacement requires a new qualification and must never overwrite the old
+seal.
+
+Retain concrete qualification evidence from every node: the successful
+`--check-config` output, `stat` output proving the root ownership and modes,
+the exact manifest directory name and `manifest.norito.sha256` contents, and a
+sorted `sha256sum` inventory of the policy plus all seventeen release files.
+Compare those captured values across all four validators before startup. There
+is no authoritative "same catalog digest" status endpoint.
+`/v1/offline/readiness` reports universal route capability and is never proof
+of catalog qualification, governed activation, or release identity.
+
+```bash
+RELEASE_ROOT=/srv/iroha-kagemusha/taira-v4-r1
+RELEASE_DIR="${RELEASE_ROOT}/catalog/${MANIFEST_SHA256}"
+test "$(basename "${RELEASE_DIR}")" = "${MANIFEST_SHA256}"
+test "$(tr -d '\n' < "${RELEASE_DIR}/manifest.norito.sha256")" = \
+  "${MANIFEST_SHA256}"
+test "$(find "${RELEASE_DIR}" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 17
+
+stat -Lc '%U:%G:%a:%h:%F:%n' \
+  "${RELEASE_ROOT}" \
+  "${RELEASE_ROOT}/policy" \
+  "${RELEASE_ROOT}/catalog" \
+  "${RELEASE_ROOT}/seals" \
+  "${RELEASE_DIR}" \
+  "${RELEASE_ROOT}/seals/catalog-qualification-v1.norito" \
+  | tee /absolute/private/path/validator-kagemusha-stat.txt
+
+{
+  sha256sum "${RELEASE_ROOT}/policy/release-policy-v1.norito"
+  find "${RELEASE_DIR}" -mindepth 1 -maxdepth 1 -type f -print0 \
+    | sort -z | xargs -0 sha256sum
+} | tee /absolute/private/path/validator-kagemusha-sha256.txt
+```
+
+Catalog qualification is the filesystem boundary; governed activation is the
+separate consensus boundary. Only after all four validators are healthy,
+advancing, and have the matching evidence above may activation begin.
+
+First identify the account that will actually execute the activation. Query
+both its direct permissions and all permissions inherited from its roles:
+
+```bash
+READ_CFG=/absolute/runtime-only/read-client.toml
+ACTIVATION_AUTHORITY="${ACTIVATION_AUTHORITY:?set the executing account}"
+
+iroha --machine --config "${READ_CFG}" --output-format json \
+  ledger account permission list --id "${ACTIVATION_AUTHORITY}" \
+  | tee /absolute/private/path/activation-authority-direct-permissions.json
+
+iroha --machine --config "${READ_CFG}" --output-format json \
+  ledger account role list --id "${ACTIVATION_AUTHORITY}" \
+  | tee /absolute/private/path/activation-authority-roles.json
+
+jq -er '.[]' /absolute/private/path/activation-authority-roles.json \
+  | while IFS= read -r ROLE_ID; do
+      iroha --machine --config "${READ_CFG}" --output-format json \
+        ledger role permission list --id "${ROLE_ID}"
+    done \
+  | tee /absolute/private/path/activation-authority-role-permissions.jsonl
+```
+
+The combined direct and role-derived results must contain both
+`CanActivateKagemushaRecursiveReleaseV4` and
+`CanManageOfflineDeviceAttestationPolicy`. They are immutable genesis-only
+permissions; there is no post-genesis repair if the executing account lacks
+either one. The stock `prepare-taira-testnet-base-genesis-v4` helper grants
+both to `genesis_authority`, not to an activation multisig. If threshold
+activation is required, the multisig account itself—not merely its signer
+accounts—must be created and receive both grants at genesis. The remaining
+example assumes `ACTIVATION_MULTISIG_ACCOUNT` is that pre-authorized executing
+account.
+
+Build the exact composite activation instruction into new owner-private files.
+Kagami prints a durable-publication result followed by the prepared report; the
+last line contains the instruction hash, while `--output` names the separate
+instruction-array file. Continue in the same operator shell so this invocation
+uses the same read-only `KAGEMUSHA_V4_KAGAMI_BIN`,
+`KAGEMUSHA_V4_KAGAMI_SHA256`, and
+`assert_kagemusha_v4_kagami_custody` established above. Set
+`REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256` from the independent review
+of the canonical governed policy state; never copy it from Kagami's report.
+Validate all release-binding report fields against those reviewed inputs before
+extracting `instructions_hash`:
+
+```bash
+ACTIVATION_JSON=/absolute/private/path/kagemusha-activation-v4.json
+PREPARE_REPORT=/absolute/private/path/kagemusha-activation-v4.prepare.jsonl
+REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256='<reviewed-device-policy-state-64-lowercase-hex>'
+set -o pipefail
+
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
+  kagemusha prepare-activation-v4 \
+  --artifact-root /srv/iroha-kagemusha/taira-v4-r1/catalog \
+  --release-policy /srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
+  --manifest-sha256 "${MANIFEST_SHA256}" \
+  --verifier-version "${NEXT_VERIFIER_VERSION}" \
+  --device-attestation-policy /absolute/private/path/device-attestation-policy.json \
+  --output "${ACTIVATION_JSON}" \
+  | /usr/bin/tee "${PREPARE_REPORT}"
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
+
+PREPARED_REPORT_LINE="$(/usr/bin/tail -n 1 "${PREPARE_REPORT}")"
+if ! /usr/bin/jq -e \
+  --arg manifest_sha256 "${MANIFEST_SHA256}" \
+  --argjson verifier_version "${NEXT_VERIFIER_VERSION}" \
+  --arg device_policy_state_sha256 \
+    "${REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256}" \
+  '
+    ($manifest_sha256 | test("^[0-9a-f]{64}$") and (test("^0{64}$") | not)) and
+    ($device_policy_state_sha256 | test("^[0-9a-f]{64}$") and (test("^0{64}$") | not)) and
+    ($verifier_version | type == "number" and . == floor and . >= 0 and . <= 4294967295) and
+    type == "object" and
+    .status == "prepared" and
+    .manifest_sha256 == $manifest_sha256 and
+    .verifier_version == $verifier_version and
+    .instruction_count == 1 and
+    .device_attestation_policy_state_sha256 == $device_policy_state_sha256 and
+    (.instructions_hash |
+      type == "string" and
+      test("^[0-9a-f]{64}$") and
+      (test("^0{64}$") | not))
+  ' <<<"${PREPARED_REPORT_LINE}" >/dev/null
+then
+  echo "Kagami activation report does not match reviewed release inputs" >&2
+  exit 1
+fi
+
+INSTRUCTIONS_HASH="$(/usr/bin/jq -er '.instructions_hash' <<<"${PREPARED_REPORT_LINE}")"
+test -n "${INSTRUCTIONS_HASH}"
+```
+
+Immediately before proposing—and again before the quorum-crossing
+approval—capture the committed height from every validator and repeat the
+future-height check. Stop if the checked margin has been consumed; do not
+submit a stale release or edit its authenticated heights. Generate, finalize,
+install, and qualify a new release instead.
+
+```bash
+VALIDATOR_READ_CFGS=(
+  /absolute/runtime-only/validator-1-read-client.toml
+  /absolute/runtime-only/validator-2-read-client.toml
+  /absolute/runtime-only/validator-3-read-client.toml
+  /absolute/runtime-only/validator-4-read-client.toml
+)
+VALIDATOR_OPERATOR_KEY_FILES=(
+  /absolute/runtime-only/validator-1-operator.key
+  /absolute/runtime-only/validator-2-operator.key
+  /absolute/runtime-only/validator-3-operator.key
+  /absolute/runtime-only/validator-4-operator.key
+)
+HEIGHT_EVIDENCE_DIR="${HEIGHT_EVIDENCE_DIR:?set a fresh evidence directory for this check}"
+test "${#VALIDATOR_READ_CFGS[@]}" -eq 4
+test "${#VALIDATOR_OPERATOR_KEY_FILES[@]}" -eq 4
+test ! -e "${HEIGHT_EVIDENCE_DIR}"
+mkdir -m 700 "${HEIGHT_EVIDENCE_DIR}"
+
+for index in "${!VALIDATOR_READ_CFGS[@]}"; do
+  iroha --machine --config "${VALIDATOR_READ_CFGS[$index]}" \
+    --operator-private-key-file "${VALIDATOR_OPERATOR_KEY_FILES[$index]}" \
+    --output-format json ops sumeragi status \
+    | tee "${HEIGHT_EVIDENCE_DIR}/validator-$((index + 1)).json" >/dev/null
+done
+
+MAX_COMMITTED_HEIGHT="$(
+  /usr/bin/python3 -I -S - \
+    "${HEIGHT_EVIDENCE_DIR}"/validator-{1,2,3,4}.json <<'PY'
+import json
+import sys
+
+heights = []
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as source:
+        height = json.load(source).get("last_committed_height")
+    if (
+        not isinstance(height, int)
+        or isinstance(height, bool)
+        or not 0 < height <= 2**64 - 1
+    ):
+        raise SystemExit(f"invalid last_committed_height in {path}: {height!r}")
+    heights.append(height)
+print(max(heights))
+PY
+)"
+
+/usr/bin/python3 -I -S - \
+  "${MAX_COMMITTED_HEIGHT}" \
+  "${ACTIVATION_SUBMISSION_MARGIN_BLOCKS}" \
+  "${ACTIVATION_HEIGHT}" <<'PY'
+import sys
+
+current, margin, activation = map(int, sys.argv[1:])
+if not 0 < margin <= 2**64 - 1:
+    raise SystemExit("activation submission margin is outside the positive u64 range")
+if not 0 < current <= 2**64 - 1 or not 0 < activation <= 2**64 - 1:
+    raise SystemExit("committed or activation height is outside the positive u64 range")
+if activation <= current + margin:
+    raise SystemExit(
+        f"stale release: activation height {activation} is not beyond fleet height "
+        f"{current} plus the {margin}-block submission margin"
+    )
+print(
+    f"checked activation window: fleet={current}, "
+    f"activation={activation}, margin={margin}"
+)
+PY
+```
+
+Submit the immutable instruction file through the authorized multisig. The
+proposer automatically supplies the first approval. Each signer uses its own
+runtime-only client config, and every submitting transaction explicitly pays
+fees from its authority. First use the CLI's no-submit `--output` mode to
+reparse that same file and prove that the proposal key equals Kagami's
+`INSTRUCTIONS_HASH`; then capture the machine-readable transaction hashes:
+
+```bash
+SIGNER1_CFG=/absolute/runtime-only/activation-signer-1.toml
+SIGNER_N_CFG=/absolute/runtime-only/activation-signer-N.toml
+PROPOSAL_PREVIEW=/absolute/private/path/kagemusha-proposal.preview.txt
+PROPOSAL_RESULT=/absolute/private/path/kagemusha-proposal.json
+APPROVAL_N_RESULT=/absolute/private/path/kagemusha-approval-N.json
+
+iroha --machine --config "${SIGNER1_CFG}" --output --output-format text \
+  ledger multisig propose \
+  --account "${ACTIVATION_MULTISIG_ACCOUNT}" \
+  < "${ACTIVATION_JSON}" \
+  | tee "${PROPOSAL_PREVIEW}"
+
+CLI_INSTRUCTIONS_HASH="$(sed -n 's/^instructions_hash: //p' \
+  "${PROPOSAL_PREVIEW}" | head -n 1)"
+test "${CLI_INSTRUCTIONS_HASH}" = "${INSTRUCTIONS_HASH}"
+
+iroha --machine --config "${SIGNER1_CFG}" --fee-payer authority \
+  --output-format json ledger multisig propose \
+  --account "${ACTIVATION_MULTISIG_ACCOUNT}" \
+  < "${ACTIVATION_JSON}" \
+  | tee "${PROPOSAL_RESULT}"
+
+PROPOSAL_TX_HASH="$(jq -er '.hash' "${PROPOSAL_RESULT}")"
+
+iroha --machine --config "${SIGNER_N_CFG}" --fee-payer authority \
+  --output-format json ledger multisig approve \
+  --account "${ACTIVATION_MULTISIG_ACCOUNT}" \
+  --instructions-hash "${INSTRUCTIONS_HASH}" \
+  | tee "${APPROVAL_N_RESULT}"
+
+APPROVAL_N_TX_HASH="$(jq -er '.hash' "${APPROVAL_N_RESULT}")"
+```
+
+Repeat the approval command only for the independently authorized signers
+required by the configured quorum, using a different signer config and result
+file each time. Prove `Applied` finality for the proposal, every approval, and
+especially the quorum-crossing approval that executes the nested activation:
+
+```bash
+iroha --machine --config "${READ_CFG}" --output-format json \
+  tx status --hash "${PROPOSAL_TX_HASH}" --wait \
+  --terminal-status applied --timeout-ms 120000 --poll-interval-ms 500
+
+iroha --machine --config "${READ_CFG}" --output-format json \
+  tx status --hash "${APPROVAL_N_TX_HASH}" --wait \
+  --terminal-status applied --timeout-ms 120000 --poll-interval-ms 500
+```
+
+After every validator has committed at least `ACTIVATION_HEIGHT`, capture its
+consensus status and the exact release-qualified Eq/Ep registry records. The
+operator key remains a runtime-only mode-`0600` file:
+
+```bash
+VALIDATOR_CFG=/absolute/runtime-only/validator-client.toml
+OPERATOR_PRIVATE_KEY_FILE=/absolute/runtime-only/operator.key
+
+iroha --machine --config "${VALIDATOR_CFG}" \
+  --operator-private-key-file "${OPERATOR_PRIVATE_KEY_FILE}" \
+  --output-format json ops sumeragi status \
+  | tee /absolute/private/path/validator-sumeragi-status.json
+
+iroha --machine --config "${VALIDATOR_CFG}" --output-format json \
+  app zk vk get \
+  --backend halo2/ipa-pasta-cycle-compact-v5 \
+  --name "kagemusha-recursive-spend-step-eq-compact-layout-v5-${MANIFEST_SHA256}" \
+  | tee /absolute/private/path/validator-kagemusha-eq-vk.json
+
+iroha --machine --config "${VALIDATOR_CFG}" --output-format json \
+  app zk vk get \
+  --backend halo2/ipa-pasta-cycle-compact-v5 \
+  --name "kagemusha-recursive-spend-step-ep-compact-lineage-v5-${MANIFEST_SHA256}" \
+  | tee /absolute/private/path/validator-kagemusha-ep-vk.json
+```
+
+Require `.last_committed_height >= ACTIVATION_HEIGHT`, verifier version
+`NEXT_VERIFIER_VERSION`, activation height `ACTIVATION_HEIGHT`, and the expected
+Eq/Ep identities and commitments. The complete Eq and Ep JSON records must be
+identical across all four validators. Failure or absence on any peer blocks the
+canary.
+
+Construct and sign the canary with the typed Rust wallet API
+(`Client::submit_offline_top_up` / `Client::submit_offline_redeem`) or the
+corresponding IrohaSwift or Kotlin Kagemusha wallet APIs. There is no generic
+CLI command that safely invents these release-bound requests. Let the typed API
+send the signed `POST /v1/offline/top-up`, wait until its operation is terminal
+`applied`, and only then construct the full redemption from that committed
+wallet state. Let it send the signed `POST /v1/offline/redeem`, wait for that
+operation to become terminal `applied`, and reconcile escrow, wallet, and final
+balances.
+
+Only when a wallet explicitly exports the canonical signed Norito request
+archive may a raw transport client send those already-constructed bytes. Such
+a request uses exact `Content-Type: application/x-norito` and exactly one
+lowercase 64-hex operation ID as `Idempotency-Key`; it does not add
+`X-Iroha-Account`, `X-Iroha-Signature`, or other substitute authentication
+headers. Poll `/v1/offline/operations/{operation_id}` until terminal `applied`.
+A `pending` or `rejected` response is not a production canary pass.
+
+`render_taira_validator_bundle.py` rewrites the checked-in peer-1 baseline with
+the complete `trusted_peers` / `trusted_peers_pop` roster, the five-dataspace
+catalog, and operator-provided runtime credentials. It rejects retired offline
+enrollment fields instead of turning them into node configuration. Use the
+ordinary empty-reset composer shown above; do not use the retired
 offline-specialized reset helpers.
 
 The Digital Shekel assets and accounts are ordinary genesis or post-genesis
@@ -1021,7 +1792,49 @@ the signed SCCP release-evidence corridor all succeed. The retired
 `/v1/sccp/manifests` route readiness check and the old Nile route-config script
 are not part of the first-release operator workflow.
 
-## Dual-target archive publication
+## Routine testnet updates (30-minute path)
+
+Use `.github/workflows/update_taira_testnet.yml` for ordinary Taira code
+updates. It is the default operational path. It checks out the selected exact
+workflow commit on the existing
+`[self-hosted, macOS, ARM64, taira-deploy]` runner, builds only `iroha3d` with
+`embedded-soracloud-runtime,zk-stark`, and rolls the four validators in place.
+There is no Linux build, privacy/BOI qualification, candidate authority,
+cross-job artifact handoff, OCI publication, or empty-state reset in this
+path. A parallel hosted watchdog cancels an unavailable runner after two
+minutes and cancels the whole build-and-update after 30 minutes.
+
+Provision the fixed updater once on the deployment Mac; never run its checkout
+copy through `sudo`:
+
+```bash
+sudo install -o root -g wheel -m 0555 \
+  scripts/deploy_taira_testnet_update.py \
+  /usr/local/libexec/iroha-taira-testnet-update-v1
+shasum -a 256 /usr/local/libexec/iroha-taira-testnet-update-v1
+```
+
+Allow the Actions runner to execute only that installed command without a
+password, and set the resulting digest as the repository or organization
+Actions variable `TAIRA_TESTNET_UPDATER_SHA256`. The fast job deliberately has
+no protected release environment or approval wait. `TAIRA_NATIVE_BUILD_JOBS`
+may override the default six Cargo jobs, and `TAIRA_TESTNET_CARGO_TARGET_DIR`
+may select the persistent target directory. That writable cache belongs only
+on the protected testnet deployment runner; do not share it with pull-request
+or other untrusted jobs.
+
+The updater hashes the candidate, validates all four existing configs in
+parallel, installs the binary under
+`/Library/SORA/Taira/binaries/<sha256>/iroha3d`, and updates one launchd job at
+a time. After each peer it requires loopback `/health`, `/readyz`, and the
+exact workflow commit in `/status`. If a peer does not return, every touched
+peer is restored in reverse order before the updater exits. The updater never
+replaces or clears config, genesis, working-directory, or storage paths. Keep
+old content-addressed binaries until the operator decides they are no longer
+needed. Changes that intentionally migrate an incompatible storage format need
+a separately planned testnet migration; they are not ordinary binary updates.
+
+## Dual-target archive publication (exceptional reset)
 
 The first Taira release is archive-only. The manual
 `.github/workflows/publish_taira_validator.yml` workflow does not build or push
@@ -1036,7 +1849,7 @@ that commit with persisted Git credentials disabled, and runs with
 One dispatch performs these two native builds from one authenticated source
 identity:
 
-- The `[self-hosted, Linux, ARM64, iroha2]` job reconstructs the reviewed DPN
+- The `[self-hosted, Linux, ARM64, taira-untrusted-build]` job reconstructs the reviewed DPN
   source closure and exact `Cargo.lock` only after sealing its controller
   closure, checks the canonical workspace-source manifest, snapshots exactly
   four secret-free privacy inputs, then builds the unsigned Linux/aarch64
@@ -1044,16 +1857,67 @@ identity:
   evidence generation finish does the sealed finalizer authenticate the
   immutable archive and sign its exact-12 authority plus controller manifest.
   An amd64 or emulated build is rejected.
-- The `[self-hosted, macOS, ARM64, taira-release]` job reconstructs that same
-  commit, lock, and source manifest independently after sealing its controller
-  closure. It byte-compares the source identity transferred from Linux before
-  compiling the macOS/arm64 `irohad` and the public-only onboarding-token hash
-  tool. No source-built genesis signer is compiled or invoked. The exact binary
+- The `[self-hosted, macOS, ARM64, taira-untrusted-build]` job reconstructs that
+  same commit, lock, and source manifest independently. It starts concurrently
+  with the Linux path because it does not consume Linux authority bytes; the
+  later secret-free qualification job performs the first cross-target identity
+  comparison. No source-built genesis signer is compiled or invoked. The exact binary
   then boots exactly four native peers, proves consensus advancement, replaces
   each peer child in turn through the shipped supervisor, and proves fleet
   advancement after every restart. Both the candidate binary and supervisor
   run from temporary root-controlled, content-addressed validation paths so a
   child cannot rewrite its own harness.
+
+The workflow has one 30-minute wall-clock watchdog. Historical image dispatches
+spent entire 24-hour windows queued against an unassigned `iroha2` runner and
+executed zero steps; repeated serialized dispatches accounted for the apparent
+roughly 100-hour rollout. The watchdog cancels after two minutes with no active
+job, or at the overall budget boundary, and reports each pending job, runner
+name, and requested labels. Keep every listed authority runner online before
+dispatch.
+
+Before any self-hosted job or Cargo invocation, the hosted `release-readiness`
+job runs `scripts/check_taira_release_prerequisites.py`. It reports and rejects
+any critical-path authority that remains an unconditional source-level refusal.
+This is intentionally the current result until the independent native-evidence,
+protocol-receipt, Exact12-governance, BOI, deploy-issuance, and rollout-observation
+authorities, plus the distinct public 24-hour soak observation authority, are
+implemented and provisioned. The gate
+prevents an unavailable release from spending build hours merely to reach the
+same refusal later.
+
+The release corridor's fixed 24-hour Taira-profile soak is a four-process local
+fault-profile gate; it is not evidence that the deployed public validator cohort
+served sustained workload. Public deployment evidence uses the separate
+`scripts/check_taira_public_v2_24h_soak_evidence.py` contract: exactly four
+validators, quorum three, an exact 86,400-second monotonic workload window, and
+432,000 individually inventoried signed transfers scheduled at five per second,
+followed by a bounded application/finality drain. The evidence distinguishes
+typed Iroha hashes from artifact digests and binds submission, global Applied,
+executed-block, finality, deploy-descendant, and zero-lifecycle-drift evidence.
+It publishes no authority itself. Admission remains source-disabled until an
+independent Ed25519 verifier, pinned native evidence verifier, and atomic replay
+broker provision the dedicated public-soak authority contract and durable
+admission receipt; no live public-soak receipt is currently claimed.
+
+Both untrusted native builders default to six Cargo jobs and reuse a Cargo
+target outside the authenticated source checkout only for retries of the same
+workspace-manifest, DPN commit, and Rust compiler identity. Different source or
+toolchain identities never share writable target state. Set
+`TAIRA_NATIVE_BUILD_JOBS` to a positive value no greater than 16 when host
+memory requires another bound. `TAIRA_LINUX_BUILD_CACHE_ROOT` and
+`TAIRA_MACOS_BUILD_CACHE_ROOT` may select owner-private absolute cache roots;
+otherwise the jobs use distinct paths beneath `RUNNER_TOOL_CACHE`. These
+source-keyed caches never cross into an authority job. Every produced byte
+remains hostile until the existing signed authority and native qualification
+stages accept it. The seven immutable DPN source inputs download concurrently;
+both curl's per-transfer and retry-window limits are 120 seconds.
+
+This workflow remains the exceptional first-release archive,
+privacy-evidence, and empty-v21-reset path. It is not used for routine testnet
+updates: the reset controller authenticates four empty storage trees and
+replaces the fleet as one cohort. Use `update_taira_testnet.yml` for the normal
+state-preserving rolling path above.
 
 Neither source reconstruction nor either native Cargo step receives protected
 authority, privacy-source, reset-source, staging-root, or external-genesis-signer
@@ -1429,6 +2293,13 @@ TAIRA_VALIDATOR_ARGS=(
 
 - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --expected-dpn-validator-release-commit "${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT}"`
 
+The MCP smoke has one absolute 240-second deadline, including all validator
+alignment retries, HTTP calls, retry delays, signer bootstrap, faucet work, and
+the signed canary. `--deadline-seconds N` changes that positive bound. Every
+curl and transaction status timeout is clamped to the remaining budget, and
+fleet alignment makes at most two attempts per sample by default. This replaces
+the former pathological 200-minute nested retry bound.
+
 Then gate the SoraFS path on the same public node:
 
 - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
@@ -1676,8 +2547,8 @@ CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
 ## Development-only containerized validator deployment
 
 This path is excluded from first-release Taira publication and admission. No
-release OCI image is produced by `publish_taira_validator.yml`; use the signed
-macOS deployment archive for the testnet rollout. The primary local wrapper is
+release OCI image is produced by `publish_taira_validator.yml`; use
+`update_taira_testnet.yml` for a routine deployed-network update. The primary local wrapper is
 `taira-validator-container.sh`, which uses plain `docker` and therefore works
 on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
 available as an optional convenience for environments that do have Compose.

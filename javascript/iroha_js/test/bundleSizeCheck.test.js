@@ -3,11 +3,13 @@
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
   BUNDLE_TARGETS,
+  analyzeSplitBundle,
   findForbiddenBrowserInputs,
   hasForbiddenGlobalBufferMutation,
   listExplicitBrowserExports,
@@ -20,6 +22,100 @@ import {
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 let bundleDistLock;
+
+function splitBuildOptions(target) {
+  return {
+    absWorkingDir: PACKAGE_ROOT,
+    entryPoints: [target.entryPoint],
+    bundle: true,
+    splitting: true,
+    write: false,
+    outdir: resolve(PACKAGE_ROOT, ".bundle-audit-test"),
+    entryNames: "entry",
+    chunkNames: "[hash]",
+    platform: target.platform,
+    target: target.target,
+    format: "esm",
+    treeShaking: true,
+    sourcemap: false,
+    minify: true,
+    metafile: true,
+    charset: "utf8",
+  };
+}
+
+function fakeSplitBundle(options, entryText = "") {
+  const entryPoint = options.entryPoints[0];
+  const entryInput = relative(PACKAGE_ROOT, entryPoint).replaceAll("\\", "/");
+  const outputRoot = relative(PACKAGE_ROOT, options.outdir).replaceAll("\\", "/");
+  const outputName = (name) => `${outputRoot}/${name}.js`;
+  const isTorii = entryInput === "src/toriiClient.js";
+  const lazyChunks = isTorii
+    ? [
+        {
+          name: "sumeragi",
+          input: "src/sumeragiTyped.js",
+          specifier: "./sumeragiTyped.js",
+          edges: 2,
+        },
+      ]
+    : [
+        {
+          name: "sumeragi",
+          input: "dist/sumeragiTyped.js",
+          specifier: "./sumeragiTyped.js",
+          edges: 2,
+        },
+        {
+          name: "deployment",
+          input: "dist/smartContractDeploymentSubmit.js",
+          specifier: "./smartContractDeploymentSubmit.js",
+          edges: 1,
+        },
+      ];
+  const inputImports = [];
+  const outputImports = [];
+  const inputs = {};
+  const outputs = {};
+  const outputFiles = [];
+  for (const lazy of lazyChunks) {
+    for (let edge = 0; edge < lazy.edges; edge += 1) {
+      inputImports.push({
+        path: lazy.input,
+        original: lazy.specifier,
+        kind: "dynamic-import",
+      });
+      outputImports.push({
+        path: outputName(lazy.name),
+        kind: "dynamic-import",
+      });
+    }
+    inputs[lazy.input] = { imports: [] };
+    outputs[outputName(lazy.name)] = {
+      entryPoint: lazy.input,
+      imports: [],
+      bytes: 0,
+    };
+    outputFiles.push({
+      path: resolve(PACKAGE_ROOT, outputName(lazy.name)),
+      contents: new Uint8Array(),
+      text: "",
+    });
+  }
+  const entryBytes = new TextEncoder().encode(entryText);
+  inputs[entryInput] = { imports: inputImports };
+  outputs[outputName("entry")] = {
+    entryPoint: entryInput,
+    imports: outputImports,
+    bytes: entryBytes.byteLength,
+  };
+  outputFiles.unshift({
+    path: resolve(PACKAGE_ROOT, outputName("entry")),
+    contents: entryBytes,
+    text: entryText,
+  });
+  return { outputFiles, metafile: { inputs, outputs } };
+}
 
 before(async () => {
   bundleDistLock = await acquireDistLock({ root: PACKAGE_ROOT });
@@ -41,11 +137,19 @@ test("bundle-size check fails closed when esbuild cannot be resolved", async () 
   );
 });
 
-test("bundle-size targets retain audited ceilings and browser graph guards", () => {
+test("bundle-size targets retain audited ceilings, lazy baselines, and browser graph guards", () => {
   assert.deepEqual(
-    BUNDLE_TARGETS.map(({ label, limitKb, forbidNodeInputs, forbidGlobalBuffer }) => ({
+    BUNDLE_TARGETS.map(({ label, limitKb, lazyChunks, forbidNodeInputs, forbidGlobalBuffer }) => ({
       label,
       limitKb,
+      lazyChunks: (lazyChunks ?? []).map(
+        ({ specifier, edgeCount, reviewedBytes, limitKb: lazyLimitKb }) => ({
+          specifier,
+          edgeCount,
+          reviewedBytes,
+          limitKb: lazyLimitKb,
+        }),
+      ),
       forbidNodeInputs: forbidNodeInputs === true,
       forbidGlobalBuffer: forbidGlobalBuffer === true,
     })),
@@ -53,42 +157,69 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       {
         label: "toriiClient.js",
         limitKb: 983,
+        lazyChunks: [
+          {
+            specifier: "./sumeragiTyped.js",
+            edgeCount: 2,
+            reviewedBytes: 71_905,
+            limitKb: 71,
+          },
+        ],
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
       {
         label: "transactionCodec.js (browser)",
         limitKb: 297,
+        lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "nexusApp.js (browser)",
         limitKb: 380,
+        lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "canonicalRequest.js (browser)",
         limitKb: 100,
+        lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "ivmArtifact.js (browser)",
         limitKb: 12,
+        lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "kotodamaCompiler/browser.js (browser)",
         limitKb: 53,
+        lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "browser.js (public aggregate)",
         limitKb: 469,
+        lazyChunks: [
+          {
+            specifier: "./sumeragiTyped.js",
+            edgeCount: 2,
+            reviewedBytes: 72_243,
+            limitKb: 71,
+          },
+          {
+            specifier: "./smartContractDeploymentSubmit.js",
+            edgeCount: 1,
+            reviewedBytes: 9_177,
+            limitKb: 9,
+          },
+        ],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -119,6 +250,13 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.ok(target.limitKb > 0 && target.limitKb <= 469);
+  assert.equal(target.reviewedEagerBytes, 480_214);
+  assert.equal(target.reviewedCombinedBytes, 561_634);
+  assert.match(target.lazyChunks[0].entryPoint, /dist[/\\]sumeragiTyped\.js$/u);
+  assert.match(
+    target.lazyChunks[1].entryPoint,
+    /dist[/\\]smartContractDeploymentSubmit\.js$/u,
+  );
 });
 
 test("bundle-size check gates canonical requests as a browser subpath", () => {
@@ -215,6 +353,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       target: "./dist/toriiBrowserClient.js",
       subpaths: ["./torii", "./torii-browser"],
     },
+    { target: "./dist/sumeragiTyped.js", subpaths: ["./sumeragi-typed"] },
     { target: "./dist/canonicalRequest.js", subpaths: ["./canonical-request"] },
     { target: "./dist/crypto.browser.js", subpaths: ["./crypto"] },
     { target: "./dist/nexusApp.js", subpaths: ["./nexus-app"] },
@@ -279,6 +418,7 @@ test("browser graph audit catches Node edges in an export omitted from size budg
       loadEsbuild: async () => ({
         async build(options) {
           const entryPoint = options.entryPoints[0];
+          if (options.splitting === true) return fakeSplitBundle(options);
           return {
             outputFiles: [{ contents: new Uint8Array(), text: "" }],
             metafile: {
@@ -305,6 +445,7 @@ test("browser runtime probe catches aliased global Buffer installation", async (
           const text = installsBuffer
             ? "const root = globalThis; root.Buffer = class BufferShim {};"
             : "export {};";
+          if (options.splitting === true) return fakeSplitBundle(options, text);
           return {
             outputFiles: [{ contents: new TextEncoder().encode(text), text }],
             metafile: { inputs: { [entryPoint]: {} } },
@@ -317,42 +458,98 @@ test("browser runtime probe catches aliased global Buffer installation", async (
   );
 });
 
-test("public browser aggregate bundles without Node inputs or global Buffer shims", async () => {
+test("split graph audit permits only the reviewed literal lazy edges", () => {
+  const target = BUNDLE_TARGETS.find(({ label }) => label.includes("public aggregate"));
+  assert.ok(target);
+  const options = splitBuildOptions(target);
+  const accepted = fakeSplitBundle(options);
+  assert.deepEqual(
+    analyzeSplitBundle(accepted, target).lazyChunks.map(
+      ({ specifier, bytes }) => ({ specifier, bytes }),
+    ),
+    [
+      { specifier: "./sumeragiTyped.js", bytes: 0 },
+      { specifier: "./smartContractDeploymentSubmit.js", bytes: 0 },
+    ],
+  );
+
+  const unexpected = fakeSplitBundle(options);
+  unexpected.metafile.inputs["dist/browser.js"].imports.push({
+    path: "dist/unreviewed.js",
+    original: "./unreviewed.js",
+    kind: "dynamic-import",
+  });
+  assert.throws(
+    () => analyzeSplitBundle(unexpected, target),
+    /unapproved local dynamic import \.\/unreviewed\.js/u,
+  );
+
+  const nonLiteral = fakeSplitBundle(options);
+  delete nonLiteral.metafile.inputs["dist/browser.js"].imports[0].original;
+  assert.throws(
+    () => analyzeSplitBundle(nonLiteral, target),
+    /unapproved local dynamic import dist\/sumeragiTyped\.js/u,
+  );
+
+  const reclassified = fakeSplitBundle(options);
+  reclassified.metafile.inputs["dist/browser.js"].imports[0].kind =
+    "import-statement";
+  assert.throws(
+    () => analyzeSplitBundle(reclassified, target),
+    /reclassified \.\/sumeragiTyped\.js as import-statement/u,
+  );
+});
+
+test("public browser aggregate audits eager, lazy, and unique combined closures", async () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("public aggregate"));
   assert.ok(target);
   const { build } = await import("esbuild");
-  const result = await build({
-    entryPoints: [target.entryPoint],
-    bundle: true,
-    write: false,
-    platform: "browser",
-    target: target.target,
-    format: "esm",
-    treeShaking: true,
-    sourcemap: false,
-    minify: true,
-    metafile: true,
-  });
+  const result = await build(splitBuildOptions(target));
+  const metrics = analyzeSplitBundle(result, target);
+  assert.equal(metrics.eagerBytes, target.reviewedEagerBytes);
+  assert.equal(metrics.combinedBytes, target.reviewedCombinedBytes);
   assert.deepEqual(
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 64);
-  assert.equal(result.outputFiles[0].contents.byteLength, 479_732);
+  assert.equal(Object.keys(result.metafile.inputs).length, 83);
+  assert.deepEqual(
+    {
+      eagerBytes: metrics.eagerBytes,
+      lazyBytes: metrics.lazyChunks.map(({ specifier, bytes }) => ({
+        specifier,
+        bytes,
+      })),
+      combinedBytes: metrics.combinedBytes,
+      combinedLimitKb: metrics.combinedLimitKb,
+    },
+    {
+      eagerBytes: 480_214,
+      lazyBytes: [
+        { specifier: "./sumeragiTyped.js", bytes: 72_243 },
+        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_177 },
+      ],
+      combinedBytes: 561_634,
+      combinedLimitKb: 549,
+    },
+  );
   assert.equal(
-    target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
-    524,
-    "public browser aggregate must retain the audited 524-byte headroom",
+    target.limitKb * 1024 - metrics.eagerBytes,
+    42,
+    "public browser aggregate must retain the audited 42-byte eager headroom",
   );
   assert.ok(
-    result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
-    "public browser aggregate regressed more than 5% from the protected pre-reset tree",
+    metrics.eagerBytes <= Math.floor(458_081 * 1.05),
+    "public browser eager closure regressed more than 5% from the protected pre-reset tree",
   );
-  assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
-  assert.doesNotMatch(
-    result.outputFiles[0].text,
-    /(?:globalThis|window|global)\.Buffer\s*=/u,
-  );
+  assert.ok(metrics.eagerBytes <= target.limitKb * 1024);
+  assert.ok(metrics.combinedBytes <= metrics.combinedLimitKb * 1024);
+  for (const output of result.outputFiles) {
+    assert.doesNotMatch(
+      output.text,
+      /(?:globalThis|window|global)\.Buffer\s*=/u,
+    );
+  }
 });
 
 test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims", async () => {
@@ -398,27 +595,33 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 1_005_947, modules: 67 }],
-    ["transactionCodec.js (browser)", { bytes: 301_649, modules: 48 }],
-    ["nexusApp.js (browser)", { bytes: 381_439, modules: 58 }],
-    ["canonicalRequest.js (browser)", { bytes: 98_089, modules: 34 }],
+    ["toriiClient.js", { bytes: 998_331, modules: 97 }],
+    ["transactionCodec.js (browser)", { bytes: 300_611, modules: 45 }],
+    ["nexusApp.js (browser)", { bytes: 384_814, modules: 55 }],
+    ["canonicalRequest.js (browser)", { bytes: 95_840, modules: 42 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
-    const result = await build({
-      entryPoints: [target.entryPoint],
-      bundle: true,
-      write: false,
-      platform: target.platform,
-      target: target.target,
-      format: "esm",
-      treeShaking: true,
-      sourcemap: false,
-      minify: true,
-      metafile: true,
-    });
+    const split = (target.lazyChunks?.length ?? 0) > 0;
+    const result = await build(
+      split
+        ? splitBuildOptions(target)
+        : {
+            entryPoints: [target.entryPoint],
+            bundle: true,
+            write: false,
+            platform: target.platform,
+            target: target.target,
+            format: "esm",
+            treeShaking: true,
+            sourcemap: false,
+            minify: true,
+            metafile: true,
+          },
+    );
+    const splitMetrics = split ? analyzeSplitBundle(result, target) : undefined;
     const actual = {
-      bytes: result.outputFiles[0].contents.byteLength,
+      bytes: splitMetrics?.eagerBytes ?? result.outputFiles[0].contents.byteLength,
       modules: Object.keys(result.metafile.inputs).length,
     };
     if ([
@@ -445,9 +648,17 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        645,
-        "Torii hard ceiling must retain the audited 645-byte headroom",
+        8_261,
+        "Torii hard ceiling must retain the audited 8,261-byte eager headroom",
       );
+      assert.deepEqual(
+        splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
+        [{ specifier: "./sumeragiTyped.js", bytes: 71_905 }],
+      );
+      assert.equal(splitMetrics.combinedBytes, 1_070_236);
+      assert.equal(splitMetrics.combinedLimitKb, 1_054);
+      assert.equal(splitMetrics.eagerBytes, target.reviewedEagerBytes);
+      assert.equal(splitMetrics.combinedBytes, target.reviewedCombinedBytes);
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
     assert.ok(

@@ -71,7 +71,10 @@ pub struct DiagnosticExplanation {
     /// Concrete remediation guidance.
     pub help: &'static str,
 }
-include!(concat!(env!("OUT_DIR"), "/kotodama_diagnostic_explanations.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/kotodama_diagnostic_explanations.rs"
+));
 /// Preserve resolver ownership when a later typed-analysis adapter surfaces a
 /// diagnostic whose canonical registry entry belongs to resolution.
 ///

@@ -1,6 +1,8 @@
 #[model]
 mod model {
     use super::*;
+    #[cfg(feature = "json")]
+    use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
     /// Sole first-release Kagemusha device authority key.
     ///
     /// The wire value is exactly one canonical uncompressed SEC1 NIST P-256
@@ -8,10 +10,7 @@ mod model {
     /// selector in this type or any request carrying it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaDevicePublicKeyV2(
         pub(super) [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
     );
@@ -22,10 +21,7 @@ mod model {
     /// recoverable encodings are not part of the protocol.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaDeviceSignatureV2(pub(super) [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]);
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
@@ -33,10 +29,7 @@ mod model {
     /// authoritative asset definition and determines the public quantity
     /// spelling used when charging or crediting the online balance.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaScaledAmountV2 {
         /// Positive proof amount in the asset's smallest unit.
         pub atomic_units: u128,
@@ -45,10 +38,7 @@ mod model {
     }
     /// Scale-, network-, and asset-bound spendable note descriptor.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaSpendableNoteDescriptorV2 {
         /// Exact network that scopes the commitment and nullifier.
         pub network_id: NetworkId,
@@ -68,10 +58,7 @@ mod model {
     /// Witness nodes are deliberately absent: native verification recomputes
     /// every Poseidon node from the note commitment and these canonical fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaConfidentialMerklePathV2 {
         /// One canonical sibling field element per tree level.
         pub siblings: Vec<[u8; 32]>,
@@ -87,10 +74,7 @@ mod model {
     /// `dummy_input_path` authenticates a distinct canonical empty leaf against
     /// the same root for the fixed two-input confidential circuits.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaNoteMembershipWitnessV2 {
         /// Confidential-tree position of the owned note.
         pub leaf_index: u32,
@@ -107,10 +91,7 @@ mod model {
     /// disjoint while allowing the ledger to reject an ancestor and any of its
     /// descendants by a deterministic prefix check.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBranchPathV2 {
         /// Stable top-up lineage root, unique for one online-to-offline operation.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -130,10 +111,7 @@ mod model {
     /// Carrying every ancestor choice prevents recipient/change outputs from
     /// alternative splits of the same parent from being mixed to inflate value.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBranchClaimV2 {
         /// Canonical leaf coordinate used for ancestor/descendant conflicts.
         pub path: KagemushaRecursiveSpendBranchPathV2,
@@ -148,10 +126,7 @@ mod model {
     /// archive. It is supplied through a separate native-only archive and must
     /// never cross a payment, Torii, or peer protocol boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecipientOutputDerivationRequestV2 {
         /// Exact network that scopes the output commitment and nullifier.
         pub network_id: NetworkId,
@@ -170,10 +145,7 @@ mod model {
     /// `rho`, and owner tag required by the sender's proof. It must never
     /// contain the receiver spend key or the output diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecipientOutputDerivationResultV2 {
         /// Receiver-owned confidential output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
@@ -182,10 +154,7 @@ mod model {
     }
     /// Canonical unsigned fields of a receiver-created payment request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecipientPaymentRequestSigningPayloadV2 {
         /// Exact network that scopes the note and its nullifier.
         pub network_id: NetworkId,
@@ -223,10 +192,7 @@ mod model {
     /// the requested commitment; it must never contain the receiver's spend
     /// key or diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecipientPaymentRequestV2 {
         /// Exact network that scopes the note and its nullifier.
         pub network_id: NetworkId,
@@ -263,20 +229,14 @@ mod model {
     /// additionally carries the App Attest authenticator data that Apple binds
     /// ahead of the client-data hash.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaAndroidKeyMintHardwareAssertionV1 {
         /// Canonical raw low-S P-256 signature (`r || s`).
         pub signature: KagemushaDeviceSignatureV2,
     }
     /// Apple App Attest assertion result for an online operation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaIosAppAttestHardwareAssertionV1 {
         /// Exact authenticator data returned by `generateAssertion`.
         pub authenticator_data: Vec<u8>,
@@ -285,10 +245,7 @@ mod model {
     }
     /// Typed platform assertion, without a stringly-typed fallback variant.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "platform", content = "assertion", rename_all = "snake_case")]
     pub enum KagemushaOnlineHardwareAssertionV1 {
         /// Android `KeyMint` `SHA256withECDSA` assertion from a maxUsageCount=1 key.
@@ -298,10 +255,7 @@ mod model {
     }
     /// Self-contained payer/recipient hardware authorization carried inside one V2 archive.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRequestAuthorizationV2 {
         /// Account bound by the registered hardware assertion key.
         pub authority: AccountId,
@@ -339,10 +293,7 @@ mod model {
     /// parses the proof public inputs and rechecks them against authoritative
     /// ledger state before mutating balances or the confidential tree.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaTopUpShieldEvidenceV2 {
         /// Authoritative confidential root before inserting the top-up note.
@@ -362,10 +313,7 @@ mod model {
     /// transition archive. Peer payloads carry only this strict identity pair;
     /// redemption resolves it before crediting any value.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpAnchorRefV2 {
         /// Stable top-up operation identifier used for the chain-state lookup.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -386,10 +334,7 @@ mod model {
     /// current roster in every proof without making the context identifier an
     /// opaque, attacker-selected cross-network binding.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityHeightContextV2 {
         /// Typed identifier of the complete persisted height context.
         pub context_id: HeightContextId,
@@ -422,10 +367,7 @@ mod model {
     }
     /// Canonical Sumeragi-v2 height-context projection and Commit certificate.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityCompactQcV2 {
         /// Bounded immutable consensus-context projection for the finalized height.
         pub height_context: KagemushaTopUpFinalityHeightContextV2,
@@ -434,10 +376,7 @@ mod model {
     }
     /// Canonical balanced-Merkle inclusion path for one finalized top-up.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpAnchorMerkleProofV2 {
         /// Position in strict operation-id order.
         pub leaf_index: u32,
@@ -453,10 +392,7 @@ mod model {
     /// Offline-verifiable proof that a finalized Commit QC authenticated one
     /// exact `(operation_id, anchor_digest)` write.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityProofV2 {
         /// Proof layout version.
         pub version: u16,
@@ -469,10 +405,7 @@ mod model {
     }
     /// Ordered validator set trusted for one non-overlapping height window.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityRosterWindowV2 {
         /// First accepted block height, inclusive.
         pub activates_at_height: u64,
@@ -487,10 +420,7 @@ mod model {
     }
     /// Content-addressed trust artifact prefetched before any peer exchange.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityRosterArtifactV2 {
         /// Artifact layout version.
         pub version: u16,
@@ -503,10 +433,7 @@ mod model {
     }
     /// Canonical descriptor for one previous branch consumed by a V2 split.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendInputBranchV2 {
         /// Canonical digest of the complete previous recursive bundle.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -526,10 +453,7 @@ mod model {
     }
     /// Role of one independently spendable output from a V2 split.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "branch", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendBranchV2 {
         /// Receiver-owned output branch.
@@ -539,10 +463,7 @@ mod model {
     }
     /// Canonical unshield-v3 public words cross-checked by the V4 redemption transition.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaUnshieldPublicInputsBindingV2 {
         /// First input note commitment.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -574,10 +495,7 @@ mod model {
     }
     /// Curve role of one proof in the current two-proof Pasta recursion pair.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "parity", content = "value", rename_all = "snake_case")]
     pub enum KagemushaPastaCycleParityV1 {
         /// EqAffine/Vesta recursive step over the Pallas scalar field.
@@ -587,10 +505,7 @@ mod model {
     }
     /// Canonical exact state vector carried across the Pasta field boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendStateBoundaryV5 {
         /// State-boundary layout version.
         pub layout_version: u16,
@@ -599,10 +514,7 @@ mod model {
     }
     /// Exact dynamic offsets for one authenticated V4 public instance column.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaPastaPublicLayoutV4 {
         /// Authenticated IPA degree and accumulator round count.
         pub ipa_round_count: u32,
@@ -627,10 +539,7 @@ mod model {
     /// constructors must receive this value from an authenticated V4 manifest;
     /// no FFI or local configuration value may substitute for it.
     #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaStepCircuitParamsV4 {
         /// Exact parameter-layout version.
         pub version: u16,
@@ -655,10 +564,7 @@ mod model {
     }
     /// Kind of content-addressed material bound to one V4 Pasta profile.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
     pub enum KagemushaPastaCycleArtifactKindV4 {
         /// Canonical `ParamsIPA` generator material.
@@ -672,10 +578,7 @@ mod model {
     }
     /// One immutable file in a V4 recursive-spend artifact manifest.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaPastaCycleArtifactV4 {
         /// Material kind within the parity profile.
         pub kind: KagemushaPastaCycleArtifactKindV4,
@@ -698,10 +601,7 @@ mod model {
     /// streaming loader validates these small role bindings first, then hashes
     /// exactly `payload_size_bytes` trailing bytes before exposing the payload.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaPastaCycleFramedArtifactHeaderV4 {
         /// Exact `KRV4KEY` public-header layout version.
         pub version: u16,
@@ -741,10 +641,7 @@ mod model {
     }
     /// V4 reference to the unchanged canonical top-up finality roster type.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaTopUpFinalityRosterArtifactReferenceV4 {
         /// Safe single-component V4 file name.
         pub file_name: String,
@@ -766,10 +663,7 @@ mod model {
     }
     /// Authenticated fixed configuration and key material for one V4 parity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaPastaCycleProofProfileV4 {
         /// Curve/parity implemented by this profile.
         pub parity: KagemushaPastaCycleParityV1,
@@ -793,10 +687,7 @@ mod model {
     }
     /// One raw-byte-qualified untracked regular file in a reviewed source closure.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedSourceClosureManifestEntryV1 {
         /// SHA-256 of the exact regular-file bytes.
@@ -819,10 +710,7 @@ mod model {
     /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
     /// including those in untracked-file entries, are lowercase hex strings.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedSourceClosureV1 {
         /// Exact reviewed-source-closure schema.
@@ -833,7 +721,7 @@ mod model {
         pub source_commit: String,
         /// Derived dirty state; first release requires `false`.
         pub source_repo_dirty: bool,
-        /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
+        /// Producer full-tree SHA-256 of the tracked tree, including `Cargo.lock`.
         #[cfg_attr(
             feature = "json",
             norito(json = "crate::json_helpers::fixed_bytes_hex")
@@ -856,9 +744,13 @@ mod model {
             norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
-        /// Exact ignored root `Cargo.lock` byte length.
+        /// Exact tracked root `Cargo.lock` byte length.
+        ///
+        /// The field name is retained for V1 wire compatibility.
         pub ignored_cargo_lock_size_bytes: u64,
-        /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
+        /// SHA-256 of the exact tracked root `Cargo.lock` bytes.
+        ///
+        /// The field name is retained for V1 wire compatibility.
         #[cfg_attr(
             feature = "json",
             norito(json = "crate::json_helpers::fixed_bytes_hex")
@@ -873,10 +765,7 @@ mod model {
     }
     /// Exact descriptor of the signed root `Cargo.lock` tracked by a V2 source closure.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedTrackedCargoLockV2 {
         /// Fixed signed-tree path, exactly `Cargo.lock`.
@@ -901,10 +790,7 @@ mod model {
     /// cross-check for the producer and authenticated source-seal boundary; it
     /// never represents an ignored or external overlay.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedSourceClosureV2 {
         /// Exact tracked-lock reviewed-source-closure schema.
@@ -951,10 +837,7 @@ mod model {
     }
     /// Production release manifest for degree-parameterized paired Pasta proofs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendArtifactManifestV4 {
         /// Exact V4 manifest schema identifier.
         pub schema: String,
@@ -980,6 +863,15 @@ mod model {
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// SHA-256 of the canonical authenticated source-seal projection embedded by the build.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// SHA-256 of the reviewed Cargo binary that built the sealed candidate executable.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// SHA-256 of the reviewed rustc binary that built the sealed candidate executable.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact network for which the release was built.
         pub network_id: NetworkId,
         /// Asset definition for which the release was built.
@@ -1019,14 +911,12 @@ mod model {
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
     /// The embedded manifest commits the independently reviewed clean source
-    /// closure, network parameters, inline circuit configuration, exact eight
-    /// recursive artifacts, and finality roster. Its benchmark, review, and
-    /// qualification and external-evidence digest slots must all be zero.
+    /// closure, authenticated source-seal projection, reviewed Cargo/rustc
+    /// binaries, network parameters, inline circuit configuration, exact eight
+    /// recursive artifacts, and finality roster. Its benchmark, review,
+    /// qualification, and external-evidence digest slots must all be zero.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCandidateV4 {
         /// Exact candidate-record schema identifier.
@@ -1042,10 +932,7 @@ mod model {
     /// proof profiles and artifact payload formats remain the explicitly named
     /// V4 cryptographic types until a separately versioned cryptographic change.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendArtifactManifestV5 {
         /// Exact V5 manifest schema identifier.
@@ -1115,10 +1002,7 @@ mod model {
     }
     /// Immutable V5 candidate captured before qualification and external evidence exist.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCandidateV5 {
         /// Exact candidate-record schema identifier.
@@ -1134,10 +1018,7 @@ mod model {
     /// are deliberately absent. Consumers must derive them from these exact proof
     /// pairs while authenticating every candidate artifact role.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendQualificationReceiptV4 {
         /// Exact receipt schema identifier.
@@ -1150,6 +1031,15 @@ mod model {
         /// SHA-256 of the candidate's exact canonical unsigned manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) manifest_sha256: [u8; 32],
+        /// Authenticated source-seal projection digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Reviewed Cargo binary digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) reviewed_cargo_binary_sha256: [u8; 32],
+        /// Reviewed rustc binary digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
         pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
@@ -1168,10 +1058,7 @@ mod model {
     /// inventory. The repeated human-auditable fields prevent a correctly signed
     /// review from being presented with an ambiguous release description.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
         /// SHA-256 of the canonical immutable pre-evidence candidate.
@@ -1195,6 +1082,15 @@ mod model {
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// Exact authenticated source-seal projection digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Exact reviewed Cargo binary digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Exact reviewed rustc binary digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact network for which the reviewed candidate was built.
         pub network_id: NetworkId,
         /// Asset definition for which the reviewed candidate was built.
@@ -1204,10 +1100,7 @@ mod model {
     }
     /// Production disposition recorded by an independent cryptographic review.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "decision", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendCryptographicReviewDecisionV4 {
         /// The exact candidate is approved for release finalization.
@@ -1217,10 +1110,7 @@ mod model {
     }
     /// Closed, canonically ordered set of security properties reviewed for V4.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "check", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendCryptographicReviewCheckV4 {
         /// Recursive-circuit constraints cover every claimed state transition.
@@ -1238,10 +1128,7 @@ mod model {
     }
     /// Result of one mandatory cryptographic-review check.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "status", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendCryptographicReviewCheckStatusV4 {
         /// The referenced evidence supports the reviewed property.
@@ -1251,10 +1138,7 @@ mod model {
     }
     /// One content-addressed mandatory check inside a V4 review.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewCheckResultV4 {
         /// Mandatory reviewed property.
@@ -1267,10 +1151,7 @@ mod model {
     }
     /// Exact domain-separated payload signed by every V4 reviewer.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
         /// Cross-protocol replay separator.
@@ -1289,10 +1170,7 @@ mod model {
     }
     /// One policy-authorized signature over a complete V4 review payload.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewApprovalV4 {
         /// Reviewer identity selected by the trusted release policy.
@@ -1302,10 +1180,7 @@ mod model {
     }
     /// Canonical signed independent cryptographic-review evidence for ABI-21/V4.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
         /// Exact V4 cryptographic-review schema.
@@ -1319,10 +1194,7 @@ mod model {
     }
     /// Independent authority role required to promote an authenticated release.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "role", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendReleaseApprovalRoleV1 {
         /// Operational release authority approving publication.
@@ -1334,10 +1206,7 @@ mod model {
     }
     /// Immutable subject shared by every role-specific V4 release approval.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
         /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1360,6 +1229,15 @@ mod model {
         /// Exact independently pinned closure descriptor digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// Exact authenticated source-seal projection digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Exact reviewed Cargo binary digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Exact reviewed rustc binary digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
@@ -1369,10 +1247,7 @@ mod model {
     }
     /// Domain-separated value signed for one independent V4 approval role.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleaseApprovalPayloadV4 {
         /// Cross-protocol replay separator.
         pub domain: String,
@@ -1383,10 +1258,7 @@ mod model {
     }
     /// One role-bound signature inside a V4 release attestation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleaseApprovalV4 {
         /// Independent authority role represented by this signature.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1397,10 +1269,7 @@ mod model {
     }
     /// Authenticated release envelope whose digest occupies the V4 manifest slot.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleaseAttestationV4 {
         /// Exact V4 attestation schema.
         pub schema: String,
@@ -1413,10 +1282,7 @@ mod model {
     }
     /// Trusted signer threshold for one independent release-approval role.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleaseRolePolicyV1 {
         /// Role governed by this threshold.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1427,10 +1293,7 @@ mod model {
     }
     /// Locally trusted policy for authenticating a release envelope.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendReleasePolicyV1 {
         /// Exact policy schema.
         pub schema: String,
@@ -1443,10 +1306,7 @@ mod model {
     }
     /// Verified signer identity retained in a machine-readable promotion record.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendApprovedSignerV1 {
         /// Approval role satisfied by this signer.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1455,10 +1315,7 @@ mod model {
     }
     /// Deterministic ABI-21 deployment marker written only after V4 release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPromotedReleaseV4 {
         /// Exact V4 promotion-record schema.
         pub schema: String,
@@ -1466,6 +1323,15 @@ mod model {
         pub version: u16,
         /// Authenticated V4 release generation.
         pub generation: String,
+        /// Authenticated source-seal projection selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Reviewed Cargo binary selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Reviewed rustc binary selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// SHA-256 of the immutable pre-evidence candidate record.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
@@ -1500,10 +1366,7 @@ mod model {
     /// The two evidence fields contain canonical signed summaries, never raw
     /// device logs, parameters, proving keys, or bootstrap witness payloads.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseRecordV4 {
         /// Canonical evidence-bearing release manifest.
@@ -1519,10 +1382,7 @@ mod model {
     }
     /// Atomic consensus payload for one ABI-21 release and its two terminal verifiers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseActivationV4 {
         /// Fully authenticated signed release record.
@@ -1541,10 +1401,7 @@ mod model {
     }
     /// Canonical proof-bearing receipt for an exact V5 candidate.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendQualificationReceiptV5 {
         /// Exact V5 receipt schema identifier.
@@ -1571,10 +1428,7 @@ mod model {
     }
     /// Immutable V5 release identity reviewed before evidence finalization.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewSubjectV5 {
         /// SHA-256 of the canonical immutable V5 candidate.
@@ -1612,10 +1466,7 @@ mod model {
     }
     /// Exact domain-separated payload signed by every V5 reviewer.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewPayloadV5 {
         /// Cross-protocol replay separator.
@@ -1634,10 +1485,7 @@ mod model {
     }
     /// One policy-authorized signature over a complete V5 review payload.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewApprovalV5 {
         /// Reviewer identity selected by the trusted release policy.
@@ -1647,10 +1495,7 @@ mod model {
     }
     /// Canonical signed independent cryptographic-review evidence for V5.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewEvidenceV5 {
         /// Exact V5 cryptographic-review schema.
@@ -1664,10 +1509,7 @@ mod model {
     }
     /// Immutable subject shared by every role-specific V5 release approval.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV5 {
         /// SHA-256 of the canonical V5 manifest with its attestation slot zeroed.
@@ -1705,10 +1547,7 @@ mod model {
     }
     /// Domain-separated value signed for one independent V5 approval role.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseApprovalPayloadV5 {
         /// Cross-protocol replay separator.
@@ -1720,10 +1559,7 @@ mod model {
     }
     /// One role-bound signature inside a V5 release attestation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseApprovalV5 {
         /// Independent authority role represented by this signature.
@@ -1735,10 +1571,7 @@ mod model {
     }
     /// Authenticated release envelope whose digest occupies the V5 manifest slot.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseAttestationV5 {
         /// Exact V5 attestation schema.
@@ -1752,10 +1585,7 @@ mod model {
     }
     /// Deterministic V5 deployment marker written only after release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendPromotedReleaseV5 {
         /// Exact V5 promotion-record schema.
@@ -1795,10 +1625,7 @@ mod model {
     }
     /// Complete signed V5 release material persisted by consensus activation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseRecordV5 {
         /// Canonical evidence-bearing V5 release manifest.
@@ -1814,10 +1641,7 @@ mod model {
     }
     /// Atomic consensus payload for one V5 release and its two unchanged terminal verifiers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseActivationV5 {
         /// Fully authenticated signed V5 release record.
@@ -1839,10 +1663,7 @@ mod model {
     /// The explicit wire version prevents an unversioned historical binding
     /// from being interpreted as an ABI-21 release identity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendArtifactBindingV4 {
         /// Exact ABI-21 binding version. Only `4` is accepted.
         pub version: u16,
@@ -1859,10 +1680,7 @@ mod model {
     /// that persists the accepted bundle. Duplicate delivery returns those
     /// exact bytes instead of signing a new timestamp.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaReceiverAcknowledgementPayloadV2 {
         /// Sender operation whose reserved inputs may be committed after ACK verification.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1888,10 +1706,7 @@ mod model {
     }
     /// Signed durable receiver acknowledgement for one offline payment.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaReceiverAcknowledgementV2 {
         /// Canonical signed bindings.
         pub payload: KagemushaReceiverAcknowledgementPayloadV2,
@@ -1900,10 +1715,7 @@ mod model {
     }
     /// Typed result returned after native acknowledgement verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaReceiverAcknowledgementVerifyResultV2 {
         /// All request, bundle, key-reference, and signature bindings passed.
         pub valid: bool,
@@ -1922,10 +1734,7 @@ mod model {
     }
     /// Native capability record for the explicitly versioned ABI-21 backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendNativeCapabilitiesV4 {
         /// Native bridge ABI reported by the loaded library.
         pub bridge_abi_version: u32,
@@ -1956,10 +1765,7 @@ mod model {
     /// `proof`; wallets and bridge carriers do not reinterpret its internal
     /// accumulators or fold transcripts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaPastaCycleProofEnvelopeV4 {
         /// Exact V4 proof-envelope version.
         pub version: u16,
@@ -2003,10 +1809,7 @@ mod model {
     /// element in little-endian `u32` order. Core rejects non-canonical field
     /// encodings before proof verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendOperationVectorV4 {
         /// All 1,080 exact public limbs; no compact or legacy encoding is accepted.
@@ -2018,10 +1821,7 @@ mod model {
     }
     /// Peer-to-peer split transition carried by an ABI-21 recursive output.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPeerSplitTransitionV4 {
         /// Circuit-exposed digest of the exact local split intent.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2041,10 +1841,7 @@ mod model {
     }
     /// Partial-redemption change transition carried by an ABI-21 child statement.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedemptionChangeTransitionV4 {
         /// Circuit-exposed digest of the exact redemption/change intent.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2062,10 +1859,7 @@ mod model {
     }
     /// Mutually exclusive semantic transition that produced an ABI-21 state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "transition", content = "value", rename_all = "snake_case")]
     pub enum KagemushaRecursiveSpendTransitionV4 {
         /// Ordinary offline peer split.
@@ -2075,10 +1869,7 @@ mod model {
     }
     /// Canonical public statement bound by an ABI-21 recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPublicStatementV4 {
         /// Exact network that scopes this cash state.
         pub network_id: NetworkId,
@@ -2110,10 +1901,7 @@ mod model {
     }
     /// V4 recursive proof whose public instance includes the statement digest.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendProofV4 {
         /// Verifier selected by the statement.
         pub verifier_key_id: VerifyingKeyId,
@@ -2125,10 +1913,7 @@ mod model {
     }
     /// Independently spendable ABI-21 recursive state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBundleV4 {
         /// Exact public statement bound by the proof.
         pub statement: KagemushaRecursiveSpendPublicStatementV4,
@@ -2139,10 +1924,7 @@ mod model {
     }
     /// Finalized top-up anchor selecting a V4 recursive release.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpAnchorV4 {
         /// Anchor schema version.
         pub version: u16,
@@ -2187,10 +1969,7 @@ mod model {
     }
     /// Canonical unsigned ABI-21 online-to-offline fields covered by payer authorization.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpUnsignedV4 {
         /// Exact chain-request wire version. Only `4` is accepted.
@@ -2211,10 +1990,7 @@ mod model {
     }
     /// Authoritative ABI-21 chain-facing online-to-offline request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(schema_name = "iroha.torii.v1.offline.top_up.request")]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpRequestV4 {
@@ -2238,10 +2014,7 @@ mod model {
     }
     /// Public V4 split transition with an ABI-21 output binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendSplitIntentV4 {
         /// Exact network inherited from the parent state and receiver request.
         pub network_id: NetworkId,
@@ -2270,10 +2043,7 @@ mod model {
     }
     /// Public V4 redemption transition with an optional ABI-21 change binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedemptionIntentV4 {
         /// Exact network inherited from the input bundle.
         pub network_id: NetworkId,
@@ -2314,10 +2084,7 @@ mod model {
     }
     /// ABI-21 local initialization request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendInitRequestV4 {
         /// Finalized chain receipt consumed by the initial proof.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
@@ -2330,10 +2097,7 @@ mod model {
     }
     /// ABI-21 initialization result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendInitResultV4 {
         /// Independently spendable state created from the finalized top-up.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -2347,10 +2111,7 @@ mod model {
     }
     /// One V4 previous-proof package consumed by append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendAppendInputV4 {
         /// Previous spendable ABI-21 recursive state.
         pub previous_bundle: KagemushaRecursiveSpendBundleV4,
@@ -2359,10 +2120,7 @@ mod model {
     }
     /// ABI-21 recursive append request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendAppendRequestV4 {
         /// One or two previous-proof packages in canonical order.
         pub previous_inputs: Vec<KagemushaRecursiveSpendAppendInputV4>,
@@ -2375,10 +2133,7 @@ mod model {
     }
     /// Result of one ABI-21 recursive split append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendSplitResultV4 {
         /// Exact value-conserving transition shared by both branches.
         pub split: KagemushaRecursiveSpendSplitIntentV4,
@@ -2400,10 +2155,7 @@ mod model {
     }
     /// Recipient-only ABI-21 peer payload emitted from a local split result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPeerPaymentV4 {
         /// Receiver-owned independently spendable ABI-21 branch.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
@@ -2414,10 +2166,7 @@ mod model {
     }
     /// Complete finalized V4 origin carried to an offline receiver.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
         /// Complete finalized ABI-21 top-up receipt.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
@@ -2426,10 +2175,7 @@ mod model {
     }
     /// Complete authenticated top-up provenance carried by every spendable ABI-21 branch.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpProvenanceV4 {
         /// Exact manifest-bound validator roster shared by every origin proof.
         pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
@@ -2438,10 +2184,7 @@ mod model {
     }
     /// ABI-21 receiver-verification request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendVerifyRequestV4 {
         /// Scale- and split-bound ABI-21 recursive bundle.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -2460,10 +2203,7 @@ mod model {
     }
     /// Opaque-safe summary decoded from an ABI-21 bundle.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBundleSummaryV4 {
         /// Asset definition bound by the proof.
         pub asset: AssetDefinitionId,
@@ -2491,10 +2231,7 @@ mod model {
     }
     /// Typed ABI-21 receiver-verification result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendVerifyResultV4 {
         /// Cryptographic proof and all public bindings verified.
         pub valid: bool,
@@ -2527,10 +2264,7 @@ mod model {
     }
     /// Proof-bound V4 offline change child created by partial redemption.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemChangeBranchV4 {
         /// Exact change descriptor exposed by unshield-v3.
         pub output: KagemushaSpendableNoteDescriptorV2,
@@ -2541,10 +2275,7 @@ mod model {
     }
     /// ABI-21 native redemption builder input.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemBuildRequestV4 {
         /// Spendable recursive state being redeemed.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -2564,10 +2295,7 @@ mod model {
     }
     /// Canonical unsigned ABI-21 chain redemption fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemUnsignedV4 {
         /// Exact chain-request wire version. Only `4` is accepted.
         pub version: u16,
@@ -2591,10 +2319,7 @@ mod model {
     }
     /// Prepared unsigned ABI-21 redemption result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemBuildResultV4 {
         /// Complete unsigned V4 chain-request fields.
         pub unsigned: KagemushaRecursiveSpendRedeemUnsignedV4,
@@ -2613,10 +2338,7 @@ mod model {
     }
     /// Versioned ABI-21 offline-to-online request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(schema_name = "iroha.torii.v1.offline.redeem.request")]
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemRequestV4 {
@@ -2644,10 +2366,7 @@ mod model {
     }
     /// Typed native ABI-21 redemption output.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemResultV4 {
         /// Exact ABI-21 result wire version. Only `4` is accepted.
         pub version: u16,

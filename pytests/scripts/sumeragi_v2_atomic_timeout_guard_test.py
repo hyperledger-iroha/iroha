@@ -176,9 +176,12 @@ def test_atomic_timeout_kernels_reject_projection_owner_and_survivor_mutations(
         ),
         (
             "TimeoutCertificateAfterReceipt",
+            "     CanonicalTimeoutVotes(\n"
+            "       CurrentEpoch,\n"
+            "       TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), "
+            "node, vote.view)))\n",
             "     TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), "
             "node, vote.view))\n",
-            "     TimeoutVotesAt(node, vote.view))\n",
         ),
         (
             "TimeoutInstallRequestAfterReceipt",

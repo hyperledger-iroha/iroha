@@ -374,8 +374,9 @@ THEOREM BootstrapParentQuorumTyped ==
       /\ initialContext.height > 0
       => /\ BootstrapParentSigners(initialContext)
                  \subseteq ValidatorIds
-         /\ DualQuorum(BootstrapParentContext(initialContext).epoch,
-                       BootstrapParentSigners(initialContext))
+         /\ ExactCertificateQuorum(
+              BootstrapParentContext(initialContext).epoch,
+              BootstrapParentSigners(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
               ModelConfiguration,
@@ -383,7 +384,7 @@ PROOF
               initialContext.height > 0
          PROVE /\ BootstrapParentSigners(initialContext)
                     \subseteq ValidatorIds
-               /\ DualQuorum(
+               /\ ExactCertificateQuorum(
                     BootstrapParentContext(initialContext).epoch,
                     BootstrapParentSigners(initialContext))
     <2>1. BootstrapParentContext(initialContext).epoch \in Epochs
@@ -392,11 +393,13 @@ PROOF
              \subseteq ValidatorIds
       BY <1>1, <2>1, Isa
          DEF ModelConfiguration, QuorumConfiguration, VotingRoster
-    <2>3. DualQuorum(
+    <2>3. ExactCertificateQuorum(
              BootstrapParentContext(initialContext).epoch,
-             Responsive
-               \cap VotingRoster(
-                      BootstrapParentContext(initialContext).epoch))
+             CanonicalCertificateSigners(
+               BootstrapParentContext(initialContext).epoch,
+               Responsive
+                 \cap VotingRoster(
+                        BootstrapParentContext(initialContext).epoch)))
       BY <1>1, <2>1 DEF ModelConfiguration
     <2> QED BY <2>2, <2>3 DEF BootstrapParentSigners
   <1> QED BY <1>1
@@ -626,7 +629,7 @@ THEOREM HistoricalQcConstructorValid ==
      /\ roundView \in Views
      /\ phase \in Phases
      /\ subject \in ValidSubjects
-     /\ DualQuorum(contextValue.epoch, signers))
+     /\ ExactCertificateQuorum(contextValue.epoch, signers))
       => HistoricalQcValid(
            QC(contextValue, roundView, phase, subject, signers))
 PROOF
@@ -641,7 +644,7 @@ PROOF
               roundView \in Views,
               phase \in Phases,
               subject \in ValidSubjects,
-              DualQuorum(contextValue.epoch, signers)
+              ExactCertificateQuorum(contextValue.epoch, signers)
          PROVE HistoricalQcValid(
                  QC(contextValue, roundView, phase, subject, signers))
     <2>1. /\ QC(contextValue, roundView, phase, subject, signers).context
@@ -744,9 +747,13 @@ PROOF
       BY <1>1, BootstrapParentContextTyped
     <2>2. /\ BootstrapParentSigners(initialContext)
                     \subseteq ValidatorIds
+          /\ ExactCertificateQuorum(
+               BootstrapParentContext(initialContext).epoch,
+               BootstrapParentSigners(initialContext))
           /\ DualQuorum(BootstrapParentContext(initialContext).epoch,
                         BootstrapParentSigners(initialContext))
       BY <1>1, BootstrapParentQuorumTyped
+         DEF ExactCertificateQuorum
     <2>3. /\ 0 \in Views
           /\ {"Prepare", "Commit"} \subseteq Phases
       BY <1>1, SMT DEF ModelConfiguration, Views, Phases
@@ -4248,11 +4255,12 @@ PROOF
           /\ qc.view \in Views
           /\ qc.phase \in Phases
           /\ qc.subject \in ValidSubjects
-          /\ DualQuorum(qc.context.epoch, qc.signers)
+          /\ ExactCertificateQuorum(qc.context.epoch, qc.signers)
       BY <1>1 DEF TypeInvariant, QcValid, QcWireValid, CurrentEpoch
     <2>2. qc.context.epoch \in Epochs
       BY <1>1
-         DEF QcValid, QcWireValid, CurrentEpoch, DualQuorum, CountQuorum
+         DEF QcValid, QcWireValid, CurrentEpoch,
+             ExactCertificateQuorum, DualQuorum, CountQuorum
     <2> QED BY <2>1, <2>2 DEF HistoricalQcValid
   <1> QED BY <1>1
 
@@ -4260,7 +4268,8 @@ THEOREM CurrentQcBackingIsCertificateBacking ==
   \A qc, intents:
     QcWireValid(qc) /\ CertificateHonestIntentBacked(qc, intents)
       => CertificateBackedBy(CurrentEpoch, qc, intents)
-BY DEF QcWireValid, CertificateHonestIntentBacked, CertificateBackedBy
+BY DEF QcWireValid, ExactCertificateQuorum,
+       CertificateHonestIntentBacked, CertificateBackedBy
 
 THEOREM WireValidBackedCertificateIsSemanticallyValid ==
   \A qc, intents, durable:
@@ -4280,7 +4289,8 @@ PROOF
           /\ CurrentEpoch \in Epochs
       BY <1>1
          DEF TypeInvariant, ModelConfiguration, QcWireValid,
-             CurrentEpoch, DualQuorum, CountQuorum
+             CurrentEpoch, ExactCertificateQuorum,
+             DualQuorum, CountQuorum
     <2>2. CertificateValidityAndAvailability(
              qc, durable, ValidSubjects)
       BY <1>1, <2>1, BackedCertificateIsValidAndAvailable
@@ -4362,27 +4372,32 @@ THEOREM PrepareVotePoolCertificateIsIntentBacked ==
     HonestVoteTransportBacked
       => CertificateHonestIntentBacked(
            QC(context, roundView, "Prepare", subject,
-              VoteSignersAt(node, roundView, "Prepare", subject)),
+              ProjectedVoteSignersAt(
+                node, roundView, "Prepare", subject)),
            prepareIntents)
 PROOF
   <1>1. ASSUME NEW node, NEW roundView, NEW subject,
               HonestVoteTransportBacked
          PROVE CertificateHonestIntentBacked(
                  QC(context, roundView, "Prepare", subject,
-                    VoteSignersAt(node, roundView, "Prepare", subject)),
+                    ProjectedVoteSignersAt(
+                      node, roundView, "Prepare", subject)),
                  prepareIntents)
     <2>1. ASSUME NEW signer \in
                     QC(context, roundView, "Prepare", subject,
-                       VoteSignersAt(node, roundView, "Prepare", subject)).signers
+                       ProjectedVoteSignersAt(
+                         node, roundView, "Prepare", subject)).signers
                       \cap Honest
            PROVE \E vote \in prepareIntents:
                    VoteBacksCertificate(
                      vote,
                      QC(context, roundView, "Prepare", subject,
-                        VoteSignersAt(node, roundView, "Prepare", subject)),
+                        ProjectedVoteSignersAt(
+                          node, roundView, "Prepare", subject)),
                      signer)
       <3>1. signer \in
-               VoteSignersAt(node, roundView, "Prepare", subject)
+               ProjectedVoteSignersAt(
+                 node, roundView, "Prepare", subject)
         BY <2>1 DEF QC
       <3>2. PICK received \in receivedVotes:
                /\ received.node = node
@@ -4391,14 +4406,16 @@ PROOF
                /\ received.vote.phase = "Prepare"
                /\ received.vote.subject = subject
                /\ received.vote.signer = signer
-        BY <3>1 DEF VoteSignersAt
+        BY <3>1 DEF ProjectedVoteSignersAt,
+                       CanonicalCertificateSigners, VoteSignersAt
       <3>3. received.vote \in prepareIntents
         BY <1>1, <2>1, <3>2
            DEF HonestVoteTransportBacked, VoteIntentFor
       <3>4. VoteBacksCertificate(
                received.vote,
                QC(context, roundView, "Prepare", subject,
-                  VoteSignersAt(node, roundView, "Prepare", subject)),
+                  ProjectedVoteSignersAt(
+                    node, roundView, "Prepare", subject)),
                signer)
         BY <3>2 DEF VoteBacksCertificate, QC
       <3> QED BY <3>3, <3>4
@@ -4410,26 +4427,30 @@ THEOREM CommitVotePoolCertificateIsIntentBacked ==
     HonestVoteTransportBacked
       => CertificateHonestIntentBacked(
            QC(context, roundView, "Commit", subject,
-              VoteSignersAt(node, roundView, "Commit", subject)),
+              ProjectedVoteSignersAt(
+                node, roundView, "Commit", subject)),
            commitIntents)
 PROOF
   <1>1. ASSUME NEW node, NEW roundView, NEW subject,
               HonestVoteTransportBacked
          PROVE CertificateHonestIntentBacked(
                  QC(context, roundView, "Commit", subject,
-                    VoteSignersAt(node, roundView, "Commit", subject)),
+                    ProjectedVoteSignersAt(
+                      node, roundView, "Commit", subject)),
                  commitIntents)
     <2>1. ASSUME NEW signer \in
                     QC(context, roundView, "Commit", subject,
-                       VoteSignersAt(node, roundView, "Commit", subject)).signers
+                       ProjectedVoteSignersAt(
+                         node, roundView, "Commit", subject)).signers
                       \cap Honest
            PROVE \E vote \in commitIntents:
                    VoteBacksCertificate(
                      vote,
                      QC(context, roundView, "Commit", subject,
-                        VoteSignersAt(node, roundView, "Commit", subject)),
+                        ProjectedVoteSignersAt(
+                          node, roundView, "Commit", subject)),
                      signer)
-      <3>1. signer \in VoteSignersAt(
+      <3>1. signer \in ProjectedVoteSignersAt(
                           node, roundView, "Commit", subject)
         BY <2>1 DEF QC
       <3>2. PICK received \in receivedVotes:
@@ -4439,14 +4460,16 @@ PROOF
                /\ received.vote.phase = "Commit"
                /\ received.vote.subject = subject
                /\ received.vote.signer = signer
-        BY <3>1 DEF VoteSignersAt
+        BY <3>1 DEF ProjectedVoteSignersAt,
+                       CanonicalCertificateSigners, VoteSignersAt
       <3>3. received.vote \in commitIntents
         BY <1>1, <2>1, <3>2
            DEF HonestVoteTransportBacked, VoteIntentFor
       <3>4. VoteBacksCertificate(
                received.vote,
                QC(context, roundView, "Commit", subject,
-                  VoteSignersAt(node, roundView, "Commit", subject)),
+                  ProjectedVoteSignersAt(
+                    node, roundView, "Commit", subject)),
                signer)
         BY <3>2 DEF VoteBacksCertificate, QC
       <3> QED BY <3>3, <3>4
@@ -4458,17 +4481,20 @@ THEOREM FormPrepareQCSemanticValidityIsDerived ==
     StrongInductiveInvariant /\ FormPrepareQC(node, roundView, subject)
       => QcValid(
            QC(context, roundView, "Prepare", subject,
-              VoteSignersAt(node, roundView, "Prepare", subject)))
+              ProjectedVoteSignersAt(
+                node, roundView, "Prepare", subject)))
 PROOF
   <1>1. ASSUME NEW node, NEW roundView, NEW subject,
               StrongInductiveInvariant,
               FormPrepareQC(node, roundView, subject)
          PROVE QcValid(
                  QC(context, roundView, "Prepare", subject,
-                    VoteSignersAt(node, roundView, "Prepare", subject)))
+                    ProjectedVoteSignersAt(
+                      node, roundView, "Prepare", subject)))
     <2> DEFINE Certificate ==
            QC(context, roundView, "Prepare", subject,
-              VoteSignersAt(node, roundView, "Prepare", subject))
+              ProjectedVoteSignersAt(
+                node, roundView, "Prepare", subject))
     <2>1. /\ TypeInvariant
           /\ QcWireValid(Certificate)
           /\ HonestVoteTransportBacked
@@ -4491,17 +4517,20 @@ THEOREM FormCommitQCSemanticValidityIsDerived ==
     StrongInductiveInvariant /\ FormCommitQC(node, roundView, subject)
       => QcValid(
            QC(context, roundView, "Commit", subject,
-              VoteSignersAt(node, roundView, "Commit", subject)))
+              ProjectedVoteSignersAt(
+                node, roundView, "Commit", subject)))
 PROOF
   <1>1. ASSUME NEW node, NEW roundView, NEW subject,
               StrongInductiveInvariant,
               FormCommitQC(node, roundView, subject)
          PROVE QcValid(
                  QC(context, roundView, "Commit", subject,
-                    VoteSignersAt(node, roundView, "Commit", subject)))
+                    ProjectedVoteSignersAt(
+                      node, roundView, "Commit", subject)))
     <2> DEFINE Certificate ==
            QC(context, roundView, "Commit", subject,
-              VoteSignersAt(node, roundView, "Commit", subject))
+              ProjectedVoteSignersAt(
+                node, roundView, "Commit", subject))
     <2>1. /\ TypeInvariant
           /\ QcWireValid(Certificate)
           /\ HonestVoteTransportBacked
@@ -4556,7 +4585,8 @@ PROOF
          PROVE StrongInductiveInvariant'
     <2> DEFINE NewQc ==
            QC(context, roundView, "Prepare", subject,
-              VoteSignersAt(node, roundView, "Prepare", subject))
+              ProjectedVoteSignersAt(
+                node, roundView, "Prepare", subject))
     <2>1. /\ QcValid(NewQc)
           /\ NewQc \in QcRecordSet
           /\ CertificateHonestIntentBacked(NewQc, prepareIntents)
@@ -9606,7 +9636,8 @@ PROOF
               FormCommitQC(node, roundView, subject)
          PROVE StrongInductiveInvariant'
     <2> DEFINE Signers ==
-           VoteSignersAt(node, roundView, "Commit", subject)
+           ProjectedVoteSignersAt(
+             node, roundView, "Commit", subject)
     <2> DEFINE Certificate ==
            QC(context, roundView, "Commit", subject, Signers)
     <2> DEFINE Request == DecisionWal(node, Certificate, TRUE)
@@ -10675,7 +10706,9 @@ PROOF
               StrongInductiveInvariant,
               FormTC(node, roundView)
          PROVE StrongInductiveInvariant'
-    <2> DEFINE Votes == TimeoutVotesAt(node, roundView)
+    <2> DEFINE Votes ==
+          CanonicalTimeoutVotes(
+            CurrentEpoch, TimeoutVotesAt(node, roundView))
     <2> DEFINE Certificate == TC(context, roundView, Votes)
     <2> DEFINE Request == InstallTcWal(node, Certificate, TRUE)
     <2> DEFINE StableVars ==
@@ -10745,8 +10778,9 @@ PROOF
           /\ TimeoutVotesDisjoint(Certificate.votes)
           /\ TimeoutHighsConflictFree(Certificate.votes)
           /\ TimeoutVotesBindCertificate(Certificate)
-          /\ DualQuorum(Certificate.context.epoch,
-                        TimeoutSignerSet(Certificate.votes))
+          /\ ExactCertificateQuorum(
+               Certificate.context.epoch,
+               TimeoutSignerSet(Certificate.votes))
           /\ \A vote \in Certificate.votes:
                /\ vote.signer \in VotingRoster(Certificate.context.epoch)
                /\ vote.highRank \in Ranks
@@ -10765,15 +10799,18 @@ PROOF
             /\ Certificate.votes # {}
             /\ TimeoutVotesDisjoint(Certificate.votes)
             /\ TimeoutHighsConflictFree(Certificate.votes)
-            /\ DualQuorum(CurrentEpoch,
-                          TimeoutSignerSet(Certificate.votes))
+            /\ ExactCertificateQuorum(
+                 CurrentEpoch, TimeoutSignerSet(Certificate.votes))
         BY <2>1 DEF TCValid
       <3>3. /\ Certificate.context \in ContextRecords
             /\ Certificate.height = Certificate.context.height
             /\ Certificate.context.epoch \in Epochs
-            /\ DualQuorum(Certificate.context.epoch,
-                          TimeoutSignerSet(Certificate.votes))
-        BY <3>1, <3>2, SMT DEF CurrentEpoch, DualQuorum, CountQuorum
+            /\ ExactCertificateQuorum(
+                 Certificate.context.epoch,
+                 TimeoutSignerSet(Certificate.votes))
+        BY <3>1, <3>2, SMT
+           DEF CurrentEpoch, ExactCertificateQuorum,
+               DualQuorum, CountQuorum
       <3>4. TimeoutVotesBindCertificate(Certificate)
         BY <2>1 DEF TCValid, TimeoutVotesBindCertificate
       <3>5. \A vote \in Certificate.votes:
@@ -10802,7 +10839,8 @@ PROOF
                        /\ received.node = node
                        /\ received.vote = vote
                 BY <4>1, Isa
-                   DEF Certificate, TC, Votes, TimeoutVotesAt
+                   DEF Certificate, TC, Votes, CanonicalTimeoutVotes,
+                       TimeoutVotesAt
               <7> QED BY <1>1, <6>1, <7>1
                  DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                      HonestTimeoutTransportBacked

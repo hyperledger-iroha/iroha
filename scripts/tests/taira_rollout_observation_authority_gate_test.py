@@ -277,6 +277,10 @@ def test_publication_close_helper_stops_before_terminal_or_output_io(
             expected_dpn_validator_release_commit="44" * 20,
             expected_cargo_lock_sha256="55" * 32,
             expected_workspace_source_manifest_sha256="66" * 32,
+            rollout_plan=tmp_path / "plan.json",
+            rollout_result=tmp_path / "result.json",
+            rollout_authority_envelope=tmp_path / "envelope.json",
+            rollout_durable_receipt=tmp_path / "receipt.json",
         )
     assert calls == []
     assert not source.exists()
@@ -302,10 +306,18 @@ def test_untrusted_lower_helpers_have_no_unbarriered_production_caller() -> None
     public_validator = inspect.getsource(rollout.validate_result)
     assert public_validator.index(
         "require_authenticated_rollout_observation_authority_provisioned()"
-    ) < public_validator.index("return _validate_unsigned_result_structure")
+    ) < public_validator.index("_validate_unsigned_result_structure(")
+    assert public_validator.index(
+        "_validate_unsigned_result_structure("
+    ) < public_validator.index("taira_authority_client.authorize(")
     public_publisher = inspect.getsource(publisher.publish)
     assert public_publisher.index(
         "_require_authenticated_rollout_observation_authority()"
+    ) < public_publisher.index(
+        "rollout_observation.verify_authenticated_result_files("
+    )
+    assert public_publisher.index(
+        "rollout_observation.verify_authenticated_result_files("
     ) < public_publisher.index(
         "return _publish_after_authenticated_rollout_observation"
     )

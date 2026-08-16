@@ -53,10 +53,7 @@ const DISTINCT_PREPARE_QC_BLOCK_CADENCE: Duration = Duration::from_secs(8);
 const DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT: Duration = Duration::from_secs(120);
 const DISTINCT_PREPARE_QC_A_SELECTION_TIMEOUT: Duration = Duration::from_secs(25);
 const DISTINCT_PREPARE_QC_A_RELEASE_BUDGET: Duration = Duration::from_secs(40);
-// The restart scenario exercises durable recovery, not the localnet's
-// accelerated 333 ms cadence. Its debug-build genesis validation runs on four
-// real peers, so use a signed cadence whose view-zero deadline remains useful
-// under ordinary shared-CI contention.
+// Restart recovery uses a signed two-second cadence, not the localnet's 333 ms, so four-peer debug genesis validation retains a useful view-zero deadline under shared-CI contention.
 const RESTART_BLOCK_CADENCE: Duration = Duration::from_secs(2);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
@@ -205,7 +202,7 @@ fn validate_commit_qc_dual_quorum(
         snapshot.peer,
     );
     ensure!(
-        certificate.signer_count <= certificate.validator_count
+        certificate.signer_count == certificate.min_signers
             && strict_dual_quorum(
                 certificate.signer_count,
                 certificate.min_signers,
@@ -2052,6 +2049,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             artifact.height_context.roster.len() == VALIDATOR_COUNT
                 && artifact.height_context.quorum.min_signers == 3
                 && artifact.height_context.quorum.total_power == 4
+                && signer_count == artifact.height_context.quorum.min_signers
                 && strict_dual_quorum(
                     signer_count,
                     artifact.height_context.quorum.min_signers,
@@ -4304,12 +4302,13 @@ fn validate_exact_finality_proof(
             .ok_or_else(|| eyre!("CommitQC signed power overflowed"))
     })?;
     ensure!(
-        strict_dual_quorum(
-            signer_count,
-            artifact.height_context.quorum.min_signers,
-            signed_power,
-            artifact.height_context.quorum.total_power,
-        ),
+        signer_count == artifact.height_context.quorum.min_signers
+            && strict_dual_quorum(
+                signer_count,
+                artifact.height_context.quorum.min_signers,
+                signed_power,
+                artifact.height_context.quorum.total_power,
+            ),
         "{} returned a finality artifact without the exact equal-vote Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
         peer.mnemonic(),
         commit_qc.signers,
@@ -4346,12 +4345,13 @@ fn validate_exact_prepare_signers_against_frozen_context(
             .ok_or_else(|| eyre!("PrepareQC signed power overflowed"))
     })?;
     ensure!(
-        strict_dual_quorum(
-            signer_count,
-            context.quorum.min_signers,
-            signed_power,
-            context.quorum.total_power,
-        ),
+        signer_count == context.quorum.min_signers
+            && strict_dual_quorum(
+                signer_count,
+                context.quorum.min_signers,
+                signed_power,
+                context.quorum.total_power,
+            ),
         "exact held Prepare envelopes do not satisfy the frozen equal-vote quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
         context.quorum,
     );

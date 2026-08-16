@@ -1,6 +1,11 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
 pub use self::model::*;
+#[cfg(feature = "json")]
+use crate::{
+    DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+    DeriveJsonSerialize as DeriveJsonSer,
+};
 use crate::{
     HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
     metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
@@ -42,14 +47,7 @@ mod model {
     #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
     #[display("[{id}]")]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct Domain {
@@ -66,14 +64,7 @@ mod model {
     }
     /// Builder which can be submitted in a transaction to create a new [`Domain`]
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[display("[{id}]")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]

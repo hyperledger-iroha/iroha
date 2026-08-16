@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import check_kagemusha_candidate_ios_evidence as checker  # noqa: E402
 import kagemusha_candidate_ios_evidence as evidence_lib  # noqa: E402
+import kagemusha_production_ios_evidence as production_evidence  # noqa: E402
 import sign_kagemusha_candidate_ios_evidence as signer  # noqa: E402
 
 
@@ -46,6 +47,70 @@ def digest(path: Path) -> str:
 
 def nonzero_digest(label: str) -> str:
     return sha256(label.encode("ascii"))
+
+
+def cbor(value: Any) -> bytes:
+    """Encode the strict definite-length CBOR subset used by App Attest tests."""
+
+    def header(major: int, argument: int) -> bytes:
+        if argument < 24:
+            return bytes([(major << 5) | argument])
+        if argument <= 0xFF:
+            return bytes([(major << 5) | 24, argument])
+        if argument <= 0xFFFF:
+            return bytes([(major << 5) | 25]) + argument.to_bytes(2, "big")
+        if argument <= 0xFFFFFFFF:
+            return bytes([(major << 5) | 26]) + argument.to_bytes(4, "big")
+        return bytes([(major << 5) | 27]) + argument.to_bytes(8, "big")
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return header(0, value) if value >= 0 else header(1, -1 - value)
+    if isinstance(value, bytes):
+        return header(2, len(value)) + value
+    if isinstance(value, str):
+        payload = value.encode("utf-8")
+        return header(3, len(payload)) + payload
+    if isinstance(value, (list, tuple)):
+        return header(4, len(value)) + b"".join(cbor(item) for item in value)
+    if isinstance(value, dict):
+        return header(5, len(value)) + b"".join(
+            cbor(key) + cbor(item) for key, item in value.items()
+        )
+    raise TypeError(f"unsupported CBOR fixture type: {type(value)!r}")
+
+
+def p256_fixture_public_key(private_scalar: int) -> bytes:
+    point = production_evidence._scalar_multiply(
+        private_scalar, production_evidence.P256_G
+    )
+    if point is None:
+        raise AssertionError("fixture P-256 public key is infinity")
+    return b"\x04" + point[0].to_bytes(32, "big") + point[1].to_bytes(32, "big")
+
+
+def p256_fixture_signature(private_scalar: int, message: bytes) -> bytes:
+    digest = hashlib.sha256(message).digest()
+    nonce = int.from_bytes(hashlib.sha256(b"kagemusha-test-k\0" + digest).digest(), "big")
+    nonce = nonce % (production_evidence.P256_N - 1) + 1
+    point = production_evidence._scalar_multiply(nonce, production_evidence.P256_G)
+    if point is None:
+        raise AssertionError("fixture P-256 nonce produced infinity")
+    r = point[0] % production_evidence.P256_N
+    s = (
+        pow(nonce, -1, production_evidence.P256_N)
+        * (int.from_bytes(digest, "big") + r * private_scalar)
+    ) % production_evidence.P256_N
+    if s > production_evidence.P256_N // 2:
+        s = production_evidence.P256_N - s
+
+    def integer(value: int) -> bytes:
+        payload = value.to_bytes((value.bit_length() + 7) // 8, "big")
+        if payload[0] & 0x80:
+            payload = b"\0" + payload
+        return b"\x02" + bytes([len(payload)]) + payload
+
+    body = integer(r) + integer(s)
+    return b"\x30" + bytes([len(body)]) + body
 
 
 def network_samples(base: int) -> list[dict[str, Any]]:
@@ -554,6 +619,276 @@ class Fixture:
         evidence_lib.write_private_json(self.evidence, value)
 
 
+class ProductionFixture:
+    """Synthetic cryptographic substrate; never an Apple trust-chain fixture."""
+
+    P256_PRIVATE_SCALAR = 7
+
+    def __init__(self, candidate: Fixture) -> None:
+        self.candidate = candidate
+        self.raw = candidate.raw
+        self.evidence = candidate.evidence
+        self.private_key = candidate.private_key
+        self.public_key = candidate.public_key
+        self.key_id = candidate.key_id
+        self.policy = candidate.base / "production-ios-policy-v1.json"
+        self.release_manifest_sha256 = nonzero_digest("final-release-manifest")
+        self._write_policy()
+        self._write_evidence()
+
+    def _write_policy(self) -> None:
+        root_der = b"\x30\x03\x02\x01\x01"
+        write_json(
+            self.policy,
+            {
+                "schema": production_evidence.PRODUCTION_POLICY_SCHEMA,
+                "version": 1,
+                "policy_id": "taira-production-ios-app-attest-v1",
+                "app_id_prefix": "A1B2C3D4E5",
+                "bundle_id": "org.hyperledger.iroha.KagemushaCandidateEvidenceLab",
+                "environment": "production",
+                "allowed_validation_categories": [4],
+                "allowed_bundle_versions": ["1"],
+                "trusted_app_attest_roots": [
+                    {
+                        "der_base64": base64.b64encode(root_der).decode("ascii"),
+                        "sha256": sha256(root_der),
+                    }
+                ],
+                "revoked_certificate_sha256": [],
+                "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
+                "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
+            },
+        )
+
+    def _write_evidence(self) -> None:
+        digests, sizes = evidence_lib.scan_raw_artifacts(self.raw)
+        artifact_digests = {
+            relative: {"size_bytes": sizes[relative], "sha256": digest_value}
+            for relative, digest_value in digests.items()
+        }
+        policy_value = json.loads(self.policy.read_text(encoding="utf-8"))
+        policy_sha256 = digest(self.policy)
+        evaluated_at = 1_780_000_000_000
+        attestation_nonce = base64.b64encode(bytes(range(32))).decode("ascii")
+        assertion_nonce = base64.b64encode(bytes(range(32, 64))).decode("ascii")
+        attestation_client_data = production_evidence._challenge_bindings(
+            artifact_digests,
+            schema=production_evidence.ATTESTATION_CHALLENGE_SCHEMA,
+            domain=production_evidence.ATTESTATION_CHALLENGE_DOMAIN,
+            policy_id=policy_value["policy_id"],
+            policy_sha256=policy_sha256,
+            release_manifest_sha256=self.release_manifest_sha256,
+            evaluated_at_unix_ms=evaluated_at,
+            nonce_base64=attestation_nonce,
+        )
+        attestation_client_data_bytes = evidence_lib.canonical_json_bytes(
+            attestation_client_data
+        )
+        public_key = p256_fixture_public_key(self.P256_PRIVATE_SCALAR)
+        key_id = hashlib.sha256(public_key).digest()
+        rp_id_hash = hashlib.sha256(
+            (
+                policy_value["app_id_prefix"]
+                + "."
+                + policy_value["bundle_id"]
+            ).encode("ascii")
+        ).digest()
+        cose_key = cbor(
+            {
+                1: 2,
+                3: -7,
+                -1: 1,
+                -2: public_key[1:33],
+                -3: public_key[33:],
+            }
+        )
+        attestation_extensions = cbor(
+            {
+                "apple_validation_category_01": 4,
+                "apple_bundle_version_01": "1",
+            }
+        )
+        attestation_auth_data = (
+            rp_id_hash
+            + b"\xc0"
+            + (0).to_bytes(4, "big")
+            + b"appattest"
+            + b"\0" * 7
+            + len(key_id).to_bytes(2, "big")
+            + key_id
+            + cose_key
+            + attestation_extensions
+        )
+        attestation_object = cbor(
+            {
+                "fmt": "apple-appattest",
+                "attStmt": {
+                    "x5c": [b"\x30\x03\x02\x01\x01", b"\x30\x03\x02\x01\x02"],
+                    "receipt": b"synthetic-receipt-not-production",
+                },
+                "authData": attestation_auth_data,
+            }
+        )
+        assertion_client_data = production_evidence._challenge_bindings(
+            artifact_digests,
+            schema=production_evidence.ASSERTION_CHALLENGE_SCHEMA,
+            domain=production_evidence.ASSERTION_CHALLENGE_DOMAIN,
+            policy_id=policy_value["policy_id"],
+            policy_sha256=policy_sha256,
+            release_manifest_sha256=self.release_manifest_sha256,
+            evaluated_at_unix_ms=evaluated_at,
+            nonce_base64=assertion_nonce,
+        )
+        assertion_client_data.update(
+            {
+                "attestation_object_sha256": sha256(attestation_object),
+                "key_id": base64.b64encode(key_id).decode("ascii"),
+            }
+        )
+        assertion_client_data_bytes = evidence_lib.canonical_json_bytes(
+            assertion_client_data
+        )
+        assertion_auth_data = (
+            rp_id_hash
+            + b"\x80"
+            + (1).to_bytes(4, "big")
+            + cbor({"validationCategory": 4, "bundleVersion": "1"})
+        )
+        assertion_signature = p256_fixture_signature(
+            self.P256_PRIVATE_SCALAR,
+            assertion_auth_data + hashlib.sha256(assertion_client_data_bytes).digest(),
+        )
+        assertion_object = cbor(
+            {
+                "signature": assertion_signature,
+                "authenticatorData": assertion_auth_data,
+            }
+        )
+        evidence: dict[str, Any] = {
+            "schema": production_evidence.PRODUCTION_SIGNED_EVIDENCE_SCHEMA,
+            "version": 1,
+            "release_manifest_sha256": self.release_manifest_sha256,
+            "production_policy_id": policy_value["policy_id"],
+            "production_policy_sha256": policy_sha256,
+            "platform_evidence": {
+                "schema": production_evidence.PLATFORM_EVIDENCE_SCHEMA,
+                "version": 1,
+                "evaluated_at_unix_ms": evaluated_at,
+                "key_id": base64.b64encode(key_id).decode("ascii"),
+                "assertion_public_key_sec1_base64": base64.b64encode(
+                    public_key
+                ).decode("ascii"),
+                "attestation_client_data_base64": base64.b64encode(
+                    attestation_client_data_bytes
+                ).decode("ascii"),
+                "attestation_object_base64": base64.b64encode(
+                    attestation_object
+                ).decode("ascii"),
+                "assertion_client_data_base64": base64.b64encode(
+                    assertion_client_data_bytes
+                ).decode("ascii"),
+                "assertion_object_base64": base64.b64encode(
+                    assertion_object
+                ).decode("ascii"),
+            },
+            "artifact_digests": artifact_digests,
+            "signer_key_id": self.key_id,
+            "signer_public_key_sha256": evidence_lib.signer_public_key_sha256(
+                self.public_key
+            ),
+            "signature_algorithm": "ed25519",
+        }
+        self._sign_value(evidence)
+
+    def _sign_value(self, value: dict[str, Any]) -> None:
+        payload = evidence_lib.canonical_signature_payload(value)
+        value["signature_payload_sha256"] = sha256(payload)
+        value["signature"] = evidence_lib.sign_ed25519(
+            self.private_key, payload
+        ).hex()
+        evidence_lib.write_private_json(self.evidence, value)
+
+    def mutate(self, mutator: Callable[[dict[str, Any]], None]) -> None:
+        value = json.loads(self.evidence.read_text(encoding="utf-8"))
+        mutator(value)
+        self._sign_value(value)
+
+    def mutate_assertion(
+        self, mutator: Callable[[dict[str, Any]], None], *, resign_assertion: bool
+    ) -> None:
+        value = json.loads(self.evidence.read_text(encoding="utf-8"))
+        platform = value["platform_evidence"]
+        encoded = base64.b64decode(platform["assertion_object_base64"])
+        parsed = production_evidence._decode_cbor(encoded, "fixture assertion")
+        assertion = dict(parsed.pairs)
+        mutator(assertion)
+        if resign_assertion:
+            client_data = base64.b64decode(platform["assertion_client_data_base64"])
+            assertion["signature"] = p256_fixture_signature(
+                self.P256_PRIVATE_SCALAR,
+                assertion["authenticatorData"] + hashlib.sha256(client_data).digest(),
+            )
+        platform["assertion_object_base64"] = base64.b64encode(
+            cbor(assertion)
+        ).decode("ascii")
+        self._sign_value(value)
+
+    def mutate_attestation(
+        self, mutator: Callable[[dict[str, Any]], None]
+    ) -> None:
+        value = json.loads(self.evidence.read_text(encoding="utf-8"))
+        platform = value["platform_evidence"]
+        encoded = base64.b64decode(platform["attestation_object_base64"])
+        attestation = dict(
+            production_evidence._decode_cbor(encoded, "fixture attestation").pairs
+        )
+        statement = dict(attestation["attStmt"].pairs)
+        mutator(statement)
+        attestation["attStmt"] = statement
+        encoded = cbor(attestation)
+        platform["attestation_object_base64"] = base64.b64encode(encoded).decode(
+            "ascii"
+        )
+        assertion_client_data = json.loads(
+            base64.b64decode(
+                platform["assertion_client_data_base64"]
+            ).decode("ascii")
+        )
+        assertion_client_data["attestation_object_sha256"] = sha256(encoded)
+        assertion_client_data_bytes = evidence_lib.canonical_json_bytes(
+            assertion_client_data
+        )
+        platform["assertion_client_data_base64"] = base64.b64encode(
+            assertion_client_data_bytes
+        ).decode("ascii")
+        assertion = dict(
+            production_evidence._decode_cbor(
+                base64.b64decode(platform["assertion_object_base64"]),
+                "fixture assertion",
+            ).pairs
+        )
+        assertion["signature"] = p256_fixture_signature(
+            self.P256_PRIVATE_SCALAR,
+            assertion["authenticatorData"]
+            + hashlib.sha256(assertion_client_data_bytes).digest(),
+        )
+        platform["assertion_object_base64"] = base64.b64encode(
+            cbor(assertion)
+        ).decode("ascii")
+        self._sign_value(value)
+
+    def errors(self) -> list[str]:
+        return production_evidence.validate_production_signed_evidence(
+            self.evidence,
+            self.raw,
+            self.key_id,
+            self.public_key,
+            self.policy,
+            evidence_lib,
+        )
+
+
 class IosCandidateEvidenceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -611,6 +946,187 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             any(expected in error for error in errors),
             (expected, errors),
         )
+
+    def test_production_ios_substrate_keeps_exact_x509_trust_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            self.assertEqual(
+                fixture.errors(),
+                [production_evidence.PLATFORM_TRUST_BLOCKER],
+            )
+
+    def test_production_ios_policy_text_rejects_ascii_control_bytes(self) -> None:
+        errors: list[str] = []
+        self.assertIsNone(
+            production_evidence._canonical_ascii(
+                "bundle\x7fversion", "fixture policy text", 64, errors
+            )
+        )
+        self.assertEqual(
+            errors,
+            ["fixture policy text must be nonempty canonical ASCII within 64 bytes"],
+        )
+
+    def test_production_ios_validation_category_matches_core_domain(self) -> None:
+        policy = {
+            "schema": production_evidence.PRODUCTION_POLICY_SCHEMA,
+            "version": 1,
+            "policy_id": "category-parity-v1",
+            "app_id_prefix": "A1B2C3D4E5",
+            "bundle_id": "org.example.app",
+            "environment": "production",
+            "allowed_validation_categories": [1, 2, 3, 4, 5, 6, 10],
+            "allowed_bundle_versions": ["1"],
+            "trusted_app_attest_roots": [
+                {
+                    "der_base64": base64.b64encode(b"\x30\x03\x02\x01\x01").decode(),
+                    "sha256": sha256(b"\x30\x03\x02\x01\x01"),
+                }
+            ],
+            "revoked_certificate_sha256": [],
+            "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
+            "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
+        }
+        errors: list[str] = []
+        production_evidence._validate_policy(
+            policy, evidence_lib.canonical_json_bytes(policy), errors
+        )
+        self.assertEqual(errors, [])
+
+    def test_production_ios_policy_mixed_lists_fail_without_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            baseline = json.loads(fixture.policy.read_text(encoding="utf-8"))
+            for field, invalid in (
+                ("allowed_bundle_versions", ["1", 2]),
+                ("revoked_certificate_sha256", [nonzero_digest("revoked"), 2]),
+            ):
+                policy = dict(baseline)
+                policy[field] = invalid
+                errors: list[str] = []
+                production_evidence._validate_policy(
+                    policy, evidence_lib.canonical_json_bytes(policy), errors
+                )
+                self.assertTrue(any(field in error for error in errors), errors)
+
+    def test_production_ios_attestation_chain_count_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            fixture.mutate_attestation(
+                lambda statement: statement.__setitem__(
+                    "x5c", tuple(statement["x5c"]) + (b"a", b"b", b"c")
+                )
+            )
+            errors = fixture.errors()
+            self.assertTrue(
+                any("bounded leaf/intermediate chain" in error for error in errors),
+                errors,
+            )
+
+    def test_production_ios_challenge_requires_code_sign_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+
+            def remove_binding(value: dict[str, Any]) -> None:
+                platform = value["platform_evidence"]
+                challenge = json.loads(
+                    base64.b64decode(
+                        platform["attestation_client_data_base64"]
+                    ).decode("ascii")
+                )
+                challenge.pop("code_sign_measurements_sha256")
+                platform["attestation_client_data_base64"] = base64.b64encode(
+                    evidence_lib.canonical_json_bytes(challenge)
+                ).decode("ascii")
+
+            fixture.mutate(remove_binding)
+            errors = fixture.errors()
+            self.assertTrue(
+                any("attestation client data fields are not exact" in error for error in errors),
+                errors,
+            )
+
+    def test_production_ios_missing_raw_artifact_fails_closed_without_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            (fixture.raw / "output/checkpoint-v1.norito").unlink()
+            errors = fixture.errors()
+            self.assertTrue(
+                any("raw artifact tree is missing files" in error for error in errors),
+                errors,
+            )
+            self.assertEqual(errors[-1], production_evidence.PLATFORM_TRUST_BLOCKER)
+
+    def test_production_ios_policy_id_and_hash_mutations_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            fixture.mutate(
+                lambda value: value.__setitem__(
+                    "production_policy_id", "attacker-production-policy"
+                )
+            )
+            errors = fixture.errors()
+            self.assertTrue(
+                any("production_policy_id must match policy" in error for error in errors),
+                errors,
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            fixture.mutate(
+                lambda value: value.__setitem__(
+                    "production_policy_sha256", nonzero_digest("substituted-policy")
+                )
+            )
+            errors = fixture.errors()
+            self.assertTrue(
+                any("production_policy_sha256 must match exact policy" in error for error in errors),
+                errors,
+            )
+
+    def test_production_ios_assertion_signature_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+
+            def mutate_signature(assertion: dict[str, Any]) -> None:
+                signature = bytearray(assertion["signature"])
+                signature[-1] ^= 1
+                assertion["signature"] = bytes(signature)
+
+            fixture.mutate_assertion(mutate_signature, resign_assertion=False)
+            errors = fixture.errors()
+            self.assertTrue(
+                any(
+                    "assertion signature" in error
+                    or "ECDSA" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_production_ios_rp_id_and_counter_are_semantic_not_booleans(self) -> None:
+        for label, mutate_auth_data, expected in (
+            (
+                "rp-id",
+                lambda payload: bytes([payload[0] ^ 1]) + payload[1:],
+                "RP ID does not match production policy",
+            ),
+            (
+                "counter",
+                lambda payload: payload[:33] + (0).to_bytes(4, "big") + payload[37:],
+                "counter must be positive",
+            ),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                fixture = ProductionFixture(self.fixture(temporary))
+
+                def mutate(assertion: dict[str, Any]) -> None:
+                    assertion["authenticatorData"] = mutate_auth_data(
+                        assertion["authenticatorData"]
+                    )
+
+                fixture.mutate_assertion(mutate, resign_assertion=True)
+                errors = fixture.errors()
+                self.assertTrue(any(expected in error for error in errors), errors)
 
     def test_valid_signing_and_cli_verification(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

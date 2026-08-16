@@ -6,6 +6,8 @@
 //! parameter, verifier, statement-schema, and engine-manifest digests. There
 //! are no free-form identifiers, aliases, or fallback proof variants.
 use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,

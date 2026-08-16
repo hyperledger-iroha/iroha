@@ -44,9 +44,9 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
-   on the CLI). MOCHI validates `nexus.enabled` against lane
-   counts and forces `sumeragi.da.enabled = true` when Nexus is enabled, because
-   Iroha 3 always runs with DA gating enabled. Torii DA replay and manifest
+   on the CLI). MOCHI validates `nexus.enabled` against lane counts. Sumeragi
+   mode and DA layout come from signed genesis/current height context; the
+   bundle exposes no node-local enable/disable switch. Torii DA replay and manifest
    roots are immutable per-generation managed paths; configured overrides are
    rejected before publication.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the
@@ -122,7 +122,8 @@ alias = "universal"
 id = 0
 
 [sumeragi]
-# DA/RBC is always enabled for first-release Iroha 3 profiles.
+# role = "validator"
+# Consensus mode, committee geometry, DA layout, and deadlines are signed context.
 ```
 
 Alternatively, store the `[nexus]` block above in a standalone TOML file and
@@ -133,12 +134,13 @@ selected storage generation. They cannot be redirected by bundle settings.
 
 ## Lane maintenance and status
 
-The Settings dialog exposes lane catalogs and DA toggles, plus a per-lane
+The Settings dialog exposes lane catalogs and lifecycle controls, plus a per-lane
 Kura/merge-log path preview (the generated peer configs include the same paths
 in their header). Use the Maintenance bar to reset a single lane:
 MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
-authenticated storage transition to Kura. The Lane status panel surfaces DA cursors, relay lag, RBC bytes,
-and relay ingest state per peer so operators can spot lagging lanes quickly.
+authenticated storage transition to Kura. The Lane status panel surfaces DA cursors,
+relay lag, legacy-labeled transport-byte observations, and relay ingest state per
+peer so operators can spot lagging lanes quickly.
 The Settings dialog also includes a profile override field that accepts preset
 slugs or inline TOML tables for custom peer counts/consensus modes.
 

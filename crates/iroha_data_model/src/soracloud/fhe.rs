@@ -1,9 +1,6 @@
 /// Fully homomorphic encryption scheme family used by a parameter set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
 pub enum FheSchemeV1 {
     /// Brakerski/Fan-Vercauteren integer arithmetic scheme.
@@ -16,10 +13,7 @@ pub enum FheSchemeV1 {
 }
 /// Governance lifecycle state for a registered FHE parameter set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 pub enum FheParamLifecycleV1 {
     /// Parameter set is published and awaiting activation.
@@ -34,10 +28,7 @@ pub enum FheParamLifecycleV1 {
 }
 /// Governance-managed FHE parameter-set descriptor for `Soracloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheParamSetV1 {
     /// Schema version; must equal [`FHE_PARAM_SET_VERSION_V1`].
     pub schema_version: u16,
@@ -293,10 +284,7 @@ impl FheParamSetV1 {
 }
 /// Rounding mode used for deterministic ciphertext arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "rounding_mode", content = "value"))]
 pub enum FheDeterministicRoundingModeV1 {
     /// Always round toward negative infinity.
@@ -307,10 +295,7 @@ pub enum FheDeterministicRoundingModeV1 {
 }
 /// Public BFV refresh transcript derivation mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "refresh_transcript_mode", content = "value")
@@ -324,10 +309,7 @@ pub enum BfvRefreshTranscriptModeV1 {
 }
 /// Public BFV ciphertext bound semantics attached to FHE state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "bound_mode", content = "value"))]
 pub enum BfvCiphertextBoundModeV1 {
     /// Bound is an exact plaintext-modulus residual multiple.
@@ -338,10 +320,7 @@ pub enum BfvCiphertextBoundModeV1 {
 }
 /// Public transcript seed for one BFV rotation refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvRotationRefreshTranscriptV1 {
     /// Rotation step count whose public refresh key is derived from `seed`.
     pub rotation_steps: u32,
@@ -350,10 +329,7 @@ pub struct BfvRotationRefreshTranscriptV1 {
 }
 /// Public transcript seed for the BFV bootstrap refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvBootstrapRefreshTranscriptV1 {
     /// Bootstrap key id whose refresh rounds are derived from `seed`.
     pub key_id: String,
@@ -364,10 +340,7 @@ pub struct BfvBootstrapRefreshTranscriptV1 {
 }
 /// Public transcript inventory for BFV evaluation-key refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvEvaluationKeyRefreshTranscriptV1 {
     /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
     pub public_key: BfvPublicKey,
@@ -785,10 +758,7 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
 }
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheExecutionPolicyV1 {
     /// Schema version; must equal [`FHE_EXECUTION_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -1172,10 +1142,7 @@ impl FheExecutionPolicyV1 {
 }
 /// Governance admission bundle coupling an FHE parameter set and execution policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheGovernanceBundleV1 {
     /// Schema version; must equal [`FHE_GOVERNANCE_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -1218,10 +1185,7 @@ impl FheGovernanceBundleV1 {
 }
 /// Exact immutable reference to one governed Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyReferenceV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1`].
     pub schema_version: u16,
@@ -1254,10 +1218,7 @@ impl SoracloudFhePolicyReferenceV1 {
 }
 /// Exact service-and-policy scope carried by the FHE governance permission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheGovernancePermissionScopeV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -1284,10 +1245,7 @@ impl SoracloudFheGovernancePermissionScopeV1 {
 }
 /// Immutable, governance-authenticated material for one Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheGovernedMaterialV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1`].
     pub schema_version: u16,
@@ -1540,10 +1498,7 @@ impl SoracloudFheGovernedMaterialV1 {
 }
 /// Lifecycle of one immutable governed Soracloud FHE policy version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 pub enum SoracloudFhePolicyVersionLifecycleV1 {
     /// Exact version currently authorized for execution.
@@ -1555,10 +1510,7 @@ pub enum SoracloudFhePolicyVersionLifecycleV1 {
 }
 /// Lifecycle wrapper for one immutable governed material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyVersionStateV1 {
     /// Immutable authenticated material.
     pub material: SoracloudFheGovernedMaterialV1,
@@ -1605,10 +1557,7 @@ impl SoracloudFhePolicyVersionStateV1 {
 }
 /// Complete monotonic lifecycle history for one service-scoped FHE policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyRecordV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1737,10 +1686,7 @@ impl SoracloudFhePolicyRecordV1 {
 }
 /// Proof envelope admitting a client-provided BFV ciphertext as Soracloud FHE input.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheInputAdmissionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1904,10 +1850,7 @@ impl SoracloudFheInputAdmissionProofV1 {
 }
 /// Proof envelope admitting public BFV key material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePublicKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2008,10 +1951,7 @@ impl SoracloudFhePublicKeyProofV1 {
 }
 /// Proof envelope admitting public BFV bootstrap-key zero-refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheBootstrapKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2112,10 +2052,7 @@ impl SoracloudFheBootstrapKeyProofV1 {
 }
 /// Proof envelope admitting a governed BFV full-bootstrap execution output claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheFullBootstrapExecutionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2861,10 +2798,7 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> Open
 }
 /// Encryption class for an opaque secret envelope payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
 pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is client-encrypted and opaque to validators.
@@ -2874,10 +2808,7 @@ pub enum SecretEnvelopeEncryptionV1 {
 }
 /// Opaque encrypted payload with commitment used by ciphertext-native state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SecretEnvelopeV1 {
     /// Schema version; must equal [`SECRET_ENVELOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -2964,10 +2895,7 @@ impl SecretEnvelopeV1 {
 }
 /// Public metadata attached to ciphertext-native state records.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextStateMetadataV1 {
     /// MIME-style content hint for encrypted payload decoding.
     pub content_type: String,
@@ -3028,10 +2956,7 @@ impl CiphertextStateMetadataV1 {
 }
 /// Ciphertext-native key-value record with public metadata and secret payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextStateRecordV1 {
     /// Schema version; must equal [`CIPHERTEXT_STATE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -3097,10 +3022,7 @@ impl CiphertextStateRecordV1 {
 }
 /// Deterministic FHE operation class admitted for Soracloud ciphertext jobs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 pub enum FheJobOperationV1 {
     /// Element-wise homomorphic addition over two or more inputs.
@@ -3118,10 +3040,7 @@ pub enum FheJobOperationV1 {
 }
 /// Input ciphertext reference for deterministic FHE job admission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheJobInputRefV1 {
     /// Canonical state key of the ciphertext input.
     pub state_key: String,
@@ -3156,10 +3075,7 @@ impl FheJobInputRefV1 {
 }
 /// Deterministic FHE admission/execution job descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheJobSpecV1 {
     /// Schema version; must equal [`FHE_JOB_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3529,10 +3445,7 @@ impl FheJobSpecV1 {
 }
 /// Decryption authority mode enforced for private-state disclosure requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum DecryptionAuthorityModeV1 {
     /// Ciphertext keys are client-held; network records request/audit only.
@@ -3542,10 +3455,7 @@ pub enum DecryptionAuthorityModeV1 {
 }
 /// Governance-managed policy for decryption authority and request gating.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DecryptionAuthorityPolicyV1 {
     /// Schema version; must equal [`DECRYPTION_AUTHORITY_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -3688,10 +3598,7 @@ impl DecryptionAuthorityPolicyV1 {
 }
 /// Decryption request envelope gated by a [`DecryptionAuthorityPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DecryptionRequestV1 {
     /// Schema version; must equal [`DECRYPTION_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -3875,10 +3782,7 @@ impl DecryptionRequestV1 {
 }
 /// Metadata projection level for ciphertext query responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "metadata_level", content = "value"))]
 pub enum CiphertextQueryMetadataLevelV1 {
     /// Return only digest-level key references.
@@ -3888,10 +3792,7 @@ pub enum CiphertextQueryMetadataLevelV1 {
 }
 /// Deterministic query specification for ciphertext-only state lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQuerySpecV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3952,10 +3853,7 @@ impl CiphertextQuerySpecV1 {
 }
 /// Inclusion proof attached to ciphertext query results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextInclusionProofV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -4011,10 +3909,7 @@ impl CiphertextInclusionProofV1 {
 }
 /// A single query result row for ciphertext metadata lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQueryResultItemV1 {
     /// Binding owning the ciphertext state row.
     pub binding_name: Name,
@@ -4090,10 +3985,7 @@ impl CiphertextQueryResultItemV1 {
 }
 /// Deterministic response payload for ciphertext query execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQueryResponseV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -4169,10 +4061,7 @@ impl CiphertextQueryResponseV1 {
 }
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraDeploymentBundleV1 {
     /// Schema version; must equal [`SORA_DEPLOYMENT_BUNDLE_VERSION_V1`].
     pub schema_version: u16,

@@ -77,10 +77,15 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 ### Sumeragi Consensus
 
 **Current controls**
-- Quorum assembly records double-vote evidence (`Evidence::DoublePrepare` / `Evidence::DoubleCommit`).
-- RBC payload hashes and size clamps; READY/DELIVER gating validated by tests in `crates/iroha_core/tests`.
-- Pacemaker timers bounded via `iroha_config::sumeragi.timers` (see `status.md`, Sep 10 2025 update).
-- Collector path verifies ExecWitness roots before commit; evidence triggers peer quarantine.
+- Revision-4 Proposal/Vote/QC/TimeoutCertificate messages are authenticated;
+  equal-vote `3f + 1` committees require exactly `2f + 1` votes.
+- Signed proposal manifests and the frozen Reed-Solomon-16 layout bind body
+  reconstruction; validators vote only after exact durable validation.
+- View-zero deadlines derive as ten signed cadence intervals, retransmission as
+  one fifth of that value, and later certified views use linear backoff. There
+  is no local timer policy.
+- Sign-once/lock rules and exact v2 equivocation evidence fail closed before a
+  conflicting certified body can be applied.
 
 **Outstanding gaps**
 - Automatic membership reconciliation alerting is being addressed by the

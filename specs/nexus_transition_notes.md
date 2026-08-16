@@ -378,10 +378,11 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   within each session and evict the oldest bucket FIFO, preventing a single
   source/plan from retaining unbounded retried or adversarial bodies while
   proposer collection is pending. Operators tune the session and per-session
-  body-bucket caps through
-  `sumeragi.advanced.native_amx.session_cache_max` and
-  `sumeragi.advanced.native_amx.session_body_bucket_max`, which default to
-  `1024` sessions and `256` body buckets.
+  body-bucket bounds from the shared revision-4 projection: session capacity
+  follows the control/reducer capacity projected from
+  `sumeragi.queues.commands`, and exact-body buckets per session follow
+  `sumeragi.block.max_transactions`. No separate Native AMX cache switches are
+  accepted.
 - When a lifecycle update retires a lane, queue reconfiguration reroutes
   pending autoscaled default-route traffic onto the surviving elastic/default
   candidates. If a lifecycle update otherwise removes the only route that a
@@ -595,18 +596,14 @@ math.
 cargo test -p integration_tests sumeragi_npos_performance -- --nocapture
 ```
 
-Set `SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K`, or
-`SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R` to explore higher-stress topologies; the
-defaults mirror the 1 s/`k=3` collector profile used in B4.
+Set `SUMERAGI_NPOS_STRESS_PEERS` to exercise another admissible exact `3f + 1`
+committee. Set A, Set B, proxy-tail rotation, and quorum are derived from signed
+revision-4 context and are not stress knobs.
 
 | Scenario / test | Coverage | Key telemetry |
 | --- | --- | --- |
-| `npos_baseline_1s_k3_captures_metrics` | Blocks 12 rounds with the rehearsal block time to record EMA latency envelopes, queue depths, and redundant-send gauges before serialising the evidence bundle. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
-| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_pacemaker_jitter_within_band` | Samples pacemaker jitter and view timeouts until it proves the configured ±125 ‰ band is enforced. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
-| `npos_rbc_store_backpressure_records_metrics` | Pushes large RBC payloads to the soft/hard store limits to show sessions and byte counters climb, back off, and settle without overrunning the store. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_redundant_send_retries_update_metrics` | Forces retransmits so the redundant-send ratio gauges and collectors-on-target counters advance, proving the telemetry the retro requested is wired end-to-end. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
-| `npos_rbc_chunk_loss_fault_reports_backlog` | Drops deterministically spaced chunks to verify backlog monitors raise faults instead of silently draining payloads. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |
+| `npos_baseline_1s_captures_metrics` | Commits the bounded baseline workload with signed 1-second cadence and records status/queue observations. | `commit_time_ms`, transaction and adapter queue status. |
+| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`. |
 
 Attach the JSON lines the harness prints together with the Prometheus scrape
 captured during the run whenever governance asks for evidence that backpressure

@@ -63,11 +63,11 @@ use super::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
-        HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
-        MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneIngressOutcome,
-        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
-        apply_lane_application_evidence_repair,
+        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery,
+        DurableLaneRolloverAuthority, GlobalBodyLockOutcome, HistoricalRecoveryServiceOutcome,
+        LaneApplicationEvidenceRepairPlanning, MergeSidecarDeferralDisposition,
+        RetainedMergeSidecars, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
+        V2LaneWorkError, V2LaneWorkLimits, apply_lane_application_evidence_repair,
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
     },
@@ -2216,12 +2216,67 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<bool, V2RunnerError> {
+    let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
+    let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     let pending = services
         .retry_pending_exact_output()
         .map_err(V2RunnerError::Service)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
+}
+/// Cancel service-owned historical requests whose adapter owner completed
+/// before retrying any retained network occurrence.
+pub(in crate::sumeragi) fn apply_retired_historical_recovery_requests(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let request_hashes = lane_work.drain_retired_historical_recovery_request_hashes();
+    if request_hashes.is_empty() {
+        return Ok(0);
+    }
+    match services.cancel_historical_lane_recovery_requests(&request_hashes) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_retired_historical_recovery_request_hashes(request_hashes)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
+}
+/// Cancel service-owned sidecar requests whose exact transport attempt retired.
+pub(in crate::sumeragi) fn apply_retired_merge_sidecar_requests(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let request_hashes = lane_work.drain_retired_merge_sidecar_request_hashes();
+    if request_hashes.is_empty() {
+        return Ok(0);
+    }
+    match services.cancel_certified_merge_sidecar_requests(&request_hashes) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_retired_merge_sidecar_request_hashes(request_hashes)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
+}
+/// Cancel requester Close retries covered by an authenticated cumulative ACK.
+pub(in crate::sumeragi) fn apply_acknowledged_merge_sidecar_closes(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let acknowledgements = lane_work.drain_acknowledged_merge_sidecar_closes();
+    if acknowledgements.is_empty() {
+        return Ok(0);
+    }
+    match services.cancel_acknowledged_certified_merge_sidecar_closes(&acknowledgements) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_acknowledged_merge_sidecar_closes(acknowledgements)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
 }
 include!("v2_runner/finalized_output_rollover.rs");
 fn apply_certified_merge_sidecar_closed_prefixes(
@@ -2268,6 +2323,17 @@ pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
+    dispatch_lane_work_effects_with_progress(lane_work, services, limit)?;
+    Ok(())
+}
+fn dispatch_lane_work_effects_with_progress(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<usize, V2RunnerError> {
+    let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
+    let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     let scan_limit = lane_work.effect_count();
@@ -2313,7 +2379,7 @@ pub(in crate::sumeragi) fn dispatch_lane_work_effects(
         }
         apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     }
-    Ok(())
+    Ok(dispatched)
 }
 include!("v2_runner/reply_route_retention.rs");
 #[derive(Debug)]

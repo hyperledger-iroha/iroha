@@ -4,6 +4,8 @@
 //! lane along with manifest metadata, sandbox guards, and metering helpers.
 //! All types derive Norito serialization so manifests, calls, and receipts can
 //! be persisted on-chain or shipped between Torii and SDKs deterministically.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{name::Name, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
@@ -14,10 +16,7 @@ use std::{
 };
 /// Payload codec expected by a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "codec", content = "value"))]
 pub enum ComputeCodec {
     /// Norito-encoded JSON payload.
@@ -31,10 +30,7 @@ pub enum ComputeCodec {
 }
 /// Price weights used to turn metering data into chargeable compute units.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputePriceWeights {
     /// Number of cycles consumed per compute unit (ceil-divided).
     pub cycles_per_unit: NonZeroU64,
@@ -54,10 +50,7 @@ impl ComputePriceWeights {
 }
 /// Multipliers applied to compute units based on execution hints and determinism.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputePriceAmplifiers {
     /// Basis-point multiplier for GPU execution (`10_000` = 1.0x).
     pub gpu_bps: NonZeroU32,
@@ -105,10 +98,7 @@ impl Default for ComputePriceAmplifiers {
 }
 /// Determinism guarantees requested by a compute route or call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "determinism", content = "value"))]
 pub enum ComputeDeterminism {
     /// Deterministic execution only (no non-deterministic syscalls or variable outputs).
@@ -119,10 +109,7 @@ pub enum ComputeDeterminism {
 }
 /// Execution class requested for the route (affects scheduling and routing).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
 pub enum ComputeExecutionClass {
     /// CPU-only execution.
@@ -135,10 +122,7 @@ pub enum ComputeExecutionClass {
 }
 /// Reference to a model or dataset stored in `SoraFS`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeModelRef {
     /// Content hash of the `SoraFS` bundle backing the model/dataset.
     pub bundle_hash: Hash,
@@ -176,10 +160,7 @@ impl ComputeModelRef {
 }
 /// Limits applied to caller-supplied inputs for a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeInputLimits {
     /// Maximum inline payload size allowed for requests (bytes).
     pub max_inline_bytes: NonZeroU64,
@@ -209,10 +190,7 @@ impl ComputeInputLimits {
 }
 /// Fee split applied to compute charges (basis points, denominator = `10_000`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeFeeSplit {
     /// Portion of fees burned (bps).
     pub burn_bps: u16,
@@ -234,10 +212,7 @@ impl ComputeFeeSplit {
 }
 /// Sponsor budget caps for subsidised compute calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeSponsorPolicy {
     /// Maximum compute units a sponsor may cover per call.
     pub max_cu_per_call: NonZeroU64,
@@ -246,10 +221,7 @@ pub struct ComputeSponsorPolicy {
 }
 /// Risk classes applied to price families for governance-bound deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
 pub enum ComputePriceRiskClass {
     /// Low-risk price families (tight delta bounds).
@@ -261,10 +233,7 @@ pub enum ComputePriceRiskClass {
 }
 /// Delta bounds (basis points) used to constrain governance price updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputePriceDeltaBounds {
     /// Maximum delta for `cycles_per_unit` vs baseline (bps).
     pub max_cycles_delta_bps: NonZeroU16,
@@ -273,10 +242,7 @@ pub struct ComputePriceDeltaBounds {
 }
 /// Resource budget applied to a compute route/profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeResourceBudget {
     /// Maximum deterministic cycle budget allowed for a call.
     pub max_cycles: NonZeroU64,
@@ -295,10 +261,7 @@ pub struct ComputeResourceBudget {
 }
 /// Sandbox execution mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum ComputeSandboxMode {
     /// Run inside the IVM only (deterministic Kotodama host surface).
@@ -308,10 +271,7 @@ pub enum ComputeSandboxMode {
 }
 /// Deterministic randomness policy for compute calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "randomness", content = "value"))]
 pub enum ComputeRandomnessPolicy {
     /// Disallow randomness entirely.
@@ -321,10 +281,7 @@ pub enum ComputeRandomnessPolicy {
 }
 /// Storage policy for the compute sandbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "storage", content = "value"))]
 pub enum ComputeStorageAccess {
     /// Allow read-only `SoraFS` bundle access; writes are rejected.
@@ -334,10 +291,7 @@ pub enum ComputeStorageAccess {
 }
 /// Sandbox guardrails shared by compute manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeSandboxRules {
     /// Execution mode (IVM-only or WASI-lite).
     pub mode: ComputeSandboxMode,
@@ -357,10 +311,7 @@ pub struct ComputeSandboxRules {
 }
 /// Authentication policy for a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum ComputeAuthPolicy {
     /// Permit only public calls (no UAID binding).
@@ -372,10 +323,7 @@ pub enum ComputeAuthPolicy {
 }
 /// Unique identifier for a compute route.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeRouteId {
     /// Service namespace.
     pub service: Name,
@@ -391,10 +339,7 @@ impl ComputeRouteId {
 }
 /// Route descriptor stored inside the compute manifest.
 #[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeRoute {
     /// Route identifier (service + method).
     pub id: ComputeRouteId,
@@ -447,10 +392,7 @@ impl ComputeRoute {
 }
 /// Compute manifest binding services/methods to Kotodama entrypoints.
 #[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeManifest {
     /// Namespace protecting the routes under this manifest.
     pub namespace: Name,
@@ -534,10 +476,7 @@ impl ComputeManifest {
 }
 /// Manifest validation errors.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "error", content = "data"))]
 pub enum ComputeManifestError {
     /// Duplicate route identifiers are not allowed.
@@ -587,10 +526,7 @@ pub enum ComputeManifestError {
 }
 /// Canonical request envelope hashed to derive idempotency/replay keys.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeRequest {
     /// Deterministically ordered headers (case preserved).
     #[cfg_attr(feature = "json", norito(default))]
@@ -607,10 +543,7 @@ impl ComputeRequest {
 }
 /// Authentication payload for an authenticated compute call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeAuthn {
     /// Universal account identifier for the caller.
     pub uaid: UniversalAccountId,
@@ -621,10 +554,7 @@ pub struct ComputeAuthn {
 }
 /// Authentication material provided by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum ComputeAuthz {
     /// Public call with no UAID/session binding.
@@ -634,10 +564,7 @@ pub enum ComputeAuthz {
 }
 /// Caller-supplied request to the compute gateway.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeCall {
     /// Target namespace.
     pub namespace: Name,
@@ -1049,10 +976,7 @@ pub fn enforce_sponsor_policy(
 }
 /// Summary of the call recorded in receipts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeCallSummary {
     /// Target namespace.
     pub namespace: Name,
@@ -1114,10 +1038,7 @@ impl From<&ComputeCall> for ComputeCallSummary {
 }
 /// Metering data recorded after execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeMetering {
     /// Total cycles consumed.
     pub cycles: u64,
@@ -1134,10 +1055,7 @@ pub struct ComputeMetering {
 }
 /// Outcome kind for a compute call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "outcome", content = "value"))]
 pub enum ComputeOutcomeKind {
     /// Successful execution.
@@ -1153,10 +1071,7 @@ pub enum ComputeOutcomeKind {
 }
 /// Execution outcome plus optional response details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeOutcome {
     /// Outcome classification.
     pub kind: ComputeOutcomeKind,
@@ -1175,10 +1090,7 @@ pub struct ComputeOutcome {
 }
 /// Receipt emitted after a compute call executes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ComputeReceipt {
     /// Call summary.
     pub call: ComputeCallSummary,

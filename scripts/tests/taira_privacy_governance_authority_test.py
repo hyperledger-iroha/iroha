@@ -375,7 +375,9 @@ def test_recomputed_request_rejects_non_u64_activation_height(forged: object) ->
         authority._validated_untrusted_request_value_v1(request)
 
 
-def test_structural_receipt_is_explicitly_untrusted_and_public_validation_stays_closed() -> None:
+def test_structural_receipt_is_accepted_only_after_native_historical_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     request = _request()
     payload = _receipt_bytes(_receipt_value(request))
     structural = authority._validate_untrusted_governance_authority_receipt_structure_v1(
@@ -388,11 +390,70 @@ def test_structural_receipt_is_explicitly_untrusted_and_public_validation_stays_
         structural.signed_transaction_norito
     ).hexdigest()
 
-    with pytest.raises(
-        authority.PrivacyGovernanceAuthorityError,
-        match=authority.PROVISIONING_BARRIER,
-    ):
-        authority.validate_authenticated_governance_receipt_v1(request, payload)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(f"preflight:{role}"),
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "verify_receipt",
+        lambda role, *_args, **_kwargs: calls.append(f"verify:{role}"),
+    )
+    verified = authority.validate_authenticated_governance_receipt_v1(
+        request,
+        payload,
+        authority_envelope_payload=authority.taira_authority_client.canonical_json_bytes(
+            {"schema": "test-governance-envelope"}
+        ),
+    )
+    assert verified == structural
+    assert calls == [
+        "preflight:privacy-governance",
+        "verify:privacy-governance",
+    ]
+
+
+def test_governance_request_authorizes_exact_validated_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The request path returns the structural view of the native receipt."""
+
+    request = _request()
+    receipt = _receipt_value(request)
+    calls: list[str] = []
+    result = authority.taira_authority_client.AuthorityResult(
+        role="privacy-governance",
+        operation_id=_digest("operation"),
+        run_id=_digest("run"),
+        status="authorized",
+        authority_envelope={"schema": "test-envelope"},
+        durable_receipt=receipt,
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(f"preflight:{role}"),
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "authorize",
+        lambda role, _subject: calls.append(f"authorize:{role}") or result,
+    )
+
+    validated = authority.request_authenticated_governance_transaction_v1(request)
+    assert validated.receipt.canonical_bytes == _receipt_bytes(receipt)
+    assert validated.authority_envelope == (
+        authority.taira_authority_client.canonical_json_bytes(
+            {"schema": "test-envelope"}
+        )
+    )
+    assert validated.durable_receipt == _receipt_bytes(receipt)
+    assert calls == [
+        "preflight:privacy-governance",
+        "authorize:privacy-governance",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -568,6 +629,13 @@ def test_self_consistent_forgery_cannot_reach_signer_validator_path_or_replay_io
     def forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("provisioning barrier allowed signer, path, or replay I/O")
 
+    def unavailable(_role: str) -> object:
+        raise authority.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(authority.taira_authority_client, "preflight", unavailable)
+
     for owner, name in (
         (builtins, "open"),
         (Path, "open"),
@@ -609,7 +677,7 @@ def test_self_consistent_forgery_cannot_reach_signer_validator_path_or_replay_io
     assert list(tmp_path.iterdir()) == []
 
 
-def test_both_public_entrypoints_have_unconditional_barrier_as_first_operation() -> None:
+def test_both_public_entrypoints_preflight_before_authenticated_operations() -> None:
     source = (ROOT / "scripts/taira_privacy_governance_authority.py").read_text(
         encoding="utf-8"
     )
@@ -628,7 +696,6 @@ def test_both_public_entrypoints_have_unconditional_barrier_as_first_operation()
             operations[0].value, ast.Constant
         ):
             operations.pop(0)
-        assert len(operations) == 1
         first = operations[0]
         assert isinstance(first, ast.Expr)
         assert isinstance(first.value, ast.Call)
@@ -638,6 +705,20 @@ def test_both_public_entrypoints_have_unconditional_barrier_as_first_operation()
             == "_require_provisioned_privacy_governance_authority_v1"
         )
         assert first.value.args == [] and first.value.keywords == []
+        client_methods = {
+            node.func.attr
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "taira_authority_client"
+        }
+        expected = (
+            "authorize"
+            if name == "request_authenticated_governance_transaction_v1"
+            else "verify_receipt"
+        )
+        assert expected in client_methods
 
     assert "os.environ" not in source
     assert "getenv(" not in source

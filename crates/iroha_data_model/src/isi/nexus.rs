@@ -454,6 +454,7 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::{
         block::{BlockHeader, consensus::LaneBlockCommitment},
         nexus::{
@@ -464,7 +465,6 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::{Decode, Encode};
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use std::num::NonZeroU64;
     #[derive(Encode)]
     struct ForgedRegisterVerifiedFeeSponsorVaultAllocation {

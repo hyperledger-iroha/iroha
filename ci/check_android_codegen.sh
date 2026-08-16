@@ -3,6 +3,15 @@
 # shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
+# Git provenance must not inherit caller-selected routing or configuration.
+while IFS= read -r openapi_git_variable; do
+  [[ "${openapi_git_variable}" == GIT_* ]] && unset "${openapi_git_variable}"
+done < <(compgen -e)
+export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROCESS_POLICY="${ROOT_DIR}/scripts/sumeragi_v2_release_process_policy.sh"
 if [[ ! -f "${PROCESS_POLICY}" || -L "${PROCESS_POLICY}" ]]; then
@@ -104,7 +113,7 @@ if [[ -n "$(GIT_OPTIONAL_LOCKS=0 git -C "${ROOT_DIR}" status --porcelain=v1 --un
   exit 1
 fi
 if [[ ! -f "${ROOT_DIR}/Cargo.lock" || -L "${ROOT_DIR}/Cargo.lock" ]]; then
-  echo "[android-codegen] error: the pinned ignored root Cargo.lock must be a regular file" >&2
+  echo "[android-codegen] error: the pinned tracked root Cargo.lock must be a regular file" >&2
   exit 1
 fi
 HEAD_COMMIT="$(GIT_OPTIONAL_LOCKS=0 git -C "${ROOT_DIR}" rev-parse --verify 'HEAD^{commit}')"

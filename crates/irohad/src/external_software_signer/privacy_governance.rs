@@ -1,11 +1,7 @@
-//! Inert native semantic contract for the future Taira privacy-governance signer.
+//! Native semantic contract for the Taira privacy-governance signer.
 //!
-//! This module deliberately has no service, key, signature, provisioning, rotation,
-//! transport, journal, or public re-export.  It only defines the canonical request
-//! and transaction checks that a separately provisioned retained-genesis-key service
-//! must perform in the future.  No production module calls it.  Keeping the module in
-//! normal builds makes release compilation type-check the contract while the retained external
-//! genesis signer and its same-key `FinalizePrivacyGenesis` transition remain unavailable.
+//! The authority service owns transport, retained-key state, replay, and audit durability;
+//! this module owns the exact request/transaction parity checks.
 //!
 //! Request account fields use the data model's canonical JSON address representation:
 //! bounded lowercase `0x` canonical bytes.  They never accept aliases, legacy
@@ -445,6 +441,98 @@ pub(super) fn validate_privacy_governance_request_v1(
         issued_at_unix_millis: issued_at,
         expires_at_unix_millis: expires_at,
     })
+}
+
+/// Derive the cryptographic transaction context from the request itself and
+/// run the full semantic validator.  The authority additionally binds the
+/// canonical request digest in an administrator-issued run assignment, so
+/// these derived axes cannot be substituted by the authenticated requester.
+pub(super) fn validate_assigned_privacy_governance_request_v1(
+    request_bytes: &[u8],
+    authenticated_kernel_peer_uid: u32,
+    now_unix_millis: u64,
+) -> Result<ValidatedPrivacyGovernanceRequestV1, PrivacyGovernanceSemanticErrorV1> {
+    let value = parse_canonical_request(request_bytes)?;
+    let request = exact_object(&value, REQUEST_FIELDS_V1)?;
+    let activation_object = nested_object(request, "activation", ACTIVATION_FIELDS_V1)?;
+    let candidate = nested_object(request, "candidate", CANDIDATE_FIELDS_V1)?;
+    let controller = nested_object(request, "controller", CONTROLLER_FIELDS_V1)?;
+    let fleet = nested_object(request, "fleet", FLEET_FIELDS_V1)?;
+    let genesis = nested_object(request, "genesis", GENESIS_FIELDS_V1)?;
+    let run = nested_object(request, "run", RUN_FIELDS_V1)?;
+    let transaction = nested_object(request, "transaction", TRANSACTION_FIELDS_V1)?;
+    let transaction_payload = required_canonical_base64(
+        transaction,
+        "payload_norito_base64",
+        MAX_TRANSACTION_PAYLOAD_BYTES_V1,
+    )?;
+    let builder = TransactionBuilder::decode_payload(&transaction_payload)
+        .map_err(|_| PrivacyGovernanceSemanticErrorV1::TransactionPayload)?;
+    let payload = builder.payload();
+    let TransactionDomain::Network(network_id) = payload.domain else {
+        return Err(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
+            "transaction domain",
+        ));
+    };
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Err(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
+            "executable kind",
+        ));
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
+            "instruction count",
+        ));
+    };
+    let registration = instruction
+        .as_any()
+        .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+        .ok_or(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
+            "instruction type",
+        ))?;
+    let genesis_public_key = required_text(genesis, "public_key")?
+        .parse::<PublicKey>()
+        .map_err(|_| PrivacyGovernanceSemanticErrorV1::BoundAxis("genesis public key"))?;
+    let genesis_authority =
+        parse_canonical_account_address(required_text(genesis, "authority_account_id")?)?
+            .to_account_id()
+            .map_err(|_| PrivacyGovernanceSemanticErrorV1::BoundAxis("genesis authority"))?;
+    let transaction_nonce = payload
+        .nonce
+        .ok_or(PrivacyGovernanceSemanticErrorV1::TimeWindow)?;
+    let expected = PrivacyGovernanceExpectedContextV1 {
+        candidate_binding_sha256: required_sha256(candidate, "candidate_binding_sha256")?,
+        cargo_lock_sha256: required_sha256(candidate, "cargo_lock_sha256")?,
+        dpn_validator_release_commit: required_commit(candidate, "dpn_validator_release_commit")?,
+        source_commit: required_commit(candidate, "source_commit")?,
+        workspace_source_manifest_sha256: required_sha256(
+            candidate,
+            "workspace_source_manifest_sha256",
+        )?,
+        controller_digest: required_sha256(controller, "digest")?,
+        controller_host_id: required_text(controller, "host_id")?.to_owned(),
+        controller_installation_id: required_text(controller, "installation_id")?.to_owned(),
+        four_peer_binding_sha256: required_sha256(fleet, "four_peer_binding_sha256")?,
+        supervisor_binding_sha256: required_sha256(fleet, "supervisor_binding_sha256")?,
+        reset_manifest_sha256: required_sha256(genesis, "reset_manifest_sha256")?,
+        signed_genesis_sha256: required_sha256(genesis, "signed_genesis_sha256")?,
+        unsigned_genesis_sha256: required_sha256(genesis, "unsigned_genesis_sha256")?,
+        network_id,
+        genesis_public_key,
+        genesis_authority,
+        compiled_profile_sha256: required_sha256(activation_object, "compiled_profile_sha256")?,
+        activation: registration.activation,
+        run_nonce_sha256: required_sha256(run, "nonce")?,
+        issued_at_unix_millis: required_positive_u64(run, "issued_at_unix_millis")?,
+        expires_at_unix_millis: required_positive_u64(run, "expires_at_unix_millis")?,
+        transaction_nonce,
+    };
+    validate_privacy_governance_request_v1(
+        request_bytes,
+        authenticated_kernel_peer_uid,
+        now_unix_millis,
+        &expected,
+    )
 }
 /// Authoritative native operation identity for a future replay journal.
 ///

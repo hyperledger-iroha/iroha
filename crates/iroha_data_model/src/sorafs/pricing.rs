@@ -6,6 +6,8 @@
 //! deterministically without relying on out-of-band config. Public pin admission fees are computed
 //! here, while provider credit deposits, settlement, and slashing remain separate authority-checked
 //! ledger flows.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     metadata::Metadata,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
@@ -35,10 +37,7 @@ const STORAGE_CLASSES: [StorageClass; 3] =
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Ord, PartialOrd, Default,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TierRate {
     /// Storage class the tier applies to.
     pub storage_class: StorageClass,
@@ -64,10 +63,7 @@ impl TierRate {
 }
 /// Collateral policy controlling minimum bonded amounts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CollateralPolicy {
     /// Multiplier (in basis points) applied to monthly storage revenue.
     pub multiplier_bps: u32,
@@ -108,10 +104,7 @@ impl Default for CollateralPolicy {
 }
 /// Credit settlement configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CreditPolicy {
     /// Length of a settlement window (seconds).
     pub settlement_window_secs: u64,
@@ -146,10 +139,7 @@ impl Default for CreditPolicy {
 }
 /// Commitment-based discount tier (e.g., loyalty or capacity commitment).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CommitmentDiscountTier {
     /// Minimum committed GiB·month required for the discount.
     pub minimum_commitment_gib_month: u64,
@@ -158,10 +148,7 @@ pub struct CommitmentDiscountTier {
 }
 /// Discount schedule applied on top of base tier pricing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DiscountSchedule {
     /// Months of uninterrupted participation required for loyalty discount.
     pub loyalty_months_required: u16,
@@ -172,10 +159,7 @@ pub struct DiscountSchedule {
 }
 /// Governance-controlled pricing schedule and credit policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PricingScheduleRecord {
     /// Schema version (see [`PRICING_SCHEDULE_VERSION_V1`]).
     pub version: u16,
@@ -731,10 +715,7 @@ pub enum PricingComputationError {
 }
 /// Credit ledger record persisted for each provider.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ProviderCreditRecord {
     /// Provider identifier this credit entry belongs to.
     pub provider_id: ProviderId,

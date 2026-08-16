@@ -3,6 +3,8 @@
 //! Signed order, cancellation, and settlement payload schemas remain in
 //! `sorafs_manifest::orderbook`. These records bind those canonical payloads to
 //! a governance-controlled policy and to deterministic ledger admission state.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId, asset::AssetDefinitionId, escrow::EscrowId,
     events::data::sorafs::SorafsOrderbookLedgerEvent, sorafs::capacity::ProviderId,
@@ -108,10 +110,7 @@ pub fn is_reserved_orderbook_escrow_id_v1(escrow_id: &EscrowId) -> bool {
 }
 /// Governance-controlled order admission and receipt-retention policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookAdmissionPolicyV1 {
     /// Schema version; must equal [`ORDERBOOK_ADMISSION_POLICY_VERSION_V1`].
     pub version: u16,
@@ -321,10 +320,7 @@ pub enum OrderbookPolicyValidationError {
 }
 /// Activated governance policy together with ledger admission provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookAdmissionPolicyRecord {
     /// Policy body.
     pub policy: OrderbookAdmissionPolicyV1,
@@ -338,10 +334,7 @@ pub struct OrderbookAdmissionPolicyRecord {
 }
 /// Authoritative lifecycle of an admitted order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
@@ -362,10 +355,7 @@ pub enum OrderbookOrderStatusV1 {
 }
 /// Native custody created atomically with one admitted bid.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookBidEscrowBindingV1 {
     /// Deterministic order-scoped native lock identifier.
     pub escrow_id: EscrowId,
@@ -376,10 +366,7 @@ pub struct OrderbookBidEscrowBindingV1 {
 }
 /// Canonical signed order and its authoritative ledger status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookOrderRecord {
     /// Canonical order identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -423,10 +410,7 @@ pub struct OrderbookOrderRecord {
 }
 /// Typed cancellation view returned by authoritative read queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookCancellationRecord {
     /// Cancelled order identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -444,10 +428,7 @@ pub struct OrderbookCancellationRecord {
 }
 /// Highest committed orderbook operation nonce for one ledger account.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookOwnerNonceRecord {
     /// Canonical account whose nonce namespace is tracked.
     pub owner: AccountId,
@@ -456,10 +437,7 @@ pub struct OrderbookOwnerNonceRecord {
 }
 /// Immutable accepted settlement receipt and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementReceiptRecord {
     /// Canonical receipt identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -486,10 +464,7 @@ pub struct OrderbookSettlementReceiptRecord {
 }
 /// Immutable authoritative trade produced by deterministic matching.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookTradeRecord {
     /// Canonical trade identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -515,10 +490,7 @@ pub struct OrderbookTradeRecord {
 }
 /// Authoritative settlement-channel lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
@@ -533,10 +505,7 @@ pub enum OrderbookSettlementChannelStatusV1 {
 }
 /// Authoritative settlement-channel state bound to native custody.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementChannelRecord {
     /// Settlement channel identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -575,10 +544,7 @@ pub struct OrderbookSettlementChannelRecord {
 }
 /// One receipt range retained in a channel replay index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementRangeRecord {
     /// Receipt identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -592,10 +558,7 @@ pub struct OrderbookSettlementRangeRecord {
 }
 /// Bounded, strictly range-ordered receipt replay index for one channel.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementIndexRecord {
     /// Settlement channel identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -608,10 +571,7 @@ pub struct OrderbookSettlementIndexRecord {
 }
 /// Constant-time authoritative orderbook ledger counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookLedgerStatusV1 {
     /// Number of unfilled open orders.
     pub open_orders: u64,
@@ -651,10 +611,7 @@ pub struct OrderbookLedgerStatusV1 {
 }
 /// Finalized block anchor for one coherent orderbook query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -664,10 +621,7 @@ pub struct OrderbookFinalizedCursorV1 {
 }
 /// Cursor-bounded authoritative order page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookOrderPageV1 {
     /// Finalized state anchor shared by every order in the page.
     pub finalized_cursor: OrderbookFinalizedCursorV1,
@@ -684,10 +638,7 @@ pub struct OrderbookOrderPageV1 {
 }
 /// Cursor-bounded authoritative settlement-receipt page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementReceiptPageV1 {
     /// Finalized state anchor shared by every receipt in the page.
     pub finalized_cursor: OrderbookFinalizedCursorV1,
@@ -704,10 +655,7 @@ pub struct OrderbookSettlementReceiptPageV1 {
 }
 /// Cursor-bounded authoritative trade page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookTradePageV1 {
     /// Finalized state anchor shared by every trade in the page.
     pub finalized_cursor: OrderbookFinalizedCursorV1,
@@ -724,10 +672,7 @@ pub struct OrderbookTradePageV1 {
 }
 /// Cursor-bounded authoritative settlement-channel page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookSettlementChannelPageV1 {
     /// Finalized state anchor shared by every channel in the page.
     pub finalized_cursor: OrderbookFinalizedCursorV1,
@@ -744,10 +689,7 @@ pub struct OrderbookSettlementChannelPageV1 {
 }
 /// Exclusive cursor for one committed orderbook event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookFinalizedEventCursorV1 {
     /// Monotonic orderbook-event sequence beginning at one.
     pub sequence: u64,
@@ -761,10 +703,7 @@ pub struct OrderbookFinalizedEventCursorV1 {
 }
 /// Typed orderbook event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookFinalizedEventV1 {
     /// Monotonic orderbook-event sequence beginning at one.
     pub sequence: u64,
@@ -792,10 +731,7 @@ impl OrderbookFinalizedEventV1 {
 }
 /// Cursor-bounded page of typed committed orderbook events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OrderbookFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: OrderbookFinalizedCursorV1,

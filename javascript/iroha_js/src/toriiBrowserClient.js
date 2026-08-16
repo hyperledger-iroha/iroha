@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 
 import { blake2b256 } from "./blake2b.js";
+import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import {
   NumericV1,
   NumericV1Error,
@@ -35,10 +36,6 @@ import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
-import {
-  parseSumeragiDiagnosticsJson,
-  parseSumeragiStatusJson,
-} from "./sumeragiTyped.js";
 import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
@@ -286,7 +283,10 @@ function normalizeContractDeploymentStateResponse(value, request) {
     "contract deployment-state response observed_block_hash",
   );
   const hashMatch = HASH_LITERAL_PATTERN.exec(observedBlockHash);
-  if (hashMatch === null || hashLiteralCrc16(hashMatch[1]) !== hashMatch[2]) {
+  if (
+    hashMatch === null ||
+    computeHashLiteralCrc("hash", hashMatch[1]) !== hashMatch[2]
+  ) {
     throw new TypeError(
       "contract deployment-state response observed_block_hash must be canonical",
     );
@@ -344,17 +344,6 @@ function requireExactHashHex(value, context) {
     throw new TypeError(`${context} must be an exact 32-byte hexadecimal string`);
   }
   return value.toLowerCase();
-}
-
-function hashLiteralCrc16(body) {
-  let crc = 0xffff;
-  for (const byte of Buffer.from(`hash:${body}`, "utf8")) {
-    crc ^= (byte & 0xff) << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc & 0x8000) !== 0 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-    }
-  }
-  return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
 function requireMatchingReceiptHashHeader(response, name, expectedHash) {
@@ -1046,10 +1035,6 @@ function signalOnlyOptions(options, context) {
   return item;
 }
 
-function kagemushaOptions(options, context) {
-  return signalOnlyOptions(options, context);
-}
-
 function copyRequestFields(source) {
   const body = { ...source };
   delete body.signal;
@@ -1184,6 +1169,41 @@ async function responseText(response) {
     }
   }
   return "";
+}
+
+function requestSignal(options, timeoutMs) {
+  let timeoutId;
+  let signal = options.signal;
+  if (
+    signal === undefined &&
+    timeoutMs !== null &&
+    timeoutMs !== undefined &&
+    Number(timeoutMs) > 0
+  ) {
+    const controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), Number(timeoutMs));
+    signal = controller.signal;
+  }
+  return { signal, timeoutId };
+}
+
+async function fetchToriiResponse(client, url, init, options, timeoutId) {
+  let response;
+  try {
+    response = await client.fetchImpl(url, init);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+  const status = responseStatus(response);
+  const successStatuses = options.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
+  if (!successStatuses.includes(status)) {
+    const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
+    const bodyText = await responseText(response);
+    throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
+  }
+  return { response, status };
 }
 
 function requireExactJsonContentType(contentType, context) {
@@ -1432,7 +1452,7 @@ export class ToriiBrowserClient {
   }
 
   getOfflineCapability(options = {}) {
-    const opts = kagemushaOptions(options, "getOfflineCapability options");
+    const opts = signalOnlyOptions(options, "getOfflineCapability options");
     return this._json("GET", "/v1/offline/readiness", {
       signal: opts.signal,
       responseObserver: (response) => requireKagemushaJsonContentType(
@@ -1464,7 +1484,7 @@ export class ToriiBrowserClient {
 
   getKagemushaOperationStatus(operationId, options = {}) {
     const canonicalId = normalizeKagemushaOperationId(operationId);
-    const opts = kagemushaOptions(options, "getKagemushaOperationStatus options");
+    const opts = signalOnlyOptions(options, "getKagemushaOperationStatus options");
     return this._json("GET", `/v1/offline/operations/${canonicalId}`, {
       signal: opts.signal,
       responseObserver: (response) => requireKagemushaJsonContentType(
@@ -1479,7 +1499,7 @@ export class ToriiBrowserClient {
       ? normalizeKagemushaTopUpRequestV4
       : normalizeKagemushaRedeemRequestV4;
     const normalized = normalizeRequest(request, `${context} request`);
-    const opts = kagemushaOptions(options, `${context} options`);
+    const opts = signalOnlyOptions(options, `${context} options`);
     let location = null;
     return this._json("POST", path, {
       rawBody: normalized.norito,
@@ -1519,18 +1539,7 @@ export class ToriiBrowserClient {
       ...this.defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
     };
-    let timeoutId;
-    let signal = normalizedOptions.signal;
-    if (
-      signal === undefined &&
-      this.timeoutMs !== null &&
-      this.timeoutMs !== undefined &&
-      Number(this.timeoutMs) > 0
-    ) {
-      const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), Number(this.timeoutMs));
-      signal = controller.signal;
-    }
+    const { signal, timeoutId } = requestSignal(normalizedOptions, this.timeoutMs);
     const init = {
       method,
       cache: "no-store",
@@ -1571,21 +1580,13 @@ export class ToriiBrowserClient {
       );
       init.redirect = "error";
     }
-    let response;
-    try {
-      response = await this.fetchImpl(url, init);
-    } finally {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-    }
-    const status = responseStatus(response);
-    const successStatuses = normalizedOptions.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
-    if (!successStatuses.includes(status)) {
-      const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
-      const bodyText = await responseText(response);
-      throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
-    }
+    const { response, status } = await fetchToriiResponse(
+      this,
+      url,
+      init,
+      normalizedOptions,
+      timeoutId,
+    );
     if (normalizedOptions.responseObserver !== undefined) {
       if (typeof normalizedOptions.responseObserver !== "function") {
         throw new TypeError(`${method} ${path} responseObserver must be a function`);
@@ -1621,36 +1622,19 @@ export class ToriiBrowserClient {
       ...(normalizedOptions.headers ?? {}),
       Accept: "application/x-norito",
     };
-    let timeoutId;
-    let signal = normalizedOptions.signal;
-    if (
-      signal === undefined &&
-      this.timeoutMs !== null &&
-      this.timeoutMs !== undefined &&
-      Number(this.timeoutMs) > 0
-    ) {
-      const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), Number(this.timeoutMs));
-      signal = controller.signal;
-    }
-    let response;
-    try {
-      response = await this.fetchImpl(this._url(path, normalizedOptions.params), {
+    const { signal, timeoutId } = requestSignal(normalizedOptions, this.timeoutMs);
+    const { response } = await fetchToriiResponse(
+      this,
+      this._url(path, normalizedOptions.params),
+      {
         method,
         cache: "no-store",
         headers,
         signal,
-      });
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
-    const status = responseStatus(response);
-    const successStatuses = normalizedOptions.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
-    if (!successStatuses.includes(status)) {
-      const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
-      const bodyText = await responseText(response);
-      throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
-    }
+      },
+      normalizedOptions,
+      timeoutId,
+    );
     const contentType = response.headers?.get?.("content-type") ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       throw new TypeError(`${method} ${path} must return application/x-norito`);
@@ -2647,23 +2631,25 @@ export class ToriiBrowserClient {
   getSumeragiStatusTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiStatusTyped options");
     return this._json("GET", "/v1/sumeragi/status", {
-        headers: { Accept: "application/json" },
-        signal: signalFrom(opts),
-        operatorSigningContext: requireOperatorSigningContext(
-          this._operatorSigningContext,
-          "getSumeragiStatusTyped",
-        ),
-        maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
-        responseObserver: (response) => {
-          requireExactJsonContentType(
-            response.headers.get("content-type"),
-            "Sumeragi typed status response",
-          );
-        },
-        jsonParser: (text) => parseSumeragiStatusJson(
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiStatusTyped",
+      ),
+      maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed status response",
+        );
+      },
+      jsonParser: (text) => import("./sumeragiTyped.js").then(
+        ({ parseSumeragiStatusJson }) => parseSumeragiStatusJson(
           text,
           "Sumeragi typed status",
         ),
+      ),
     });
   }
 
@@ -2681,23 +2667,25 @@ export class ToriiBrowserClient {
   getSumeragiDiagnosticsTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
     return this._json("GET", "/v1/sumeragi/diagnostics", {
-        headers: { Accept: "application/json" },
-        signal: signalFrom(opts),
-        operatorSigningContext: requireOperatorSigningContext(
-          this._operatorSigningContext,
-          "getSumeragiDiagnosticsTyped",
-        ),
-        maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
-        responseObserver: (response) => {
-          requireExactJsonContentType(
-            response.headers.get("content-type"),
-            "Sumeragi typed diagnostics response",
-          );
-        },
-        jsonParser: (text) => parseSumeragiDiagnosticsJson(
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiDiagnosticsTyped",
+      ),
+      maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed diagnostics response",
+        );
+      },
+      jsonParser: (text) => import("./sumeragiTyped.js").then(
+        ({ parseSumeragiDiagnosticsJson }) => parseSumeragiDiagnosticsJson(
           text,
           "Sumeragi typed diagnostics",
         ),
+      ),
     });
   }
 

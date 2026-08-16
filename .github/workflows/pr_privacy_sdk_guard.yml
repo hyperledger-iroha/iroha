@@ -319,14 +319,18 @@ jobs:
         with:
           name: privacy-jvm-native-abi22-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Install and verify the frozen workspace Cargo lock
+      - name: Authenticate distinct privacy release lock and enforce requalification blocker
         run: |
-          [[ ! -e Cargo.lock && ! -L Cargo.lock ]]
-          install -m 600 "$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock" Cargo.lock
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" ]]
+          ! cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
           echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
+          echo "::error::Swift privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked 0ddb root authority"
+          exit 1
       - name: Prepare external privacy Swift build and artifact roots
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-artifacts"
@@ -365,7 +369,8 @@ jobs:
       - name: Revalidate frozen Swift inputs and ABI22 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only
 
   privacy_jvm_sdk_tests:
@@ -453,9 +458,8 @@ jobs:
           PRIVACY_CSHARP_PYTHON: ${{ steps.privacy-csharp-python.outputs.python-path }}
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi22"
-          [[ ! -e Cargo.lock && ! -L Cargo.lock ]]
-          install -m 600 "$input/Cargo.lock" Cargo.lock
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi22_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi22-csharp.json" \
@@ -508,13 +512,16 @@ jobs:
         with:
           name: privacy-jvm-native-abi22-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Install and verify the frozen workspace Cargo lock
+      - name: Authenticate distinct privacy release lock and enforce requalification blocker
         env:
           PRIVACY_JS_PYTHON: ${{ steps.privacy-js-python.outputs.python-path }}
         run: |
-          [[ ! -e Cargo.lock && ! -L Cargo.lock ]]
-          install -m 600 "$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock" Cargo.lock
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" ]]
+          ! cmp -s "$release_lock" Cargo.lock
+          echo "::error::JavaScript privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked 0ddb root authority"
+          exit 1
       - name: Prime privacy N-API dependencies from the frozen lock
         run: cargo fetch --locked
       - name: Install JavaScript SDK dependencies

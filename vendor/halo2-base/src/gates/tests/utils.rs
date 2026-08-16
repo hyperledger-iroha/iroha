@@ -1,11 +1,11 @@
 #![allow(clippy::type_complexity)]
 use num_integer::Integer;
 
-use crate::utils::biguint_to_fe;
-use crate::utils::fe_to_biguint;
+use crate::QuantumCell;
 use crate::utils::BigPrimeField;
 use crate::utils::ScalarField;
-use crate::QuantumCell;
+use crate::utils::biguint_to_fe;
+use crate::utils::fe_to_biguint;
 
 // Ground truth functions
 
@@ -44,7 +44,9 @@ pub fn div_unsafe_ground_truth<F: ScalarField>(inputs: &[QuantumCell<F>]) -> F {
 }
 
 pub fn inner_product_ground_truth<F: ScalarField>(a: &[F], b: &[F]) -> F {
-    a.iter().zip(b.iter()).fold(F::ZERO, |acc, (&a, &b)| acc + a * b)
+    a.iter()
+        .zip(b.iter())
+        .fold(F::ZERO, |acc, (&a, &b)| acc + a * b)
 }
 
 pub fn inner_product_left_last_ground_truth<F: ScalarField>(a: &[F], b: &[F]) -> (F, F) {
@@ -71,10 +73,9 @@ pub fn inner_product_with_sums_ground_truth<F: ScalarField>(
 pub fn sum_products_with_coeff_and_var_ground_truth<F: ScalarField>(
     input: &(Vec<(F, QuantumCell<F>, QuantumCell<F>)>, QuantumCell<F>),
 ) -> F {
-    let expected =
-        input.0.iter().fold(F::ZERO, |acc, (coeff, cell1, cell2)| {
-            acc + *coeff * *cell1.value() * *cell2.value()
-        }) + *input.1.value();
+    let expected = input.0.iter().fold(F::ZERO, |acc, (coeff, cell1, cell2)| {
+        acc + *coeff * *cell1.value() * *cell2.value()
+    }) + *input.1.value();
     expected
 }
 
@@ -126,7 +127,11 @@ pub fn select_by_indicator_ground_truth<F: ScalarField>(
         indicator[idx_value] = F::ONE;
     }
     // take cross product of indicator and inputs.0
-    inputs.0.iter().zip(indicator.iter()).fold(F::ZERO, |acc, (a, b)| acc + (*a.value() * *b))
+    inputs
+        .0
+        .iter()
+        .zip(indicator.iter())
+        .fold(F::ZERO, |acc, (a, b)| acc + (*a.value() * *b))
 }
 
 pub fn select_from_idx_ground_truth<F: ScalarField>(
@@ -143,11 +148,7 @@ pub fn select_from_idx_ground_truth<F: ScalarField>(
 }
 
 pub fn is_zero_ground_truth<F: ScalarField>(x: F) -> F {
-    if x.is_zero().into() {
-        F::ONE
-    } else {
-        F::ZERO
-    }
+    if x.is_zero().into() { F::ONE } else { F::ZERO }
 }
 
 pub fn is_equal_ground_truth<F: ScalarField>(inputs: &[QuantumCell<F>]) -> F {
@@ -166,11 +167,7 @@ pub fn lagrange_eval_ground_truth<F: ScalarField>(inputs: &[F]) -> (F, F) {
 // Range Chip Ground Truths
 
 pub fn is_less_than_ground_truth<F: ScalarField>(inputs: (F, F)) -> F {
-    if inputs.0 < inputs.1 {
-        F::ONE
-    } else {
-        F::ZERO
-    }
+    if inputs.0 < inputs.1 { F::ONE } else { F::ZERO }
 }
 
 pub fn div_mod_ground_truth<F: ScalarField + BigPrimeField>(inputs: (F, u64)) -> (F, F) {

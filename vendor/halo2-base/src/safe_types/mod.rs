@@ -4,13 +4,13 @@ use std::{
 };
 
 use crate::{
+    AssignedValue, Context,
+    QuantumCell::Constant,
     gates::{
         flex_gate::GateInstructions,
         range::{RangeChip, RangeInstructions},
     },
     utils::ScalarField,
-    AssignedValue, Context,
-    QuantumCell::Constant,
 };
 
 use itertools::Itertools;
@@ -62,7 +62,10 @@ impl<F: ScalarField, const BYTES_PER_ELE: usize, const TOTAL_BITS: usize>
 
     // new is private so Safetype can only be constructed by this crate.
     fn new(raw_values: RawAssignedValues<F>) -> Self {
-        assert!(raw_values.len() == Self::VALUE_LENGTH, "Invalid raw values length");
+        assert!(
+            raw_values.len() == Self::VALUE_LENGTH,
+            "Invalid raw values length"
+        );
         Self { value: raw_values }
     }
 
@@ -89,7 +92,9 @@ impl<F: ScalarField, const TOTAL_BITS: usize> TryFrom<Vec<SafeByte<F>>>
         if value.len() * 8 != TOTAL_BITS {
             return Err("Invalid length".to_owned());
         }
-        Ok(Self::new(value.into_iter().map(|b| b.0).collect::<Vec<_>>()))
+        Ok(Self::new(
+            value.into_iter().map(|b| b.0).collect::<Vec<_>>(),
+        ))
     }
 }
 
@@ -154,7 +159,10 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
     pub fn unsafe_to_safe_type<const BYTES_PER_ELE: usize, const TOTAL_BITS: usize>(
         inputs: RawAssignedValues<F>,
     ) -> SafeType<F, BYTES_PER_ELE, TOTAL_BITS> {
-        assert_eq!(inputs.len(), SafeType::<F, BYTES_PER_ELE, TOTAL_BITS>::VALUE_LENGTH);
+        assert_eq!(
+            inputs.len(),
+            SafeType::<F, BYTES_PER_ELE, TOTAL_BITS>::VALUE_LENGTH
+        );
         SafeType::<F, BYTES_PER_ELE, TOTAL_BITS>::new(inputs)
     }
 
@@ -211,7 +219,10 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
         max_len: usize,
     ) -> VarLenBytesVec<F> {
         VarLenBytesVec::<F>::new(
-            inputs.iter().map(|input| Self::unsafe_to_byte(*input)).collect_vec(),
+            inputs
+                .iter()
+                .map(|input| Self::unsafe_to_byte(*input))
+                .collect_vec(),
             len,
             max_len,
         )
@@ -232,7 +243,10 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
         len: usize,
     ) -> FixLenBytesVec<F> {
         FixLenBytesVec::<F>::new(
-            inputs.into_iter().map(|input| Self::unsafe_to_byte(input)).collect_vec(),
+            inputs
+                .into_iter()
+                .map(|input| Self::unsafe_to_byte(input))
+                .collect_vec(),
             len,
         )
     }
@@ -252,7 +266,8 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
         inputs: [AssignedValue<F>; MAX_LEN],
         len: AssignedValue<F>,
     ) -> VarLenBytes<F, MAX_LEN> {
-        self.range_chip.check_less_than_safe(ctx, len, MAX_LEN as u64 + 1);
+        self.range_chip
+            .check_less_than_safe(ctx, len, MAX_LEN as u64 + 1);
         VarLenBytes::<F, MAX_LEN>::new(inputs.map(|input| self.assert_byte(ctx, input)), len)
     }
 
@@ -272,9 +287,13 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
         len: AssignedValue<F>,
         max_len: usize,
     ) -> VarLenBytesVec<F> {
-        self.range_chip.check_less_than_safe(ctx, len, max_len as u64 + 1);
+        self.range_chip
+            .check_less_than_safe(ctx, len, max_len as u64 + 1);
         VarLenBytesVec::<F>::new(
-            inputs.iter().map(|input| self.assert_byte(ctx, *input)).collect_vec(),
+            inputs
+                .iter()
+                .map(|input| self.assert_byte(ctx, *input))
+                .collect_vec(),
             len,
             max_len,
         )
@@ -303,7 +322,10 @@ impl<'a, F: ScalarField> SafeTypeChip<'a, F> {
         len: usize,
     ) -> FixLenBytesVec<F> {
         FixLenBytesVec::<F>::new(
-            inputs.into_iter().map(|input| self.assert_byte(ctx, input)).collect_vec(),
+            inputs
+                .into_iter()
+                .map(|input| self.assert_byte(ctx, input))
+                .collect_vec(),
             len,
         )
     }

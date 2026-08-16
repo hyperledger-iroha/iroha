@@ -448,7 +448,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "let Self { owner, retirement } = self",
                     "let launched = owner.launch(inputs)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
-                    "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: super::launch::LaunchedProductionLifecycleV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
+                    "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: Box<super::launch::LaunchedProductionLifecycleV1>, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
                     "fn initialize_recovered_local_proposal( &mut self, runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1, )",
                     "self.launched.initialize_recovered_local_proposal(runner)",
@@ -966,7 +966,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let staged_predecessor = if fetch_is_present",
                         "predecessor.clone()",
                         ".stage_authenticated_wal_decision_fetch(projection.fetch())",
-                        "staged_predecessor .stage_recovered_decision_apply(&projection)",
+                        "staged_predecessor .stage_recovered_decision_apply(projection.as_ref())",
                         "LifecycleCoordinator::prepare_with_authenticated_successor_store_borrowed(",
                         "authority, ledger_store, predecessor, successor.clone()",
                     ),
@@ -1338,12 +1338,22 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "owner.live_fetch_count_for_test()",
                 ),
             )
-            lifecycle_launch = region(
+            lifecycle_launch_item = _require_qualified_rust_item(
                 launch_path,
                 launch_source,
+                "ProductionLifecycleOwnerV1",
+                "launch",
+                errors,
                 "Kura-bound production lifecycle launch",
-                "pub(in crate::sumeragi) fn launch(\n        mut self,",
-                "\n}\n#[cfg(test)]\nmod tests {",
+                expected_attributes=(
+                    "#[allow(clippy::result_large_err)]",
+                    "#[inline(never)]",
+                ),
+            )
+            lifecycle_launch = (
+                lifecycle_launch_item.source
+                if lifecycle_launch_item is not None
+                else ""
             )
             require_order(
                 launch_path,
@@ -3571,26 +3581,93 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "cold recovered phase Broadcast-and-Sign registry join",
                 registry_source,
                 (
-                    "fn prepare_cold_adapter_startup(",
+                    "#[inline(never)] pub(in crate::sumeragi) fn prepare_cold_adapter_startup(",
+                    "Self::prepare_cold_sign_branch(",
+                    "Self::prepare_cold_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_sign_branch(",
+                    "#[inline(never)] fn prepare_cold_signed_broadcast_branch(",
+                    "let pair_hint = matching.next()",
+                    "if matching.next().is_some()",
+                    "drop(matching)",
+                    "Self::prepare_cold_signed_broadcast_and_next_vote_branch(",
+                    "Self::prepare_cold_single_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_single_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_signed_broadcast_and_next_vote_branch(",
                     "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
                     "project_authenticated_cold_signed_broadcast_and_sign(verified, seal)",
                     "authenticate_recovered_phase_signed_broadcast_and_sign(",
                     "advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                    "#[inline(never)] pub(crate) fn install_recovered_wal_sign(",
+                    "Self::install_recovered_sign_branch(",
+                    "Self::install_recovered_broadcast_branch(",
+                    "Self::install_recovered_broadcast_and_next_vote_branch(",
+                    "#[inline(never)] fn install_recovered_sign_branch(",
+                    "#[inline(never)] fn install_recovered_broadcast_branch(",
+                    "#[inline(never)] fn install_recovered_broadcast_and_next_vote_branch(",
                     "fn install_recovered_broadcast_and_next_vote(",
                     "paired_next_sign: Some((next_sign_address, next_sign_digest))",
                     "fn phase_broadcast_and_next_vote_projection(",
                     "owns_recovered_phase_broadcast_and_next_sign(",
                 ),
             )
+            pair_install = _require_rust_item(
+                registry_path,
+                registry_source,
+                "install_recovered_broadcast_and_next_vote",
+                errors,
+            )
+            if pair_install is not None:
+                require_tokens(
+                    registry_path,
+                    "cold recovered phase Broadcast-and-Sign registry join",
+                    pair_install.source,
+                    (
+                        "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+                    ),
+                )
             require_tokens(
                 adapter_path,
                 "cold recovered phase owner handoff",
                 adapter_source,
                 (
-                    "install_recovered_sign(&body_store)",
+                    "#[inline(never)] fn authenticate_recovered_phase_vote_stage<'registry>(",
+                    "Ok(Box::new(authenticated))",
+                    "#[inline(never)] fn persist_recovered_phase_vote_stage<'registry>(",
+                    "(*authenticated).persist_repair()",
+                    "Ok(persisted)",
+                    "#[inline(never)] fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(",
                     "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                    "ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup { adapter_startup, verified, persisted, }",
+                    "#[inline(never)] fn install_recovered_phase_vote_sign_stage<'registry>(",
+                    "(*prepared).install_recovered_sign()",
+                    "#[inline(never)] fn open_recovered_phase_vote_seals_stage(",
+                    "(*installed).open_production_owner_seals(",
+                    "#[inline(never)] fn finish_recovered_phase_vote_owner_stage(",
+                    "(*paired).into_owner(registry, payload_store, body_store)",
                 ),
             )
+            phase_branch = _require_rust_item(
+                adapter_path,
+                adapter_source,
+                "open_recovered_phase_vote_branch",
+                errors,
+            )
+            if phase_branch is not None:
+                require_order(
+                    adapter_path,
+                    "cold recovered phase owner handoff",
+                    phase_branch.source,
+                    (
+                        "Self::ensure_recovered_body_store_context(&body_store, &verified)",
+                        "Self::open_recovered_non_apply_stores(",
+                        "Self::authenticate_recovered_phase_vote_stage(",
+                        "Self::persist_recovered_phase_vote_stage(authenticated)",
+                        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+                        "Self::install_recovered_phase_vote_sign_stage(prepared)",
+                        "Self::open_recovered_phase_vote_seals_stage(",
+                        "Self::finish_recovered_phase_vote_owner_stage(",
+                    ),
+                )
             recovered_phase_broadcast_assembly = region(
                 lifecycle_open_path,
                 lifecycle_open_source,

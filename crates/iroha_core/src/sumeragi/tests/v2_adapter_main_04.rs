@@ -1069,6 +1069,8 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     };
     authenticate_qc(&mut unbound_qc_a, &keys);
     let mut unbound_qc_b = wire::QuorumCertificate {
+        round: timeout_round,
+        proposal_round: timeout_round,
         execution_commitment: execution_commitment(0x86),
         ..unbound_qc_a.clone()
     };

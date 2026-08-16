@@ -2,7 +2,7 @@ version: "3.9"
 services:
   iroha-iroha3-dev-0:
     image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    command: ["iroha3d", "--sora", "--config", "/config/config.toml"]
     volumes:
       - ./config.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
@@ -15,7 +15,7 @@ services:
         ipv4_address: 172.28.0.10
   iroha-iroha3-dev-1:
     image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    command: ["iroha3d", "--sora", "--config", "/config/config.toml"]
     volumes:
       - ./config-peer-1.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
@@ -28,7 +28,7 @@ services:
         ipv4_address: 172.28.0.11
   iroha-iroha3-dev-2:
     image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    command: ["iroha3d", "--sora", "--config", "/config/config.toml"]
     volumes:
       - ./config-peer-2.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
@@ -41,7 +41,7 @@ services:
         ipv4_address: 172.28.0.12
   iroha-iroha3-dev-3:
     image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    command: ["iroha3d", "--sora", "--config", "/config/config.toml"]
     volumes:
       - ./config-peer-3.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro

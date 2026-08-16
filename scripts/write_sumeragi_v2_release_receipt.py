@@ -59,16 +59,16 @@ _RELEASE_RECEIPT_COMPONENT_FILES = (
 )
 _RELEASE_RECEIPT_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "d57f1fac4c07849e8a377a0d0ce4fdba09aa20d1de35cf0cc8d7f0c191ebc786"
+        "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
     ),
 }
 
@@ -194,7 +194,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "fa8fc59f626da66e5b0ec76894fafe037619070f05a5833868ba954d7a9fa17b"
+    "0dc98e8799acf15729f4cb42c79b754232fbda6091558ec87c2bd2765a6ffc48"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -239,16 +239,16 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "d57f1fac4c07849e8a377a0d0ce4fdba09aa20d1de35cf0cc8d7f0c191ebc786"
+        "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
@@ -505,13 +505,13 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 860
-_G_UNIT_TEST_COUNT = 525
+_G_UNIT_TEST_COUNT = 527
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        319,
+        321,
         "lib",
     ),
     (
@@ -752,22 +752,22 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 62),
-    ("javascript", 60),
+    ("python", 63),
+    ("javascript", 61),
     ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
-    ("python", 121),
+    ("python", 129),
     ("javascript", 88),
-    ("swift", 33),
-    ("kotlin", 42),
-    ("java", 41),
+    ("swift", 34),
+    ("kotlin", 43),
+    ("java", 42),
 )
 _SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
 _SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"
@@ -3396,10 +3396,17 @@ def _validate_framework_python_runtime(
         raise ReceiptError("framework Python runtime members differ from the marker")
     by_path = {record["path"]: record for record in observed}
     stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    top_level = {PurePosixPath(path).parts[0] for path in by_path}
+    framework_roots = top_level - {"bin", "Resources", "lib"}
+    if len(framework_roots) != 1:
+        raise ReceiptError(
+            "framework Python runtime indispensable layout is incomplete"
+        )
+    framework = next(iter(framework_roots))
     required = {
         "bin": "directory",
         "bin/python3": "file",
-        "Python3": "file",
+        framework: "file",
         "Resources": "directory",
         "Resources/Python.app/Contents/MacOS/Python": "file",
         "lib": "directory",
@@ -3407,8 +3414,7 @@ def _validate_framework_python_runtime(
         f"lib/{stdlib_name}/lib-dynload": "directory",
     }
     if (
-        {PurePosixPath(path).parts[0] for path in by_path}
-        != {"bin", "Python3", "Resources", "lib"}
+        top_level != {"bin", framework, "Resources", "lib"}
         or any(by_path.get(path, {}).get("kind") != kind for path, kind in required.items())
     ):
         raise ReceiptError("framework Python runtime indispensable layout is incomplete")
@@ -3432,7 +3438,7 @@ def _validate_framework_python_runtime(
                 parts.pop()
             else:
                 parts.append(part)
-        if not parts or parts[0] not in {"Python3", "Resources", "lib"}:
+        if not parts or parts[0] not in {framework, "Resources", "lib"}:
             raise ReceiptError(
                 f"framework Python runtime symlink leaves its closure: {relative}"
             )

@@ -383,9 +383,18 @@ python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
   --root "$PWD" > <private-reviewed-source-closure.json>
 python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
+  --cargo <absolute-reviewed-cargo-binary> \
+  --cargo-sha256 <reviewed-cargo-binary-sha256> \
+  --rustc <absolute-reviewed-rustc-binary> \
+  --rustc-sha256 <reviewed-rustc-binary-sha256> \
+  --cargo-home <absolute-private-cache-only-cargo-home> \
   --target-dir <new-external-cargo-target> \
   --reviewed-source-closure <private-reviewed-source-closure.json> \
   --reviewed-source-closure-sha256 <reviewed-descriptor-sha256> \
+  --authenticated-source-seal-projection \
+    <private-authenticated-source-seal-projection.json> \
+  --authenticated-source-seal-projection-sha256 \
+    <reviewed-authenticated-source-seal-projection-sha256> \
   > <sealed-build-report.json>
 # Require source_commit in the build report to equal $SOURCE_COMMIT.
 
@@ -424,11 +433,26 @@ exit status 75, never as a safely retryable failure.
 
 The source seal is a first-release clean-only contract. Descriptor emission,
 sealed build, generation, validation, and finalization all reject a nonempty
-tracked diff, any untracked file, an absent or nonempty tracked-gitlink
-directory, a mismatched ignored root `Cargo.lock`, or a commit whose signature
-cannot be verified locally. `source_repo_dirty` remains in the closure only as
-an explicit invariant and must be `false`; the tracked-diff and untracked
-manifest digests must both identify empty byte strings.
+tracked diff, any untracked or ignored file, an absent or nonempty
+tracked-gitlink directory, a root `Cargo.lock` that is not exactly one tracked
+mode-`100644` index entry or differs from its separate V1 digest binding, or a
+commit whose signature cannot be verified locally. The legacy
+`ignored_cargo_lock_*` descriptor field names remain unchanged for V1 wire
+compatibility but bind that tracked file. `source_repo_dirty` remains in the
+closure only as an explicit invariant and must be `false`; the tracked-diff and
+untracked manifest digests must both identify empty byte strings.
+
+For the production V4 wire, the sealed build also authenticates the canonical
+source-seal projection and the exact Cargo and rustc binaries. The builder sets
+absolute `CARGO`/`RUSTC` paths and exports
+`KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256` and
+`KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256`; `build.rs` hashes those actual
+files before embedding their digests. The candidate manifest, qualification
+receipt, cryptographic-review and release-attestation subjects, promotion
+record and reports, and catalog qualification seal all bind the same non-zero
+three-digest identity. Existing V4 wire artifacts predate this identity and are
+deliberately invalid: regenerate candidates and qualification receipts, then
+repeat review, attestation, promotion, and runtime sealing.
 
 The source-sealed binary always starts its own fail-closed footprint monitor;
 the launcher adds the host-global lifecycle, publication, and evidence boundary.
@@ -501,12 +525,18 @@ python3 scripts/run_kagemusha_v4_generation_benchmark.py \
 ```
 
 Use `probe-compact-k17-shape` in place of `measure-compact-k17` to rerun the
-populated four-role closure diagnostic. The guard admits only those two exact
-operations and rejects extra arguments. On Darwin, both diagnostic operations
-use the production runner's 250 ms process-group sampling and enforce the
-greater of aggregate RSS or physical footprint. Other hosts retain the
-process-group RSS policy because they do not expose the Darwin footprint
-counter.
+populated four-role closure diagnostic. Use
+`probe-compact-k17-audit-inventory` to run only the two witness-only scalar
+prepasses, print exact source/equation/term and compiled-protocol point counts,
+and derive checked V6 Poseidon, historical raw V5 SHA, and counterfactual
+compressed-source SHA geometry.
+The inventory command exits before either populated reciprocal Step circuit is
+built; its V5 figures are diagnostic alternatives, not production fallbacks.
+The guard admits only those three exact operations and rejects extra arguments.
+On Darwin, all diagnostic operations use the production runner's 250 ms
+process-group sampling and enforce the greater of aggregate RSS or physical
+footprint. Other hosts retain the process-group RSS policy because they do not
+expose the Darwin footprint counter.
 
 Use the optimized binary for calibration. An `opt-level=0` debug build derives
 the same deterministic public parameters and byte geometry, but its sequential
@@ -524,6 +554,64 @@ base fixed columns, 330 selectors, 297 equality/permutation columns, 339 fixed
 polynomials, and 636 commitments. Its exact per-parity encodings are 8,388,676
 bytes for ParamsIPA, 20,362 bytes for the processed VK, and 5,347,763,078 bytes
 for the processed PK.
+Constant-copy constraints retain one exact field value per distinct constant
+in an ordered map and every constrained `ContextCell`, including duplicate
+edges, in that constant's bucket. A one-entry last-constant cache avoids the
+ordered lookup for repeated runs. Keygen shape calculation reads the distinct
+map length directly. Physical assignment sorts each complete cell bucket and
+then traverses constants in field order, reproducing the former flat
+`(constant, ContextCell)` lexicographic sequence exactly for fixed assignment
+and permutation constraints. For `E` constant equalities, the cell payload is
+`8E` bytes plus the bounded distinct-constant index instead of `40E` bytes on
+the reviewed 64-bit Pasta target. The earlier complete populated graph recorded
+912,209,172 edges, so the representation removes 29,190,693,504 bytes of flat
+field-element payload before allocator capacity and compression effects.
+Virtual advice-cell coordinates use a nonzero packed 64-bit word: a pinned
+two-bit canonical region tag, a checked 29-bit context index, a checked 32-bit
+row index, and one niche bit. The constructor and accessors remain
+`usize`-based, reject unknown tags and out-of-range coordinates explicitly, and
+preserve the former string/context/row equality, ordering, debug, and legacy
+`usize` hash semantics. Both `ContextCell` and `Option<ContextCell>` are eight
+bytes on 64-bit targets.
+Context advice retains exact `Assigned::{Zero, Trivial, Rational}` semantics in
+fixed 65,536-entry numerator/value segments, a packed `Zero` bit mask, and
+sorted checked-u32 rational positions paired with a sparse denominator vector.
+The zero mask and the parallel virtual-gate selector use the same fixed
+65,536-byte (524,288-bit) segmented Boolean storage. No packed-bit segment ever
+relocates an earlier segment, each store has less than one segment of tail
+slack per context, and selector iteration and indexing retain exact logical
+order. The zero-mask segment is allocated before a new advice value changes any
+logical length. Random advice access uses binary search over rational positions,
+while assignment, iteration, and debug formatting merge the sparse inventory
+sequentially. Rational witnesses, including a zero denominator, are reconstructed
+without evaluation before Halo2 assignment, so backend batch-inversion timing
+and circuit synthesis order are unchanged. For `N` advice values and `R`
+rationals, advice backing storage is `32N + ceil(N / 8) + 36R` bytes instead of
+72 bytes per value; its selector adds `ceil(N / 8)` written bytes instead of
+`N`. The 220-column profile contains at least 28,702,798 virtual advice values,
+and the reviewed rational-producing primitives contribute at most one
+denominator per eight values. Written storage therefore falls by at least
+1,015,361,506 bytes before the additional selector, packed-cell equality, and
+lookup savings. The guarded probe reports mask and selector used bytes and
+segment counts, active rational positions, denominators, every advice and
+selector backing capacity, constant bucket count and cell capacity, and
+last-constant cache hits versus ordered-index lookups to detect allocation or
+construction-time cliffs. The two cache counters are schedule-local diagnostic
+performance data, not reproducibility evidence or promotion predicates. These
+are in-memory representation changes only; circuit shape and proof bytes are
+unchanged.
+The reciprocal Pasta scalar loader also recognizes exactly one assigned
+product with coefficient one and constant zero, the shape emitted by
+`Halo2Loader` for assigned-by-assigned multiplication. `FpChip::mul` already
+returns a three-limb `ProperCrtUint` with the same proper-limb residue
+invariant as the old trailing carry operations, so the loader returns that
+product directly instead of multiplying it by one and adding zero. No
+other sum/product shape is specialized. Unlike the storage changes above,
+this algebraic identity deliberately changes advice, lookup, selector, and
+copy-constraint placement. All prior Eq/Ep breakpoints, processed VK/PK
+payloads, compiled-protocol identities, bootstrap witnesses, proofs, artifact
+digests, and source-seal evidence are therefore invalid and must be regenerated
+before release qualification.
 Proving keys serialize directly into bounded owner-private staging files and
 are framed by streaming reads; Eq and Ep
 processed keys are never retained together or copied through a release-sized

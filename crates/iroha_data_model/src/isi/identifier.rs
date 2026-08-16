@@ -108,6 +108,7 @@ impl_decode_two_fields!(RevokeIdentifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::{
         nexus::UniversalAccountId,
         ram_lfe::{
@@ -119,7 +120,6 @@ mod tests {
         Algorithm, Hash, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf,
     };
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked identifier instruction fixture keypair")

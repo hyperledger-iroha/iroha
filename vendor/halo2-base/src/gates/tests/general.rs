@@ -2,6 +2,7 @@ use crate::ff::Field;
 use crate::gates::flex_gate::threads::parallelize_core;
 use crate::halo2_proofs::halo2curves::bn256::Fr;
 use crate::utils::{BigPrimeField, ScalarField};
+use crate::{Context, QuantumCell::Constant};
 use crate::{
     gates::{
         flex_gate::{GateChip, GateInstructions},
@@ -9,9 +10,8 @@ use crate::{
     },
     utils::testing::base_test,
 };
-use crate::{Context, QuantumCell::Constant};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use test_log::test;
 
 fn gate_tests<F: ScalarField>(ctx: &mut Context<F>, inputs: [F; 3]) {
@@ -43,7 +43,9 @@ fn test_multithread_gates() {
     let mut rng = StdRng::seed_from_u64(0);
     base_test().k(6).bench_builder(
         vec![[Fr::ZERO; 3]; 4],
-        (0..4usize).map(|_| [(); 3].map(|_| Fr::random(&mut rng))).collect(),
+        (0..4usize)
+            .map(|_| [(); 3].map(|_| Fr::random(&mut rng)))
+            .collect(),
         |pool, _, inputs| {
             parallelize_core(pool, inputs, |ctx, input| {
                 gate_tests(ctx, input);
@@ -70,7 +72,9 @@ fn plot_gates() {
 
     // auto-tune circuit
     builder.calculate_params(Some(9));
-    halo2_proofs::dev::CircuitLayout::default().render(k as u32, &builder, &root).unwrap();
+    halo2_proofs::dev::CircuitLayout::default()
+        .render(k as u32, &builder, &root)
+        .unwrap();
 }
 
 fn range_tests<F: BigPrimeField>(
@@ -113,13 +117,21 @@ fn test_range_multicolumn() {
 
 #[test]
 fn test_multithread_range() {
-    base_test().k(6).lookup_bits(3).unusable_rows(20).bench_builder(
-        vec![[Fr::ZERO; 2]; 3],
-        vec![[0, 1].map(Fr::from), [100, 101].map(Fr::from), [254, 255].map(Fr::from)],
-        |pool, range, inputs| {
-            parallelize_core(pool, inputs, |ctx, input| {
-                range_tests(ctx, range, input, 8, 8);
-            });
-        },
-    );
+    base_test()
+        .k(6)
+        .lookup_bits(3)
+        .unusable_rows(20)
+        .bench_builder(
+            vec![[Fr::ZERO; 2]; 3],
+            vec![
+                [0, 1].map(Fr::from),
+                [100, 101].map(Fr::from),
+                [254, 255].map(Fr::from),
+            ],
+            |pool, range, inputs| {
+                parallelize_core(pool, inputs, |ctx, input| {
+                    range_tests(ctx, range, input, 8, 8);
+                });
+            },
+        );
 }

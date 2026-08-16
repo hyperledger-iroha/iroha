@@ -1,9 +1,6 @@
 /// Backend family admitted for authoritative HF placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "backend_family", content = "value"))]
 pub enum SoraHfBackendFamilyV1 {
     /// Hugging Face Transformers-style local execution.
@@ -13,10 +10,7 @@ pub enum SoraHfBackendFamilyV1 {
 }
 /// Canonical weight/layout format admitted for authoritative HF placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "model_format", content = "value"))]
 pub enum SoraHfModelFormatV1 {
     /// Safetensors checkpoint layout.
@@ -28,10 +22,7 @@ pub enum SoraHfModelFormatV1 {
 }
 /// Deterministic size bucket used for adaptive placement and tariff lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "size_bucket", content = "value"))]
 pub enum SoraHfModelSizeBucketV1 {
     /// Models up to and including 2 GiB.
@@ -43,10 +34,7 @@ pub enum SoraHfModelSizeBucketV1 {
 }
 /// Canonical resource profile derived from HF source/import metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfResourceProfileV1 {
     /// Canonical model bytes that must fit on a single assigned host.
     pub required_model_bytes: u64,
@@ -143,10 +131,7 @@ pub fn hf_shared_lease_max_compute_reservation_fee_v1(
 }
 /// Active opt-in validator host capability advert for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraModelHostCapabilityRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -255,10 +240,7 @@ impl SoraModelHostCapabilityRecordV1 {
 }
 /// Active opt-in validator host capability advert for authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraInrouHostCapabilityRecordV1 {
     /// Schema version; must equal [`SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -397,10 +379,7 @@ impl SoraInrouHostCapabilityRecordV1 {
 }
 /// Authoritative host assignment for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraInrouReplicaPlacementV1 {
     /// One-based replica slot within the selected service revision.
     pub replica_slot: u16,
@@ -452,10 +431,7 @@ impl SoraInrouReplicaPlacementV1 {
 }
 /// Authoritative per-revision placement record for hosted Inrou replicas.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraInrouServicePlacementRecordV1 {
     /// Schema version; must equal [`SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -533,10 +509,7 @@ impl SoraInrouServicePlacementRecordV1 {
 }
 /// Placement lifecycle state for the active HF compute reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraHfPlacementStatusV1 {
     /// The placement is being selected.
@@ -554,10 +527,7 @@ pub enum SoraHfPlacementStatusV1 {
 }
 /// Assigned role of a validator within a placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "role", content = "value"))]
 pub enum SoraHfPlacementHostRoleV1 {
     /// Primary execution host.
@@ -567,10 +537,7 @@ pub enum SoraHfPlacementHostRoleV1 {
 }
 /// Current placement status for an assigned validator host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraHfPlacementHostStatusV1 {
     /// Slot is reserved and the host is warming the model.
@@ -584,10 +551,7 @@ pub enum SoraHfPlacementHostStatusV1 {
 }
 /// Host assignment persisted on the authoritative placement record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfPlacementHostAssignmentV1 {
     /// Validator assigned to the slot.
     pub validator_account_id: AccountId,
@@ -621,10 +585,7 @@ impl SoraHfPlacementHostAssignmentV1 {
 }
 /// Authoritative placement record attached to the active HF lease window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfPlacementRecordV1 {
     /// Schema version; must equal [`SORA_HF_PLACEMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -741,10 +702,7 @@ impl SoraHfPlacementRecordV1 {
 }
 /// Canonical Soracloud model-host violation kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum SoraModelHostViolationKindV1 {
     /// The host was assigned to warm a model but never became ready before its advert expired.
@@ -756,10 +714,7 @@ pub enum SoraModelHostViolationKindV1 {
 }
 /// Authoritative evidence record for a Soracloud model-host violation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraModelHostViolationEvidenceRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -914,10 +869,7 @@ impl SoraModelHostViolationEvidenceRecordV1 {
 }
 /// Import lifecycle state for a canonical Hugging Face source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraHfSourceStatusV1 {
     /// Metadata has been admitted and the import worker still needs to hydrate bytes.
@@ -931,10 +883,7 @@ pub enum SoraHfSourceStatusV1 {
 }
 /// Authoritative canonical Hugging Face import metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSourceRecordV1 {
     /// Schema version; must equal [`SORA_HF_SOURCE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1022,10 +971,7 @@ impl SoraHfSourceRecordV1 {
 }
 /// Shared-lease pool lifecycle state for a canonical HF source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraHfSharedLeaseStatusV1 {
     /// The pool is accepting joins against the current window.
@@ -1039,10 +985,7 @@ pub enum SoraHfSharedLeaseStatusV1 {
 }
 /// Shared-lease membership lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraHfSharedLeaseMemberStatusV1 {
     /// The account actively participates in the current window.
@@ -1052,10 +995,7 @@ pub enum SoraHfSharedLeaseMemberStatusV1 {
 }
 /// Audit action recorded for shared Hugging Face lease windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 pub enum SoraHfSharedLeaseActionV1 {
     /// A brand new window was opened by a sponsor.
@@ -1071,10 +1011,7 @@ pub enum SoraHfSharedLeaseActionV1 {
 }
 /// Queued next-window sponsorship metadata for a shared Hugging Face lease pool.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSharedLeaseQueuedWindowV1 {
     /// Account that fronted the full charge for the queued window.
     pub sponsor_account_id: AccountId,
@@ -1165,10 +1102,7 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
 }
 /// Shared-lease pool metadata keyed by canonical import and pricing dimensions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSharedLeasePoolV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_POOL_VERSION_V1`].
     pub schema_version: u16,
@@ -1271,10 +1205,7 @@ impl SoraHfSharedLeasePoolV1 {
 }
 /// Account-scoped shared-lease membership plus free service/apartment bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSharedLeaseMemberV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1`].
     pub schema_version: u16,
@@ -1363,10 +1294,7 @@ impl SoraHfSharedLeaseMemberV1 {
 }
 /// Audit record for shared Hugging Face lease lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSharedLeaseAuditEventV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1460,10 +1388,7 @@ impl SoraHfSharedLeaseAuditEventV1 {
 }
 /// Audit record for model-artifact lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraModelArtifactAuditEventV1 {
     /// Schema version; must equal [`SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1527,10 +1452,7 @@ impl SoraModelArtifactAuditEventV1 {
 }
 /// Audit action recorded for authoritative Soracloud agent-apartment state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 pub enum SoraAgentApartmentActionV1 {
     /// A new apartment was deployed.
@@ -1558,10 +1480,7 @@ pub enum SoraAgentApartmentActionV1 {
 }
 /// Runtime status of an authoritative Soracloud agent apartment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 pub enum SoraAgentRuntimeStatusV1 {
     /// Apartment lease is active and the process is considered runnable.
@@ -1571,10 +1490,7 @@ pub enum SoraAgentRuntimeStatusV1 {
 }
 /// Pending wallet spend request tracked inside an authoritative apartment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentWalletSpendRequestV1 {
     /// Deterministic request identifier.
     pub request_id: String,
@@ -1587,10 +1503,7 @@ pub struct SoraAgentWalletSpendRequestV1 {
 }
 /// Daily wallet-spend aggregate for an asset/day bucket pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentWalletDailySpendEntryV1 {
     /// Asset definition constrained by the apartment policy.
     pub asset_definition: String,
@@ -1601,10 +1514,7 @@ pub struct SoraAgentWalletDailySpendEntryV1 {
 }
 /// Mailbox message queued for deterministic apartment-to-apartment delivery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentMailboxMessageV1 {
     /// Deterministic message identifier.
     pub message_id: String,
@@ -1621,10 +1531,7 @@ pub struct SoraAgentMailboxMessageV1 {
 }
 /// Allowlist entry authorizing an autonomy artifact for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentArtifactAllowRuleV1 {
     /// Artifact hash that was approved.
     pub artifact_hash: String,
@@ -1636,10 +1543,7 @@ pub struct SoraAgentArtifactAllowRuleV1 {
 }
 /// Historical autonomy-run approval recorded for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentAutonomyRunRecordV1 {
     /// Deterministic run identifier.
     pub run_id: String,
@@ -1664,10 +1568,7 @@ pub struct SoraAgentAutonomyRunRecordV1 {
 }
 /// Authoritative persistent-state accounting attached to an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentPersistentStateV1 {
     /// Total bytes consumed by apartment-owned state.
     pub total_bytes: u64,
@@ -1677,10 +1578,7 @@ pub struct SoraAgentPersistentStateV1 {
 }
 /// Authoritative runtime record for a Soracloud agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentApartmentRecordV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2005,10 +1903,7 @@ impl SoraAgentApartmentRecordV1 {
 }
 /// Audit record for authoritative agent-apartment state transitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAgentApartmentAuditEventV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2223,10 +2118,7 @@ fn validate_absolute_path(
 }
 /// Lifecycle action recorded for an app-level Soracloud topology transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
 pub enum SoraAppInfraActionV1 {
     /// First-time admission of an app topology.
@@ -2236,10 +2128,7 @@ pub enum SoraAppInfraActionV1 {
 }
 /// Static-site binding attached to a Soracloud app.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppStaticSiteBindingV1 {
     /// Schema version; must equal [`SORA_APP_STATIC_SITE_BINDING_VERSION_V1`].
     pub schema_version: u16,
@@ -2299,10 +2188,7 @@ impl SoraAppStaticSiteBindingV1 {
 }
 /// Route projection exposed by a service inside an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppRouteProjectionV1 {
     /// Schema version; must equal [`SORA_APP_ROUTE_PROJECTION_VERSION_V1`].
     pub schema_version: u16,
@@ -2345,10 +2231,7 @@ impl SoraAppRouteProjectionV1 {
 }
 /// Reference to an admitted Soracloud service revision in an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppInfraServiceRefV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_SERVICE_REF_VERSION_V1`].
     pub schema_version: u16,
@@ -2428,10 +2311,7 @@ impl SoraAppInfraServiceRefV1 {
 }
 /// Canonical app-level Soracloud infrastructure manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppInfraManifestV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -2489,10 +2369,7 @@ impl SoraAppInfraManifestV1 {
 }
 /// Authoritative app-level Soracloud infrastructure state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppInfraStateV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2556,10 +2433,7 @@ impl SoraAppInfraStateV1 {
 }
 /// Audit record for an authoritative Soracloud app topology event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraAppInfraAuditEventV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2621,10 +2495,7 @@ impl SoraAppInfraAuditEventV1 {
 }
 /// Audit record for an authoritative Soracloud lifecycle event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraServiceAuditEventV1 {
     /// Schema version; must equal [`SORA_SERVICE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2834,10 +2705,7 @@ impl SoraServiceAuditEventV1 {
 }
 /// Runtime health status observed for a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "health_status", content = "value"))]
 pub enum SoraServiceHealthStatusV1 {
     /// Revision is still hydrating bundles or replay state.
@@ -2852,10 +2720,7 @@ pub enum SoraServiceHealthStatusV1 {
 }
 /// Authoritative runtime state for the active revision of a service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraServiceRuntimeStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2928,10 +2793,7 @@ impl SoraServiceRuntimeStateV1 {
 }
 /// Authoritative runtime state for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraInrouReplicaRuntimeStateV1 {
     /// Schema version; must equal [`SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -3025,10 +2887,7 @@ impl SoraInrouReplicaRuntimeStateV1 {
 }
 /// Ordered asynchronous mailbox message used for replicated cross-service calls.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraServiceMailboxMessageV1 {
     /// Schema version; must equal [`SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1`].
     pub schema_version: u16,
@@ -3104,10 +2963,7 @@ impl SoraServiceMailboxMessageV1 {
 }
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraRuntimeReceiptV1 {
     /// Schema version; must equal [`SORA_RUNTIME_RECEIPT_VERSION_V1`].
     pub schema_version: u16,

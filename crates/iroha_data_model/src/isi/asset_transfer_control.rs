@@ -305,8 +305,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferControl {
 mod tests {
     use super::*;
     use crate::asset::AssetTransferControlWindow;
-    use iroha_crypto::{Algorithm, KeyPair};
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use iroha_crypto::{Algorithm, KeyPair};
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked asset-transfer-control fixture keypair");

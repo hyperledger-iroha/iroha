@@ -24,6 +24,8 @@ object SumeragiV2Wire {
     const val MERGE_CARRIER_COMMITMENT_VERSION: Int = 1
     /** Maximum participant route/incarnation leaves committed by one global block. */
     const val MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: Long = 1_024
+    /** Maximum lane-finality statements committed by one global block. */
+    const val MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK: Long = 1_024
     private val NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
         "iroha:sumeragi:v2:native-amx-application-manifest:v1:empty"
             .toByteArray(StandardCharsets.UTF_8)
@@ -177,6 +179,32 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Exact Merkle root and non-zero leaf count of canonical lane-finality statements. */
+    class LaneFinalityManifestCommitment(
+        @JvmField val root: Hash32,
+        @JvmField val leafCount: Long,
+    ) : WireValue() {
+        init {
+            require(leafCount in 1..MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK) {
+                "lane-finality manifest leaf count exceeds the non-empty consensus bound"
+            }
+        }
+
+        override fun encode(): ByteArray = struct(root.bytes(), u64(leafCount))
+
+        companion object {
+            internal fun decode(bytes: ByteArray): LaneFinalityManifestCommitment =
+                decodeStruct(bytes) { reader ->
+                    LaneFinalityManifestCommitment(
+                        Hash32(reader.field("lane_finality_manifest.root") { it.hash() }),
+                        reader.field("lane_finality_manifest.leaf_count") {
+                            it.u64Only("lane_finality_manifest.leaf_count")
+                        },
+                    )
+                }
+        }
+    }
+
     /** Deterministic state-transition result authenticated by votes and certificates. */
     class ExecutionCommitment(
         @JvmField val parentStateRoot: Hash32,
@@ -187,6 +215,7 @@ object SumeragiV2Wire {
         @JvmField val nativeAmxApplicationManifestVersion: Int,
         @JvmField val nativeAmxApplicationManifestRoot: Hash32,
         @JvmField val nativeAmxApplicationManifestCount: Long,
+        @JvmField val laneFinalityManifest: LaneFinalityManifestCommitment?,
         @JvmField val mergeCarrier: MergeCarrierCommitment? = null,
         @JvmField val executedBlockWireLen: Long,
         @JvmField val executedBlockWireHash: Hash32,
@@ -244,6 +273,7 @@ object SumeragiV2Wire {
             u16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes(),
             u32(nativeAmxApplicationManifestCount),
+            option(laneFinalityManifest?.encode()),
             option(mergeCarrier?.encode()),
             u64(executedBlockWireLen),
             executedBlockWireHash.bytes(),
@@ -266,6 +296,7 @@ object SumeragiV2Wire {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nativeAmxApplicationManifestEmptyRoot(),
                 0,
+                null,
                 null,
                 executedBlockWireLen,
                 executedBlockWireHash,
@@ -320,6 +351,11 @@ object SumeragiV2Wire {
                         reader.field("execution.native_amx_application_manifest_count") {
                             it.u32Only("execution.native_amx_application_manifest_count")
                         }
+                    val laneFinalityManifest = reader.field("execution.lane_finality_manifest") {
+                        optionDecode(it, "execution.lane_finality_manifest") {
+                            LaneFinalityManifestCommitment.decode(it)
+                        }
+                    }
                     val mergeCarrier = reader.field("execution.merge_carrier") {
                         optionDecode(it, "execution.merge_carrier") {
                             MergeCarrierCommitment.decode(it)
@@ -340,6 +376,7 @@ object SumeragiV2Wire {
                         manifestVersion,
                         manifestRoot,
                         manifestCount,
+                        laneFinalityManifest,
                         mergeCarrier,
                         executedBlockWireLen,
                         executedBlockWireHash,

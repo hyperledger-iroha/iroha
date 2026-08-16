@@ -144,7 +144,7 @@ def _production_module_command(module: str) -> str:
         "tests::relay_fairness",
     }:
         return (
-            "cargo test --locked --offline -p irohad --bin iroha3d "
+            "cargo test --locked --offline -p irohad --lib "
             "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )
@@ -592,6 +592,7 @@ def _prebuilt_version_transcripts(
     bundle_dir: Path,
     fields: dict[str, str],
     corridor_fields: dict[str, str],
+    private_build_roots_available: bool,
 ) -> dict[str, dict[str, Any]]:
     tool_specs = (
         ("cargo", Path(corridor_fields["cargo_path"]), (), fields["cargo_version_sha256"]),
@@ -601,19 +602,33 @@ def _prebuilt_version_transcripts(
     environment = _closed_replay_environment(bundle_dir)
     for tool, executable, arguments, expected_digest in tool_specs:
         tool_label = "Cargo" if tool == "cargo" else tool
-        contract = _capture_path_contract(
-            executable,
-            f"authenticated corridor {tool} tool",
-            expected_sha256=corridor_fields[f"{tool}_sha256"],
-            expected_owner=os.geteuid(),
-            expected_nlink=1,
-        )
-        if contract.mode & 0o111 == 0:
-            raise ReceiptError(f"authenticated corridor {tool} tool is not executable")
+        size_text = corridor_fields[f"{tool}_version_size_bytes"]
+        if (
+            re.fullmatch(r"[1-9][0-9]*", size_text) is None
+            or int(size_text) > _MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES
+        ):
+            raise ReceiptError(
+                f"authenticated {tool} version transcript size is not bounded"
+            )
+        expected_size = int(size_text)
+        contract: PathContract | None = None
+        if private_build_roots_available:
+            contract = _capture_path_contract(
+                executable,
+                f"authenticated corridor {tool} tool",
+                expected_sha256=corridor_fields[f"{tool}_sha256"],
+                expected_owner=os.geteuid(),
+                expected_nlink=1,
+            )
+            if contract.mode & 0o111 == 0:
+                raise ReceiptError(
+                    f"authenticated corridor {tool} tool is not executable"
+                )
         if tool == "cargo":
             # This transcript was captured earlier through run_cargo --version.
-            status, stdout, stderr = 0, (corridor_fields["cargo_version"] + "\n").encode(), b""
-        else:
+            stdout = (corridor_fields["cargo_version"] + "\n").encode()
+        elif private_build_roots_available:
+            assert contract is not None
             status, stdout, stderr = _run_bounded_replay(
                 executable,
                 arguments,
@@ -623,75 +638,110 @@ def _prebuilt_version_transcripts(
                 maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
                 executable_contract=contract,
             )
-        if status != 0 or stderr or not stdout.endswith(b"\n"):
-            raise ReceiptError(
-                f"authenticated {tool} version probe did not produce exact stdout"
-            )
-        if b"\r" in stdout or b"\0" in stdout:
-            raise ReceiptError(
-                f"authenticated {tool} version probe output is not LF-only text"
-            )
-        observed_digest = hashlib.sha256(stdout).hexdigest()
-        if observed_digest != expected_digest:
-            source = "policy-captured corridor transcript" if tool == "cargo" else "authenticated tool"
-            raise ReceiptError(
-                f"prebuilt manifest {tool_label} version digest does not match the {source}"
-            )
-        try:
-            lines = stdout.decode("utf-8").splitlines()
-        except UnicodeDecodeError as error:
-            raise ReceiptError(
-                f"authenticated {tool} version probe output is not UTF-8"
-            ) from error
-        if tool == "cargo":
-            if lines != [corridor_fields["cargo_version"]]:
-                raise ReceiptError("policy-captured Cargo version transcript is not exact")
+            if status != 0 or stderr:
+                raise ReceiptError(
+                    f"authenticated {tool} version probe did not produce exact stdout"
+                )
         else:
-            version = re.fullmatch(
-                r"rustc ([0-9]+\.[0-9]+\.[0-9]+) "
-                r"\(([0-9a-f]{7,40}) ([0-9]{4}-[0-9]{2}-[0-9]{2})\)",
-                corridor_fields["rustc_version"],
-            )
-            expected_keys = (
-                "binary", "commit-hash", "commit-date", "host", "release", "LLVM version"
-            )
-            parsed: dict[str, str] = {}
-            if version is None or not lines or lines[0] != corridor_fields["rustc_version"]:
-                raise ReceiptError("authenticated rustc version probe has the wrong version line")
-            for line in lines[1:]:
-                key, separator, value = line.partition(": ")
-                if not separator or key in parsed or not value:
-                    raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
-                parsed[key] = value
+            stdout = None
+        if stdout is not None:
             if (
-                tuple(parsed) != expected_keys
-                or parsed["binary"] != "rustc"
-                or re.fullmatch(r"[0-9a-f]{40}", parsed["commit-hash"]) is None
-                or not parsed["commit-hash"].startswith(version.group(2))
-                or parsed["commit-date"] != version.group(3)
-                or parsed["host"] != fields["host_triple"]
-                or parsed["release"] != version.group(1)
-                or re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", parsed["LLVM version"])
-                is None
+                not stdout.endswith(b"\n")
+                or b"\r" in stdout
+                or b"\0" in stdout
+                or len(stdout) != expected_size
             ):
-                raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
-        after = _capture_path_contract(
-            executable,
-            f"authenticated corridor {tool} tool after version probe",
-            expected_sha256=contract.sha256,
-            expected_mode=contract.mode,
-            expected_owner=contract.owner,
-            expected_nlink=contract.nlink,
-            expected_size=contract.size,
-        )
-        if after != contract:
-            raise ReceiptError(f"authenticated corridor {tool} tool changed during version probe")
-        display_arguments = ("--version",) if tool == "cargo" else arguments
+                raise ReceiptError(
+                    f"authenticated {tool} version transcript is not exact"
+                )
+            observed_digest = hashlib.sha256(stdout).hexdigest()
+            if observed_digest != expected_digest:
+                source = (
+                    "policy-captured corridor transcript"
+                    if tool == "cargo"
+                    else "authenticated tool"
+                )
+                raise ReceiptError(
+                    f"prebuilt manifest {tool_label} version digest does not "
+                    f"match the {source}"
+                )
+            try:
+                lines = stdout.decode("utf-8").splitlines()
+            except UnicodeDecodeError as error:
+                raise ReceiptError(
+                    f"authenticated {tool} version probe output is not UTF-8"
+                ) from error
+            if tool == "cargo":
+                if lines != [corridor_fields["cargo_version"]]:
+                    raise ReceiptError(
+                        "policy-captured Cargo version transcript is not exact"
+                    )
+            else:
+                version = re.fullmatch(
+                    r"rustc ([0-9]+\.[0-9]+\.[0-9]+) "
+                    r"\(([0-9a-f]{7,40}) ([0-9]{4}-[0-9]{2}-[0-9]{2})\)",
+                    corridor_fields["rustc_version"],
+                )
+                expected_keys = (
+                    "binary", "commit-hash", "commit-date", "host", "release",
+                    "LLVM version",
+                )
+                parsed: dict[str, str] = {}
+                if (
+                    version is None
+                    or not lines
+                    or lines[0] != corridor_fields["rustc_version"]
+                ):
+                    raise ReceiptError(
+                        "authenticated rustc version probe has the wrong version line"
+                    )
+                for line in lines[1:]:
+                    key, separator, value = line.partition(": ")
+                    if not separator or key in parsed or not value:
+                        raise ReceiptError(
+                            "authenticated rustc version probe is not exact "
+                            "rustc -vV output"
+                        )
+                    parsed[key] = value
+                if (
+                    tuple(parsed) != expected_keys
+                    or parsed["binary"] != "rustc"
+                    or re.fullmatch(r"[0-9a-f]{40}", parsed["commit-hash"])
+                    is None
+                    or not parsed["commit-hash"].startswith(version.group(2))
+                    or parsed["commit-date"] != version.group(3)
+                    or parsed["host"] != fields["host_triple"]
+                    or parsed["release"] != version.group(1)
+                    or re.fullmatch(
+                        r"[0-9]+\.[0-9]+(?:\.[0-9]+)?",
+                        parsed["LLVM version"],
+                    )
+                    is None
+                ):
+                    raise ReceiptError(
+                        "authenticated rustc version probe is not exact rustc -vV output"
+                    )
+        else:
+            observed_digest = expected_digest
+        if contract is not None:
+            after = _capture_path_contract(
+                executable,
+                f"authenticated corridor {tool} tool after version probe",
+                expected_sha256=contract.sha256,
+                expected_mode=contract.mode,
+                expected_owner=contract.owner,
+                expected_nlink=contract.nlink,
+                expected_size=contract.size,
+            )
+            if after != contract:
+                raise ReceiptError(
+                    f"authenticated corridor {tool} tool changed during version probe"
+                )
         results[tool] = {
             "operation_id": f"{tool}.version.v1",
             "tool_archive_id": f"release-runner-tool.{tool}.v1",
             "sha256": observed_digest,
-            "size_bytes": len(stdout),
+            "size_bytes": expected_size,
         }
     return results
 
@@ -705,6 +755,7 @@ def _prebuilt_binary_bundle(
     repo_root: Path,
     artifact_root: Path,
     cargo_target_root: Path,
+    private_build_roots_available: bool,
 ) -> dict[str, Any]:
     expected_manifest_sha256 = _require_digest(
         expected_manifest_sha256, "prebuilt binary manifest digest"
@@ -871,6 +922,7 @@ def _prebuilt_binary_bundle(
             bundle_dir=bundle_dir,
             fields=manifest_fields,
             corridor_fields=fields,
+            private_build_roots_available=private_build_roots_available,
         ),
         "binaries": binaries,
     }
@@ -882,9 +934,11 @@ def _corridor_artifacts(
     sealed: dict[str, Any],
     repo_root: Path,
     bootstrap_runner_tools: dict[str, Any],
+    bootstrap_trusted_input_digests: dict[str, str],
     *,
     expected_artifact_root: Path,
     expected_cargo_target_root: Path,
+    private_build_roots_available: bool,
 ) -> tuple[
     PathContract,
     PathContract,
@@ -915,9 +969,11 @@ def _corridor_artifacts(
             "cargo_path",
             "cargo_sha256",
             "cargo_version",
+            "cargo_version_size_bytes",
             "rustc_path",
             "rustc_sha256",
             "rustc_version",
+            "rustc_version_size_bytes",
             "python3_path",
             "python3_sha256",
             "node_path",
@@ -947,6 +1003,7 @@ def _corridor_artifacts(
         fields=fields,
         expected_artifact_root=expected_artifact_root,
         expected_cargo_target_root=expected_cargo_target_root,
+        private_build_roots_available=private_build_roots_available,
     )
     expected_identity = {
         "schema_version": "1",
@@ -972,23 +1029,32 @@ def _corridor_artifacts(
         != "rustc 1.93.1 (01f6ddf75 2026-02-11)"
     ):
         raise ReceiptError("corridor Rust tools do not match rust-toolchain.toml")
-    for tool in ("cargo", "rustc"):
+    runtime_root = expected_artifact_root.parent / "runtime"
+    expected_tool_paths = {
+        "java": runtime_root / "java-runtime" / "bin" / "java",
+        "cargo": runtime_root / "rust-toolchain" / "bin" / "cargo",
+        "rustc": runtime_root / "rust-toolchain" / "bin" / "rustc",
+        "python3": runtime_root / "bin" / "python3",
+        "node": runtime_root / "bin" / "node",
+        "bash": runtime_root / "bin" / "bash",
+        "git": runtime_root / "bin" / "git",
+    }
+    expected_tool_digests = {
+        "python3": bootstrap_trusted_input_digests.get("python"),
+        "bash": bootstrap_trusted_input_digests.get("bash"),
+        "git": bootstrap_trusted_input_digests.get("git"),
+    }
+    for tool in ("java", "cargo", "rustc", "node", "swift"):
         runner_record = bootstrap_runner_tools.get(tool)
-        tool_path = Path(fields[f"{tool}_path"])
         if (
             not isinstance(runner_record, dict)
-            or (
-                runner_record.get("archive_name") != f"runner-tools/{tool}"
-                or (
-                    (tool_path.parent.name != "runner-tools" or tool_path.name != tool)
-                    and expected_artifact_root.parent not in tool_path.parents
-                )
-            )
-            or fields[f"{tool}_sha256"] != runner_record.get("sha256")
+            or runner_record.get("archive_name") != f"runner-tools/{tool}"
+            or runner_record.get("alias_name") != tool
         ):
             raise ReceiptError(
                 f"corridor {tool} is not the authenticated bootstrap runner tool"
             )
+        expected_tool_digests[tool] = runner_record.get("sha256")
     for tool in (
         "java",
         "cargo",
@@ -1000,20 +1066,44 @@ def _corridor_artifacts(
         "git",
     ):
         tool_path = Path(fields[f"{tool}_path"])
-        if not tool_path.is_absolute():
-            raise ReceiptError(f"corridor {tool} path is not absolute")
+        digest = fields[f"{tool}_sha256"]
+        expected_path = expected_tool_paths.get(tool)
+        path_is_exact = (
+            tool_path.parent == runtime_root / "swift-toolchain" / "bin"
+            and _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(tool_path.name)
+            is not None
+            if tool == "swift"
+            else tool_path == expected_path
+        )
+        if (
+            not tool_path.is_absolute()
+            or not path_is_exact
+            or not _DIGEST_RE.fullmatch(digest)
+            or digest != expected_tool_digests.get(tool)
+        ):
+            raise ReceiptError(
+                f"corridor {tool} is not the authenticated private runtime tool"
+            )
+        if not private_build_roots_available:
+            continue
         tool_contract = _bounded_path_contract(
             tool_path,
             f"corridor {tool} tool",
             maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
+            expected_mode=0o500,
+            allowed_owners={os.geteuid()},
+            require_single_link=True,
+            executable=True,
         )
-        digest = fields[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or tool_contract.sha256 != digest:
+        if tool_contract.sha256 != digest:
             raise ReceiptError(f"corridor {tool} tool digest mismatch")
     if not fields["swift_version"].strip():
         raise ReceiptError("corridor Swift tool version is blank")
-    cargo_cache_input = _validate_cargo_cache_input(fields, artifact_root=artifact_root)
+    cargo_cache_input = _validate_cargo_cache_input(
+        fields,
+        artifact_root=artifact_root,
+        private_build_roots_available=private_build_roots_available,
+    )
     repo_cargo_config = _bounded_path_contract(
         repo_root / ".cargo" / "config.toml",
         "repository Cargo config",
@@ -1329,6 +1419,7 @@ def _corridor_artifacts(
         repo_root=repo_root,
         artifact_root=artifact_root,
         cargo_target_root=cargo_target_root,
+        private_build_roots_available=private_build_roots_available,
     )
     return (
         _snapshot_contract(summary),

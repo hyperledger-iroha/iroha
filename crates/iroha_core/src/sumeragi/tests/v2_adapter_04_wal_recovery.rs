@@ -511,7 +511,13 @@ fn ordinary_validate_predecessor_for_test(
         round,
         subject,
     };
-    let owner = RuntimeEffectOwnership::fresh_for_test(tag, owner_ordinal);
+    let owner = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&store),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, owner_ordinal)],
+    )
+    .expect("bind one ordinary Store owner")
+    .pop()
+    .expect("one ordinary Store owner");
     let store_pending = owner
         .pending_adapter_effect_binding(&store)
         .expect("bind ordinary Store predecessor");
@@ -908,11 +914,9 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
         .recovered_control_row_summary_for_test()
         .expect("missing-row repair installs one exact control row and carrier");
     assert_eq!(first_summary.0, first_summary.1);
-    assert_eq!(
-        crate::sumeragi::status::v2_status()
-            .expect("status publication follows the complete control owner")
-            .height,
-        context().height
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "control owner construction keeps status sealed until runner activation"
     );
     let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
     let first_frame = std::fs::read(&ledger_path).expect("read repaired control LedgerV1");
@@ -946,11 +950,9 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
             "exact coalesce validates the durable frame without replacing it"
         );
     }
-    assert_eq!(
-        crate::sumeragi::status::v2_status()
-            .expect("coalesced status follows exact carrier reconstruction")
-            .height,
-        context().height
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "coalesced control owner remains unpublished until runner activation"
     );
     crate::sumeragi::status::clear_v2_status();
 }
@@ -1144,6 +1146,10 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             "exact Decision Fetch coalesce validates without replacing the inode"
         );
     }
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "Decision Fetch owner construction must remain unpublished"
+    );
     {
         let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
             .expect("verify the clean recovered Fetch executor context");
@@ -1195,9 +1201,11 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         assert!(!output_guard.restart_required());
         planner_io.detach(&mut services);
     }
-    assert!(
-        crate::sumeragi::status::v2_status().is_none(),
-        "Decision Fetch owner construction must remain unpublished"
+    assert_eq!(
+        crate::sumeragi::status::v2_status()
+            .expect("the explicitly published executor adapter remains visible")
+            .height,
+        wire_context.height
     );
     crate::sumeragi::status::clear_v2_status();
 }
@@ -2572,10 +2580,13 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
 }
 #[test]
 fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
-    let adapter = include_str!("../v2.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
-    let runtime = include_str!("../v2_runtime.rs");
-    let replay = include_str!("../v2_lifecycle_replay_authority.rs");
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
+    let replay = concat!(
+        include_str!("../v2_lifecycle_replay_authority.rs"),
+        include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
+    );
     let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
     let ledger = reviewed_lifecycle_ledger_source_for_test();
     let registry = reviewed_lifecycle_work_registry_source_for_test();
@@ -2689,7 +2700,7 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         .find("detach_recovered_decision_apply_body")
         .expect("locate the opaque Decision body preflight");
     let decision_adapter_preview = factory
-        .find(".into_adapter_preview(adapter, &verified, fetch, lineage)")
+        .find(".into_adapter_preview(adapter, verified, fetch, lineage)")
         .expect("locate the consuming recovered Decision adapter preview");
     let body_handoff = factory
         .find("into_lifecycle_owner_store")
@@ -2832,7 +2843,7 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         );
     }
     let runtime_control = runtime
-        .split_once("pub(crate) fn project_recovered_wal_control_sign(")
+        .split_once("pub(in crate::sumeragi) fn project_recovered_wal_control_sign(")
         .expect("locate runtime control projection")
         .1
         .split_once("/// Ownership-preserving failure")
@@ -2867,16 +2878,21 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         .split_once("/// Bind one paired recovered-WAL open")
         .expect("locate end of recovered control storage transaction")
         .0;
-    assert!(durable.contains("stage_authenticated_wal_control_sign"));
+    let control_stage = durable
+        .find("stage_authenticated_wal_control_sign")
+        .expect("locate recovered control durable staging");
+    let control_persist = durable[control_stage..]
+        .find("persist_exact_successor")
+        .map(|offset| control_stage + offset)
+        .expect("locate recovered control durable publication");
+    let control_registry = durable[control_persist..]
+        .find("LifecycleWorkRegistryHolder::empty")
+        .map(|offset| control_persist + offset)
+        .expect("locate recovered control registry construction");
     assert!(durable.contains("if changed"));
-    assert!(durable.contains("persist_exact_successor"));
     assert!(
-        durable
-            .find("stage_authenticated_wal_control_sign")
-            .expect("classification precedes the registry")
-            < durable
-                .find("LifecycleWorkRegistryHolder::empty")
-                .expect("locate fresh registry construction")
+        control_stage < control_persist && control_persist < control_registry,
+        "control staging and durable publication precede volatile registry construction"
     );
     assert!(!durable.contains("RuntimeLifecycleOrdinalSource"));
     assert!(!durable.contains("publish_recovered_adapter_status"));
@@ -2938,8 +2954,8 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     }
     for required in [
         "RecoveredWalDecisionFetch",
-        "sealed Decision-Fetch startup authority",
-        "exact semantically revalidated BodyFrame marker",
+        "fn authenticate_recovered_wal_decision_fetch(",
+        "body_store.has_exact_recovered_decision_fetch_parent(&fetch)",
         "return Err((AdapterError::RecoveredStartupEffectMismatch, self))",
     ] {
         assert!(

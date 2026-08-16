@@ -1,21 +1,9 @@
+import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+
 const NETWORK_ID_BYTE_LENGTH = 32;
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
 const CONSTRUCTION_TOKEN = Symbol("NetworkId construction token");
 const networkIdStorage = new WeakMap();
-
-function crc16CcittFalse(bytes) {
-  let crc = 0xffff;
-  for (const byte of bytes) {
-    crc ^= byte << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 0x8000) !== 0
-          ? ((crc << 1) ^ 0x1021) & 0xffff
-          : (crc << 1) & 0xffff;
-    }
-  }
-  return crc;
-}
 
 function copyBytes(value, context) {
   let bytes;
@@ -46,10 +34,7 @@ function canonicalLiteral(bytes) {
     byte.toString(16).toUpperCase().padStart(2, "0"),
   ).join("");
   const prefix = `hash:${body}`;
-  const checksum = crc16CcittFalse(new TextEncoder().encode(prefix))
-    .toString(16)
-    .toUpperCase()
-    .padStart(4, "0");
+  const checksum = computeHashLiteralCrc("hash", body);
   return `${prefix}#${checksum}`;
 }
 

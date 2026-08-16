@@ -198,7 +198,8 @@ fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
             }),
         "recovered Apply must authenticate its exact context before storage execution"
     );
-    let carrier_source = include_str!("../v2.rs");
+    let carrier_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     assert_eq!(
         carrier_source
             .matches("RecoveredDecisionApplyTaskV1::from_registry_projection")

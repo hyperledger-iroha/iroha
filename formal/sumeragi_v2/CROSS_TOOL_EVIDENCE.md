@@ -123,10 +123,11 @@ Ledger obligation:
 `successor-activation-exact-recovery-production-refinement`.
 
 Named TLA+ theorem:
-`SumeragiV2ChainEpochRefinement!SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement`.
+`SumeragiV2ChainEpochRefinementShard16!SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement`
+(re-exported by the ledger-facing `SumeragiV2ChainEpochRefinement` façade).
 
 Required strict provider log:
-`target/formal/sumeragi_v2/tlaps/SumeragiV2ChainEpochRefinement.log`.
+`target/formal/sumeragi_v2/tlaps/SumeragiV2ChainEpochRefinementShard16.log`.
 
 Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 
@@ -178,35 +179,50 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The final ledger precommits the three eligible obligations as
-`cross_tool_proved`:
+The checked-in legacy/revision-3-rooted ledger declares all three
+production-refinement rows `cross_tool_proved`, and
+`--print-cross-tool-obligations` returns their exact ordered IDs. That status
+does not prove the separate revision-4 exact-cardinality corridor. The
+code-owned `4 + 7 + 6` inventory has named Verus signatures, non-vacuous
+postconditions, shared Rust/Verus kernels, sealed projection builders and
+identity extractors, and fail-closed production call-site expressions. The
+checker binds 24 primary production call contracts, six supplemental call
+contracts, and six linked-consumer contracts. Their call multiplicities cover
+33 guarded invocations plus six linked-consumer seams; all 39 seams carry
+reviewed item-token seals.
 
-- `effective-lock-body-acquisition-production-refinement`;
-- `progress-witness-production-refinement`;
-- `successor-activation-exact-recovery-production-refinement`.
+The checked-in status is not backend evidence by itself. Release mode accepts
+the three rows only after fresh strict provider logs, the pinned Verus run,
+exact source manifests, proved transitive prerequisites, and the derived
+cross-tool document all bind the same ledger and signed source.
 
-This status declaration is the byte-exact input to the release proof wave, not
-backend proof evidence. The code-owned `4 + 7 + 6` claim inventory has exact
-named Verus signatures, non-vacuous postconditions, shared Rust/Verus kernels,
-sealed projection builders and identity extractors, and fail-closed production
-call-site expressions. The checker seals 24 triples across 23 unique production
-call items, and read-only reconstruction succeeds for all `4/4`, `7/7`, and
-`6/6` claims. The structural model/source and source-only causal-FIFO checks
-pass, as do the 26 checked-token real-source tests. The aggregate proof-ledger
-checker remains under validation.
+- Effective-lock verification covers the serialized post-install lock,
+  immutable body owner, exact retirement accounting, and bounded class
+  selector through live production invocations. Its only ledger prerequisite,
+  `effective-lock-body-acquisition-model`, is `tlaps_proved`. Repeated host
+  invocation and terminating local work remain explicit runtime assumptions.
+  Release acceptance requires one frozen-source strict TLAPS provider log,
+  the pinned Verus run, and derived cross-tool evidence.
+- Progress-witness verification covers seven pure reducer/WAL, timer/FIFO,
+  ingress, two-stage relay retry, writer-flush, and application kernels. The
+  writer-flush claim additionally binds two supplemental kernels to the same
+  exact `MergeSidecarTransport::acknowledge_outbound_chunk` item. Its entire
+  transitive proof dependency closure is `tlaps_proved`. Release acceptance
+  remains blocked on a fresh frozen-source strict TLAPS plus pinned Verus
+  evidence set and the derived cross-tool document.
+- Successor verification covers six pure status, runner, startup, historical
+  block-sync, and terminal Apply-boundary kernels. Its production source
+  binding is complete, and `successor-activation-starvation-freedom` has its
+  promoted target status. Fresh release-grade strict TLAPS evidence for that
+  prerequisite must validate before derived successor cross-tool evidence is
+  accepted.
 
-- Effective-lock acquisition has
-  `effective-lock-body-acquisition-model` precommitted as `tlaps_proved`.
-- The durable-progress dependency closure is precommitted at accepted proof
-  statuses.
-- Successor activation has
-  `successor-activation-starvation-freedom` precommitted as `tlaps_proved`.
+Mutable `target/formal/sumeragi_v2` contents are never durable status authority.
+The formal release wrapper removes prior outputs, regenerates every evidence
+document, and validates them against the frozen ledger and source before
+publishing completion.
 
-Those prerequisite and cross-tool statuses still require strict same-candidate
-TLAPS, pinned Verus, and derived cross-tool validation before release.
-
-`target/formal/sumeragi_v2` is currently absent, so no current
-`proof_evidence.json`, provider TLAPS logs, `verus.log`,
-`verus_evidence.json`, or `cross_tool_evidence.json` exists. Earlier results
-remain diagnostic. `--print-cross-tool-obligations` therefore has the exact
-three-entry inventory above, but that ledger-derived inventory is not evidence.
+The mutable evidence directory is currently absent, so the checked-in status
+declaration and its three-entry `--print-cross-tool-obligations` inventory are
+not current backend evidence. Fresh provider TLAPS logs, `verus.log`,
+`verus_evidence.json`, and derived `cross_tool_evidence.json` remain required.

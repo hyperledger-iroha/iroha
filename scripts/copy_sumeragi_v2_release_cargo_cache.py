@@ -160,7 +160,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "74e55a2d544b76342d57f24eb901c4432b10e484a6044fbfcc7c8d7878288578"
+    "9dab3cd31c184be81838db6df78146914a85d228400a7bb07b916f5f41e679e8"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
@@ -592,6 +592,13 @@ def _copy_symlink(
     }
 
 
+def _path_is_omitted(path: str, omitted_paths: frozenset[str]) -> bool:
+    return any(
+        path == omitted or path.startswith(f"{omitted}/")
+        for omitted in omitted_paths
+    )
+
+
 def _copy_directory(
     source_fd: int,
     destination_parent_fd: int,
@@ -601,6 +608,8 @@ def _copy_directory(
     relative_parts: tuple[str, ...],
     records: list[dict[str, object]],
     budget: dict[str, int],
+    *,
+    omitted_paths: frozenset[str] = frozenset(),
 ) -> None:
     _bounded_relative(relative)
     before = os.fstat(source_fd)
@@ -658,13 +667,19 @@ def _copy_directory(
         for name in names:
             entry_relative = f"{relative}/{name}"
             _bounded_relative(entry_relative)
+            if _path_is_omitted(entry_relative, omitted_paths):
+                continue
             entry_before = _entry_stat(source_fd, name, f"cache entry {entry_relative}")
             if stat.S_ISDIR(entry_before.st_mode):
                 child_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=source_fd)
                 try:
                     if not _unchanged(entry_before, os.fstat(child_fd)):
                         raise CacheCopyError(f"cache directory changed while opened: {entry_relative}")
-                    _copy_directory(child_fd, destination_fd, name, entry_relative, root_fd, (*relative_parts, name), records, budget)
+                    _copy_directory(
+                        child_fd, destination_fd, name, entry_relative, root_fd,
+                        (*relative_parts, name), records, budget,
+                        omitted_paths=omitted_paths,
+                    )
                 finally:
                     os.close(child_fd)
                 _revalidate_entry(source_fd, name, entry_before, f"cache directory {entry_relative}")
@@ -1880,6 +1895,8 @@ def seal_release_result(
 
 def _verify_runtime_sources(
     roots: dict[str, Path], records: list[dict[str, object]],
+    *,
+    omitted_paths: frozenset[str] = frozenset(),
 ) -> None:
     for record in records:
         if not isinstance(record, dict):
@@ -1915,7 +1932,15 @@ def _verify_runtime_sources(
         metadata = os.fstat(root_fd)
         if not isinstance(directory, dict) or directory.get("kind") != "directory" or directory.get("source_device") != metadata.st_dev or directory.get("source_inode") != metadata.st_ino or directory.get("source_mode") != format(stat.S_IMODE(metadata.st_mode), "04o"):
             raise CacheCopyError(f"runtime source directory changed: {directory_path}")
-        names = _directory_entries(root_fd, f"runtime source {directory_path}")
+        names = [
+            name
+            for name in _directory_entries(
+                root_fd, f"runtime source {directory_path}",
+            )
+            if not _path_is_omitted(
+                f"{directory_path}/{name}", omitted_paths,
+            )
+        ]
         expected_children = {
             path.split("/")[len(directory_path.split("/"))]
             for path in by_path if path.startswith(f"{directory_path}/")
@@ -2216,12 +2241,22 @@ def _framework_python_closure(
     return version_root, framework, stdlib_name
 
 
+def _framework_python_omitted_paths(stdlib_name: str) -> frozenset[str]:
+    """Return paths excluded by the exact isolated framework-Python contract."""
+
+    # ``-I -S`` excludes site-packages from sys.path. Homebrew represents this
+    # unused location as a symlink into its mutable prefix, so it must not enter
+    # the protected runtime or its source inventory.
+    return frozenset({f"lib/{stdlib_name}/site-packages"})
+
+
 def _validate_framework_python_sources(
-    version_root: Path, framework: str,
+    version_root: Path, framework: str, stdlib_name: str,
 ) -> None:
     """Validate every selected framework member without following a symlink."""
 
     allowed_roots = {framework, "Resources", "lib"}
+    omitted_paths = _framework_python_omitted_paths(stdlib_name)
     root_fd, root_metadata = _open_directory(
         version_root, "selected Python framework version",
     )
@@ -2248,6 +2283,8 @@ def _validate_framework_python_sources(
             child_parts = (*parts, name)
             label = "/".join(child_parts)
             _bounded_relative(label)
+            if _path_is_omitted(label, omitted_paths):
+                continue
             metadata = _entry_stat(
                 directory_fd, name, f"selected Python framework {label}",
             )
@@ -2340,6 +2377,11 @@ def _validate_framework_python_runtime_records(
     }
     if len(by_path) != len(records):
         raise CacheCopyError("private runtime framework inventory is not unique")
+    omitted_paths = _framework_python_omitted_paths(stdlib_name)
+    if any(_path_is_omitted(path, omitted_paths) for path in by_path):
+        raise CacheCopyError(
+            "private runtime framework inventory contains site-packages"
+        )
     required = {
         "bin/python3": "file",
         framework: "file",
@@ -2524,12 +2566,14 @@ def verify_runtime_sources(
     resolved = [source.resolve(strict=True) for source in sources]
     _runtime_names(resolved)
     framework_python = _framework_python_closure(resolved)
+    framework_omitted_paths: frozenset[str] = frozenset()
     if framework_python is not None:
         version_root, framework, stdlib_name = framework_python
+        framework_omitted_paths = _framework_python_omitted_paths(stdlib_name)
         _reject_framework_python_destination_overlap(
             version_root, runtime_root, inventory_path,
         )
-        _validate_framework_python_sources(version_root, framework)
+        _validate_framework_python_sources(version_root, framework, stdlib_name)
     payload, inventory_metadata = _read_regular(inventory_path, "runtime inventory")
     try:
         inventory = json.loads(payload)
@@ -2541,7 +2585,11 @@ def verify_runtime_sources(
     input_file_bytes = sum(record.get("size", 0) for record in inventory["input_records"] if isinstance(record, dict) and record.get("kind") == "file")
     if type(inventory.get("input_record_count")) is not int or inventory["input_record_count"] != len(inventory["input_records"]) or type(inventory.get("input_file_bytes")) is not int or inventory["input_file_bytes"] != input_file_bytes:
         raise CacheCopyError("runtime source inventory accounting is not exact")
-    _verify_runtime_sources(_runtime_source_roots(resolved), inventory["input_records"])
+    _verify_runtime_sources(
+        _runtime_source_roots(resolved),
+        inventory["input_records"],
+        omitted_paths=framework_omitted_paths,
+    )
     for record in inventory["records"]:
         if not isinstance(record, dict):
             raise CacheCopyError("private runtime record is not an object")
@@ -4136,12 +4184,14 @@ def _populate_runtime(
     resolved = [source.resolve(strict=True) for source in sources]
     names = _runtime_names(resolved)
     framework_python = _framework_python_closure(resolved)
+    framework_omitted_paths: frozenset[str] = frozenset()
     if framework_python is not None:
         version_root, framework, stdlib_name = framework_python
+        framework_omitted_paths = _framework_python_omitted_paths(stdlib_name)
         _reject_framework_python_destination_overlap(
             version_root, runtime_root, inventory_path,
         )
-        _validate_framework_python_sources(version_root, framework)
+        _validate_framework_python_sources(version_root, framework, stdlib_name)
     cargo_index = names.index("cargo")
     rustc_index = names.index("rustc")
     cargo, rustc = resolved[cargo_index], resolved[rustc_index]
@@ -4162,6 +4212,7 @@ def _populate_runtime(
         *,
         symlink_root: Path | None = None,
         symlink_parts: tuple[str, ...] = (),
+        omitted_paths: frozenset[str] = frozenset(),
     ) -> None:
         source_fd, source_identity = _open_directory(source, label)
         destination_parent_fd, destination_parent_identity = _open_directory(
@@ -4179,6 +4230,7 @@ def _populate_runtime(
                 source_fd, destination_parent_fd, destination.name,
                 destination.name, symlink_root_fd, symlink_parts,
                 input_records, input_budget,
+                omitted_paths=omitted_paths,
             )
             _revalidate_directory_path(source, source_identity, label)
             _revalidate_directory_path(
@@ -4284,7 +4336,8 @@ def _populate_runtime(
                 "apalache-mc": "apalache-distribution/bin",
                 "verus": "verus-distribution", "cargo-verus": "verus-distribution",
             }[name]
-            os.symlink(f"../{root_name}/{name}", link)
+            target_name = source.name if name == "swift" else name
+            os.symlink(f"../{root_name}/{target_name}", link)
     if framework_python is not None:
         copy_stable_file(
             version_root / framework,
@@ -4298,8 +4351,9 @@ def _populate_runtime(
                 f"Python framework {name}",
                 symlink_root=version_root,
                 symlink_parts=(name,),
+                omitted_paths=framework_omitted_paths,
             )
-        _validate_framework_python_sources(version_root, framework)
+        _validate_framework_python_sources(version_root, framework, stdlib_name)
     _seal_copied_tree(
         runtime_root,
         "runtime",
@@ -4335,7 +4389,11 @@ def _populate_runtime(
         "input_file_bytes": input_budget["bytes"],
         "input_records": sorted(input_records, key=lambda record: str(record["path"])),
     }
-    _verify_runtime_sources(source_roots, input_records)
+    _verify_runtime_sources(
+        source_roots,
+        input_records,
+        omitted_paths=framework_omitted_paths,
+    )
     return _publish_inventory(inventory_path, _canonical_payload(document))
 
 
@@ -4412,10 +4470,11 @@ def verify_framework_python_runtime(
     if closure is None:
         raise CacheCopyError("selected Python has no macOS framework closure")
     version_root, framework, stdlib_name = closure
+    omitted_paths = _framework_python_omitted_paths(stdlib_name)
     _reject_framework_python_destination_overlap(
         version_root, runtime_root, inventory_path,
     )
-    _validate_framework_python_sources(version_root, framework)
+    _validate_framework_python_sources(version_root, framework, stdlib_name)
     payload, inventory_metadata = _read_regular(
         inventory_path, "framework Python runtime inventory",
     )
@@ -4476,7 +4535,9 @@ def verify_framework_python_runtime(
         "Resources": version_root / "Resources",
         "lib": version_root / "lib",
     }
-    _verify_runtime_sources(source_roots, input_records)
+    _verify_runtime_sources(
+        source_roots, input_records, omitted_paths=omitted_paths,
+    )
     _bind_runtime_destinations(input_records, records, update=False)
     _validate_framework_python_runtime_records(records, framework, stdlib_name)
     _probe_framework_python_runtime(runtime_root, stdlib_name)
@@ -4526,10 +4587,11 @@ def copy_framework_python_runtime(
     if closure is None:
         raise CacheCopyError("selected Python has no macOS framework closure")
     version_root, framework, stdlib_name = closure
+    omitted_paths = _framework_python_omitted_paths(stdlib_name)
     _reject_framework_python_destination_overlap(
         version_root, runtime_root, inventory_path,
     )
-    _validate_framework_python_sources(version_root, framework)
+    _validate_framework_python_sources(version_root, framework, stdlib_name)
     parent_fd, parent_identity = _open_directory(
         runtime_root.parent, "framework Python archive parent",
     )
@@ -4598,6 +4660,7 @@ def copy_framework_python_runtime(
                 (name,),
                 input_records,
                 input_budget,
+                omitted_paths=omitted_paths,
             )
             _revalidate_directory_path(
                 source, source_identity, f"Python framework {name}",
@@ -4655,7 +4718,7 @@ def copy_framework_python_runtime(
         )
         for name in ("Resources", "lib"):
             copy_tree(version_root / name, runtime_root / name, name)
-        _validate_framework_python_sources(version_root, framework)
+        _validate_framework_python_sources(version_root, framework, stdlib_name)
         _seal_copied_tree(
             runtime_root,
             "protected framework Python runtime",
@@ -4690,7 +4753,9 @@ def copy_framework_python_runtime(
             "Resources": version_root / "Resources",
             "lib": version_root / "lib",
         }
-        _verify_runtime_sources(source_roots, input_records)
+        _verify_runtime_sources(
+            source_roots, input_records, omitted_paths=omitted_paths,
+        )
         published = _publish_inventory(
             inventory_path, _canonical_payload(document),
         )

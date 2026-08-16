@@ -1,9 +1,11 @@
 //! Embeds source identity into `iroha_core` binaries.
 //!
-//! Ordinary builds retain the lightweight Git-commit marker used by RBC. The opt-in Kagemusha
+//! Ordinary builds retain the lightweight Git-commit marker used by the Sumeragi v2 adapter
+//! build fingerprint. The opt-in Kagemusha
 //! candidate-build feature additionally requires and verifies an independently pinned reviewed
-//! clean signed source closure supplied by the dedicated build helper.
-use std::{env, ffi::OsStr, process::Command};
+//! clean signed source closure and the exact Cargo/rustc binaries supplied by the dedicated build
+//! helper.
+use std::{env, ffi::OsStr, fs, path::Path, process::Command};
 
 const SEALED_FEATURE_ENV: &str = "CARGO_FEATURE_KAGEMUSHA_CANDIDATE_SOURCE_SEAL";
 const AUTHORIZED_PARENT_COMMIT: &str = "5d41c784787ed496ccbd46379ee236cc992d9c65";
@@ -61,7 +63,7 @@ fn main() {
     } else {
         println!(
             "cargo:warning=iroha_core build.rs: unable to determine git commit hash; \
-             persisted RBC sessions will be discarded across restarts"
+             the Sumeragi v2 build fingerprint will use the `unknown` source marker"
         );
     }
 }
@@ -90,6 +92,12 @@ fn embed_exact_kagemusha_source_seal() {
     let ssh_revocation_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_SSH_REVOCATION_SHA256", 64);
     let source_tree_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
+    let reviewed_cargo_binary_sha256 =
+        required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256", 64);
+    let reviewed_rustc_binary_sha256 =
+        required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256", 64);
+    require_actual_tool_digest("CARGO", &reviewed_cargo_binary_sha256, "Cargo");
+    require_actual_tool_digest("RUSTC", &reviewed_rustc_binary_sha256, "rustc");
     let closure_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", 64);
     let closure_hex =
@@ -152,6 +160,7 @@ fn embed_exact_kagemusha_source_seal() {
             "\"commit_object_sha256\":\"{commit_object_sha256}\",",
             "\"commit_object_size\":{commit_object_size},",
             "\"committer_epoch\":{source_date_epoch},\"git_tree\":\"{source_git_tree}\",",
+            "\"ordered_parents\":[\"{parent_commit}\"],",
             "\"parent_commit\":\"{parent_commit}\",\"parent_tree\":\"{parent_tree}\",",
             "\"signature\":{{\"allowed_signers_sha256\":\"{ssh_allowed_signers_sha256}\",",
             "\"mechanism\":\"git-commit-ssh-signature-v1\",",
@@ -224,6 +233,33 @@ fn embed_exact_kagemusha_source_seal() {
     println!(
         "cargo:rustc-env=KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256={actual_projection_sha256}"
     );
+    println!(
+        "cargo:rustc-env=KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256={reviewed_cargo_binary_sha256}"
+    );
+    println!(
+        "cargo:rustc-env=KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256={reviewed_rustc_binary_sha256}"
+    );
+}
+
+fn require_actual_tool_digest(environment_name: &str, expected_sha256: &str, label: &str) {
+    let path = env::var_os(environment_name)
+        .unwrap_or_else(|| panic!("{environment_name} is required for a sealed build"));
+    let path = Path::new(&path);
+    if !path.is_absolute() {
+        panic!("sealed {label} path must be absolute");
+    }
+    let canonical = fs::canonicalize(path)
+        .unwrap_or_else(|error| panic!("sealed {label} path is unavailable: {error}"));
+    let metadata = fs::metadata(&canonical)
+        .unwrap_or_else(|error| panic!("sealed {label} metadata is unavailable: {error}"));
+    if !metadata.is_file() || metadata.len() == 0 {
+        panic!("sealed {label} path is not a nonempty regular file");
+    }
+    let bytes = fs::read(&canonical)
+        .unwrap_or_else(|error| panic!("sealed {label} bytes are unavailable: {error}"));
+    if sha256_hex(&bytes) != expected_sha256 {
+        panic!("sealed {label} bytes differ from the reviewed SHA-256");
+    }
 }
 
 fn validate_exact_sealed_build_context() {

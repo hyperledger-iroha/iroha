@@ -1110,8 +1110,10 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
     )
     assert "checkout_ref" not in workflow
     assert "permissions:\n  actions: read\n  contents: read" in workflow
-    assert workflow.count("ref: ${{ github.sha }}") == 2
-    assert workflow.count("persist-credentials: false") == 2
+    # Hosted readiness plus the two native builders each inspect the immutable
+    # workflow commit; no dispatch input selects executable source.
+    assert workflow.count("ref: ${{ github.sha }}") == 3
+    assert workflow.count("persist-credentials: false") == 3
     assert (
         workflow.count('[[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]')
         == 3

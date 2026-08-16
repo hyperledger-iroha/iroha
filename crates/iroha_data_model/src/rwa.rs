@@ -1,4 +1,9 @@
 //! Real-world asset lot structures and helper types.
+#[cfg(feature = "json")]
+use crate::{
+    DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+    DeriveJsonSerialize as DeriveJsonSer,
+};
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered,
     common::{Owned, Ref, split_nonempty},
@@ -118,14 +123,7 @@ pub struct RwaControlPolicy {
     IntoSchema,
 )]
 #[display("{id}")]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -207,14 +205,7 @@ pub struct NewRwa {
 pub type RwaEntry<'world> = Ref<'world, RwaId, RwaValue>;
 /// [`Rwa`] without `id` field for world-state storage.
 #[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct RwaData {
     /// Current lot quantity.

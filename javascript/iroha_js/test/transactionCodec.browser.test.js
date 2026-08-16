@@ -1200,6 +1200,24 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   };
   const otherKey = Buffer.from(DESTINATION_PUBLIC_KEY);
 
+  assert.equal(
+    validateBrowserTransferSignable({
+      ...signable,
+      signatureAlgorithm: "0",
+    }).signatureAlgorithm,
+    "ed25519",
+    "the validator must retain the canonical string-zero algorithm alias",
+  );
+  expectCodecError(
+    () =>
+      finalizeBrowserSignedTransaction(
+        { ...signable, signatureAlgorithm: "0" },
+        signature,
+        PUBLIC_KEY,
+      ),
+    "unsupported_algorithm",
+  );
+
   expectCodecError(
     () =>
       finalizeBrowserSignedTransaction(

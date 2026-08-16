@@ -25,6 +25,7 @@ public final class SumeragiStatusModels {
 
   private static final int NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
   private static final int NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1_024;
+  private static final int LANE_FINALITY_MANIFEST_MAX_LEAVES = 1_024;
   private static final int MERGE_CARRIER_COMMITMENT_VERSION = 1;
   private static final String NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
       "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F";
@@ -84,6 +85,20 @@ public final class SumeragiStatusModels {
     public String payloadHash() { return payloadHash; }
   }
 
+  /** Exact Merkle root and non-zero leaf count of canonical lane-finality statements. */
+  public static final class LaneFinalityManifestCommitment {
+    private final String root;
+    private final BigInteger leafCount;
+
+    private LaneFinalityManifestCommitment(final String root, final BigInteger leafCount) {
+      this.root = root;
+      this.leafCount = leafCount;
+    }
+
+    public String root() { return root; }
+    public BigInteger leafCount() { return leafCount; }
+  }
+
   /** Exact merge-ledger entry identity authenticated by a global certificate. */
   public static final class MergeCarrierCommitment {
     private final int version;
@@ -108,6 +123,7 @@ public final class SumeragiStatusModels {
     private final int nativeAmxApplicationManifestVersion;
     private final String nativeAmxApplicationManifestRoot;
     private final BigInteger nativeAmxApplicationManifestCount;
+    private final LaneFinalityManifestCommitment laneFinalityManifest;
     private final MergeCarrierCommitment mergeCarrier;
     private final BigInteger executedBlockWireLen;
     private final String executedBlockWireHash;
@@ -121,6 +137,7 @@ public final class SumeragiStatusModels {
         final int nativeAmxApplicationManifestVersion,
         final String nativeAmxApplicationManifestRoot,
         final BigInteger nativeAmxApplicationManifestCount,
+        final LaneFinalityManifestCommitment laneFinalityManifest,
         final MergeCarrierCommitment mergeCarrier,
         final BigInteger executedBlockWireLen,
         final String executedBlockWireHash) {
@@ -132,6 +149,7 @@ public final class SumeragiStatusModels {
       this.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion;
       this.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot;
       this.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount;
+      this.laneFinalityManifest = laneFinalityManifest;
       this.mergeCarrier = mergeCarrier;
       this.executedBlockWireLen = executedBlockWireLen;
       this.executedBlockWireHash = executedBlockWireHash;
@@ -150,6 +168,9 @@ public final class SumeragiStatusModels {
     }
     public BigInteger nativeAmxApplicationManifestCount() {
       return nativeAmxApplicationManifestCount;
+    }
+    public LaneFinalityManifestCommitment laneFinalityManifest() {
+      return laneFinalityManifest;
     }
     public MergeCarrierCommitment mergeCarrier() { return mergeCarrier; }
     public BigInteger executedBlockWireLen() { return executedBlockWireLen; }
@@ -1065,7 +1086,8 @@ public final class SumeragiStatusModels {
             "parent_state_root", "post_state_root", "ordinary_writes_root",
             "topup_anchor_count", "native_amx_application_manifest_version",
             "native_amx_application_manifest_root", "native_amx_application_manifest_count",
-            "merge_carrier", "executed_block_wire_len", "executed_block_wire_hash"),
+            "lane_finality_manifest", "merge_carrier", "executed_block_wire_len",
+            "executed_block_wire_hash"),
         Set.of("topup_anchor_root"),
         context);
     final BigInteger topupCount =
@@ -1102,6 +1124,23 @@ public final class SumeragiStatusModels {
             == NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT.equals(manifestRoot),
         context + ".native_amx_application_manifest_count must be zero exactly for the canonical empty root");
 
+    final LaneFinalityManifestCommitment laneFinalityManifest;
+    if (record.get("lane_finality_manifest") == null) {
+      laneFinalityManifest = null;
+    } else {
+      final String laneContext = context + ".lane_finality_manifest";
+      final Map<String, Object> lane =
+          SumeragiJsonSupport.exactObject(
+              record.get("lane_finality_manifest"), Set.of("root", "leaf_count"), laneContext);
+      laneFinalityManifest =
+          new LaneFinalityManifestCommitment(
+              SumeragiJsonSupport.hash(lane.get("root"), laneContext + ".root"),
+              SumeragiJsonSupport.unsigned(
+                  lane.get("leaf_count"),
+                  BigInteger.valueOf(LANE_FINALITY_MANIFEST_MAX_LEAVES),
+                  laneContext + ".leaf_count",
+                  true));
+    }
     final MergeCarrierCommitment mergeCarrier;
     if (record.get("merge_carrier") == null) {
       mergeCarrier = null;
@@ -1130,6 +1169,7 @@ public final class SumeragiStatusModels {
         manifestVersion,
         manifestRoot,
         manifestCount,
+        laneFinalityManifest,
         mergeCarrier,
         SumeragiJsonSupport.positiveU64(
             record.get("executed_block_wire_len"), context + ".executed_block_wire_len"),
@@ -1236,12 +1276,12 @@ public final class SumeragiStatusModels {
     final BigInteger canonicalMinSigners =
         validatorCount.multiply(TWO).divide(THREE).add(BigInteger.ONE);
     require(
-        signerCount.compareTo(minSigners) >= 0
+        signerCount.equals(minSigners)
             && minSigners.equals(canonicalMinSigners)
             && signedPower.equals(signerCount)
             && totalPower.equals(validatorCount)
             && signedPower.multiply(THREE).compareTo(totalPower.multiply(TWO)) > 0,
-        context + " does not satisfy its frozen dual quorum");
+        context + " does not satisfy its exact frozen certificate quorum");
     return new CommitQc(
         parseQcReference(record.get("certificate"), context + ".certificate"),
         validatorCount,
@@ -1636,9 +1676,21 @@ public final class SumeragiStatusModels {
             .equals(right.nativeAmxApplicationManifestRoot())
         && left.nativeAmxApplicationManifestCount()
             .equals(right.nativeAmxApplicationManifestCount())
+        && sameLaneFinalityManifest(
+            left.laneFinalityManifest(), right.laneFinalityManifest())
         && sameMergeCarrier(left.mergeCarrier(), right.mergeCarrier())
         && left.executedBlockWireLen().equals(right.executedBlockWireLen())
         && left.executedBlockWireHash().equals(right.executedBlockWireHash());
+  }
+
+  private static boolean sameLaneFinalityManifest(
+      final LaneFinalityManifestCommitment left,
+      final LaneFinalityManifestCommitment right) {
+    return left == null
+        ? right == null
+        : right != null
+            && left.root().equals(right.root())
+            && left.leafCount().equals(right.leafCount());
   }
 
   private static boolean sameMergeCarrier(

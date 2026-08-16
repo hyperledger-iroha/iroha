@@ -28722,14 +28722,12 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height) {
-        if act >= withdraw {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "withdraw_height must be > activation_height".into(),
-                ),
-            )));
-        }
+    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height) && act >= withdraw {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "withdraw_height must be > activation_height".into(),
+            ),
+        )));
     }
     let mut record = VerifyingKeyRecord::new_with_owner(
         version,

@@ -557,6 +557,16 @@ pub(crate) enum LaneDrainCertificateError {
     /// The drain certificate does not contain enough distinct committee signatures.
     #[error("lane drain certificate quorum is not met")]
     QuorumNotMet,
+    /// The drain certificate does not carry exactly the canonical signer count.
+    #[error(
+        "lane drain certificate signer count mismatch: expected exactly {expected}, got {actual}"
+    )]
+    SignerCountMismatch {
+        /// Canonical signer count required by the committee.
+        expected: usize,
+        /// Signer count carried by the certificate.
+        actual: usize,
+    },
     /// A selected signer's PoP is absent, reordered, malformed, or invalid.
     #[error("lane drain signer proof of possession is invalid")]
     InvalidProofOfPossession,
@@ -639,6 +649,16 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Votes or certificate signers do not reach the bound quorum.
     #[error("lane NewView quorum is not met")]
     NewViewQuorumNotMet,
+    /// A NewView certificate does not carry exactly the canonical signer count.
+    #[error(
+        "lane NewView certificate signer count mismatch: expected exactly {expected}, got {actual}"
+    )]
+    NewViewSignerCountMismatch {
+        /// Canonical signer count required by the committee.
+        expected: usize,
+        /// Signer count carried by the certificate.
+        actual: usize,
+    },
     /// Certificate bitmap is malformed.
     #[error("lane NewView signer bitmap is malformed")]
     InvalidNewViewBitmap,
@@ -687,6 +707,16 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// READY votes do not satisfy the exact committee quorum.
     #[error("lane payload availability quorum is not met")]
     AvailabilityQuorumNotMet,
+    /// A READY certificate does not carry exactly the canonical signer count.
+    #[error(
+        "lane payload availability signer count mismatch: expected exactly {expected}, got {actual}"
+    )]
+    AvailabilitySignerCountMismatch {
+        /// Canonical signer count required by the committee.
+        expected: usize,
+        /// Signer count carried by the certificate.
+        actual: usize,
+    },
     /// READY signer bitmap is malformed or has trailing bits set.
     #[error("lane payload availability signer bitmap is invalid")]
     InvalidAvailabilityBitmap,
@@ -1279,15 +1309,15 @@ fn aggregate_lane_payload_availability_votes(
             Some(_) => {}
         }
     }
-    if indexed_signatures.len()
-        < usize::try_from(body.min_quorum)
-            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
-    {
+    let min_quorum = usize::try_from(body.min_quorum)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if indexed_signatures.len() < min_quorum {
         return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
     }
     let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
     let ordered_signatures = indexed_signatures
         .into_iter()
+        .take(min_quorum)
         .map(|(index, signature)| {
             signers_bitmap[index / 8] |= 1_u8 << (index % 8);
             signature
@@ -1376,11 +1406,15 @@ pub(crate) fn validate_lane_payload_availability_qc(
             pop_refs.push(pop.as_slice());
         }
     }
-    if signer_count
-        < usize::try_from(qc.body.min_quorum)
-            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
-    {
-        return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
+    let min_quorum = usize::try_from(qc.body.min_quorum)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if signer_count != min_quorum {
+        return Err(
+            LaneAutonomousArtifactError::AvailabilitySignerCountMismatch {
+                expected: min_quorum,
+                actual: signer_count,
+            },
+        );
     }
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &qc.body.signature_preimage(),
@@ -1978,16 +2012,16 @@ pub(crate) fn aggregate_lane_drain_votes(
             return Err(LaneDrainCertificateError::DuplicateSigner);
         }
     }
-    if signatures.len()
-        < usize::try_from(body.intent.min_quorum)
-            .map_err(|_| LaneDrainCertificateError::InvalidIntent)?
-    {
+    let min_quorum = usize::try_from(body.intent.min_quorum)
+        .map_err(|_| LaneDrainCertificateError::InvalidIntent)?;
+    if signatures.len() < min_quorum {
         return Err(LaneDrainCertificateError::QuorumNotMet);
     }
     let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
-    let mut signer_proofs = Vec::with_capacity(signatures.len());
+    let mut signer_proofs = Vec::with_capacity(min_quorum);
     let ordered_signatures = signatures
         .into_iter()
+        .take(min_quorum)
         .map(|(index, (signature, proof_of_possession))| {
             signers_bitmap[index / 8] |= 1_u8 << (index % 8);
             signer_proofs.push(MergeSignerProof {
@@ -2062,12 +2096,16 @@ pub(crate) fn validate_lane_drain_certificate(
             selected_indices.push(index);
         }
     }
-    if selected_indices.len()
-        < usize::try_from(body.intent.min_quorum)
-            .map_err(|_| LaneDrainCertificateError::InvalidIntent)?
-        || certificate.signer_proofs.len() != selected_indices.len()
-    {
-        return Err(LaneDrainCertificateError::QuorumNotMet);
+    let min_quorum = usize::try_from(body.intent.min_quorum)
+        .map_err(|_| LaneDrainCertificateError::InvalidIntent)?;
+    if selected_indices.len() != min_quorum {
+        return Err(LaneDrainCertificateError::SignerCountMismatch {
+            expected: min_quorum,
+            actual: selected_indices.len(),
+        });
+    }
+    if certificate.signer_proofs.len() != selected_indices.len() {
+        return Err(LaneDrainCertificateError::InvalidProofOfPossession);
     }
     let mut public_keys = Vec::with_capacity(selected_indices.len());
     let mut pop_refs = Vec::with_capacity(selected_indices.len());
@@ -2134,15 +2172,15 @@ pub(crate) fn aggregate_lane_block_new_view_votes(
             return Err(LaneAutonomousArtifactError::DuplicateNewViewSigner);
         }
     }
-    if signatures.len()
-        < usize::try_from(body.min_quorum)
-            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?
-    {
+    let min_quorum = usize::try_from(body.min_quorum)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+    if signatures.len() < min_quorum {
         return Err(LaneAutonomousArtifactError::NewViewQuorumNotMet);
     }
     let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
     let ordered = signatures
         .into_iter()
+        .take(min_quorum)
         .map(|(index, signature)| {
             signers_bitmap[index / 8] |= 1_u8 << (index % 8);
             signature
@@ -2207,11 +2245,13 @@ pub(crate) fn validate_lane_block_new_view_certificate(
             signer_count = signer_count.saturating_add(1);
         }
     }
-    if signer_count
-        < usize::try_from(body.min_quorum)
-            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?
-    {
-        return Err(LaneAutonomousArtifactError::NewViewQuorumNotMet);
+    let min_quorum = usize::try_from(body.min_quorum)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+    if signer_count != min_quorum {
+        return Err(LaneAutonomousArtifactError::NewViewSignerCountMismatch {
+            expected: min_quorum,
+            actual: signer_count,
+        });
     }
     if selected_keys != signer_pops.keys().cloned().collect::<BTreeSet<_>>() {
         return Err(LaneAutonomousArtifactError::InvalidNewViewPop);
@@ -4825,9 +4865,14 @@ pub enum LaneBlockQcIngressError {
     /// signer bitmap contains bits beyond the validator set
     #[error("lane block QC signer bitmap contains out-of-range signers")]
     SignerBitmapOutOfRange,
-    /// signer bitmap is below quorum
-    #[error("lane block QC signer bitmap quorum is not met")]
-    QuorumNotMet,
+    /// signer bitmap does not carry exactly the canonical quorum.
+    #[error("lane block QC signer count mismatch: expected exactly {expected}, got {actual}")]
+    SignerCountMismatch {
+        /// Canonical signer count required by the committee.
+        expected: u32,
+        /// Signer count carried by the certificate bitmap.
+        actual: u32,
+    },
     /// signer bitmap selects a non-BLS-normal validator
     #[error("lane block QC signer is not BLS-normal")]
     SignerNotBlsNormal,
@@ -4999,7 +5044,7 @@ pub fn validate_lane_block_proposal(
 ///
 /// # Errors
 ///
-/// Returns an error when the QC is malformed, below quorum, carries a bad
+/// Returns an error when the QC is malformed, has non-canonical signer count, carries a bad
 /// signer bitmap, or references non-BLS-normal validators.
 pub fn validate_lane_block_qc(qc: &LaneBlockQcV1) -> Result<(), LaneBlockQcIngressError> {
     validate_lane_block_vote_body_shape(&qc.body)
@@ -5063,8 +5108,11 @@ pub fn validate_lane_block_qc(qc: &LaneBlockQcV1) -> Result<(), LaneBlockQcIngre
             signer_count = signer_count.saturating_add(1);
         }
     }
-    if signer_count < qc.body.min_quorum {
-        return Err(LaneBlockQcIngressError::QuorumNotMet);
+    if signer_count != qc.body.min_quorum {
+        return Err(LaneBlockQcIngressError::SignerCountMismatch {
+            expected: qc.body.min_quorum,
+            actual: signer_count,
+        });
     }
     Ok(())
 }
@@ -5169,14 +5217,15 @@ pub fn aggregate_lane_block_votes_to_qc(
             return Err(LaneBlockQcBuildError::InvalidSignature);
         }
     }
-    if indexed_signatures.len()
-        < usize::try_from(body.min_quorum).map_err(|_| LaneBlockQcBuildError::InvalidBody)?
-    {
+    let min_quorum =
+        usize::try_from(body.min_quorum).map_err(|_| LaneBlockQcBuildError::InvalidBody)?;
+    if indexed_signatures.len() < min_quorum {
         return Err(LaneBlockQcBuildError::QuorumNotMet);
     }
     let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
     let ordered_signatures = indexed_signatures
         .into_iter()
+        .take(min_quorum)
         .map(|(index, signature)| {
             signers_bitmap[index / 8] |= 1_u8 << (index % 8);
             signature
@@ -5500,43 +5549,6 @@ mod tests {
         );
     }
     #[test]
-    fn lane_drain_certificate_aggregates_exact_quorum_and_verifies_after_restart() {
-        let keys = [
-            checked_bls_keypair(101),
-            checked_bls_keypair(102),
-            checked_bls_keypair(103),
-            checked_bls_keypair(104),
-        ];
-        let (body, validator_set) = lane_drain_fixture(&keys);
-        let votes = keys[..3]
-            .iter()
-            .map(|keypair| {
-                LaneDrainVoteV1::new_signed(body.clone(), peer(keypair), keypair.private_key())
-                    .expect("valid drain vote")
-            })
-            .collect::<Vec<_>>();
-        let certificate = aggregate_lane_drain_votes(body.clone(), validator_set.clone(), &votes)
-            .expect("valid drain certificate");
-        validate_lane_drain_certificate(&certificate)
-            .expect("self-contained certificate verifies after restart");
-        assert_eq!(certificate.body, body);
-        assert_eq!(certificate.validator_set, validator_set);
-        assert_eq!(certificate.signer_proofs.len(), 3);
-        assert_eq!(
-            certificate
-                .signers_bitmap
-                .iter()
-                .map(|byte| byte.count_ones())
-                .sum::<u32>(),
-            3
-        );
-        let encoded = certificate.encode();
-        let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
-            .expect("drain certificate round-trips");
-        validate_lane_drain_certificate(&decoded)
-            .expect("round-tripped drain certificate verifies");
-    }
-    #[test]
     fn lane_drain_vote_state_accepts_strictly_higher_frontier_refresh() {
         let keys = [
             checked_bls_keypair(111),
@@ -5809,7 +5821,10 @@ mod tests {
         under_quorum.signers_bitmap[removed_index / 8] &= !(1_u8 << (removed_index % 8));
         assert_eq!(
             validate_lane_drain_certificate(&under_quorum),
-            Err(LaneDrainCertificateError::QuorumNotMet)
+            Err(LaneDrainCertificateError::SignerCountMismatch {
+                expected: 3,
+                actual: 2,
+            })
         );
         let mut padded = certificate.clone();
         padded.signers_bitmap[0] |= 1_u8 << 7;
@@ -6375,9 +6390,14 @@ mod tests {
             &votes,
         )
         .expect("NewView certificate");
+        let signer_pops = selected_signer_pops(
+            &certificate.validator_set,
+            &certificate.signers_bitmap,
+            keypairs,
+        );
         DurableLaneBlockNewViewCertificateV1 {
             certificate,
-            signer_pops: signer_pops(keypairs),
+            signer_pops,
         }
     }
     #[test]
@@ -6566,7 +6586,12 @@ mod tests {
         below_quorum.signers_bitmap = vec![0b0000_0001];
         assert_eq!(
             validate_lane_payload_availability_qc(&below_quorum),
-            Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet)
+            Err(
+                LaneAutonomousArtifactError::AvailabilitySignerCountMismatch {
+                    expected: 3,
+                    actual: 1,
+                }
+            )
         );
         let mut duplicate_roster = qc.clone();
         duplicate_roster.validator_set[1] = duplicate_roster.validator_set[0].clone();
@@ -7443,44 +7468,6 @@ mod tests {
         );
     }
     #[test]
-    fn aggregate_lane_block_votes_builds_sorted_bitmap_and_signature() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-            checked_bls_keypair(4),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let body = vote_body(&validator_set);
-        let vote_a = signed_vote(&body, &keys[0]);
-        let vote_c = signed_vote(&body, &keys[2]);
-        let vote_d = signed_vote(&body, &keys[3]);
-        let qc = aggregate_lane_block_votes_to_qc(
-            body.clone(),
-            validator_set.clone(),
-            &[vote_c.clone(), vote_a.clone(), vote_d.clone()],
-        )
-        .expect("lane block QC");
-        let expected_signer_indices = [vote_a.signer, vote_c.signer, vote_d.signer]
-            .into_iter()
-            .map(|signer| {
-                validator_set
-                    .iter()
-                    .position(|validator| validator == &signer)
-                    .expect("signer in validator set")
-            })
-            .collect::<Vec<_>>();
-        let mut expected_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
-        for index in expected_signer_indices {
-            expected_bitmap[index / 8] |= 1_u8 << (index % 8);
-        }
-        assert_eq!(qc.signers_bitmap, expected_bitmap);
-        assert_eq!(qc.body, body);
-        assert_eq!(qc.validator_set_hash, HashOf::new(&validator_set));
-        assert!(!qc.bls_aggregate_signature.is_empty());
-    }
-    #[test]
     fn lane_block_qc_preserves_sparse_high_index_signer_order() {
         let mut keys = (1_u8..=10).map(checked_bls_keypair).collect::<Vec<_>>();
         keys.sort_by_key(peer);
@@ -7585,7 +7572,10 @@ mod tests {
         below_quorum.signers_bitmap = vec![0b0000_0001];
         assert_eq!(
             validate_lane_block_qc(&below_quorum),
-            Err(LaneBlockQcIngressError::QuorumNotMet)
+            Err(LaneBlockQcIngressError::SignerCountMismatch {
+                expected: 3,
+                actual: 1,
+            })
         );
         let mut missing_signature = qc;
         missing_signature.bls_aggregate_signature.clear();
@@ -9492,6 +9482,7 @@ mod tests {
     }
     include!("lane_consensus/session_capacity_tests.rs");
     include!("lane_consensus/commit_vote_lock_incarnation_test.rs");
+    include!("lane_consensus/exact_quorum_cardinality_tests.rs");
     // Backpressure and adversarial vote-set tests retain their stable libtest paths.
     include!("lane_consensus/backpressure_and_vote_set_tests.rs");
 }

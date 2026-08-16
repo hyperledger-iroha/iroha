@@ -532,7 +532,7 @@ CastZkBallot Verification Path
 
 ### Slashing and Jailing Workflow
 
-Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default `7200` blocks) bounds accepted record age; `activation_lag_blocks` and `slashing_delay_blocks` in the same on-chain record delay enactment so governance can cancel penalties before they apply. These are governed chain values, not local `[sumeragi]` configuration.
 
 Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
@@ -573,16 +573,16 @@ Governance must treat the evidence bytes as canonical proof:
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
 2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
 3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Commit the governed successor-mode and activation-height record with the updated roster; do not attempt to express the transition through local Sumeragi configuration.
 5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
 Joint consensus guarantees that the outgoing <i105-account-id> set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
 
-- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
-- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
-- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
+- The governed `next_mode` and `mode_activation_height` staging fields must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag. An incomplete pair is rejected with `mode_activation_height requires next_mode to be set in the same block`.
+- Governed `SumeragiNposParameters.reconfig.activation_lag_blocks` (default `1`) prevents zero-lag hand-offs.
+- Governed `SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;

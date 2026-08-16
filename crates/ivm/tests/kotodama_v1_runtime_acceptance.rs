@@ -230,9 +230,9 @@ fn logical_operators_short_circuit_state_side_effects() {
 }
 #[test]
 fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
-    let mut source = String::from(
-        include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/014.ko"),
-    );
+    let mut source = String::from(include_str!(
+        "../fixtures/koto_v1/kotodama_v1_runtime_acceptance/014.ko"
+    ));
     let inserted = (-32_i64..32).rev().collect::<Vec<_>>();
     for key in &inserted {
         writeln!(source, "    Values[{key}] = {};", key * 2).expect("write generated assignment");

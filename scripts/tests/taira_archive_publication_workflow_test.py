@@ -51,6 +51,11 @@ def _assert_source_reconstruction_contract(source: str) -> None:
     assert '"$release_dir/iroha_source_bundle.py" reconstruct' in source
     assert '"$release_dir/iroha_source_bundle.py" verify' in source
     assert "hashlib.sha256(lock.read_bytes()).hexdigest() != expected" in source
+    assert "download_pids=()" in source
+    assert 'download_pids+=("$!")' in source
+    assert 'for download_pid in "${download_pids[@]}"' in source
+    assert "--retry-max-time 120" in source
+    assert "--max-time 120" in source
 
 
 def test_source_reconstruction_remains_exact_and_fail_closed() -> None:
@@ -60,6 +65,8 @@ def test_source_reconstruction_remains_exact_and_fail_closed() -> None:
 def _assert_split_trust_architecture(source: str) -> None:
     jobs = _workflow(source)
     assert list(jobs) == [
+        "rollout-budget",
+        "release-readiness",
         "public-privacy-input",
         "linux-native-build",
         "linux-native-authority",
@@ -89,7 +96,7 @@ def _assert_split_trust_architecture(source: str) -> None:
         assert isinstance(raw_job, dict)
         steps = _steps(raw_job)
         checkout = [step for step in steps if "actions/checkout@" in str(step.get("uses", ""))]
-        if name in build_jobs:
+        if name in build_jobs or name == "release-readiness":
             assert len(checkout) == 1
             assert "environment" not in raw_job
         else:
@@ -115,6 +122,8 @@ def _assert_split_trust_architecture(source: str) -> None:
         "public-privacy-input",
         "linux-native-build",
     ]
+    assert jobs["public-privacy-input"]["needs"] == "release-readiness"
+    assert jobs["macos-native-build"]["needs"] == "release-readiness"
     assert jobs["macos-secret-free-qualification"]["needs"] == [
         "linux-native-authority",
         "macos-native-build",
@@ -164,6 +173,60 @@ def test_rollouts_are_globally_serialized_and_unsigned_authority_outputs_stay_ro
     )
     assert "${{ runner.temp }}/taira-public-privacy-input/" not in source
     assert "${{ runner.temp }}/taira-qualification-receipt/" not in source
+
+
+def test_rollout_budget_fails_runner_queue_stalls_with_action_only_write_scope() -> None:
+    jobs = _workflow()
+    budget = jobs["rollout-budget"]
+    assert budget["runs-on"] == "ubuntu-latest"
+    assert budget["timeout-minutes"] == 31
+    assert budget["permissions"] == {"actions": "write", "contents": "none"}
+    text = _job_text(budget)
+    assert "30 * 60" in text
+    assert "2 * 60" in text
+    assert "No Taira job ran for two minutes" in text
+    assert "runner_name" in text
+    assert "labels" in text
+    assert "/cancel" in text
+    assert "secrets." not in text
+
+
+def test_release_readiness_fails_before_any_native_builder() -> None:
+    jobs = _workflow()
+    readiness_job = jobs["release-readiness"]
+    assert readiness_job["runs-on"] == "ubuntu-latest"
+    assert readiness_job["timeout-minutes"] == 2
+    assert readiness_job["permissions"] == {"contents": "read"}
+    assert "check_taira_release_prerequisites.py" in _job_text(readiness_job)
+    assert jobs["public-privacy-input"]["needs"] == "release-readiness"
+    assert jobs["macos-native-build"]["needs"] == "release-readiness"
+
+
+def test_native_builds_are_parallel_cached_and_not_single_threaded() -> None:
+    jobs = _workflow()
+    linux = _job_text(jobs["linux-native-build"])
+    macos = _job_text(jobs["macos-native-build"])
+    assert jobs["macos-native-build"]["needs"] == "release-readiness"
+    assert "taira-linux-authority-" not in macos
+    for text, cache_variable in (
+        (linux, "TAIRA_LINUX_BUILD_CACHE_ROOT"),
+        (macos, "TAIRA_MACOS_BUILD_CACHE_ROOT"),
+    ):
+        assert cache_variable in text
+        assert "RUNNER_TOOL_CACHE" in text
+        assert "TAIRA_NATIVE_BUILD_JOBS" in text
+        assert "CARGO_BUILD_JOBS=1" not in text
+        assert "cargo-target" in text
+        assert "cache_key=" in text
+        assert (
+            "$source_manifest-$TAIRA_INPUT_VALIDATOR_RELEASE_REF-$rustc_identity"
+            in text
+        )
+        assert "workspace_source_manifest_sha256" in text
+        assert "rustc -Vv" in text
+    assert "privacy-release-evidence,iroha-core-tests" in macos
+    assert linux.count("CARGO_TARGET_DIR") >= 1
+    assert macos.count("CARGO_TARGET_DIR") >= 1
 
 
 @pytest.mark.parametrize(

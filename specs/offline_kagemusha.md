@@ -208,7 +208,8 @@ in each profile and digest-bound into every artifact header; it is not a
 separate streamed file. The content-addressed top-up-finality roster remains
 release metadata outside that eight-role cryptographic inventory. Every file
 has an exact framed and payload size and SHA-256. Installation streams to
-private files, verifies every binding plus the canonical candidate-bound
+private files, requires supplied manifest bytes to equal the canonical encoding
+of the validated manifest object, verifies every binding plus the candidate-bound
 `promotion-record-v4.norito`, and atomically activates the complete generation.
 Bootstrap payload version 5 authenticates the final key-generation circuit's
 canonical per-phase virtual-region breakpoints. Runtime rejects malformed or
@@ -314,6 +315,15 @@ remain expected values until authentic generation confirms them. Candidate
 promotion must bind the exact generated bounds rather than the larger
 defensive wire ceilings.
 
+The reciprocal scalar loader removes only the identity tail of one assigned
+product with coefficient one and constant zero: its direct `FpChip::mul`
+result has the same three-limb `ProperCrtUint` residue invariant as the former
+product-by-one plus zero path. All other sum/product shapes retain their old
+operation sequence. This optimization intentionally changes circuit placement,
+so prior Eq/Ep breakpoints, VK/PK payloads, compiled-protocol identities,
+bootstrap witnesses, proofs, digests, and source-seal evidence are invalid and
+must be regenerated before the final guarded qualification.
+
 The userspace supervisor enforces the lower of
 64 GiB or half of installed physical memory and cannot be raised by an
 operator option. On macOS, candidate generation and its diagnostic benchmark
@@ -398,7 +408,10 @@ qualification seal must be immutable, well formed, and bound to both the source
 directories and running executable. For each Eq/Ep profile the seal binds the
 manifest's value-free V1 compiled-protocol structure digest separately from
 the qualified V2 full protocol identity derived from the final verifying key;
-the two values must be non-zero and distinct.
+the two values must be non-zero and distinct. The per-release seal also repeats
+the authenticated source-seal projection SHA-256 and the reviewed Cargo and
+rustc binary SHA-256 values from the manifest. Any zero or one-bit-substituted
+value invalidates the seal against the authenticated release.
 
 Create a seal only with the no-bind validation command:
 
@@ -463,7 +476,11 @@ readiness. `ActivateKagemushaRecursiveReleaseV4` authenticates
 the release-policy digest, signed release and evidence, exact-eight inventory,
 `NetworkId`/asset/scale and future issuance window, distinct inline Eq/Ep verifier
 records, matching local cached material, and the embedded production iOS and
-Android device-attestation policy. The instruction requires both release-
+Android device-attestation policy. Each verifier record must carry the exact
+release-derived owner identifier and public-input schema hash plus the
+domain-separated commitment of its inline key; merely non-empty or non-zero
+substitutes are invalid. Release-policy role thresholds must also fit together
+within the 64-approval attestation ceiling. The instruction requires both release-
 activation and device-policy governance permissions, then publishes the exact
 device policy, release, and Eq/Ep records in one consensus transaction overlay.
 There is no independently reorderable or standalone release-activation path. A
@@ -510,10 +527,25 @@ signature trusted by the reviewer's owner-controlled user-level
 ignored and every verifier/policy setting is overridden. The index must equal
 `HEAD`; every mandatory worktree path must match the index blob and Git mode
 through descriptor-rooted, no-symlink traversal; there must be zero untracked
-files; and the separately bound root `Cargo.lock` must be exact. The complete
-clean closure is hash-bound throughout the candidate, native build, device
-transcript, and signed evidence. Dirty closures have no compatibility
-admission path.
+or ignored files; and the root `Cargo.lock` must be exactly one tracked
+mode-`100644` index entry whose bytes also match the separate V1 lock digest.
+The legacy `ignored_cargo_lock_*` descriptor field names retain their V1 wire
+spelling but bind this tracked file. The complete clean closure is hash-bound
+throughout the candidate, native build, device transcript, and signed evidence.
+Dirty closures have no compatibility admission path.
+
+The V4 candidate manifest additionally binds
+`authenticated_source_seal_projection_sha256`,
+`reviewed_cargo_binary_sha256`, and `reviewed_rustc_binary_sha256`. The sealed
+builder hashes the actual absolute `CARGO` and `RUSTC` executables before the
+build script accepts the external pins, then revalidates those executable bytes
+after compilation and while sealing the candidate. The qualification receipt,
+cryptographic-review subject, release-attestation subject, promotion record,
+sealed-build and candidate-validation reports, Kagami verification report,
+promotion gate, and runtime qualification seal all repeat or authenticate this
+exact trio. This intentionally invalidates earlier V4 manifest, candidate,
+receipt, review, attestation, promotion, activation, qualification-seal, and
+sealed-build report bytes; regenerate, re-review, re-sign, and reseal them.
 
 The Taira artifact exporter also runs a candidate-bound release-key regression
 before publishing a catalog. One parsed installed prover creates an
@@ -551,16 +583,39 @@ candidate:
 ci/check_kagemusha_production_readiness.sh candidate
 ```
 
-For promotion, provision the same canonical policy file used by validators and
-the root containing lowercase manifest-digest directories. The corridor invokes
-Kagami's typed verifier for every release; it authenticates the policy,
-manifest, signed attestation, evidence, exact-eight artifacts, bootstrap
-witnesses, and promotion record rather than trusting filenames or JSON alone:
+For promotion, a separately authenticated launcher must install the reviewed
+checkout at a root-owned path whose complete path, `ci/` directory, and gate
+file are not group/world writable. It must verify the gate digest before
+execution and pass that same digest below; an in-process self-check cannot make
+a substituted script trustworthy. Pre-create the fixed owner-private staging
+parent (`/private/var/db/iroha-kagemusha-readiness-v1` on macOS or
+`/var/lib/iroha/kagemusha-readiness-v1` on Linux). Provision the same canonical
+policy file used by validators and the root containing lowercase
+manifest-digest directories. The authenticated source-seal projection binds
+the exact reviewed closure to the allowed-signers and revocation-policy
+digests. An explicitly pinned empty revocation file means no revoked keys; the
+revocation input is never implicit. The corridor invokes the digest-pinned
+Kagami typed verifier for every release; it authenticates the policy, manifest,
+signed attestation, evidence, exact-eight artifacts, bootstrap witnesses, and
+promotion record rather than trusting filenames or JSON alone:
 
 ```bash
+KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
+KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256='<reviewed-revocation-64-lowercase-hex>' \
 KAGEMUSHA_V4_RELEASE_POLICY_PATH=/run/iroha/kagemusha/release-policy.norito \
 KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
-  ci/check_kagemusha_production_readiness.sh promotion
+  /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 When the selected policy uses the Taira physical-iOS slot, provide the trusted
@@ -569,12 +624,25 @@ release manifest-digest directories. Each child contains the corresponding
 runner's exact `raw/` tree:
 
 ```bash
+KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
+KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256='<reviewed-revocation-64-lowercase-hex>' \
 KAGEMUSHA_V4_RELEASE_POLICY_PATH=/run/iroha/kagemusha/release-policy.norito \
 KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/run/iroha/kagemusha/ios-device-evidence \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID="$TRUSTED_KEY_ID" \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-evidence-ed25519.pub.pem \
-  ci/check_kagemusha_production_readiness.sh promotion
+  /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 The signed JSON itself remains the release's

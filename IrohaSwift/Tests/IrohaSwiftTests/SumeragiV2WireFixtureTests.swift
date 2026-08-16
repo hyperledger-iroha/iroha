@@ -67,7 +67,7 @@ func duplicateSumeragiRootField(_ prefix: String, in payload: Data) -> Data {
 }
 
 final class SumeragiV2WireFixtureTests: XCTestCase {
-    func testExecutionCommitmentCarriesExactMandatoryMergeCarrierOption() throws {
+    func testExecutionCommitmentCarriesExactLaneFinalityAndMergeOptions() throws {
         func hash(_ seed: UInt8) throws -> SumeragiV2Hash {
             var bytes = Data(repeating: seed, count: 32)
             bytes[31] |= 1
@@ -88,6 +88,9 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             executedBlockWireLen: 123,
             executedBlockWireHash: hash(0x27)
         )
+        let laneFinality = try SumeragiV2LaneFinalityManifestCommitment(
+            root: hash(0x2B), leafCount: 1
+        )
         let carrier = try SumeragiV2MergeCarrierCommitment(entryHash: hash(0x29))
         let carried = try SumeragiV2ExecutionCommitment(
             parentStateRoot: base.parentStateRoot,
@@ -99,15 +102,44 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 base.nativeAmxApplicationManifestVersion,
             nativeAmxApplicationManifestRoot: base.nativeAmxApplicationManifestRoot,
             nativeAmxApplicationManifestCount: 0,
+            laneFinalityManifest: laneFinality,
             mergeCarrier: carrier,
             executedBlockWireLen: base.executedBlockWireLen,
             executedBlockWireHash: base.executedBlockWireHash
         )
 
+        XCTAssertNil(base.laneFinalityManifest)
         XCTAssertNil(base.mergeCarrier)
         XCTAssertEqual(base.executedBlockWireLen, 123)
+        XCTAssertEqual(carried.laneFinalityManifest, laneFinality)
         XCTAssertEqual(carried.mergeCarrier, carrier)
         XCTAssertGreaterThan(carried.encode().count, base.encode().count)
+        let round = SumeragiV2ConsensusRound(
+            contextID: SumeragiV2HeightContextID(hash: try hash(0x31)), height: 1, view: 0
+        )
+        let vote = try SumeragiV2Vote(
+            round: round,
+            proposalRound: round,
+            phase: .prepare,
+            subject: SumeragiV2BlockSubject(
+                parentBlockHash: nil, blockHash: try hash(0x33), payloadHash: try hash(0x35)
+            ),
+            executionCommitment: carried,
+            signer: 0,
+            signature: Data([0x01])
+        )
+        let decoded = try SumeragiV2ConsensusMessage.decodeCanonical(
+            SumeragiV2ConsensusMessage(payload: .vote(vote)).encode()
+        )
+        guard case .vote(let decodedVote) = decoded.payload else {
+            return XCTFail("roundtrip changed the consensus payload kind")
+        }
+        XCTAssertEqual(decodedVote.executionCommitment.laneFinalityManifest, laneFinality)
+        for count in [UInt64(0), SumeragiV2LaneFinalityManifestCommitment.maximumLeafCount + 1] {
+            XCTAssertThrowsError(
+                try SumeragiV2LaneFinalityManifestCommitment(root: hash(0x2B), leafCount: count)
+            )
+        }
         XCTAssertThrowsError(
             try SumeragiV2MergeCarrierCommitment(version: 2, entryHash: hash(0x29))
         )

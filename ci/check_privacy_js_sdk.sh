@@ -6,11 +6,12 @@ NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
-# The JavaScript release gate builds and executes its N-API module from the
-# frozen workspace lock. Preserve the exact lock identity across the full lane.
+# Preserve the tracked root source authority independently from the distinct
+# frozen privacy-release lock selected for the native build.
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 WORKSPACE_CARGO_LOCKFILE="${ROOT_DIR}/Cargo.lock"
@@ -103,8 +104,18 @@ PY
 
 [[ -f "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] \
   || { echo "error: privacy JavaScript native execution requires Cargo.lock" >&2; exit 1; }
-[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
-  || { echo "error: privacy JavaScript Cargo.lock is not the frozen release lock" >&2; exit 1; }
+[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
+  || { echo "error: privacy JavaScript tracked root Cargo.lock authority changed" >&2; exit 1; }
+PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
+[[ -f "${PRIVACY_RELEASE_CARGO_LOCK}" && ! -L "${PRIVACY_RELEASE_CARGO_LOCK}" && \
+  "${PRIVACY_RELEASE_CARGO_LOCK}" != "${WORKSPACE_CARGO_LOCKFILE}" ]] \
+  || { echo "error: privacy JavaScript requires a distinct external release Cargo.lock" >&2; exit 1; }
+[[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
+  || { echo "error: privacy JavaScript external Cargo.lock is not the frozen release lock" >&2; exit 1; }
+echo \
+  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked 0ddb root authority" \
+  >&2
+exit 1
 
 RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
 IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"
@@ -117,7 +128,7 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 export CARGO_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"
-export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"
+export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"
 export IROHA_JS_NATIVE_DIR="${NATIVE_BUILD_ROOT}/native"
 export NORITO_SKIP_BINDINGS_SYNC=1
 export RUSTC_BOOTSTRAP=1
@@ -177,5 +188,5 @@ NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --node "${NODE_BIN}"
-[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
-  || { echo "error: Cargo.lock changed during privacy JavaScript native execution" >&2; exit 1; }
+[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
+  || { echo "error: tracked root Cargo.lock changed during privacy JavaScript native execution" >&2; exit 1; }

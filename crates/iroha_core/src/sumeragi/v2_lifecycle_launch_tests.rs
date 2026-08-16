@@ -379,10 +379,11 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         include_str!("v2_lifecycle_launch.rs"),
         include_str!("v2_lifecycle_preactivation.rs")
     );
-    let adapter_source = concat!(
-        include_str!("v2.rs"),
-        include_str!("v2_pending_kura_recovery.rs")
-    );
+    let adapter_source = [
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
+        include_str!("v2_pending_kura_recovery.rs"),
+    ]
+    .concat();
     let safety_wal_source = include_str!("safety_wal.rs");
     let kura_source = concat!(
         include_str!("../kura.rs"),
@@ -391,7 +392,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
     let worker_source = include_str!("v2_worker.rs");
     let effects_source = include_str!("v2_effects.rs");
-    let runtime_source = include_str!("v2_runtime.rs");
+    let runtime_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
     let runner_authority_source = concat!(
@@ -416,7 +418,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     );
 
     assert!(bound_launch.contains(
-            "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n    launched: super::launch::LaunchedProductionLifecycleV1,\n    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,\n}"
+            "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n    launched: Box<super::launch::LaunchedProductionLifecycleV1>,\n    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,\n}"
         ));
     assert_source_tokens_in_order(
         bound_launch,
@@ -552,7 +554,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let complete = launch.rfind("construction.complete()").unwrap();
     assert!(take <= take_apply);
     let gate_open = source_region(
-        adapter_source,
+        &adapter_source,
         "pub(in crate::sumeragi) fn open_gate(",
         "impl ProductionLifecycleAdapterStartupV1",
     );
@@ -568,7 +570,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     );
     assert!(!gate_open.contains("durable_bodies: &[DurableBodyReceipt]"));
     let adapter_launch = source_region(
-        adapter_source,
+        &adapter_source,
         "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
         "/// Consume the sealed adapter startup directly",
     );
@@ -583,13 +585,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     let runtime_conversion = source_region(
-        adapter_source,
+        &adapter_source,
         "pub(in crate::sumeragi) fn into_serialized_runtime(",
-        "#[cfg(test)]\n    pub(in crate::sumeragi) const fn fixture_for_test",
+        "#[cfg_attr(not(test), allow(dead_code))]\nimpl PreparedRecoveredPendingKuraApplyReplayV1",
     );
     assert!(runtime_conversion.contains("leader_wire_launch_prepared: true"));
     let adapter_open = source_region(
-        adapter_source,
+        &adapter_source,
         "fn open_with_aggregator_and_publication_with_capacity(",
         "/// Return the tag which must accompany a new asynchronous operation",
     );
@@ -718,8 +720,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         launch,
         &[
             ".apply_service\n            .take()",
-            "super::ProductionLifecycleApplyServiceLaunchPermitV1 {",
             "ProductionV2Services::start_with_apply_service(",
+            "super::ProductionLifecycleApplyServiceLaunchPermitV1 {",
         ],
     );
     assert!(!launch.contains("inputs.block_cadence"));
@@ -771,7 +773,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "/// Sign and retain all canonical chunks",
     );
     let legacy_start = worker_start
-        .split_once("/// Start with the exact application service used for recovered marker replay.")
+        .split_once(
+            "/// Start with the exact application service used for recovered marker replay.",
+        )
         .expect("legacy construction ends before the sealed transfer seam")
         .0;
     assert!(legacy_start.contains("let apply_service = V2ApplyService::new("));
@@ -787,7 +791,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     ));
     assert_source_tokens_in_order(
         transferred_start,
-        &["apply_service.matches_lifecycle_launch(", "Self::start_inner("],
+        &[
+            "apply_service.matches_lifecycle_launch(",
+            "Self::start_inner(",
+        ],
     );
     assert!(!transferred_start.contains("create_dir_all"));
     assert_eq!(
@@ -811,8 +818,11 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         coordinator_source
             .contains("impl Drop for ProductionLifecycleApplyServiceLaunchPermitSealV1")
     );
-    let status_publication =
-        source_region(worker_source, "fn publish_effect_status(", "fn fail_closed(");
+    let status_publication = source_region(
+        worker_source,
+        "fn publish_effect_status(",
+        "fn fail_closed(",
+    );
     assert!(!worker_start.contains("set_v2_effect_completion_observer"));
     assert!(!worker_start.contains("activate_effect_completion_observer"));
     assert!(!worker_start.contains("publish_effect_status"));
@@ -1215,8 +1225,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "fn into_finalized_rollover(",
         "/// Exercise the exact empty-output post-handoff retirement transaction",
     );
-    let owner_token =
-        "let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,";
+    let owner_token = "let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,";
     assert_source_tokens_in_order(
         activated_finalization,
         &["executor.ready_to_finish()", owner_token],
@@ -1472,28 +1481,28 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_required_source_tokens(
         ordinary_activation,
         &[
-        "_seal: ProductionLifecycleRunnerActivationSealV1",
-        "ingress_ready: Arc<AtomicBool>",
-        "block_ingress: Arc<FairV2Ingress>",
-        "status: ProductionLifecycleRunnerStatusAuthorityV1",
-        "struct ProductionLifecycleRunnerActivationSealV1",
-        "impl Drop for ProductionLifecycleRunnerActivationSealV1",
-        "fn current_height(",
-        "fn applied(",
-        "fn snapshot_bootstrap(",
-        "CurrentHeight",
-        "Applied",
-        "SnapshotBootstrap",
-        "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
-        "self.ingress_ready.store(false, Ordering::Release)",
-        "self.block_ingress.open()",
-        "status::set_v2_status(successor)",
-        "status::activate_v2_successor_height(",
-        "status::activate_snapshot_bootstrap_v2_height(",
-        "self.block_ingress.close()",
-        "self.ingress_ready.store(true, Ordering::Release)",
-        "ProductionLifecycleActivatedRunnerAuthorityV1 {",
-        "ingress_ready: self.ingress_ready",
+            "_seal: ProductionLifecycleRunnerActivationSealV1",
+            "ingress_ready: Arc<AtomicBool>",
+            "block_ingress: Arc<FairV2Ingress>",
+            "status: ProductionLifecycleRunnerStatusAuthorityV1",
+            "struct ProductionLifecycleRunnerActivationSealV1",
+            "impl Drop for ProductionLifecycleRunnerActivationSealV1",
+            "fn current_height(",
+            "fn applied(",
+            "fn snapshot_bootstrap(",
+            "CurrentHeight",
+            "Applied",
+            "SnapshotBootstrap",
+            "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+            "self.ingress_ready.store(false, Ordering::Release)",
+            "self.block_ingress.open()",
+            "status::set_v2_status(successor)",
+            "status::activate_v2_successor_height(",
+            "status::activate_snapshot_bootstrap_v2_height(",
+            "self.block_ingress.close()",
+            "self.ingress_ready.store(true, Ordering::Release)",
+            "ProductionLifecycleActivatedRunnerAuthorityV1 {",
+            "ingress_ready: self.ingress_ready",
             "block_ingress: self.block_ingress",
         ],
     );
@@ -1641,7 +1650,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadence()"
     ));
     let factory_bind = source_region(
-        adapter_source,
+        &adapter_source,
         "fn bind_production_lifecycle_owner_factory_inputs_v1(",
         "/// Consume all recovered adapter and storage authority",
     );
@@ -1693,11 +1702,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         "self.coordinator.rollback_unpublished_turn(&lease)",
         1,
     );
-    assert_source_token_count(
-        dispatch,
-        "rollback_unpublished_reserved_turn(&lease",
-        3,
-    );
+    assert_source_token_count(dispatch, "rollback_unpublished_reserved_turn(&lease", 3);
     assert_source_token_count(dispatch, "reservation.cancel_uncommitted()", 6);
     assert_forbidden_source_tokens(
         dispatch,
@@ -1807,7 +1812,10 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         "fn sign_recovered_lifecycle_task(",
         "fn recover_outbound_proposal_payload(",
     );
-    assert_forbidden_source_tokens(signer, &["prepared_candidates", "register_outbound_payload"]);
+    assert_forbidden_source_tokens(
+        signer,
+        &["prepared_candidates", "register_outbound_payload"],
+    );
     let capacity = source_region(
         worker_source,
         "fn capture_recovered_lifecycle_sign_capacity<'a>(",
@@ -1823,7 +1831,10 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     );
     assert_required_source_tokens(
         rollback,
-        &["lease.output_reservation.is_some()", "assert!(\n            inserted,"],
+        &[
+            "lease.output_reservation.is_some()",
+            "assert!(\n            inserted,",
+        ],
     );
     assert_forbidden_source_tokens(rollback, &["debug_assert!"]);
 

@@ -56,22 +56,21 @@ impl Quorum {
     pub fn satisfies(self, context: &HeightContext) -> bool {
         self.signer_count >= context.minimum_signer_count()
     }
-    /// Validates a canonical signer set and requires its equal-vote quorum.
+    /// Validates a canonical certificate signer set and requires exactly `2f + 1` members.
     ///
     /// # Errors
     ///
-    /// Returns an error when the signer set is malformed or does not satisfy
-    /// both thresholds.
+    /// Returns an error when the signer set is malformed or does not have the
+    /// canonical certificate cardinality.
     pub fn require(context: &HeightContext, signers: &[ValidatorId]) -> Result<Self, QuorumError> {
         let quorum = Self::calculate(context, signers)?;
-        if quorum.satisfies(context) {
+        let required_signer_count = context.minimum_signer_count();
+        if quorum.signer_count == required_signer_count {
             Ok(quorum)
         } else {
-            Err(QuorumError::Insufficient {
+            Err(QuorumError::SignerCountMismatch {
                 signer_count: quorum.signer_count,
-                voting_power: quorum.voting_power,
-                required_signer_count: context.minimum_signer_count(),
-                total_voting_power: context.total_voting_power(),
+                required_signer_count,
             })
         }
     }
@@ -113,6 +112,13 @@ pub enum QuorumError {
     VotingPowerOverflow,
     /// A context validator does not carry the required single consensus vote.
     VotingPowerNotOne(ValidatorId),
+    /// A wire certificate does not carry exactly the canonical signer count.
+    SignerCountMismatch {
+        /// Distinct validators represented by the certificate.
+        signer_count: usize,
+        /// Exact distinct-validator count required by the height context.
+        required_signer_count: usize,
+    },
     /// The signer set fails the `2f + 1` distinct-validator threshold.
     Insufficient {
         /// Distinct validators represented by the set.
@@ -162,6 +168,13 @@ impl fmt::Display for QuorumError {
                     "validator {validator} does not have exactly one vote"
                 )
             }
+            Self::SignerCountMismatch {
+                signer_count,
+                required_signer_count,
+            } => write!(
+                formatter,
+                "certificate signer count mismatch: expected exactly {required_signer_count}, got {signer_count}"
+            ),
             Self::Insufficient {
                 signer_count,
                 voting_power,

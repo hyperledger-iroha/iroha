@@ -135,22 +135,16 @@ mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
-// Increment whenever any NativeSignerBridge JNI method descriptor changes.
-// The bridge-wide ABI number alone cannot distinguish two ABI-22 artifacts
-// whose JVM calling conventions differ.
-// Revision 4 hard-cuts RegisterZkAsset signing to the asset plus optional
-// unshield and shield verifier bindings. Revision 5 replaces the human chain
-// label with the exact 32-byte genesis-derived NetworkId.
+// Increment for NativeSignerBridge JNI descriptor changes that the bridge-wide ABI cannot distinguish.
+// Revision 4 narrowed RegisterZkAsset bindings; revision 5 replaced the chain label with the exact
+// 32-byte genesis-derived NetworkId.
 const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
 const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
-/// Restores Norito's conservative 32-fold allocation ceiling for schemas with
-/// nested, semantically bounded collections.
-///
-/// Those cardinality checks run after reconstruction, so a flat allowance
-/// cannot safely replace the frame-scaled part of the generic decoder budget.
+/// Restores Norito's 32-fold ceiling for semantically bounded nested collections whose cardinality
+/// is checked after reconstruction, where a flat allowance cannot replace frame-scaled budgeting.
 const KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER: usize = 28;
 const KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH: usize = 64;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -383,20 +377,12 @@ impl BridgeError {
     }
 }
 type BridgeResult<T> = Result<T, BridgeError>;
-/// Stack reserved for one ABI-21 Kagemusha artifact/proof execution boundary.
-///
-/// Mobile callers enter the bridge on Swift- and ART-owned threads whose stack
-/// size is outside Rust's control. Keep the resource-heavy authenticated
-/// artifact parsing and Halo2 lifecycle execution on a Rust-owned stack so a
-/// caller's executor stack cannot determine whether offline cash succeeds.
+/// Rust-owned stack for ABI-21 artifact parsing and Halo2 execution, insulating offline cash from
+/// Swift/ART caller stacks whose size Rust cannot control.
 const KAGEMUSHA_RECURSIVE_SPEND_WORKER_STACK_BYTES_V4: usize = 64 * 1024 * 1024;
-/// Process-wide permit for the parsed-artifact and Halo2 lifecycle boundary.
-///
-/// A single authenticated prover already owns both Pasta parameter sets and
-/// proving keys. Allowing two mobile callers to parse and prove concurrently
-/// would multiply that release-sized heap even when each individual operation
-/// stays within its budget. The permit carries no mutable protocol state, so a
-/// worker panic must not poison future offline-cash operations.
+/// Process-wide permit preventing concurrent callers from multiplying the authenticated prover's
+/// two-parity parameter/key heap. It guards no mutable protocol state, so worker panic cannot poison
+/// future offline-cash operations.
 static KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_PERMIT_V4: OnceLock<Mutex<()>> = OnceLock::new();
 fn kagemusha_recursive_spend_lifecycle_permit_v4() -> &'static Mutex<()> {
     KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_PERMIT_V4.get_or_init(|| Mutex::new(()))
@@ -424,11 +410,8 @@ where
         worker.join().map_err(|_| boundary_error)?
     })
 }
-/// Return the current native bridge C ABI version.
-///
-/// Clients that resolve symbols dynamically must check this before calling other
-/// entrypoints; stale bridge artifacts can otherwise crash before Rust receives
-/// enough arguments to validate the call.
+/// Return the native C ABI version, which dynamic clients must check before other entrypoints so a
+/// stale artifact cannot crash before Rust receives enough arguments to validate the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
@@ -676,14 +659,9 @@ fn kagemusha_canonical_decode_limits_with_profile(
     extra_encoded_allocation_multiplier: usize,
     fixed_allocation_allowance: usize,
 ) -> norito::DecodeLimits {
-    // Every variable-length member must be represented in the exact
-    // uncompressed canonical frame. These limits therefore scale from the
-    // already capped archive. One fixed 64 KiB allowance covers decoded enum,
-    // collection, and string bookkeeping whose size does not shrink in direct
-    // proportion to a small payload. Fixed-depth proof schemas pass their
-    // protocol-derived allowance. Schemas with nested collections whose
-    // cardinality is validated after reconstruction restore Norito's generic
-    // 32-fold frame-scaled ceiling through their explicit profile.
+    // Scale from the capped canonical frame. A fixed 64 KiB covers decoded enum/collection/string
+    // bookkeeping; fixed-depth proofs add their protocol allowance, while nested collections whose
+    // cardinality is checked after reconstruction explicitly restore Norito's 32-fold ceiling.
     norito::DecodeLimits::new(
         encoded_len,
         encoded_len,
@@ -6777,78 +6755,12 @@ fn validate_kagemusha_recursive_spend_bundle_shape_v4(
     }
     Ok(())
 }
-fn validate_kagemusha_recursive_spend_topup_anchor_shape_v4(
-    anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
-) -> BridgeResult<()> {
-    use iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2;
-    anchor
-        .amount
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    anchor
-        .current_note
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    anchor
-        .artifact_binding
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    if anchor.version != KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4
-        || anchor.asset_scale != anchor.amount.scale
-        || anchor.current_note.amount != anchor.amount
-        || anchor.asset.account() != &anchor.payer
-        || anchor.current_note.network_id != anchor.network_id
-        || anchor.current_note.asset != *anchor.asset.definition()
-        || anchor.initial_root == [0; 32]
-        || anchor.finalized_root == [0; 32]
-        || anchor.initial_root == anchor.finalized_root
-        || anchor.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
-        || anchor.topup_operation_id == [0; 32]
-        || anchor.shield_verifier_id.backend.is_empty()
-        || anchor.shield_verifier_id.name.is_empty()
-        || anchor.shield_verifier_commitment == [0; 32]
-        || anchor.finalized_height == 0
-        || anchor.finalized_tx_hash == [0; 32]
-        || anchor.anchor_digest == [0; 32]
-    {
-        return Err(BridgeError::KagemushaProve);
-    }
-    Ok(())
-}
 fn validate_kagemusha_recursive_spend_init_request_shape_v4(
     request: &iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV4,
 ) -> BridgeResult<()> {
-    validate_kagemusha_recursive_spend_topup_anchor_shape_v4(&request.topup_anchor)?;
     request
-        .topup_finality_proof
-        .validate_structure()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    request
-        .topup_finality_roster_artifact
-        .validate_structure()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    request
-        .artifact_binding
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let anchor = &request.topup_anchor;
-    if request.artifact_binding != anchor.artifact_binding
-        || request.topup_finality_proof.anchor.topup_operation_id != anchor.topup_operation_id
-        || request.topup_finality_proof.anchor.anchor_digest != anchor.anchor_digest
-        || request.topup_finality_proof.commit_qc.height_context.height != anchor.finalized_height
-        || request.topup_finality_roster_artifact.network_id != anchor.network_id
-        || request.topup_finality_roster_artifact.network_id
-            != request
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .network_id
-        || request.topup_finality_roster_artifact.artifact_generation
-            != request.artifact_binding.generation
-    {
-        return Err(BridgeError::KagemushaProve);
-    }
-    Ok(())
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)
 }
 fn validate_kagemusha_recursive_spend_verify_request_shape_v4(
     request: &iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV4,
@@ -7106,7 +7018,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
         }
         validate_kagemusha_recursive_spend_bundle_shape_v4(&self.bundle)?;
         self.topup_provenance
-            .validate_for_bundle(&self.bundle)
+            .validate_for_bundle_at(&self.bundle, self.block_height)
             .map_err(|_| BridgeError::KagemushaProve)?;
         self.input_opening.validate()?;
         self.input_membership_witness
@@ -14647,6 +14559,11 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: digest(
+                b"SBD streaming installer source-seal projection",
+            ),
+            reviewed_cargo_binary_sha256: digest(b"SBD streaming installer reviewed Cargo"),
+            reviewed_rustc_binary_sha256: digest(b"SBD streaming installer reviewed rustc"),
             network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
                 iroha_data_model::block::BlockHeader,
             >::from_untyped_unchecked(Hash::new(
@@ -17606,6 +17523,11 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: digest(
+                b"production gate authenticated source-seal projection",
+            ),
+            reviewed_cargo_binary_sha256: digest(b"production gate reviewed Cargo binary"),
+            reviewed_rustc_binary_sha256: digest(b"production gate reviewed rustc binary"),
             network_id,
             asset,
             asset_scale: 2,
@@ -17743,6 +17665,10 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: generation.to_owned(),
+            authenticated_source_seal_projection_sha256: manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
             candidate_sha256: candidate.sha256().expect("candidate digest"),
             qualification_receipt_sha256: manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: manifest.qualified_candidate_sha256,
@@ -18073,8 +17999,7 @@ mod kagemusha_bridge_tests {
         .finalize_digest()
         .expect("release-key regression top-up anchor");
         let (local_roster, local_signing_keys) = production_topup_finality_roster_v2(
-            production_topup_finality_network_id_v2(),
-            &fixture.manifest.network_id,
+            fixture.manifest.network_id,
             &fixture.manifest.generation,
         );
         let topup_finality_proof = production_topup_finality_proof_v2(
@@ -18642,6 +18567,33 @@ mod kagemusha_bridge_tests {
             opening: sender_opening.clone(),
             output_membership: topup_output_membership.clone(),
         };
+        init_local
+            .validate_shape()
+            .expect("production SBD init bridge shape");
+        let mut wrong_anchor_digest = init_local.clone();
+        wrong_anchor_digest.request.topup_anchor.anchor_digest[0] ^= 1;
+        wrong_anchor_digest
+            .request
+            .topup_finality_proof
+            .anchor
+            .anchor_digest = wrong_anchor_digest.request.topup_anchor.anchor_digest;
+        assert!(wrong_anchor_digest.validate_shape().is_err());
+        let mut insufficient_quorum = init_local.clone();
+        insufficient_quorum
+            .request
+            .topup_finality_proof
+            .commit_qc
+            .certificate
+            .signers
+            .pop();
+        assert!(insufficient_quorum.validate_shape().is_err());
+        let mut missing_roster_window = init_local.clone();
+        missing_roster_window
+            .request
+            .topup_finality_roster_artifact
+            .windows[0]
+            .withdraws_at_height = missing_roster_window.request.topup_anchor.finalized_height;
+        assert!(missing_roster_window.validate_shape().is_err());
         let init_archive =
             Zeroizing::new(norito::to_bytes(&init_local).expect("encode production SBD init"));
         let mut init_ptr = ptr::null_mut();
@@ -18798,6 +18750,33 @@ mod kagemusha_bridge_tests {
         );
         let peer_payment = KagemushaRecursiveSpendPeerPaymentV4::from_split_result(&split_result)
             .expect("project production SBD recipient payment");
+        let redeem_shape = KagemushaRecursiveSpendRedeemLocalRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+            bundle: peer_payment.recipient_bundle.clone(),
+            topup_provenance: peer_payment.topup_provenance.clone(),
+            input_opening: sender_opening.clone(),
+            input_membership_witness: peer_payment.recipient_membership_witness.clone(),
+            recipient: sample_account(0x97),
+            public_amount: peer_payment.recipient_bundle.statement.current_note.amount,
+            change_opening: None,
+            unshield_verifier_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            ),
+            unshield_verifier_commitment: [0x98; 32],
+            block_height: 43,
+            operation_id: [0x99; 32],
+            change_output_membership: None,
+        };
+        redeem_shape
+            .validate_shape()
+            .expect("production SBD redeem bridge shape");
+        let finalized_height = redeem_shape.topup_provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .finalized_height;
+        let mut future_finality = redeem_shape;
+        future_finality.block_height = finalized_height - 1;
+        assert!(future_finality.validate_shape().is_err());
         let verify_local = KagemushaRecursiveSpendVerifyLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             request: KagemushaRecursiveSpendVerifyRequestV4 {
@@ -25074,11 +25053,7 @@ mod accel_tests {
             "burn",
             "claim_identifier",
         ];
-        let macro_marker = [
-            "define_ed25519_signed_",
-            "transaction_wrapper!{",
-        ]
-        .concat();
+        let macro_marker = ["define_ed25519_signed_", "transaction_wrapper!{"].concat();
         assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 14);
         for family in families {
             let default = format!("connect_norito_encode_{family}_signed_transaction");

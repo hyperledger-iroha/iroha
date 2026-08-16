@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "cb5ac98055cd99b84cb5736fd3f352e027f293188000f0505173baa6fda198b2"
+        "afd73a96a4e243923a5a01a97f95dc82da971fdf13486dd73d38479456512537"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 525
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 526
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 527
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 528
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352"
+        "5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -183,7 +183,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 860
-    assert receipt_module._G_UNIT_TEST_COUNT == 525
+    assert receipt_module._G_UNIT_TEST_COUNT == 527
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 860
     receipt_module_counts = {
         module_name: count
@@ -199,9 +199,8 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 525
+        == 527
     )
-
 
 @pytest.mark.parametrize(
     "mutation_name",
@@ -254,7 +253,6 @@ def test_kura_production_source_boundary_rejects_hostile_test_suffix_mutations(
     kura_path.write_text(mutated, encoding="utf-8")
     _, _, _, errors = module._kura_production_source_inventory(repo_root)
     assert any(diagnostic in error for error in errors), errors
-
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     tmp_path: Path,
@@ -1908,9 +1906,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         )
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
-    )
+        )
     for module_name, test_name, source in production_inventory_additions:
-        declaration_count = source.count(f"fn {test_name}(")
+        declaration_count = sum(
+            source.count(marker)
+            for marker in (f"fn {test_name}(", f"state_test! {{ sync {test_name}")
+        )
         assert declaration_count == 1, (
             module_name,
             test_name,
@@ -2514,8 +2515,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "preflight-release-bootstrap pytest 258" in release_source
     assert "did not run exactly 44 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 44" in release_source
-    assert "did not run exactly 367 passing tests" in release_source
-    assert "preflight-release-receipt pytest 367" in release_source
+    assert "did not run exactly 368 passing tests" in release_source
+    assert "preflight-release-receipt pytest 368" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
         in release_source
@@ -2546,13 +2547,13 @@ kura.claim_autonomous_lifecycle_process_generation(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                367,'
+        '"preflight-release-receipt",\n                "pytest",\n                368,'
         in receipt_source
     )
-    assert "did not run exactly 5485 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5485" in release_source
+    assert "did not run exactly 5513 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5513" in release_source
     assert (
-        "^5485 passed in [0-9]+([.][0-9]+)?s( "
+        "^5513 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2604,7 +2605,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert len(proof_fidelity_runner_nodes) == 18
     assert len(set(proof_fidelity_runner_nodes)) == 18
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
-    assert "Collection is source-bound as 5,383 ledger/checker cases" in release_source
+    assert "Collection is source-bound as 5,410 ledger/checker cases" in release_source
     for selector in (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
@@ -2634,7 +2635,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5485,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5513,'
         in receipt_source
     )
     assert "did not run exactly 27 passing tests" in release_source
@@ -2844,7 +2845,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert expected_flag in release_source
 
     g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
-    for relative in (
+    for relative in _release_inventory_fixture_paths(module, (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -2863,7 +2864,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-    ):
+    )):
         destination = g4p_fidelity_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
@@ -3377,7 +3378,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     successful_skip = taira_source.index("return Ok(());", fail_closed)
     assert finalizer < fail_closed < successful_skip
 
-
 def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> None:
     release_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
@@ -3529,7 +3529,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
     )
     assert '${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}' not in release_source
 
-
 def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     inventory_source = (
         ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
@@ -3563,7 +3562,6 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     for name in obsolete_dense_names:
         assert name in inventory_source
         assert name not in kura_source
-
 
 def test_multilane_inventory_checker_rejects_weakened_production_count(
     tmp_path: Path,
@@ -3756,7 +3754,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         for error in errors
     ), errors
 
-
 def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_digest(
     tmp_path: Path,
 ) -> None:
@@ -3878,7 +3875,6 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
         oversupplied.stderr
     )
 
-
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:
     source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh"
@@ -3891,7 +3887,6 @@ def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> No
     assert completion_check < exact_count < runner_marker
     assert completion_check < final_line < runner_marker
     assert "TLAPM did not report exact strict completion" in source
-
 
 def test_tla2tools_and_replay_share_the_same_pin() -> None:
     scripts = [
@@ -3910,7 +3905,6 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
     # `-noGenerateSpecTE` was introduced after the immutable v1.7.4 release.
     # Keep both TLC entry points executable with the toolchain pinned above.
     assert all("-noGenerateSpecTE" not in source for source in sources[1:])
-
 
 def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
     scripts = [
@@ -3938,11 +3932,18 @@ def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
     assert all('readonly TLC_MAX_SET_SIZE="1000000"' in source for source in sources)
     assert all('-maxSetSize "$TLC_MAX_SET_SIZE"' in source for source in sources)
 
-
 def test_tlapm_corridor_uses_one_pinned_identity() -> None:
     commit = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
     exact_identity_paths = (
         ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tlapm.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "build_sumeragi_v2_tlapm_from_source.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "sumeragi_v2_tlapm_source_build_lock.json",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh",
@@ -3961,7 +3962,6 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
         ROOT_DIR / "formal" / "sumeragi_v2" / "PROOF.md"
     ).read_text(encoding="utf-8")
     assert commit[:7] in proof_source
-
 
 def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None:
     source = (
@@ -4414,10 +4414,584 @@ def test_installers_use_fixed_urls_and_literal_checksums() -> None:
         ),
         (
             "482297997",
-            "3ca4c39613e58b90e46a385ee61e2c7f17375c19855ea1a35e056d6eb902071c",
+            "3ca4c39613e58b90e46a385ee61e2c7f17375c19854ea1a35e056d6eb902071c",
         ),
     ):
         assert f'RELEASE_ASSET_ID="{asset_id}"' in tlapm_source
         assert f'ARCHIVE_SHA256="{digest}"' in tlapm_source
     assert "GitHub Actions run 29682668751" in tlapm_source
     assert "TLAPM_ARCHIVE_PATH" in tlapm_source
+
+
+def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
+    tmp_path: Path,
+) -> None:
+    tmp_path = tmp_path.resolve(strict=True)
+    formal_scripts = ROOT_DIR / "scripts" / "formal"
+    lock_path = formal_scripts / "sumeragi_v2_tlapm_source_build_lock.json"
+    helper = formal_scripts / "sumeragi_v2_tlapm_source_lock.py"
+
+    def invoke(lock_file: Path, platform: str, *arguments: object):
+        return subprocess.run(
+            [sys.executable, "-I", "-S", str(helper), "--lock", str(lock_file),
+             "--platform", platform, *(str(argument) for argument in arguments)],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+
+    assert lock["schema_version"] == 1
+    assert lock["source"] == {
+        "commit": "3ab43c7ff31db4ced850619d4746fa4c841a7681",
+        "repository": "https://github.com/tlaplus/tlapm.git",
+        "source_date_epoch": 1784455405,
+        "tree": "bf173dd38408314652d436f990b2b9edadaaabe9",
+        "version": "1.6.0-pre",
+    }
+    assert lock["opam"] == {
+        "repository": {
+            "commit": "ba7c59c5aafbef7f549ce2ca2e2b864cbfa0a5f7",
+            "repository": "https://github.com/ocaml/opam-repository.git",
+            "tree": "afd25878962ffa2ab4788fe71a0d9c726bb02342",
+        },
+        "version": "2.5.2",
+    }
+    compiler_packages = lock["compiler_packages"]
+    build_packages = lock["build_packages"]
+    assert len(compiler_packages) == 9
+    assert len(build_packages) == 122
+    assert len(
+        {
+            package["name"]
+            for package in compiler_packages + build_packages
+        }
+    ) == 131
+    assert {
+        package["name"]: package["version"]
+        for package in compiler_packages
+    }["ocaml-base-compiler"] == "5.1.0"
+    assert {
+        package["name"]: package["version"] for package in build_packages
+    }["dune"] == "3.24.0"
+
+    assert set(lock["platforms"]) == {"arm64-darwin", "x86_64-linux-gnu"}
+    expected_platform_pins = {
+        "arm64-darwin": {
+            "additional": {},
+            "count": 131,
+            "opam": "407e53416cfb49b41ce80e6d3c67a3df08df7f5028f407311f457f4e2a19004b",
+            "package_set": "2f61af5fd7ef689457f622dfb1b31d9169fcbeacb6d5aed0859b8ca73240f34c",
+            "z3": "5fdbec33ca4a2ef8169553b6a4f41d9c05d5e9d5ef56c400c28dafb007f0e768",
+            "isabelle": "ea5754c228857f5d9d3ae254ec9814797f2453ea290df20b2f6dcb2ef0e2e7f8",
+            "z3_member": "0207d927019e8d90c28acd18c4596796baef36a87583e6e853c81487a9cd0c27",
+        },
+        "x86_64-linux-gnu": {
+            "additional": {"eio_linux": "1.2", "uring": "2.7.0"},
+            "count": 133,
+            "opam": "edfca2630c373b44b7ee1c2f81cd8dcf67468d0db57d6c02158de553ac63dbd4",
+            "package_set": "9e706a61b06be508588ac8be7530ee3b2aea94a5c1ee22204bada0e887e51a95",
+            "z3": "42f1644d79596718bf56944365900df8ef261c3150dddbb7687b5d3797d55c2d",
+            "isabelle": "3d1d66de371823fe31aa8ae66638f73575bac244f00b31aee1dcb62f38147c56",
+            "z3_member": "4321b0c0db1574a1e90881d9e097f12b8753d0c3e78b21a0155c77005a631436",
+        },
+    }
+    for platform, expected in expected_platform_pins.items():
+        platform_lock = lock["platforms"][platform]
+        additional = {
+            package["name"]: package["version"]
+            for package in platform_lock["additional_packages"]
+        }
+        assert additional == expected["additional"]
+        assert len(compiler_packages) + len(build_packages) + len(additional) == (
+            expected["count"]
+        )
+        assert platform_lock["package_set_sha256"] == expected["package_set"]
+        assert platform_lock["opam_binary"]["sha256"] == expected["opam"]
+        backends = {
+            backend["name"]: backend
+            for backend in platform_lock["backend_downloads"]
+        }
+        assert list(backends) == [
+            "community-modules",
+            "isabelle",
+            "ls4",
+            "z3",
+        ]
+        community = backends["community-modules"]
+        assert community["download_url"] == (
+            "https://github.com/tlaplus/CommunityModules/releases/download/"
+            "202607181436/CommunityModules.jar"
+        )
+        assert community["requested_url"] == (
+            "https://github.com/tlaplus/CommunityModules/releases/latest/"
+            "download/CommunityModules.jar"
+        )
+        assert community["sha256"] == (
+            "c90a5e35c8fbfb656788332c3c532a13d7cef3b71ad9e699afaeb8873bd1ecf6"
+        )
+        assert community["progress_dot_giga"] is False
+        assert backends["ls4"]["sha256"] == (
+            "2d3fff1637497971cf00287df1a6cbb572769a61d10a86e0d11d34d39a017b1d"
+        )
+        assert backends["z3"]["sha256"] == expected["z3"]
+        assert backends["z3"]["locked_output_sha256"] == expected["z3_member"]
+        assert backends["z3"]["locked_output_architecture"] == "x86_64"
+        assert backends["isabelle"]["sha256"] == expected["isabelle"]
+        assert backends["isabelle"]["directory_prefix"] == "_build_cache"
+
+        validation = invoke(lock_path, platform, "validate")
+        assert validation.returncode == 0, validation.stderr
+
+    changed_package_lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    changed_package_lock["build_packages"][20]["version"] = "3.23.0"
+    changed_package_lock_path = tmp_path / "changed-package-lock.json"
+    changed_package_lock_path.write_text(
+        json.dumps(changed_package_lock, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    changed_package = invoke(changed_package_lock_path, "arm64-darwin", "validate")
+    assert changed_package.returncode != 0
+    assert "package_set_sha256 does not match" in changed_package.stderr
+
+    fixture_bytes = b"bounded source-build fixture\n"
+    fixture_sha256 = hashlib.sha256(fixture_bytes).hexdigest()
+    fixture_lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    for platform_lock in fixture_lock["platforms"].values():
+        for backend in platform_lock["backend_downloads"]:
+            if backend["name"] in {"community-modules", "z3"}:
+                backend["locked_output_sha256"] = fixture_sha256
+    fixture_lock_path = tmp_path / "fixture-lock.json"
+    fixture_lock_path.write_text(
+        json.dumps(fixture_lock, indent=2) + "\n", encoding="utf-8"
+    )
+
+    build_tree = tmp_path / "build-tree"
+    distribution_tree = tmp_path / "distribution"
+
+    def materialize(root: Path, relative: str, *, executable: bool = False) -> Path:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(fixture_bytes)
+        if executable:
+            path.chmod(0o500)
+        return path
+
+    package_root = distribution_tree / "tlapm"
+    for backend in fixture_lock["platforms"]["arm64-darwin"]["backend_downloads"]:
+        if backend["derivation_kind"] == "file":
+            executable = backend["name"] in {"ls4", "z3"}
+            materialize(package_root, backend["package_path"], executable=executable)
+            materialize(build_tree, backend["build_path"], executable=executable)
+        else:
+            for root, relative in ((package_root, backend["package_path"]), (build_tree, backend["build_path"])):
+                materialize(root, f"{relative}/bin/isabelle", executable=True)
+    for path in (package_root / "lib/tlapm/backends/Isabelle.exec-files", build_tree / "_build/default/deps/isabelle/Isabelle.exec-files"): path.write_text("Isabelle/bin/isabelle\n", encoding="utf-8")
+    for build_relative, package_relative in (
+        ("_build/default/translate/main.exe", "lib/tlapm/backends/bin/ptl_to_trp"),
+        ("_build/default/deps/zenon/zenon", "lib/tlapm/backends/bin/zenon"),
+    ):
+        materialize(package_root, package_relative, executable=True)
+        materialize(build_tree, build_relative, executable=True)
+
+    archive = tmp_path / "source-built.tar.gz"; archive.write_bytes(fixture_bytes)
+    attestation = tmp_path / "attestation.json"
+    locked_wget = formal_scripts / "sumeragi_v2_tlapm_locked_wget.sh"
+    source_builder = formal_scripts / "build_sumeragi_v2_tlapm_from_source.sh"
+    common = (fixture_lock_path, "arm64-darwin")
+    written = invoke(*common, "write-attestation", "--archive", archive,
+        "--build-tree", build_tree, "--distribution-tree", distribution_tree,
+        "--locked-wget", locked_wget, "--source-builder", source_builder, "--output", attestation)
+    assert written.returncode == 0, written.stderr
+    verify_attestation = ("verify-attestation", "--archive", archive,
+        "--distribution-tree", distribution_tree, "--locked-wget", locked_wget,
+        "--source-builder", source_builder, "--attestation", attestation)
+    verified = invoke(*common, *verify_attestation)
+    assert verified.returncode == 0, verified.stderr
+
+    install = tmp_path / "install"
+    install.mkdir(mode=0o700)
+    shutil.copytree(distribution_tree / "tlapm", install / "tlapm")
+    shutil.copyfile(fixture_lock_path, install / "source-build-lock.json")
+    shutil.copyfile(attestation, install / "source-build-attestation.json")
+    archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (install / "archive.sha256").write_text(archive_sha256 + "\n", encoding="utf-8")
+    (install / "archive.origin").write_text("immutable-source-build\n", encoding="utf-8")
+    state = install / "install-state.json"
+    state_written = invoke(*common, "write-install-state", "--directory", install,
+        "--origin", "immutable-source-build", "--archive-sha256", archive_sha256,
+        "--attestation", install / "source-build-attestation.json",
+        "--locked-wget", locked_wget, "--source-builder", source_builder, "--output", state)
+    assert state_written.returncode == 0, state_written.stderr
+    verify_install_command = [
+        "verify-install",
+        "--directory", install, "--allowed-origin", "immutable-source-build",
+        "--prebuilt-sha256", "0" * 64, "--locked-wget", locked_wget, "--source-builder", source_builder,
+    ]
+    install_verified = invoke(*common, *verify_install_command)
+    assert install_verified.returncode == 0, install_verified.stderr
+
+    installed_community = install / "tlapm/lib/tlapm/stdlib/CommunityModules.jar"
+    installed_community.write_bytes(b"forged cache closure\n")
+    forged_install = invoke(*common, *verify_install_command)
+    assert forged_install.returncode != 0
+    assert "locked archive member" in forged_install.stderr
+    installed_community.write_bytes(fixture_bytes)
+
+    mutated = json.loads(attestation.read_text(encoding="utf-8"))
+    mutated["source_tree"] = "0" * 40
+    attestation.chmod(0o600)
+    attestation.write_text(
+        json.dumps(mutated, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rejected = invoke(*common, *verify_attestation)
+    assert rejected.returncode != 0
+    assert "does not match the lock and archive" in rejected.stderr
+
+
+def test_tlapm_locked_wget_is_exact_consuming_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    tmp_path = tmp_path.resolve(strict=True)
+    tmp_path.chmod(0o700)
+    formal_scripts = ROOT_DIR / "scripts" / "formal"
+    lock_path = formal_scripts / "sumeragi_v2_tlapm_source_build_lock.json"
+    helper = formal_scripts / "sumeragi_v2_tlapm_source_lock.py"
+    locked_wget = formal_scripts / "sumeragi_v2_tlapm_locked_wget.sh"
+    fixture = b"locked backend fixture\n"
+    fixture_digest = hashlib.sha256(fixture).hexdigest()
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    backends = lock["platforms"]["arm64-darwin"]["backend_downloads"]
+    for backend in backends:
+        backend["sha256"] = fixture_digest
+        if backend["name"] in {"community-modules", "z3"}:
+            backend["locked_output_sha256"] = fixture_digest
+    fixture_lock = tmp_path / "fixture-lock.json"
+    fixture_lock.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+
+    cache = tmp_path / "cache"
+    receipts = tmp_path / "receipts"
+    output_root = tmp_path / "output"
+    for directory in (cache, receipts, output_root):
+        directory.mkdir(mode=0o700)
+    base = [sys.executable, "-I", "-S", str(helper), "--lock", str(fixture_lock),
+        "--platform", "arm64-darwin", "serve-wget", "--cache-dir", str(cache),
+        "--output-root", str(output_root), "--receipt-dir", str(receipts), "--"]
+    def run(command: list[str], cwd: Path):
+        return subprocess.run(command, cwd=cwd, check=False, capture_output=True,
+            text=True, timeout=10)
+
+    reviewed: dict[str, tuple[list[str], Path]] = {}
+    for backend in backends:
+        cache_file = cache / backend["destination"]
+        cache_file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        cache_file.write_bytes(fixture)
+        cache_file.chmod(0o400)
+        working = output_root / "_build/.sandbox/reviewed" / backend["working_suffix"]
+        working.mkdir(parents=True, exist_ok=True)
+        arguments = ["--progress=dot:giga"] if backend["progress_dot_giga"] else []
+        if backend["directory_prefix"] is not None:
+            prefix = output_root / backend["directory_prefix"]
+            prefix.mkdir(mode=0o700)
+            arguments.append(f"--directory-prefix={prefix}")
+        command = [*base, *arguments, backend["requested_url"]]
+        accepted = run(command, working)
+        assert accepted.returncode == 0, accepted.stderr
+        assert (receipts / f"{backend['name']}.json").is_file()
+        destination_parent = prefix if backend["directory_prefix"] is not None else working
+        assert (destination_parent / Path(backend["destination"]).name).read_bytes() == fixture
+        reviewed[backend["name"]] = (command, working)
+
+    command, working = reviewed["community-modules"]
+    duplicate = run(command, working)
+    assert duplicate.returncode != 0
+    assert "destination already exists" in duplicate.stderr
+
+    wrong_url = run([*command[:-1], "https://example.invalid/CommunityModules.jar"], working)
+    assert wrong_url.returncode != 0
+    assert "rejects unreviewed URL" in wrong_url.stderr
+
+    wrong_working = output_root / "unreviewed"
+    wrong_working.mkdir()
+    wrong_cwd = run(command, wrong_working)
+    assert wrong_cwd.returncode != 0
+    assert "rejects the working directory" in wrong_cwd.stderr
+
+    snapshot = tmp_path / "snapshot"
+    snapshotted = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(helper),
+            "--lock",
+            str(lock_path),
+            "--platform",
+            "arm64-darwin",
+            "snapshot-corridor",
+            "--helper",
+            str(helper),
+            "--locked-wget",
+            str(locked_wget),
+            "--source-builder", str(locked_wget.with_name("build_sumeragi_v2_tlapm_from_source.sh")),
+            "--output-dir",
+            str(snapshot),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert snapshotted.returncode == 0, snapshotted.stderr
+    assert (snapshot / "source-build-lock.json").read_bytes() == lock_path.read_bytes()
+    assert (snapshot / "source-lock.py").read_bytes() == helper.read_bytes()
+    assert (snapshot / "locked-wget.sh").read_bytes() == locked_wget.read_bytes()
+    assert (snapshot / "source-builder.sh").read_bytes() == locked_wget.with_name("build_sumeragi_v2_tlapm_from_source.sh").read_bytes()
+
+    public_output = tmp_path / "public-output"
+    public_output.mkdir(mode=0o755)
+    host_platform = "arm64-darwin" if sys.platform == "darwin" else "x86_64-linux-gnu"
+    frozen_preflight = subprocess.run(["/bin/bash", str(snapshot / "source-builder.sh"),
+        host_platform, str(public_output / "bundle"), str(snapshot), str(ROOT_DIR)],
+        check=False, capture_output=True, text=True, timeout=10)
+    assert frozen_preflight.returncode != 0
+    assert "owner-private mode-0700 directory" in frozen_preflight.stderr
+
+
+def test_tlapm_source_builder_checks_every_locked_boundary() -> None:
+    formal_scripts = ROOT_DIR / "scripts" / "formal"
+    builder = (formal_scripts / "build_sumeragi_v2_tlapm_from_source.sh").read_text(encoding="utf-8")
+    helper = (formal_scripts / "sumeragi_v2_tlapm_source_lock.py").read_text(encoding="utf-8")
+    normalized = " ".join(builder.replace("\\\n", "").split())
+
+    assert (
+        'readonly EXPECTED_TLAPM_COMMIT="'
+        '3ab43c7ff31db4ced850619d4746fa4c841a7681"'
+    ) in builder
+    assert (
+        'readonly EXPECTED_OCAML_COMPILER_ATOM="'
+        'ocaml-base-compiler.5.1.0"'
+    ) in builder
+    assert 'git -C "$destination" rev-parse --verify HEAD' in builder
+    assert "rev-parse --verify 'HEAD^{tree}'" in builder
+    assert (
+        '[[ "$actual_commit" == "$commit" && "$actual_tree" == "$tree" ]]'
+        in builder
+    )
+    assert (
+        'git -C "$destination" status --porcelain=v1 --untracked-files=no'
+        in builder
+    )
+    assert "opam-deps" not in builder
+    assert (
+        'opam_command install --switch "$OPAM_SWITCH" --yes '
+        '"${build_packages[@]}" < /dev/null'
+    ) in normalized
+    assert builder.count("verify_package_set") >= 4
+    assert 'if ! diff -u "$sorted_expected" "$actual_atoms"; then' in builder
+    assert builder.count('verify_exact_tree "TLAPM source pin"') >= 2 and builder.count("verify_build_source_checkout") >= 4
+    assert builder.count('verify_exact_tree "opam repository"') >= 2
+    assert 'verify_checked_file "$backend_name" "$backend_sha256"' in normalized
+    assert 'make --jobs=1 -C "$SOURCE_DIR" release' in normalized
+    assert 'checkout_exact_tree "TLAPM build source" "$SOURCE_PIN_DIR"' in normalized and 'git -C "$SOURCE_PIN_DIR" archive' not in normalized
+    assert 'readonly BACKEND_CACHE="${tmp_dir}/backend-cache"' in builder
+    assert 'cp "$LOCKED_WGET" "${CONTROLLED_BIN}/wget"' in builder
+    assert "verify-wget-receipts" in builder
+    assert "locked Z3 4.8.9 runtime cannot execute" in builder
+    assert '"$ENV_BIN" -i' in builder
+    assert "OPAMREQUIRECHECKSUMS=true" in builder
+    assert '"$OPAM_BINARY" "$@"' in builder
+    assert "--require-checksums" not in builder
+    opam_subcommands = re.findall(r"\bopam_command\s+([A-Za-z0-9_-]+)", builder)
+    assert opam_subcommands == ["list", "init", "switch", "var", "install", "install", "exec"]
+    assert (
+        'opam_command init --bare --no-setup --disable-sandboxing locked '
+        '"$OPAM_REPOSITORY_DIR"'
+    ) in normalized
+    for scrubbed in (
+        "-u MAKEFLAGS",
+        "-u MFLAGS",
+        "-u GNUMAKEFLAGS",
+        "-u DUNE_CACHE_ROOT",
+        "-u OPAMFETCH",
+        "-u OPAMNOCHECKSUMS",
+        "DUNE_CACHE=disabled",
+    ):
+        assert scrubbed in builder
+    assert "snapshot-corridor" in builder
+    assert "changed during the long build" in builder
+    assert "publish-output-bundle" in builder
+    assert "renameatx_np" in helper and "renameat2" in helper and "dir_fd=" in helper
+    assert 'rm -f -- "$OUTPUT_ARCHIVE"' not in builder
+    assert 'rm -f -- "$OUTPUT_ATTESTATION"' not in builder
+    assert "write-attestation" in builder
+    assert "verify-attestation" in builder
+    assert "byte_reproducibility_claimed" not in builder
+    clean_body = " ".join(builder[builder.index("clean_command() {"):builder.index("\n}\n\nfor required_command", builder.index("clean_command() {")) + 2].replace("\\\n", "").split())
+    assert clean_body == 'clean_command() { "$ENV_BIN" -i HOME="$BUILD_HOME" PATH="$SANITIZED_HOST_PATH" TMPDIR="$BUILD_TMP" XDG_CACHE_HOME="$BUILD_XDG_CACHE" XDG_CONFIG_HOME="$BUILD_XDG_CONFIG" LANG=C LC_ALL=C TZ=UTC GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1 "$@" }'
+    darwin_guard = '\n  [[ "$PLATFORM" == "arm64-darwin" ]] || return 0'
+    assert all(f"{name}() {{{darwin_guard}" in builder for name in ("prepare_darwin_conf_boundary", "verify_darwin_depext_capabilities"))
+    darwin_probes = ('clean_command sh -c \'command -v "$1" >/dev/null 2>&1\' sh pkg-config', "conf-*) darwin_conf_packages", "${#darwin_conf_packages[@]} -eq 3", "clean_command g++ -std=c++17 -Wall -Wextra -Werror -pedantic", "static_assert(__cplusplus == 201703L", "std::vector<int>", "std::accumulate(", 'clean_command "$DARWIN_CXX_PREFLIGHT"', "clean_command pkg-config --exists zlib", "strcmp(ZLIB_VERSION, zlibVersion())", "compress2(", "clean_command cc -std=c11 -Wall -Wextra -Werror -pedantic", '-x c - -lz -o "$DARWIN_ZLIB_PREFLIGHT"', 'clean_command "$DARWIN_ZLIB_PREFLIGHT"')
+    assert all(fragment in builder for fragment in darwin_probes)
+    assert re.findall(r'darwin_conf_packages\[[0-9]+\]}" == "([^"]+)"', builder) == ["conf-g++.1.0", "conf-pkg-config.5", "conf-zlib.1"]
+    assumed_install = 'opam_command install --assume-depexts --switch "$OPAM_SWITCH" --yes "${darwin_conf_packages[@]}" < /dev/null'
+    complete_install = 'opam_command install --switch "$OPAM_SWITCH" --yes "${build_packages[@]}" < /dev/null'
+    assert normalized.count(assumed_install) == normalized.count(complete_install) == builder.count("--assume-depexts") == 1
+    preflight_prefix = builder[:builder.index("\nverify_darwin_depext_capabilities\n")]
+    darwin_helper_source = builder[builder.index("prepare_darwin_conf_boundary() {"):builder.index("\ncheckout_exact_tree() {")]
+    assert re.search(r"(?m)^(?:(?:clean_command[ \t]+)?curl\b|(?:clean_command[ \t]+)?git\b[^\n]*\bfetch\b|(?:checkout_exact_tree|download_checked|opam_command)[ \t]+)", preflight_prefix) is None and re.search(r"\b(?:curl|checkout_exact_tree|download_checked|opam_command)\b|\bgit\b[^\n]*\bfetch\b", darwin_helper_source) is None and hashlib.sha256(darwin_helper_source.encode()).hexdigest() == "5674f471244306d795323a6b5497966a596b0dcebfaa368365238c1a93b6da77"
+    depext_order = ('prepare_darwin_conf_boundary readonly -a darwin_conf_packages verify_darwin_depext_capabilities echo "[tlapm] fetching immutable source commit', 'if [[ "$PLATFORM" == "arm64-darwin" ]]; then echo "[tlapm] validating the exact Darwin host capability packages" ' + assumed_install, 'verify_package_set darwin-conf "$DARWIN_INTERMEDIATE_ATOMS"', complete_install, 'verify_package_set complete "$EXPECTED_ATOMS"')
+    assert [normalized.index(fragment) for fragment in depext_order] == sorted(normalized.index(fragment) for fragment in depext_order)
+    assert 'clean_command cp "$COMPILER_ATOMS" "$DARWIN_INTERMEDIATE_ATOMS"' in builder and 'printf \'%s\\n\' "${darwin_conf_packages[@]}" >> "$DARWIN_INTERMEDIATE_ATOMS"' in normalized
+    assert all(forbidden not in builder for forbidden in ("OPAMASSUMEDEPEXTS", "OPAMDEPEXTS", "opam option depext=false")) and re.search(r"\b(?:brew|sudo)\b", builder) is None
+
+
+def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(
+    tmp_path: Path,
+) -> None:
+    tmp_path = tmp_path.resolve(strict=True)
+    tmp_path.chmod(0o700)
+    formal_scripts = ROOT_DIR / "scripts" / "formal"
+    lock = formal_scripts / "sumeragi_v2_tlapm_source_build_lock.json"
+    helper = formal_scripts / "sumeragi_v2_tlapm_source_lock.py"
+    common = [
+        sys.executable,
+        "-I",
+        "-S",
+        str(helper),
+        "--lock",
+        str(lock),
+        "--platform",
+        "arm64-darwin",
+    ]
+    archive = tmp_path / "archive.tar.gz"
+    attestation = tmp_path / "attestation.json"
+    archive.write_bytes(b"archive winner\n")
+    attestation.write_bytes(b"attestation winner\n")
+    bundle = tmp_path / "bundle"
+    publish_bundle = [
+        *common,
+        "publish-output-bundle",
+        "--archive",
+        str(archive),
+        "--attestation",
+        str(attestation),
+        "--output-bundle",
+        str(bundle),
+    ]
+    published = subprocess.run(
+        publish_bundle,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert published.returncode == 0, published.stderr
+    winner = (bundle / "archive.tar.gz").read_bytes()
+    raced = subprocess.run(
+        publish_bundle,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert raced.returncode == 3
+    assert (bundle / "archive.tar.gz").read_bytes() == winner
+
+    failed_bundle = tmp_path / "failed-bundle"
+    failed_command = [str(tmp_path / "missing-attestation") if argument == str(attestation)
+        else str(failed_bundle) if argument == str(bundle) else argument for argument in publish_bundle]
+    failed = subprocess.run(failed_command, check=False, capture_output=True, text=True, timeout=10)
+    assert failed.returncode != 0 and not failed_bundle.exists()
+    assert not tuple(tmp_path.glob(".failed-bundle.*.stage"))
+
+    install_stage = tmp_path / "install-stage"
+    install_stage.mkdir(mode=0o700)
+    (install_stage / "winner").write_bytes(b"first\n")
+    install = tmp_path / "installed"
+    publish_install = [
+        *common,
+        "publish-install",
+        "--staged",
+        str(install_stage),
+        "--destination",
+        str(install),
+    ]
+    first_install = subprocess.run(
+        publish_install,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert first_install.returncode == 0, first_install.stderr
+    second_stage = tmp_path / "second-stage"
+    second_stage.mkdir(mode=0o700)
+    (second_stage / "winner").write_bytes(b"second\n")
+    second_install = subprocess.run(
+        [
+            *common,
+            "publish-install",
+            "--staged",
+            str(second_stage),
+            "--destination",
+            str(install),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert second_install.returncode == 3
+    assert (install / "winner").read_bytes() == b"first\n"
+
+
+def test_tlapm_archive_precedence_only_falls_back_on_asset_unavailability() -> None:
+    installer = (
+        ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tlapm.sh"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(installer.replace("\\\n", "").split())
+
+    caller_index = normalized.index(
+        'if [[ -n "${TLAPM_ARCHIVE_PATH:-}" ]]; then'
+    )
+    asset_index = normalized.index("/usr/bin/curl --proto '=https'")
+    builder_index = normalized.index(
+        '/bin/bash "$FROZEN_SOURCE_BUILDER" "$PLATFORM" "$SOURCE_BUILD_BUNDLE"'
+    )
+    checksum_index = normalized.index(
+        'if [[ "$archive_origin" != immutable-source-build'
+    )
+    extraction_index = normalized.index('tar -xzf "$archive_path"')
+    assert caller_index < asset_index < builder_index < checksum_index < extraction_index
+
+    caller_branch = normalized[caller_index:asset_index]
+    assert "SOURCE_BUILD_SCRIPT" not in caller_branch
+    assert 'archive_origin="caller-archive"' in caller_branch
+    assert 'archive_origin="github-release-asset"' in normalized
+    assert 'archive_origin="immutable-source-build"' in normalized
+    assert normalized.count("verify-attestation") == 1
+    assert "classify-release-fetch" in normalized
+    assert "snapshot-corridor" in installer
+    assert "verify-install" in installer
+    assert "write-install-state" in installer
+    assert "publish-install" in installer
+    assert 'rm -rf -- "$INSTALL_DIR"' not in installer
+    assert 'rm -f -- "$OUTPUT_ARCHIVE"' not in installer
+    assert "refusing stale, partial, or unauthenticated TLAPM cache" in installer
+    assert (
+        'printf \'%s\\n\' "$actual_sha256" > "${INSTALL_STAGE}/archive.sha256"'
+        in normalized
+    )
+
+    helper = ROOT_DIR / "scripts/formal/sumeragi_v2_tlapm_source_lock.py"
+    lock = ROOT_DIR / "scripts/formal/sumeragi_v2_tlapm_source_build_lock.json"
+    for curl_status, http_status, expected in ((0, "200", "github-release-asset"),
+        (22, "404", "immutable-source-build"), (22, "410", "immutable-source-build"),
+        (6, "000", None), (23, "404", None), (22, "403", None),
+        (22, "429", None), (22, "500", None)):
+        result = subprocess.run([sys.executable, "-I", "-S", str(helper), "--lock",
+            str(lock), "--platform", "arm64-darwin", "classify-release-fetch",
+            "--curl-status", str(curl_status), "--http-status", http_status],
+            check=False, capture_output=True, text=True, timeout=10)
+        assert (result.returncode == 0 and result.stdout.strip() == expected) if expected else result.returncode != 0

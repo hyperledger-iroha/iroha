@@ -36,7 +36,7 @@ use std::{
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Optional profile: picks Iroha3 defaults for dev/taira/nexus (sets chain id, DA/RBC, collector knobs).
+    /// Optional profile: picks Iroha3 chain, cadence, consensus, and VRF defaults for dev/taira/nexus.
     #[clap(long, value_enum, value_name = "PROFILE")]
     profile: Option<GenesisProfile>,
     /// Optional explicit chain id (overrides profile default).

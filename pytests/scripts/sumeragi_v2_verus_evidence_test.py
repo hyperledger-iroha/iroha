@@ -386,6 +386,31 @@ def test_repository_verus_evidence_binds_lexically_included_proof_tail() -> None
     )
 
 
+def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
+    """Extracted adapter and runtime implementations remain independently sealed."""
+
+    module = load_module()
+    providers = {
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_rebind_impl.rs",
+    }
+    assert providers <= set(module.REQUIRED_SOURCE_PATHS)
+    adapter = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2.rs").read_text(
+        encoding="utf-8"
+    )
+    runtime = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2_runtime.rs").read_text(
+        encoding="utf-8"
+    )
+    assert adapter.count(
+        'include!("v2_authenticated_recovered_adapter_startup_impl.rs");'
+    ) == 1
+    assert runtime.count('include!("v2_runtime_effect_ownership_core_impl.rs");') == 1
+    assert runtime.count(
+        'include!("v2_runtime_effect_ownership_rebind_impl.rs");'
+    ) == 1
+
+
 def test_verus_invocation_without_no_cheating_is_rejected(tmp_path: Path) -> None:
     """Deleting the root no-cheating flag invalidates the source contract."""
 

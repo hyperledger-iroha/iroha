@@ -15,13 +15,19 @@ fn run_program(source: &str) -> IVM {
 }
 #[test]
 fn mint_request_shape_roundtrips_all_eleven_fields() {
-    let source = include_str!("../fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/001.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let source =
+        include_str!("../fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/001.ko")
+            .strip_suffix('\n')
+            .expect("fixture sentinel newline");
     let vm = run_program(source);
     assert_eq!(vm.register(10), 1);
 }
 #[test]
 fn mixed_pointer_and_scalar_literal_fields_keep_their_exact_types() {
-    let source = include_str!("../fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/002.ko").strip_suffix('\n').expect("fixture sentinel newline");
+    let source =
+        include_str!("../fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/002.ko")
+            .strip_suffix('\n')
+            .expect("fixture sentinel newline");
     let vm = run_program(source);
     assert_eq!(vm.register(10), 1);
 }

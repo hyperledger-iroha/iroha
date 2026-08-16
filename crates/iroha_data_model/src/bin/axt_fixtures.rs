@@ -80,7 +80,7 @@ fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         effect_binding: None,
     }
 }
-fn encoded_account(seed: u8) -> String {
+fn seeded_account(seed: u8) -> String {
     let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
     iroha_data_model::account::AccountId::new(key_pair.public_key().clone()).to_string()
 }
@@ -290,9 +290,9 @@ fn build_envelope_fixture(
             proof: proof_seven.clone(),
         },
     ];
-    let alice = encoded_account(0xA1);
-    let bob = encoded_account(0xB2);
-    let carol = encoded_account(0xC3);
+    let alice = seeded_account(0xA1);
+    let bob = seeded_account(0xB2);
+    let carol = seeded_account(0xC3);
     let happy_handles = vec![
         transfer_handle_fixture(binding, manifest_root_one, proof_one, alice, bob.clone()),
         lock_handle_fixture(binding, manifest_root_seven, proof_seven, bob, carol),
@@ -373,4 +373,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_fixture(Path::new(ENVELOPE_FIXTURE_PATH), &envelope, check_only)?;
     write_fixture(Path::new(POSEIDON_FIXTURE_PATH), &poseidon, check_only)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seeded_account;
+    use iroha_data_model::account::AccountId;
+
+    #[test]
+    fn seeded_fixture_accounts_are_valid_and_distinct() {
+        let alice = seeded_account(0xA1);
+        let bob = seeded_account(0xB2);
+
+        assert_ne!(alice, bob);
+        AccountId::parse_encoded(&alice).expect("Alice account parses");
+        AccountId::parse_encoded(&bob).expect("Bob account parses");
+    }
 }

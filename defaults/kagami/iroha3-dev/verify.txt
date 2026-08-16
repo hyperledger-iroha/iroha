@@ -3,5 +3,5 @@ chain_id: iroha3-dev.local
 block_cadence_ms: 100
 vrf_seed: 4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9
 peers_with_pop: 4
-consensus_fingerprint: 0xef42e51c74559e975b2cff3e91fd361e477acf2ab6bbf1f17bfb87d4f8341cc2
+consensus_fingerprint: 0xa9a2252abd174b9c9cc2ef03da5cd42dd9262661cff76de8f7525c3bc3cee582
 kagami_version: 2.0.0-rc.2.0

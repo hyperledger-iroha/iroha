@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { ToriiClient as SourceToriiClient } from "../src/toriiClient.js";
 import {
-  ToriiClient as SourceToriiClient,
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
-} from "../src/toriiClient.js";
+} from "../src/sumeragiTyped.js";
 import {
   verifyBlockMerkleProof as sourceVerifyBlockMerkleProof,
 } from "../src/norito.js";
@@ -18,8 +18,10 @@ const distToriiClientUrl = distToriiClientPath
   : new URL("../dist/toriiClient.js", import.meta.url);
 const {
   ToriiClient: DistToriiClient,
-  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
 } = await import(distToriiClientUrl);
+const {
+  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+} = await import(new URL("./sumeragiTyped.js", distToriiClientUrl));
 const {
   verifyBlockMerkleProof: distVerifyBlockMerkleProof,
 } = await import(new URL("./norito.js", distToriiClientUrl));
@@ -139,6 +141,7 @@ function validateApplicationEvidence(document) {
   const execution = evidence.execution_commitment;
   const artifacts = evidence.manifest_artifacts;
   assert.equal(execution.native_amx_application_manifest_version, 1);
+  assert.equal(execution.lane_finality_manifest, null);
   assert.equal(
     typeof execution.merge_carrier,
     "object",

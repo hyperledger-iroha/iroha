@@ -19,14 +19,25 @@ python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
 REVIEWED_SOURCE_CLOSURE_SHA256=<reviewed-descriptor-sha256>
 python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
+  --cargo /absolute/private/reviewed-toolchain/bin/cargo \
+  --cargo-sha256 <reviewed-cargo-binary-sha256> \
+  --rustc /absolute/private/reviewed-toolchain/bin/rustc \
+  --rustc-sha256 <reviewed-rustc-binary-sha256> \
+  --cargo-home /absolute/private/cache-only-cargo-home \
   --target-dir /absolute/private/new-kagemusha-cargo-target \
   --reviewed-source-closure /absolute/private/reviewed-source-closure-v1.json \
   --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" \
+  --authenticated-source-seal-projection \
+    /absolute/private/authenticated-source-seal-projection-v1.json \
+  --authenticated-source-seal-projection-sha256 \
+    <reviewed-authenticated-source-seal-projection-sha256> \
   > /absolute/private/sealed-build-report.json
 ```
 
-The seal requires an entirely clean checkout, including untracked files. It
-hashes the canonical Git-index path, mode, and exact regular-file bytes or
+The seal requires an entirely clean checkout, including zero untracked or
+ignored files. The root `Cargo.lock` must be exactly one tracked mode-`100644`
+index entry and is redundantly bound by the legacy V1 lock-digest fields. The
+seal hashes the canonical Git-index path, mode, and exact regular-file bytes or
 symlink-target bytes for the complete source tree. Candidate generation,
 candidate validation, Android staging, and the candidate-only native build all
 recompute this same seal. Commit-signature verification is the explicit Git
@@ -35,8 +46,10 @@ step above; require the helper report's `source_commit` to equal the verified
 during, and after a locked release build; sanitizes ambient compiler controls;
 requires at least 24 GiB of installed physical memory; and prints canonical
 JSON containing the exact `binary_path`, binary digest, source commit, and
-source-tree digest. The memory check is build admission, not an OS-hard compiler
-limit. Pass those returned identities and that exact prebuilt binary through
+source-tree digest, plus `reviewed_cargo_binary_sha256` and
+`reviewed_rustc_binary_sha256` for the actual admitted tool files. The memory
+check is build admission, not an OS-hard compiler limit. Pass those returned
+identities and that exact prebuilt binary through
 `scripts/run_kagemusha_v4_generation.py` with the `generate-candidate`
 subcommand.
 
@@ -175,7 +188,13 @@ validator/toolchain identities. The qualified-candidate identity is SHA-256 of
 the ASCII domain `iroha:kagemusha:recursive-spend-qualified-candidate:v4`, one
 zero byte, the raw candidate-record digest, and the raw receipt digest. The V2
 validation report also records the exact nonzero generation memory limit and
-the `self-physical-footprint-v1` in-process enforcement profile.
+the `self-physical-footprint-v1` in-process enforcement profile. Its exact V2
+field set additionally requires the reviewed source-closure descriptor,
+authenticated source-seal projection, reviewed Cargo binary, and reviewed
+rustc binary SHA-256 values. Each must be canonical and nonzero; the whole
+report remains content-bound by the stage manifest. Reports created before
+these first-release provenance fields are intentionally invalid and must be
+regenerated with the candidate.
 
 The scenario inventory digest is SHA-256 over the domain
 `iroha.kagemusha.android-candidate-scenario-inventory.v1\0`, big-endian `u32`

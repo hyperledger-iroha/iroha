@@ -1,4 +1,4 @@
-"""Fail-closed tests for the unprovisioned controller-origin authority."""
+"""Fail-closed tests for the authenticated controller-origin authority."""
 
 from __future__ import annotations
 
@@ -54,9 +54,10 @@ def test_installed_controller_routes_expose_only_barriered_validation() -> None:
     )
     assert receipt_source.count("validate_unsigned_v2_structure(") == 2
     wrapper = inspect.getsource(evidence.validate_evidence_directory)
-    assert wrapper.index(
-        "require_controller_origin_authority_provisioned()"
-    ) < wrapper.index("return validate_unsigned_v2_structure(")
+    preflight = wrapper.index("require_controller_origin_authority_provisioned()")
+    structural = wrapper.index("result, subject, artifacts = _validated_authority_request(")
+    authorization = wrapper.index("taira_authority_client.authorize(")
+    assert preflight < structural < authorization
 
     sealer = (SCRIPTS / "seal_taira_release_controllers.py").read_text(
         encoding="utf-8"
@@ -79,7 +80,7 @@ def test_installed_controller_routes_expose_only_barriered_validation() -> None:
     assert "validate_unsigned_v2_structure" not in sealer
 
 
-def test_provisioning_contract_is_named_complete_and_has_no_caller_bypass(
+def test_provisioning_contract_uses_the_fixed_role_and_has_no_caller_bypass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,11 +111,92 @@ def test_provisioning_contract_is_named_complete_and_has_no_caller_bypass(
     assert not inspect.signature(
         evidence.require_controller_origin_authority_provisioned
     ).parameters
+    calls: list[str] = []
+    monkeypatch.setattr(
+        evidence.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(role) or {"role": role, "status": "ready"},
+    )
+    evidence.require_controller_origin_authority_provisioned()
+    assert calls == ["privacy-protocol-origin"]
+
+    def unavailable(_role: str):
+        raise evidence.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(evidence.taira_authority_client, "preflight", unavailable)
     with pytest.raises(
         evidence.PrivacyProtocolEvidenceError,
         match=evidence.CONTROLLER_ORIGIN_AUTHORITY_CONTRACT,
     ):
         evidence.require_controller_origin_authority_provisioned()
+
+
+def test_validation_preflights_then_authorizes_the_normalized_subject(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The structural subject is signed only after fixed-service authentication."""
+
+    calls: list[tuple[str, str]] = []
+    digest = "55" * 32
+    structural = {
+        "case_count": 7,
+        "outcomes": [{"protocol": "test"}] * 12,
+    }
+    monkeypatch.setattr(
+        evidence.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(("preflight", role)),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "validate_unsigned_v2_structure",
+        lambda *_args, **_kwargs: calls.append(
+            ("structural", "privacy-protocol-origin")
+        )
+        or structural,
+    )
+    monkeypatch.setattr(
+        evidence.taira_authority_client,
+        "authorize",
+        lambda role, _subject, **_kwargs: calls.append(("authorize", role))
+        or evidence.taira_authority_client.AuthorityResult(
+            role=role,
+            operation_id="66" * 32,
+            run_id="77" * 32,
+            status="authorized",
+            authority_envelope={"schema": "test-envelope"},
+            durable_receipt={"schema": "test-receipt"},
+        ),
+    )
+
+    result = evidence.validate_evidence_directory(
+        tmp_path,
+        expected_source=SOURCE.as_dict(),
+        expected_validator_binary_sha256=digest,
+        expected_linux_release_archive_sha256=digest,
+        expected_exact12_matrix_sha256=digest,
+        expected_artifact_handoff_sha256=digest,
+        expected_receipt_id=digest,
+        now_unix=1_900_000_000,
+    )
+    assert isinstance(result, evidence.AuthenticatedPrivacyProtocolEvidence)
+    assert result == structural
+    assert result.operation_id == "66" * 32
+    assert result.run_id == "77" * 32
+    assert result.authority_envelope == evidence.taira_authority_client.canonical_json_bytes(
+        {"schema": "test-envelope"}
+    )
+    assert result.durable_receipt == evidence.taira_authority_client.canonical_json_bytes(
+        {"schema": "test-receipt"}
+    )
+    assert calls == [
+        ("preflight", "privacy-protocol-origin"),
+        ("structural", "privacy-protocol-origin"),
+        ("authorize", "privacy-protocol-origin"),
+    ]
 
 
 @pytest.mark.parametrize("hostile_case", HOSTILE_PROVENANCE_CASES)
@@ -135,6 +217,13 @@ def test_receipt_candidate_and_admission_reject_untrusted_provenance_before_io(
             )
 
         return call
+
+    def unavailable(_role: str):
+        raise evidence.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(evidence.taira_authority_client, "preflight", unavailable)
 
     monkeypatch.setattr(
         evidence,

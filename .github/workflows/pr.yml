@@ -487,7 +487,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ steps.formal_layout.outputs.tlapm_root }}/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
-          key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681
+          key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681-closure-v2-${{ hashFiles('scripts/formal/sumeragi_v2_tlapm_source_build_lock.json', 'scripts/formal/sumeragi_v2_tlapm_source_lock.py', 'scripts/formal/sumeragi_v2_tlapm_locked_wget.sh', 'scripts/formal/build_sumeragi_v2_tlapm_from_source.sh', 'scripts/formal/install_sumeragi_v2_tlapm.sh') }}
       - name: Install pinned formal tools
         run: |
           set -euo pipefail
