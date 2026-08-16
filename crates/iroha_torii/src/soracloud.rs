@@ -11881,6 +11881,14 @@ mod tests {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test fixture key derivation should succeed")
     }
+    fn test_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
+    fn required_test_runtime(message: &str) -> tokio::runtime::Runtime {
+        test_runtime().expect(message)
+    }
     #[test]
     fn fhe_policy_lifecycle_actions_keep_distinct_control_plane_identity() {
         for (source, expected, label) in [
@@ -12061,6 +12069,47 @@ mod tests {
         bundle.container.capabilities.allow_model_training = allow_model_training;
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         bundle
+    }
+    fn fixture_service_deployment(bundle: &SoraDeploymentBundleV1) -> SoraServiceDeploymentStateV1 {
+        SoraServiceDeploymentStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            current_service_version: bundle.service.service_version.clone(),
+            current_service_manifest_hash: bundle.service_manifest_hash(),
+            current_container_manifest_hash: bundle.container_manifest_hash(),
+            revision_count: 1,
+            process_generation: 1,
+            process_started_sequence: 1,
+            active_rollout: None,
+            last_rollout: None,
+            config_generation: 0,
+            secret_generation: 0,
+            service_configs: BTreeMap::new(),
+            service_secrets: BTreeMap::new(),
+            fhe_policy_records: BTreeMap::new(),
+            service_lease: None,
+            lease_volume_states: Vec::new(),
+        }
+    }
+    fn insert_revision(
+        world: &mut iroha_core::state::World,
+        bundle: &SoraDeploymentBundleV1,
+        service_name: String,
+    ) {
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (service_name, bundle.service.service_version.clone()),
+            bundle.clone(),
+        );
+    }
+    fn install_fixture_service(
+        world: &mut iroha_core::state::World,
+        bundle: &SoraDeploymentBundleV1,
+        service_name: &Name,
+    ) {
+        insert_revision(world, bundle, service_name.as_ref().to_owned());
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(service_name.clone(), fixture_service_deployment(bundle));
     }
     fn fixture_fhe_job_spec() -> FheJobSpecV1 {
         load_json(&workspace_fixture(
@@ -12475,9 +12524,7 @@ mod tests {
     fn control_plane_snapshot_uses_authoritative_soracloud_state() -> Result<(), eyre::Report> {
         use iroha_core::{smartcontracts::Execute, state::World};
         use iroha_data_model::block::BlockHeader;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let wonderland: iroha_data_model::domain::DomainId =
                 DomainId::try_new("wonderland", "universal")?;
@@ -12619,38 +12666,10 @@ mod tests {
         let mut world = World::new();
         let bundle = fixture_bundle("2026.02.0");
         let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
+        insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                service_name.clone(),
-                SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 0,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::new(),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: None,
-                    lease_volume_states: Vec::new(),
-                },
-            );
+            .insert(service_name.clone(), fixture_service_deployment(&bundle));
         let app = mk_app_state_for_tests_with_world(world);
         let assets = resolve_public_local_read_route(&app, "portal.sora:443", "/app/assets")
             .expect("asset route");
@@ -12684,13 +12703,7 @@ mod tests {
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
+        insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
             .insert(
@@ -12812,13 +12825,7 @@ mod tests {
         ];
         for bundle in [live_bundle.clone(), vault_bundle.clone()] {
             let service_name = bundle.service.service_name.clone();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    bundle.service.service_name.to_string(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
+            insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
@@ -12916,13 +12923,7 @@ mod tests {
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
+        insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
             .insert(
@@ -12979,38 +12980,10 @@ mod tests {
         let mut world = World::new();
         let bundle = fixture_bundle("2026.02.0");
         let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
+        insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                service_name,
-                SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 0,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::new(),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: None,
-                    lease_volume_states: Vec::new(),
-                },
-            );
+            .insert(service_name, fixture_service_deployment(&bundle));
         let app = mk_app_state_for_tests_with_world(world);
         let route_match = resolve_public_route(&app, "portal.sora", "POST", "/app/update/search")
             .expect("ordered mailbox route");
@@ -13069,38 +13042,10 @@ mod tests {
             },
         ];
         let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
+        insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                service_name,
-                SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 0,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::new(),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: None,
-                    lease_volume_states: Vec::new(),
-                },
-            );
+            .insert(service_name, fixture_service_deployment(&bundle));
         let app = mk_app_state_for_tests_with_world(world);
         let get_route =
             resolve_public_route(&app, "portal.sora", "GET", "/app/v1/user/preferences")
@@ -13129,9 +13074,7 @@ mod tests {
     #[test]
     fn authoritative_ciphertext_query_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle("1.0.0");
@@ -13139,38 +13082,7 @@ mod tests {
             let binding_name: Name = "patient_records".parse()?;
             let state_key = "/state/health/patient-1".to_string();
             let governance_tx_hash = Hash::new(b"gov-state");
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
+            install_fixture_service(&mut world, &bundle, &service_name);
             world
                 .soracloud_service_audit_events_mut_for_testing()
                 .insert(
@@ -13254,47 +13166,14 @@ mod tests {
     #[test]
     fn authoritative_health_compliance_report_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle("1.0.0");
             let service_name = bundle.service.service_name.clone();
             let policy = fixture_decryption_authority_policy();
             let policy_snapshot_hash = Hash::new(Encode::encode(&policy));
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
+            install_fixture_service(&mut world, &bundle, &service_name);
             for (sequence, state_key, break_glass, consent_evidence_hash) in [
                 (
                     2,
@@ -13396,45 +13275,12 @@ mod tests {
     #[test]
     fn authoritative_training_job_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle_with_training("1.0.0", true);
             let service_name = bundle.service.service_name.clone();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
+            install_fixture_service(&mut world, &bundle, &service_name);
             world.soracloud_training_jobs_mut_for_testing().insert(
                 (service_name.as_ref().to_owned(), "job-1".to_string()),
                 iroha_data_model::soracloud::SoraTrainingJobRecordV1 {
@@ -13478,9 +13324,7 @@ mod tests {
     #[test]
     fn authoritative_service_config_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle("1.0.0");
@@ -13489,13 +13333,7 @@ mod tests {
                 "theme": "dark",
                 "max_connections": 32
             });
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
+            insert_revision(&mut world, &bundle, service_name.as_ref().to_owned());
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
@@ -13553,9 +13391,7 @@ mod tests {
     #[test]
     fn authoritative_service_public_discovery_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle("1.0.0");
@@ -13604,13 +13440,7 @@ mod tests {
                     discovery.clone(),
                 )]),
             };
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
+            insert_revision(&mut world, &bundle, service_name.as_ref().to_owned());
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
@@ -13683,9 +13513,7 @@ mod tests {
     #[test]
     fn authoritative_service_secret_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle("1.0.0");
@@ -13700,13 +13528,7 @@ mod tests {
                 commitment: Hash::new(b"service-secret"),
                 aad_digest: None,
             };
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
+            insert_revision(&mut world, &bundle, service_name.as_ref().to_owned());
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
@@ -13773,45 +13595,12 @@ mod tests {
     #[test]
     fn authoritative_model_weight_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle_with_training("1.0.0", true);
             let service_name = bundle.service.service_name.clone();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
+            install_fixture_service(&mut world, &bundle, &service_name);
             world.soracloud_model_registries_mut_for_testing().insert(
                 (service_name.as_ref().to_owned(), "vision_model".to_string()),
                 iroha_data_model::soracloud::SoraModelRegistryV1 {
@@ -13873,45 +13662,12 @@ mod tests {
     #[test]
     fn authoritative_model_artifact_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let bundle = fixture_bundle_with_training("1.0.0", true);
             let service_name = bundle.service.service_name.clone();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
+            install_fixture_service(&mut world, &bundle, &service_name);
             world.soracloud_model_artifacts_mut_for_testing().insert(
                 (service_name.as_ref().to_owned(), "job-1".to_string()),
                 iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
@@ -13961,9 +13717,7 @@ mod tests {
     #[test]
     fn authoritative_uploaded_model_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
             let service_name: Name = "web_portal".parse().expect("service name");
@@ -15529,9 +15283,7 @@ mod tests {
     fn ensure_hf_generated_service_instruction_reuses_matching_existing_service()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let source_id = hf_source_id("openai/gpt-oss", "main")
                 .map_err(|err| eyre::eyre!("hf source id failed: {}", err.message))?;
@@ -15543,37 +15295,12 @@ mod tests {
                 "gpt_oss_20b",
             );
             let mut world = World::default();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    bundle.service.service_name.to_string(),
-                    bundle.service.service_version.clone(),
-                ),
-                bundle.clone(),
-            );
+            insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: bundle.service.service_name.clone(),
-                        current_service_version: bundle.service.service_version.clone(),
-                        current_service_manifest_hash: bundle.service_manifest_hash(),
-                        current_container_manifest_hash: bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
+                    fixture_service_deployment(&bundle),
                 );
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
@@ -15598,10 +15325,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_service_instruction_requires_generated_provenance() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -15635,10 +15359,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_service_instruction_accepts_valid_generated_provenance() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let key_pair = checked_test_keypair(0xA1);
             let signer = test_soracloud_mutation_signer(&key_pair);
@@ -15669,10 +15390,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_service_instruction_rejects_signer_mismatch() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let signer_keypair = checked_test_keypair(0xA2);
             let provenance_keypair = checked_test_keypair(0xA3);
@@ -15709,10 +15427,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_service_instruction_rejects_unrelated_existing_service() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let expected_bundle = build_soracloud_hf_generated_service_bundle(
@@ -15728,37 +15443,16 @@ mod tests {
             existing_bundle.service.container.manifest_hash =
                 existing_bundle.container_manifest_hash();
             let mut world = World::default();
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (
-                    existing_bundle.service.service_name.to_string(),
-                    existing_bundle.service.service_version.clone(),
-                ),
-                existing_bundle.clone(),
+            insert_revision(
+                &mut world,
+                &existing_bundle,
+                existing_bundle.service.service_name.to_string(),
             );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     existing_bundle.service.service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: existing_bundle.service.service_name.clone(),
-                        current_service_version: existing_bundle.service.service_version.clone(),
-                        current_service_manifest_hash: existing_bundle.service_manifest_hash(),
-                        current_container_manifest_hash: existing_bundle.container_manifest_hash(),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
+                    fixture_service_deployment(&existing_bundle),
                 );
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
@@ -15787,9 +15481,7 @@ mod tests {
     fn ensure_hf_generated_agent_instruction_reuses_matching_existing_apartment()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let source_id = hf_source_id("openai/gpt-oss", "main")
                 .map_err(|err| eyre::eyre!("hf source id failed: {}", err.message))?;
@@ -15855,10 +15547,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_agent_instruction_requires_generated_provenance() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -15887,10 +15576,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_agent_instruction_accepts_valid_generated_provenance() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let key_pair = checked_test_keypair(0xA5);
             let signer = test_soracloud_mutation_signer(&key_pair);
@@ -15917,10 +15603,7 @@ mod tests {
     #[test]
     fn ensure_hf_generated_agent_instruction_rejects_signer_mismatch() {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
             let signer_keypair = checked_test_keypair(0xA6);
             let provenance_keypair = checked_test_keypair(0xA7);
@@ -15957,25 +15640,7 @@ mod tests {
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let admission = admit_scr_host_bundle(&bundle).expect("SCR admission should succeed");
         assert!(admission.allow_model_inference);
-        let deployment = SoraServiceDeploymentStateV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-            service_name: bundle.service.service_name.clone(),
-            current_service_version: bundle.service.service_version.clone(),
-            current_service_manifest_hash: bundle.service_manifest_hash(),
-            current_container_manifest_hash: bundle.container_manifest_hash(),
-            revision_count: 1,
-            process_generation: 1,
-            process_started_sequence: 1,
-            active_rollout: None,
-            last_rollout: None,
-            config_generation: 0,
-            secret_generation: 0,
-            service_configs: BTreeMap::new(),
-            service_secrets: BTreeMap::new(),
-            fhe_policy_records: BTreeMap::new(),
-            service_lease: None,
-            lease_volume_states: Vec::new(),
-        };
+        let deployment = fixture_service_deployment(&bundle);
         let revision =
             deployment_bundle_to_control_plane_revision(&deployment, &bundle, None, None);
         assert!(revision.allow_model_inference);
@@ -15995,9 +15660,7 @@ mod tests {
     #[test]
     fn authoritative_hf_shared_lease_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
             let resolved_revision = "0123456789abcdef";
@@ -16239,9 +15902,7 @@ mod tests {
     #[test]
     fn authoritative_hf_shared_lease_mutation_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
             let resolved_revision = "0123456789abcdef";
@@ -16373,9 +16034,7 @@ mod tests {
     fn authoritative_hf_shared_lease_status_uses_runtime_projection_when_available()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
             let resolved_revision = "0123456789abcdef";
@@ -16550,9 +16209,7 @@ mod tests {
     #[test]
     fn handle_agent_autonomy_run_finalize_rejects_signer_mismatch() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let apartment_name = "ops_agent";
             let run = fixture_agent_run_record(apartment_name, "ops_agent:autonomy:1", 7, 1);
@@ -16598,9 +16255,7 @@ mod tests {
     fn execute_runtime_agent_autonomy_run_returns_none_for_non_hf_apartment()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let apartment_name = "ops_agent";
             let run = fixture_agent_run_record(apartment_name, "ops_agent:autonomy:2", 9, 1);
@@ -16647,9 +16302,7 @@ mod tests {
     fn build_authoritative_agent_runtime_receipt_instruction_is_idempotent()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let receipt_id = Hash::new(b"ops-agent-runtime-receipt");
             let request_commitment = Hash::new(b"ops-agent-runtime-request");
@@ -16721,9 +16374,7 @@ mod tests {
     fn build_authoritative_agent_autonomy_execution_audit_instruction_is_idempotent()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = test_runtime()?;
         runtime.block_on(async move {
             let result_commitment = Hash::new(b"ops-agent-executed-result");
             let runtime_receipt_id = Hash::new(b"ops-agent-executed-receipt");

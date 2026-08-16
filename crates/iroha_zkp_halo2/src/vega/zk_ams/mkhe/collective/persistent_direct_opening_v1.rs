@@ -11,11 +11,11 @@ use super::super::{
     manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
 };
 use super::{
-    PersistentOpeningCommitmentWireV1, PersistentSecretCommitmentBlindingsV1,
-    ZeroizingT256MembershipCoefficientsV1, commit_persistent_secret_opening_v1,
+    PersistentOpeningCommitmentWireV1, ZeroizingCpkMembershipBlindingsV1,
+    ZeroizingT256MembershipCoefficientsV1, commit_cpk_membership_opening_v1,
     encode_persistent_opening_commitments_v1,
 };
-use crate::vega::VegaT256PointV1 as Point;
+use crate::vega::{VegaT256PointV1 as Point, bulletproof_t256::ZkAmsT256MembershipBoundV1};
 
 /// Every public axis that identifies the sole state-owned CPK opening.
 pub(super) struct PersistentDirectOpeningAxesV1 {
@@ -60,7 +60,7 @@ impl PersistentDirectOpeningAxesV1 {
 pub(super) struct PersistentDirectOpeningOwnerV1 {
     pub(super) axes: PersistentDirectOpeningAxesV1,
     pub(super) verified_binding: Option<VerifiedPersistentWitnessBindingV1>,
-    pub(super) blindings: PersistentSecretCommitmentBlindingsV1,
+    pub(super) blindings: ZeroizingCpkMembershipBlindingsV1,
     pub(super) secret: SecretPolynomial,
     pub(super) retained_commitment_wire: PersistentOpeningCommitmentWireV1,
 }
@@ -69,12 +69,15 @@ impl PersistentDirectOpeningOwnerV1 {
     pub(super) fn new_unverified(
         axes: PersistentDirectOpeningAxesV1,
         secret: SecretPolynomial,
-        blindings: PersistentSecretCommitmentBlindingsV1,
+        blindings: ZeroizingCpkMembershipBlindingsV1,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         axes.validate()?;
-        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&secret)?;
-        let commitments =
-            commit_persistent_secret_opening_v1(coefficients.as_slice(), blindings.as_array())?;
+        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_bounded(&secret, 1)?;
+        let commitments = commit_cpk_membership_opening_v1(
+            coefficients.as_slice(),
+            blindings.as_array(),
+            ZkAmsT256MembershipBoundV1::One,
+        )?;
         let retained_commitment_wire = encode_persistent_opening_commitments_v1(&commitments)?;
         Ok(Self {
             axes,
@@ -104,11 +107,11 @@ impl<'a> PostCpkPersistentDirectOpeningGuardV1<'a> {
             .verified_binding
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
-        let coefficients =
-            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&owner.secret)?;
-        let commitments = commit_persistent_secret_opening_v1(
+        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_bounded(&owner.secret, 1)?;
+        let commitments = commit_cpk_membership_opening_v1(
             coefficients.as_slice(),
             owner.blindings.as_array(),
+            ZkAmsT256MembershipBoundV1::One,
         )?;
         if binding.commitments() != &commitments
             || encode_persistent_opening_commitments_v1(&commitments)?

@@ -289,13 +289,21 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     fn from_exact(
         evidence: ExactEightChunkMembershipEvidenceV1<PersistentSecretMembershipRoleV1>,
     ) -> Self {
+        let (
+            context,
+            generator_basis_digest,
+            chunks,
+            commitment_set_digest,
+            proof_set_digest,
+            verifier_transcript_digest,
+        ) = evidence.into_structural_parts();
         Self {
-            context: ZkAmsMkhePersistentMembershipContextV1::from_exact(evidence.context()),
-            generator_basis_digest: evidence.generator_basis_digest(),
-            chunks: evidence.chunks().clone(),
-            commitment_set_digest: evidence.commitment_set_digest(),
-            proof_set_digest: evidence.proof_set_digest(),
-            verifier_transcript_digest: evidence.verifier_transcript_digest(),
+            context: ZkAmsMkhePersistentMembershipContextV1::from_exact(context),
+            generator_basis_digest,
+            chunks,
+            commitment_set_digest,
+            proof_set_digest,
+            verifier_transcript_digest,
         }
     }
     fn to_exact(
@@ -308,6 +316,22 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             self.context.to_exact()?,
             self.generator_basis_digest,
             self.chunks.clone(),
+            self.commitment_set_digest,
+            self.proof_set_digest,
+            self.verifier_transcript_digest,
+        )
+        .map_err(Into::into)
+    }
+    fn into_exact(
+        self,
+    ) -> Result<
+        ExactEightChunkMembershipEvidenceV1<PersistentSecretMembershipRoleV1>,
+        ZkAmsMkhePersistentMembershipErrorV1,
+    > {
+        ExactEightChunkMembershipEvidenceV1::from_structural_parts(
+            self.context.to_exact()?,
+            self.generator_basis_digest,
+            self.chunks,
             self.commitment_set_digest,
             self.proof_set_digest,
             self.verifier_transcript_digest,
@@ -374,6 +398,10 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact()?.to_wire_bytes().map_err(Into::into)
     }
+    /// Move the proof chunks into the canonical encoder without cloning them.
+    pub(super) fn into_wire_bytes(self) -> Result<Vec<u8>, ZkAmsMkhePersistentMembershipErrorV1> {
+        self.into_exact()?.to_wire_bytes().map_err(Into::into)
+    }
     /// Replay every production proof and self-recompute all three ordered roots.
     pub(super) fn verify(&self) -> Result<(), ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact()?.verify().map_err(Into::into)
@@ -385,7 +413,7 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     pub(super) fn into_verified(
         self,
     ) -> Result<ZkAmsMkheVerifiedPersistentMembershipV1, ZkAmsMkhePersistentMembershipErrorV1> {
-        self.to_exact()?
+        self.into_exact()?
             .into_verified()
             .map(|inner| ZkAmsMkheVerifiedPersistentMembershipV1 { inner })
             .map_err(Into::into)
@@ -794,6 +822,49 @@ mod tests {
         });
         ZkAmsMkhePersistentMembershipEvidenceV1::assemble(context, chunks, transcripts)
             .expect("synthetic evidence")
+    }
+    #[test]
+    fn exact_facade_handoff_moves_every_proof_buffer() {
+        let evidence = fake_evidence(b"move-exact-proof-buffers", 0);
+        let allocations = core::array::from_fn::<_, 8, _>(|index| {
+            (
+                evidence.chunks()[index].proof_bytes().as_ptr(),
+                evidence.chunks()[index].proof_capacity(),
+            )
+        });
+        assert!(allocations.iter().all(|(_, capacity)| *capacity == 1_447));
+        let exact = evidence.into_exact().expect("move facade into exact owner");
+        for (chunk, (allocation, capacity)) in exact.chunks().iter().zip(allocations) {
+            assert_eq!(chunk.proof_bytes().as_ptr(), allocation);
+            assert_eq!(chunk.proof_capacity(), capacity);
+        }
+        let facade = ZkAmsMkhePersistentMembershipEvidenceV1::from_exact(exact);
+        for (chunk, (allocation, capacity)) in facade.chunks().iter().zip(allocations) {
+            assert_eq!(chunk.proof_bytes().as_ptr(), allocation);
+            assert_eq!(chunk.proof_capacity(), capacity);
+        }
+        let production = include_str!("persistent_membership_evidence.rs")
+            .split("\n#[cfg(test)]\nfn commitment_set_digest")
+            .next()
+            .expect("production facade source");
+        let handoff = production
+            .split("fn from_exact(")
+            .nth(2)
+            .expect("evidence handoff")
+            .split("fn to_exact(")
+            .next()
+            .expect("handoff boundary");
+        assert!(handoff.contains("evidence.into_structural_parts()"));
+        assert!(!handoff.contains("clone()"));
+        let consuming = production
+            .split("pub(super) fn into_verified(")
+            .nth(1)
+            .expect("consuming verifier")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("consuming verifier boundary");
+        assert!(consuming.contains("self.into_exact()?"));
+        assert!(!consuming.contains("self.to_exact()?"));
     }
     fn chunk_wire_range(index: usize) -> core::ops::Range<usize> {
         let start = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1 + index * MEMBERSHIP_CHUNK_WIRE_BYTES_V1;

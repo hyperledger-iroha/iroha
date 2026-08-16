@@ -1,11 +1,9 @@
+use super::super::direct_rkg_one_sealed_candidate_v1::SealedDirectRkgOneCandidateV1;
 use super::super::tests::{Inject, Rng, begin, drops};
 use super::*;
 use crate::vega::zk_ams::mkhe::{
     active::ZkAmsMkheGovernedActiveRosterV1,
-    active_exact_binding::{
-        DirectRelationPublicObjectsV1, SealedDirectRkgOneProofOwnerV1,
-        VerifiedPersistentWitnessBindingSetV1,
-    },
+    active_exact_binding::{DirectRelationPublicObjectsV1, VerifiedPersistentWitnessBindingSetV1},
     direct_collective_eval_ceremony::ZkAmsMkheDirectEvaluatedKeyTargetV1,
     direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
     direct_rkg_ephemeral_membership::tests::creator_state_fixture,
@@ -41,9 +39,26 @@ fn assert_ordered(section: &str, snippets: &[&str]) {
     }
 }
 
+fn assert_owner_fields(source: &str, marker: &str, fields: &str) {
+    let owner = struct_body(source, marker);
+    let fields = fields.split('|');
+    assert_eq!(owner.matches(": ").count(), fields.clone().count());
+    for field in fields {
+        assert_eq!(owner.matches(field).count(), 1, "owner field: {field}");
+    }
+}
+
+fn assert_restricted_reexport(source: &str, item: &str) {
+    assert_eq!(source.matches(item).count(), 1);
+    let before = source.split_once(item).expect("restricted reexport").0;
+    let route = before.rsplit_once("pub(").expect("restricted visibility").1;
+    assert!(route.starts_with("in crate::vega::zk_ams::mkhe) use "));
+    assert!(!route.contains(';'));
+}
+
 #[expect(dead_code, reason = "compile-only precise-capture check")]
-fn semantic_owner_does_not_borrow_provider_or_objects<'a, P>(
-    owner: SealedDirectRkgOneProofOwnerV1<'a>,
+fn sealed_semantic_owner_does_not_borrow_provider_or_objects<'a, P>(
+    owner: SealedDirectRkgOneCandidateV1<'a>,
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
     provider: &mut P,
@@ -96,54 +111,44 @@ impl ReadyFixture {
 
 #[test]
 fn post_take_error_burns_ephemeral_owner_and_keeps_creation_bit() {
-    let ReadyFixture {
-        roster,
-        bindings,
-        mut state,
-        wrapper,
-        context,
-    } = ReadyFixture::new(b"rkg1-post-take-error");
-    let creation_mask = state.party_local_rkg_ephemeral_creation_mask;
+    let mut fixture = ReadyFixture::new(b"rkg1-post-take-error");
+    let creation_mask = fixture.state.party_local_rkg_ephemeral_creation_mask;
     begin(Inject::None);
     let result = take_ready_direct_rkg_one_prover_session_v1(
-        &mut state,
-        wrapper,
-        &roster,
-        &bindings,
-        context,
+        &mut fixture.state,
+        fixture.wrapper,
+        &fixture.roster,
+        &fixture.bindings,
+        fixture.context,
         &mut Rng::fail(0xaa, 0),
     );
     assert!(matches!(result, Err(ZkAmsMkheErrorV1::RandomUnavailable)));
-    assert!(state.party_local_rkg_ephemeral_opening.is_none());
-    assert_eq!(state.party_local_rkg_ephemeral_creation_mask, creation_mask);
+    assert!(fixture.state.party_local_rkg_ephemeral_opening.is_none());
+    let post_mask = fixture.state.party_local_rkg_ephemeral_creation_mask;
+    assert_eq!(post_mask, creation_mask);
     assert_eq!(drops(), [1, 0, 1, 1]);
 }
 
 #[test]
 fn post_take_unwind_burns_ephemeral_owner_and_keeps_creation_bit() {
-    let ReadyFixture {
-        roster,
-        bindings,
-        mut state,
-        wrapper,
-        context,
-    } = ReadyFixture::new(b"rkg1-post-take-unwind");
-    let creation_mask = state.party_local_rkg_ephemeral_creation_mask;
+    let mut fixture = ReadyFixture::new(b"rkg1-post-take-unwind");
+    let creation_mask = fixture.state.party_local_rkg_ephemeral_creation_mask;
     begin(Inject::None);
     let mut random = Rng::panic(0xaa, 0);
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         let _ = take_ready_direct_rkg_one_prover_session_v1(
-            &mut state,
-            wrapper,
-            &roster,
-            &bindings,
-            context,
+            &mut fixture.state,
+            fixture.wrapper,
+            &fixture.roster,
+            &fixture.bindings,
+            fixture.context,
             &mut random,
         );
     }));
     assert!(unwind.is_err());
-    assert!(state.party_local_rkg_ephemeral_opening.is_none());
-    assert_eq!(state.party_local_rkg_ephemeral_creation_mask, creation_mask);
+    assert!(fixture.state.party_local_rkg_ephemeral_opening.is_none());
+    let post_mask = fixture.state.party_local_rkg_ephemeral_creation_mask;
+    assert_eq!(post_mask, creation_mask);
     assert_eq!(drops(), [1, 0, 1, 1]);
 }
 
@@ -151,43 +156,66 @@ fn post_take_unwind_burns_ephemeral_owner_and_keeps_creation_bit() {
 fn sealed_candidate_remains_opaque_and_unreachable() {
     let candidate = include_str!("../direct_rkg_one_candidate_v1.rs");
     let sealed = include_str!("../direct_rkg_one_sealed_candidate_v1.rs");
+    let creator = include_str!("../direct_rkg_one_creator_v2.rs");
+    let lifecycle = include_str!("../direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs");
     let parent = include_str!("../party_local_rkg_ephemeral_v1.rs");
     let collective = include_str!("../../collective.rs");
     let active = include_str!("../../active_exact_binding.rs");
+    let direct_wire = include_str!("../../active_exact_binding/direct_relation_wire_v1.rs");
     let adapter = include_str!("../../active_exact_binding/direct_rkg_one_creator_adapter_v1.rs");
     let publication = include_str!("../direct_rkg_one_publication_v1.rs");
     let prover = include_str!(
         "../../active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"
     );
+    let permit = "DirectRkgOneProofDurabilityPermitV2";
+    let permit_literal = "DirectRkgOneProofDurabilityPermitV2 { _private: () }";
+    let permit_declaration = bounded_source_section(
+        lifecycle,
+        "/// Proof durability witness; only this lifecycle module can construct it.",
+        "/// Sole live permit accepted before H0 staging; never returned by recovery.",
+    );
 
-    assert!(candidate.contains("not creator provenance, extractor evidence, receipt,"));
-    assert!(candidate.contains("binding, admission, or verifier authority."));
-    assert!(sealed.contains("Unverified authority-neutral candidate"));
     assert!(!sealed.contains("fn proof_bytes"));
     assert!(!prover.contains("fn proof_bytes"));
-    assert!(!sealed.contains("into_bytes"));
     assert_eq!(
-        sealed
-            .matches("fn create_direct_rkg_one_sealed_candidate_v1")
+        creator
+            .matches("fn create_direct_rkg_one_sealed_candidate_v2")
             .count(),
         1
     );
+    assert!(sealed.contains("pub(super) const fn from_durable_parts_v2"));
+    assert!(permit_declaration.contains(
+        "pub(in crate::vega::zk_ams::mkhe) struct DirectRkgOneProofDurabilityPermitV2 {\n    _private: (),\n}"
+    ));
+    for forbidden in ["derive", "impl ", "fn ", "const ", "static "] {
+        assert!(!permit_declaration.contains(forbidden));
+    }
+    assert_eq!(lifecycle.matches(permit).count(), 2);
+    assert_eq!(lifecycle.matches(permit_literal).count(), 1);
+    assert_eq!(prover.matches(permit).count(), 2);
+    for source in [publication, parent, collective] {
+        assert_restricted_reexport(source, permit);
+    }
+    let no_route = format!("{candidate}{sealed}{creator}{adapter}{active}{direct_wire}");
+    assert!(!no_route.contains(permit));
+    let no_mint = format!("{prover}{creator}{sealed}{publication}{parent}{collective}{active}");
+    assert!(!no_mint.contains(permit_literal));
     for source in [parent, collective, active] {
-        assert!(!source.contains("create_direct_rkg_one_sealed_candidate_v1"));
+        assert!(!source.contains("create_direct_rkg_one_sealed_candidate_v2"));
         assert!(!source.contains("verify_finalized_direct_rkg_one_semantic_candidate_v1"));
         assert!(!source.contains("fn verify_semantic_candidate_v1"));
     }
-    for source in [candidate, sealed, adapter, publication, prover] {
-        for forbidden in [
-            "ReadyRkg2",
-            "VerifiedPersistentWitnessBindingV1",
-            "VerifiedDirectRelationProofReceiptV1",
-            "AdmissionV1",
-            "ReleaseGate",
-            "verify_and_consume",
-        ] {
-            assert!(!source.contains(forbidden), "authority escape: {forbidden}");
-        }
+    let authority_sources =
+        format!("{candidate}{sealed}{creator}{lifecycle}{adapter}{publication}{prover}");
+    for forbidden in [
+        "ReadyRkg2",
+        "VerifiedPersistentWitnessBindingV1",
+        "VerifiedDirectRelationProofReceiptV1",
+        "AdmissionV1",
+        "ReleaseGate",
+        "verify_and_consume",
+    ] {
+        assert!(!authority_sources.contains(forbidden));
     }
     assert!(!adapter.contains("bind_direct_relation_use("));
     assert!(!adapter.contains("mint_rkg_round_one_selector_v1"));
@@ -198,13 +226,12 @@ fn sealed_candidate_remains_opaque_and_unreachable() {
 
 #[test]
 fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
-    let persistent = include_str!("../persistent_direct_opening_v1.rs");
-    let candidate = include_str!("../direct_rkg_one_candidate_v1.rs");
     let adapter = include_str!("../../active_exact_binding/direct_rkg_one_creator_adapter_v1.rs");
     let prover = include_str!(
         "../../active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"
     );
     let sealed = include_str!("../direct_rkg_one_sealed_candidate_v1.rs");
+    let lifecycle = include_str!("../direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs");
     let adapter_handoff = bounded_source_section(
         adapter,
         "fn verify_finalized_direct_rkg_one_semantic_candidate_v1",
@@ -215,11 +242,15 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
         "fn verify_semantic_candidate_v1",
         "fn seal_direct_rkg_one_proof_owner_v1",
     );
-    let sealed_handoff = bounded_source_section(
-        sealed,
-        "fn verify_semantic_candidate_v1",
-        "/// Private construction corridor",
+    let lifecycle_handoff = bounded_source_section(
+        lifecycle,
+        "fn verify_semantic_candidate_v2",
+        "pub(in super::super) enum DirectRkgOneFreshReservationOutcomeV2",
     );
+    let sealed_handoff = sealed
+        .split_once("fn verify_semantic_candidate_v1")
+        .expect("sealed semantic handoff")
+        .1;
 
     assert_ordered(
         adapter_handoff,
@@ -234,95 +265,102 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
     assert_ordered(
         prover_handoff,
         &[
+            "_durability_permit: DirectRkgOneProofDurabilityPermitV2,",
             "let Self {",
+            "sealed,",
+            "publication,",
             "let semantic_owner = verify_finalized_direct_rkg_one_semantic_candidate_v1(",
             "proof.as_bytes()",
             ")?;",
-            "_proof: proof",
+            "_proof: proof,",
+            "_publication: publication,",
+        ],
+    );
+    assert_ordered(
+        lifecycle_handoff,
+        &[
+            "let Self {",
+            "proof_owner,",
+            "publication_owner,",
+            "proof_owner.verify_semantic_candidate_v1(",
+            "DirectRkgOneProofDurabilityPermitV2 { _private: () },",
+            "context,",
+            "objects,",
+            "provider,",
+            ")?;",
+            "_publication_owner: publication_owner,",
         ],
     );
     assert_ordered(
         sealed_handoff,
         &[
-            "statement_objects_v1()? != objects",
+            "statement_objects_v2()? != objects",
             "return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);",
-            "let proof_owner = self.proof_owner;",
-            "let publication_owner = self._publication_owner;",
-            "proof_owner.verify_semantic_candidate_v1(context, objects, provider)?",
+            "self.lifecycle_owner",
+            ".verify_semantic_candidate_v2(context, objects, provider)?",
             "Ok(PostSemanticDirectRkgOneCandidateV1 {",
-            "_publication_owner: publication_owner,",
+            "_lifecycle_owner: lifecycle_owner,",
         ],
     );
-    for handoff in [adapter_handoff, prover_handoff, sealed_handoff] {
-        assert!(handoff.contains("impl Sized + use<'a, P>"));
-        for forbidden in [
-            "callback",
-            "into_parts",
-            ".clone()",
-            "unsafe",
-            "ManuallyDrop",
-            "MaybeUninit",
-            "mem::forget",
-            "catch_unwind",
-            "Receipt",
-            "Binding",
-            "Admission",
-            "ReadyRkg2",
-            "ReleaseGate",
-        ] {
-            assert!(!handoff.contains(forbidden), "handoff escape: {forbidden}");
-        }
+    assert!(adapter_handoff.contains("impl Sized + use<'a, P>"));
+    assert!(prover_handoff.contains("impl Sized + use<'a, P>"));
+    assert!(lifecycle_handoff.contains("impl Sized + use<'a, P>"));
+    assert!(sealed_handoff.contains("impl Sized + use<'a, P>"));
+    let handoffs = format!("{adapter_handoff}{prover_handoff}{lifecycle_handoff}{sealed_handoff}");
+    for forbidden in [
+        "callback",
+        "into_parts",
+        ".clone()",
+        "unsafe",
+        "ManuallyDrop",
+        "MaybeUninit",
+        "mem::forget",
+        "catch_unwind",
+        "Binding",
+        "Admission",
+        "ReadyRkg2",
+        "ReleaseGate",
+    ] {
+        assert!(!handoffs.contains(forbidden), "handoff escape: {forbidden}");
     }
 
-    assert_eq!(adapter.matches("fn into_compacted_post_seal_v1").count(), 0);
-    assert_eq!(prover.matches("fn into_compacted_post_seal_v1").count(), 0);
     assert!(!sealed.contains("into_compacted_sealed_candidate_v1"));
     assert!(!sealed.contains("CompactedSealedDirectRkgOneCandidateV1"));
-    assert_eq!(
-        candidate.matches("fn into_compacted_post_seal_v1").count(),
-        1
+    assert_owner_fields(
+        adapter,
+        "struct FinalizedDirectRkgOneCapabilityV1<'a> {",
+        "_prover_session:|capability:",
     );
-    assert_eq!(
-        persistent.matches("fn into_compacted_post_seal_v1").count(),
-        1
+    assert_owner_fields(
+        prover,
+        "struct PostSemanticDirectRkgOneProofOwnerV1<S> {",
+        "_semantic_owner:|_proof:|_publication:",
     );
-    for (source, marker, fields) in [
-        (
-            adapter,
-            "struct FinalizedDirectRkgOneCapabilityV1<'a> {",
-            ["_prover_session:", "capability:"],
-        ),
-        (
-            prover,
-            "struct PostSemanticDirectRkgOneProofOwnerV1<S> {",
-            ["_semantic_owner:", "_proof:"],
-        ),
-        (
-            sealed,
-            "struct PostSemanticDirectRkgOneCandidateV1<S> {",
-            ["_proof_owner:", "_publication_owner:"],
-        ),
-    ] {
-        let owner = struct_body(source, marker);
-        assert_eq!(owner.matches(": ").count(), 2);
-        for field in fields {
-            assert_eq!(owner.matches(field).count(), 1, "owner field: {field}");
-        }
-    }
-    for source in [prover, sealed] {
-        for forbidden in [
-            "impl Clone for PostSemantic",
-            "impl Copy for PostSemantic",
-            "Norito",
-        ] {
-            assert!(!source.contains(forbidden), "owner escape: {forbidden}");
-        }
-    }
+    assert_owner_fields(
+        lifecycle,
+        "struct PostSemanticDirectRkgOneLifecycleOwnerV2<S> {",
+        "_proof_owner:|_publication_owner:|_scope:|_storage_key:|_record:",
+    );
+    assert_owner_fields(
+        sealed,
+        "struct PostSemanticDirectRkgOneCandidateV1<S> {",
+        "_lifecycle_owner:",
+    );
+    let owners = format!("{prover}{lifecycle}{sealed}");
+    assert!(!owners.contains("impl Clone for PostSemantic"));
+    assert!(!owners.contains("impl Copy for PostSemantic"));
+    assert!(!owners.contains("Norito"));
     let top_line = sealed
         .lines()
         .find(|line| line.contains("fn verify_semantic_candidate_v1"))
         .expect("private top semantic handoff");
-    assert!(top_line.trim_start().starts_with("fn "));
+    assert!(top_line.trim_start().starts_with("pub(super) fn "));
+    let unpublished = bounded_source_section(
+        prover,
+        "impl<'a> SealedDirectRkgOneProofOwnerV1<'a>",
+        "impl<'a> PublishedDirectRkgOneProofOwnerV2<'a>",
+    );
+    assert!(!unpublished.contains("fn verify_semantic_candidate_v1"));
 }
 
 #[test]
@@ -411,21 +449,10 @@ fn prover_session_derives_persistent_points_from_installed_owner() {
 
 #[test]
 fn semantic_overlap_accounting_is_only_a_logical_lower_bound() {
-    const COMMON_A: usize = 39_845_888;
-    const RKG_ONE_ERRORS: usize = 2_097_152;
-    const PERSISTENT_NARROWING: usize = 131_072;
-    const PROOF: usize = 25_248_766;
-    const EPHEMERAL_U: usize = 1_048_576;
-    const ORIGINAL_WRAPPER: usize = 11_576;
-    const PERSISTENT_SECRET: usize = 1_048_576;
-    const PUBLIC_ERROR: usize = 1_048_576;
-    const GENERATORS: usize = 12_584_544;
-    const RNS_LEDGER: usize = 87_031_808;
-    let released_after_success = COMMON_A + RKG_ONE_ERRORS + PERSISTENT_NARROWING;
-    let compact_candidate = PROOF + EPHEMERAL_U + ORIGINAL_WRAPPER;
+    let released_after_success = 39_845_888 + 2_097_152 + 131_072;
+    let compact_candidate = 25_248_766 + 1_048_576 + 11_576;
     // Membership payloads are already inside `PROOF`; adding 71_568 would double-count them.
-    let post_success =
-        compact_candidate + PERSISTENT_SECRET + PUBLIC_ERROR + GENERATORS + RNS_LEDGER;
+    let post_success = compact_candidate + 1_048_576 + 1_048_576 + 12_584_544 + 87_031_808;
     let verification_overlap = post_success + released_after_success;
     assert_eq!(released_after_success, 42_074_112);
     assert_eq!(compact_candidate, 26_308_918);

@@ -4,12 +4,6 @@
 //! by [`IrohaRuntimeProviderBindingsV1`]. Provider credentials, private keys,
 //! tokens, attestations, and private evidence remain encapsulated by the
 //! deployment-owned backend objects returned by the registry.
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use clap::Parser;
 use super::api::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
     RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
@@ -21,6 +15,12 @@ use crate::runtime_provider_registry::RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1;
 use crate::runtime_provider_registry::{
     IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1,
     IrohaRuntimeProviderRegistryErrorV1,
+};
+use clap::Parser;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 /// Deployment-owned resolver for the complete broker-server backend set.
 ///
@@ -665,11 +665,11 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::IrohaRuntimeProviderSlotV1;
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::{fs, sync::atomic::AtomicBool};
-    use super::*;
-    use crate::IrohaRuntimeProviderSlotV1;
     struct RecordingRegistry {
         calls: AtomicUsize,
         outcome: Result<RuntimeProviderBrokerBackendsV1, IrohaRuntimeProviderRegistryErrorV1>,

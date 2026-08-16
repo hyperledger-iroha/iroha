@@ -4,8 +4,7 @@ use super::super::super::{
     direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
 };
 use super::{
-    ZkAmsMkheErrorV1,
-    direct_rkg_one_publication_v1::DirectRkgOneProofPublishedUnverifiedOwnerV2,
+    ZkAmsMkheErrorV1, direct_rkg_one_publication_v1::DirectRkgOneProofPublishedUnverifiedOwnerV2,
 };
 
 /// Unverified authority-neutral candidate retaining the complete durable publication/proof owner.
@@ -27,7 +26,7 @@ impl<'a> SealedDirectRkgOneCandidateV1<'a> {
 
     /// Named logical payload lower bounds, not heap/RSS, headroom, or certification: verification 170_096_534; post-success 128_022_422.
     #[expect(dead_code, reason = "private unconnected semantic handoff")]
-    fn verify_semantic_candidate_v1<P>(
+    pub(super) fn verify_semantic_candidate_v1<P>(
         self,
         context: ZkAmsMkheDirectCeremonyContextV1,
         objects: DirectRelationPublicObjectsV1,

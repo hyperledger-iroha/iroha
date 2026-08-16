@@ -23,24 +23,62 @@ identify source inputs; they are not evidence that any theorem has been proved.
 | Artifact | SHA-256 |
 | --- | --- |
 | `Cargo.lock` | `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222` |
-| `crates/iroha_zkp_halo2/src/generalized_bulletproof.rs` | `1a50651277cb0125256ad8f7fd2c81c5fb02cd853772dc0d7771b4410713eacb` |
-| `crates/iroha_zkp_halo2/src/generalized_bulletproof/exact_small_coefficient_source_v1.rs` | `635689b54f71d0936af07f392ebd220ff58da26ea444ee805da038f64fee59db` |
-| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256.rs` | `9336fb09601a5135fbabba21d7e5c71e420650f406dd0bc60a9c3d0174450f88` |
-| `crates/iroha_zkp_halo2/src/vega/curve.rs` | `c60e0be42aadb6715e203129a0c5d12e8d212cf71235812cbdbdcfdbc07cfce2` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/exact_eight_chunk_membership.rs` | `11de1995183838dc560dabe3ca91550fc3639b5f1a0617338e74ff7663f9d2db` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective.rs` | `77eff18381f7860cba5571e4708b63ddac8527718794d376328f96c626363042` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/persistent_direct_opening_v1.rs` | `12e6c8f388798149eca120ed4df9174ad526f1804ceafcd72d015b323886ba61` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/party_local_rkg_ephemeral_v1.rs` | `4fa6c140ce64499ddff01f3cb28501703b3c3132eade1784d9516df7eb7ec619` |
+| `crates/iroha_zkp_halo2/src/vega.rs` | `60b31745a00c20a5ae356037dc5c10c1581704ac3170f55bb0cb936657a84fee` |
+| `crates/iroha_zkp_halo2/src/vega/masked_relaxed.rs` | `262b8189f6ddb59b069913cd53eeeb159d352339115f389b3c0a5fbebbb776d9` |
+| `crates/iroha_zkp_halo2/src/vega/sponge.rs` | `6eb48cb13dc9afb1a5a088d11ec918235d584234d8fad87170dd606e2eb5a81c` |
+| `crates/iroha_zkp_halo2/src/generalized_bulletproof.rs` | `3d5e1fcf8a34e3e55b2e8f9fb4062f2adf7c5ce766bddb4a6884df66ce59eb7d` |
+| `crates/iroha_zkp_halo2/src/generalized_bulletproof/exact_small_coefficient_source_v1.rs` | `1f9d45b7673ef85e92b56d9a442b61cddf7bee87cc5398d009d4085e6ed26533` |
+| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256.rs` | `35e546ee0cb5108c235d1d80d6c1a5c3fa5739a66f06f1f86edca7ee43171cc3` |
+| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256_transcript_v1.rs` | `83fd77d2277392bc4d4b5ac317ff23319e8f996d5af4f2dcf7ce7583cc12e2f2` |
+| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256_workspace_lease_v1.rs` | `cb46b5d740e6062b1ad4996560be719af766988e0ff570b36588bd81c524fafe` |
+| `crates/iroha_zkp_halo2/src/vega/curve.rs` | `6bd3b34fdaf502718443a2da907af44896f0195435713596c1b1133d252b0f80` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs` | `afa7133b7c022e7dba457acae1cf5a8c8109f26ac2c7493b5f9c1110b4bef12f` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/manifest.rs` | `43dd1d481e6262fe7d286c0dc6fee8ec8696f1da77dfcda7beb165409dfaa4cd` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_object_transport.rs` | `2f9486d6a4f55de751c50f1d39965de070f5ec2cc25e77cc53d486a2e829d6ac` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/wire.rs` | `da3acef7b6f6b519938bc4d22baff2380bf189ff3ee6aa6b822696a6e697737d` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_ceremony.rs` | `fe85cc7a1c5b443c1d00b1c0ce4340c88c0e0eecae0ea0955f31e39475615ae9` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_relation.rs` | `54bfabae233502eb9c05d2682e544253715f41dc7a45d13b00f1aaf369b1f656` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_relation_common_a.rs` | `e049575a3b8a8b0f75a260a02a0815b612cf3bcb83266b38360cb6b40301a8f1` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_relation/state_owned_creator_v1.rs` | `756153513f97e0fbb4925af649bb8390ec890c4317934acadfdcac0d5a5dc7b0` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_relation/state_owned_secret_adapter_v1.rs` | `e06a9ccd292c7769cdee2568996c3af2d8326978baaaa9d44d0341e419feea92` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/persistent_decryption_equality.rs` | `304ccbfcfbcbb6f250e5f022b95e72c434ca00b60e0f3ade4b0597480bf40b84` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/exact_eight_chunk_membership.rs` | `1babb96a2796ace46f4fbbae3ac2eb3145e6ee4236990a22d0ac749353823859` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/persistent_membership_evidence.rs` | `181b849eb5768ddccf2942c3843eeef32746ec531ef23dbbff37ca58ce1e11a7` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective.rs` | `4e2b545df7303a3680be73dd15a705c6f56b05361213544e7f78457eee0b34bc` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/borrowed_product.rs` | `b3519af60e2f3f61e8797be964be76bc98122a4df606e38c745563ded6fcbfed` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/persistent_direct_opening_v1.rs` | `e6da14a973093b0751d07342b55a083001e2bd3cac837b6f7530d3402fa7dc87` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/party_local_rkg_ephemeral_v1.rs` | `07348243c3b2a986ca7b61626d140dac8193701efab920640adfb24eb749d5da` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_candidate_v1.rs` | `58c49c41a3e819348cb535d1f53ca06ed96233e77d34bffb1ef9b67217df6f66` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_creator_v2.rs` | `f5b982d52b82e16e3575dd1d99ac77e2306f123eafd90e7c8e3e3a3c60078a41` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_publication_v1.rs` | `88b76057d3fbd5e9d3339c8985f4ebf6f4d4a8bda05b9f650b9a183dbed62b69` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs` | `abc0580f8e6747fdfca7cf8f185a20e60cb3d1e8353f7448a5694ba2b455253b` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_record_v2.rs` | `fb02a926fdb8ebceb6882cec1e79d4f957d75c67beb1224c99966d3c65f65091` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_sealed_candidate_v1.rs` | `2b9179d061d42f0c01cc222c3d3772c0937d08c1f81144a4a85b285e100e961c` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_rkg_ephemeral_membership.rs` | `d001681b891574a124783951133a069954f96c07a66346ca93df2bb69cf4c5be` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1.rs` | `e719cb268cdf0be394272db4c13fbd5be82e90814e6d494c5abedca386b4ce74` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active.rs` | `782f239a3b844a2ac3303c50877462509cab95af4583e3f167c17432ece73dae` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_common_a_v1.rs` | `953916ba1c94edc69acbb41c71dd4be09666c611cfeaa2caf8275945260c49ed` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_common_a_v1/creator_replay_v1.rs` | `b1524d148bb20bff22144de04a7eb877d27949cad944ff853f71fd898fb5c6a2` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1.rs` | `c63e85c714da2de177d007248c5f2151d0d4d93d26d63bdfcf8ff22665301bc9` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/response_commitment_v1.rs` | `c0e428e9f10073b309ca287044e87d7a38f223824c053e7c45c9561f68145536` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_response_v1.rs` | `fcdab00a646888c3227cec0a04537a3bc63068b1667dbe1cd8c4f1bee9721a4a` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_response_v1/rns_first_messages_v1.rs` | `98a87b09819ccd93d970a32c1613f67d9c577577654ecb40c7af9f58253bdde2` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_membership_v1.rs` | `990f1eadb3f9199a0c33f627bb942cfd1fdf267de269b0806860b6c8271d81c0` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs` | `6e3c437cc92b5b65dd2e5fbc5a71b81b25ceb2e7eb373395739c6b2f961bd293` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs` | `f1aa4ba944f929ea322ea7f3d710a32e6a933a331fb9441859b757835c8a49fe` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1/transcript_v1.rs` | `658e7aae564868ce3997240b87dc27e8add6b2f583b0895e08ba9a98961cdafb` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/statement_v1.rs` | `cb28a30ff5f4069f20638aec702beae5103abae41870c88660cf1d25a1bb4f76` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/statement_v1/rkg_one_h0_h1_replay_v1.rs` | `e435eb280a9da280231008cf24e581a7a660989cd6239b4f5db5c9a2401a29c6` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/statement_v1/rkg_one_creator_core_v1.rs` | `8c038b0b5304e09dcb9aa99aaef33fad4d25c18f2dc7af3e44871153449f97bf` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_rkg_one_creator_adapter_v1.rs` | `5d0e4f671ad0ba31bfc781a8892565f03c30f36f57ff27274f863e26e7e46ea7` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1.rs` | `43eb5fa77d9985c92a5f7fc8d7b7e2c73834ee5600b20b786f811a8dd5b4c7b1` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1/rkg_one_semantic_verifier_v1.rs` | `25be7c86805756a1855421a2350c4c509afcd9d8633e70b5f4dde115ec9b99b9` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_collective_eval_ceremony.rs` | `b569555f674cb1ed1787efc7690993c77b4067b4e2666087b019f7a9aa99ebef` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding.rs` | `e038ce8090ffcc2674eb726be6521f38e56d2df513916af8c3eeb4070d80e086` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding.rs` | `cb601f6ce2ff4d7766dec5f190371afcbf09bf63b67b95c4857cb89d5211f888` |
+
+This table is exhaustive for the production Rust inputs used by the five
+source-refinement facts below. Test-only children and production siblings
+unrelated to those facts—including Galois, streaming, incremental,
+prepared-public-A, and release-admission paths—are outside this snapshot
+unless listed explicitly.
 
 `Cargo.lock` pins `halo2curves` 0.9.0, `keccak` 0.1.6,
 `sha3` 0.10.9, and `tiny-keccak` 2.0.2. It does not pin an upstream

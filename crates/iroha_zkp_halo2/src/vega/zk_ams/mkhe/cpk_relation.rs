@@ -34,8 +34,8 @@ use super::{
     },
     exact_eight_chunk_membership::{
         CpkErrorMembershipRoleV1, ExactEightChunkMembershipContextV1,
-        ExactEightChunkMembershipEvidenceV1, VerifiedExactEightChunkMembershipV1,
-        ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
+        ExactEightChunkMembershipErrorV1 as ExactError, ExactEightChunkMembershipEvidenceV1,
+        VerifiedExactEightChunkMembershipV1, ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
     },
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_security_certificate_v1,
@@ -49,12 +49,16 @@ use super::{
     wire::ZkAmsMkheAuthenticationWireV1,
 };
 use crate::{
-    generalized_bulletproof::{ProofRandomSource, ProofSuite, multiexp},
+    generalized_bulletproof::{
+        GeneralizedBulletproofErrorV1 as BpError, ProofRandomSource, ProofSuite, multiexp,
+        try_exact_capacity_vec_v1,
+    },
     vega::{
         MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-            ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
+            ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipErrorV1 as MembershipError,
+            ZkAmsT256MembershipProofV1,
         },
         sponge::{Keccak256, Shake256Reader},
     },
@@ -66,12 +70,15 @@ use core::{
 use thiserror::Error;
 #[path = "cpk_relation_common_a.rs"]
 mod common_a;
+#[path = "cpk_relation/state_owned_creator_v1.rs"]
+mod state_owned_creator_v1;
 #[path = "cpk_relation/state_owned_secret_adapter_v1.rs"]
 pub(super) mod state_owned_secret_adapter_v1;
 pub(super) use common_a::{
     ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
     derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
 };
+pub(super) use state_owned_creator_v1::publish_canonical_cpk_relation_proof_v1;
 const CPK_SHARE_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZCPS";
 const CPK_RELATION_PROOF_MAGIC_V1: [u8; 4] = *b"ZCPR";
 const CPK_RELATION_ALGORITHM_V1: u8 = 1;
@@ -645,6 +652,22 @@ impl ZkAmsMkheCpkErrorMembershipContextV1 {
         self.inner.context_digest()
     }
 }
+fn map_membership_prover_error_v1(error: MembershipError) -> ZkAmsMkheCpkRelationErrorV1 {
+    use BpError::{ProverRandomnessExhausted, RandomnessUnavailable, ResourceOverflow};
+    use MembershipError::Backend;
+    use ZkAmsMkheCpkRelationErrorV1 as Error;
+    match error {
+        Backend(RandomnessUnavailable | ProverRandomnessExhausted) => Error::RandomUnavailable,
+        Backend(ResourceOverflow) => Error::ResourceCeiling,
+        _ => Error::MembershipEvidence,
+    }
+}
+fn map_exact_membership_error_v1(error: ExactError) -> ZkAmsMkheCpkRelationErrorV1 {
+    let ExactError::Membership(error) = error else {
+        return ZkAmsMkheCpkRelationErrorV1::MembershipEvidence;
+    };
+    map_membership_prover_error_v1(error)
+}
 /// Canonical eight-chunk bound-two evidence for the public CPK error polynomial.
 ///
 /// This type is not interchangeable with persistent-secret membership even
@@ -663,7 +686,7 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
     ) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         ExactEightChunkMembershipEvidenceV1::prove(context.inner, coefficients, blindings, random)
             .map(|inner| Self { inner })
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
+            .map_err(map_exact_membership_error_v1)
     }
     /// Verify and assemble eight externally supplied bound-two chunks.
     pub(super) fn from_proof_chunks_verified(
@@ -684,7 +707,10 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
         self.inner
             .to_wire_bytes()
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
+            .map_err(map_exact_membership_error_v1)
+    }
+    pub(super) fn into_wire_bytes(self) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
+        self.to_wire_bytes()
     }
     /// Replay all eight bound-two proofs without retaining a capability.
     pub(super) fn verify(&self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
@@ -1091,9 +1117,7 @@ impl CpkRelationBodyV1 {
     ) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
         self.validate(shape)?;
         let expected = shape.body_bytes()?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(expected)
+        let mut bytes = try_exact_capacity_vec_v1(expected)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         bytes.extend_from_slice(&self.challenge_seed);
         for response in &self.responses {
@@ -1116,9 +1140,7 @@ impl CpkRelationBodyV1 {
         }
         let response_count = shape.response_count()?;
         let blind_response_count = shape.blind_response_count()?;
-        let mut responses = Vec::new();
-        responses
-            .try_reserve_exact(response_count)
+        let mut responses = try_exact_capacity_vec_v1(response_count)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         let mut cursor = CPK_CHALLENGE_SEED_BYTES_V1;
         for _ in 0..response_count {
@@ -1129,9 +1151,7 @@ impl CpkRelationBodyV1 {
             responses.push(response);
             cursor += CPK_SIGNED_RESPONSE_BYTES_V1;
         }
-        let mut blind_responses = Vec::new();
-        blind_responses
-            .try_reserve_exact(blind_response_count)
+        let mut blind_responses = try_exact_capacity_vec_v1(blind_response_count)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         for _ in 0..blind_response_count {
             let encoded = array_at::<32>(bytes, cursor)?;
@@ -1183,8 +1203,7 @@ impl ZkAmsMkheCpkRelationProofV1 {
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
         let header = self.header.to_wire_bytes()?;
         let body = self.body.to_wire_bytes(CpkRelationShapeV1::RELEASE)?;
-        let mut wire = Vec::new();
-        wire.try_reserve_exact(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1)
+        let mut wire = try_exact_capacity_vec_v1(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         wire.extend_from_slice(&header);
         wire.extend_from_slice(&body);
@@ -1342,7 +1361,7 @@ static CPK_SCALAR_COPY_ERASURE_DROP_CALLS_V1: core::sync::atomic::AtomicUsize =
 ///
 /// Its owned named copies receive best-effort erasure on drop. Compiler-created
 /// copies, register temporaries, and process-abort paths cannot be guaranteed.
-pub(super) struct ZkAmsMkheCpkRelationMaskAttemptV1 {
+struct ZkAmsMkheCpkRelationMaskAttemptV1 {
     shape: CpkRelationShapeV1,
     masks: BestEffortErasingI64VecV1,
     blind_masks: BestEffortErasingScalarVecV1,
@@ -1358,12 +1377,6 @@ impl fmt::Debug for ZkAmsMkheCpkRelationMaskAttemptV1 {
     }
 }
 impl ZkAmsMkheCpkRelationMaskAttemptV1 {
-    /// Sample every release-shape mask exactly uniformly and every scalar blinding freshly.
-    pub(super) fn sample<R: MaskedRelaxedRandomSourceV1>(
-        random: &mut R,
-    ) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
-        Self::sample_for_shape(CpkRelationShapeV1::RELEASE, random)
-    }
     fn sample_for_shape<R: MaskedRelaxedRandomSourceV1>(
         shape: CpkRelationShapeV1,
         random: &mut R,
@@ -1371,24 +1384,30 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
         shape.validate()?;
         let response_count = shape.response_count()?;
         let blind_count = shape.blind_response_count()?;
-        let mut masks = BestEffortErasingI64VecV1(Vec::new());
-        masks
-            .0
-            .try_reserve_exact(response_count)
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+        let mut masks = BestEffortErasingI64VecV1(
+            try_exact_capacity_vec_v1(response_count)
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?,
+        );
+        let masks_allocation = masks.0.as_ptr();
         for _ in 0..response_count {
             masks.0.push(sample_exact_uniform_signed_box_v1(
                 random,
                 ZK_AMS_MKHE_CPK_MASK_BOUND_V1,
             )?);
         }
-        let mut blind_masks = BestEffortErasingScalarVecV1(Vec::new());
-        blind_masks
-            .0
-            .try_reserve_exact(blind_count)
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+        if masks.0.len() != response_count || masks.0.as_ptr() != masks_allocation {
+            return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
+        }
+        let mut blind_masks = BestEffortErasingScalarVecV1(
+            try_exact_capacity_vec_v1(blind_count)
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?,
+        );
+        let blind_masks_allocation = blind_masks.0.as_ptr();
         for _ in 0..blind_count {
             blind_masks.0.push(sample_t256_scalar_v1(random)?);
+        }
+        if blind_masks.0.len() != blind_count || blind_masks.0.as_ptr() != blind_masks_allocation {
+            return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
         }
         Ok(Self {
             shape,
@@ -1398,12 +1417,12 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
     }
     /// Signed masks in repetition/role/coefficient order for first-message algebra.
     #[must_use]
-    pub(super) fn masks(&self) -> &[i64] {
+    fn masks(&self) -> &[i64] {
         self.masks.as_slice()
     }
     /// Scalar masks in repetition/role/chunk order for commitment first messages.
     #[must_use]
-    pub(super) fn blind_masks(&self) -> &[Scalar] {
+    fn blind_masks(&self) -> &[Scalar] {
         self.blind_masks.as_slice()
     }
     /// Consume one attempt into public responses or reject it.
@@ -1411,7 +1430,7 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
     /// Rejected attempts retain no externally reachable partial response, and
     /// their owned named mask copies receive best-effort erasure during drop.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn into_responses(
+    fn into_responses(
         mut self,
         challenge_seed: [u8; 32],
         challenges: [u32; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1],
@@ -1448,6 +1467,8 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
         {
             return Err(ZkAmsMkheCpkRelationErrorV1::Witness);
         }
+        let masks_allocation = self.masks.0.as_ptr();
+        let blind_masks_allocation = self.blind_masks.0.as_ptr();
         for (repetition, &challenge) in challenges.iter().enumerate() {
             let challenge = i64::from(challenge);
             for role in 0..self.shape.witnesses {
@@ -1484,6 +1505,15 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
             }
             challenge_scalar.clear_secret();
         }
+        if self.masks.0.len() != self.shape.response_count()?
+            || self.masks.0.capacity() != self.shape.response_count()?
+            || self.masks.0.as_ptr() != masks_allocation
+            || self.blind_masks.0.len() != self.shape.blind_response_count()?
+            || self.blind_masks.0.capacity() != self.shape.blind_response_count()?
+            || self.blind_masks.0.as_ptr() != blind_masks_allocation
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
+        }
         let responses = self.masks.into_public();
         let blind_responses = self.blind_masks.into_public();
         let body = CpkRelationBodyV1 {
@@ -1519,7 +1549,7 @@ impl fmt::Debug for ZkAmsMkheCpkProverResponseV1 {
 /// bounded attempt. Malformed transcript, RNS-stream, and provider errors remain terminal. Retry
 /// ordinals are intentionally absent from both callback input and wire.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn construct_zk_ams_mkhe_cpk_responses_with_aborts_v1<R, F>(
+fn construct_zk_ams_mkhe_cpk_responses_with_aborts_v1<R, F>(
     secret: &[i8],
     error: &[i8],
     secret_blindings: &[Scalar],
@@ -1923,21 +1953,18 @@ fn cpk_challenges_from_seed_v1(seed: [u8; 32]) -> [u32; ZK_AMS_MKHE_CPK_CHALLENG
 fn active_collective_public_a_context_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
-) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
+) -> Result<[u8; 1 + 32 + 8 + 32], ZkAmsMkheCpkRelationErrorV1> {
     roster
         .validate()
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
     if cpk_transcript_digest == [0; 32] {
         return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
     }
-    let mut context = Vec::new();
-    context
-        .try_reserve_exact(1 + 32 + 8 + 32)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    context.push(MKHE_VERSION_V1);
-    context.extend_from_slice(&roster.roster_digest());
-    context.extend_from_slice(&roster.epoch().to_be_bytes());
-    context.extend_from_slice(&cpk_transcript_digest);
+    let mut context = [0_u8; 1 + 32 + 8 + 32];
+    context[0] = MKHE_VERSION_V1;
+    context[1..33].copy_from_slice(&roster.roster_digest());
+    context[33..41].copy_from_slice(&roster.epoch().to_be_bytes());
+    context[41..].copy_from_slice(&cpk_transcript_digest);
     Ok(context)
 }
 fn cpk_public_a_context_digest_v1(
@@ -2261,9 +2288,7 @@ where
         if limb != self.next_limb || limb >= self.shape.limbs || modulus <= u64::from(u32::MAX) {
             return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
         }
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(self.shape.degree)
+        let mut values = try_exact_capacity_vec_v1(self.shape.degree)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
         while values.len() != self.shape.degree {
@@ -2322,8 +2347,7 @@ where
         provider,
     )
     .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
-    let mut wire = Vec::new();
-    wire.try_reserve_exact(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1)
+    let mut wire = try_exact_capacity_vec_v1(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1)
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
     let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
     while transaction.remaining_bytes() != 0 {
@@ -2399,10 +2423,7 @@ fn cpk_authentication_wire_digest_v1(authentication: ZkAmsMkheAuthenticationWire
     hash.update(&authentication.signature());
     hash.finalize()
 }
-/// Authenticate the exact statement, both membership wires, and both direct-object pointers.
-///
-/// The relation proof must already have been encoded and content-addressed.
-/// The authentication scalar never crosses this boundary.
+/// Authenticate exact public inputs after proof publication without exposing the signing scalar.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn authenticate_zk_ams_mkhe_cpk_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
     statement: ZkAmsMkheCpkShareStatementV1,
@@ -2413,6 +2434,7 @@ pub(super) fn authenticate_zk_ams_mkhe_cpk_contribution_v1<R: MaskedRelaxedRando
     party_secret: &ZkAmsMkheActivePartySecretV1,
     random: &mut R,
 ) -> Result<ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCpkRelationErrorV1> {
+    use ZkAmsMkheCpkRelationErrorV1::{Authentication, RandomUnavailable};
     let contribution_digest = complete_cpk_contribution_digest_v1(
         statement,
         header,
@@ -2422,7 +2444,10 @@ pub(super) fn authenticate_zk_ams_mkhe_cpk_contribution_v1<R: MaskedRelaxedRando
     )?;
     let authentication = party_secret
         .authenticate_artifact(CPK_CONTRIBUTION_AUTH_DOMAIN_V1, contribution_digest, random)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)?;
+        .map_err(|error| match error {
+            super::ZkAmsMkheErrorV1::RandomUnavailable => RandomUnavailable,
+            _ => Authentication,
+        })?;
     if authentication.party != statement.party() {
         return Err(ZkAmsMkheCpkRelationErrorV1::Authentication);
     }
@@ -4148,8 +4173,13 @@ mod tests {
         let attempt = ZkAmsMkheCpkRelationMaskAttemptV1::sample_for_shape(shape, &mut random)
             .expect("tiny attempt");
         assert_eq!(attempt.masks().len(), shape.response_count().unwrap());
+        assert_eq!(attempt.masks.0.capacity(), shape.response_count().unwrap());
         assert_eq!(
             attempt.blind_masks().len(),
+            shape.blind_response_count().unwrap()
+        );
+        assert_eq!(
+            attempt.blind_masks.0.capacity(),
             shape.blind_response_count().unwrap()
         );
         assert!(
@@ -4557,5 +4587,63 @@ mod tests {
         // The membership-input scaffold still has no relation-receipt
         // constructor or active-binding conversion. Only the complete
         // governed provider/authentication verifier can consume it.
+    }
+    #[test]
+    fn state_owned_cpk_capacity_precursor_is_closed_without_opening_a_gate() {
+        let relation = include_str!("cpk_relation.rs")
+            .rsplit_once("\n#[cfg(test)]\nmod tests {")
+            .unwrap()
+            .0;
+        let creator = include_str!("cpk_relation/state_owned_creator_v1.rs");
+        let common_a = include_str!("cpk_relation_common_a.rs");
+        let lease = include_str!("../../bulletproof_t256_workspace_lease_v1.rs");
+        let mkhe = include_str!("../mkhe.rs");
+        let profile = mkhe
+            .split("impl BgvProfile {")
+            .nth(1)
+            .unwrap()
+            .split("struct RnsPolynomial")
+            .next()
+            .unwrap();
+        let masks = relation
+            .split("fn sample_for_shape")
+            .nth(1)
+            .unwrap()
+            .split("fn masks(&self)")
+            .next()
+            .unwrap();
+        assert_eq!(masks.matches("try_exact_capacity_vec_v1(").count(), 2);
+        assert_eq!(masks.matches(".as_ptr()").count(), 4);
+        assert_eq!(masks.matches(".len() !=").count(), 2);
+        assert!(!masks.contains("try_reserve_exact"));
+        assert!(relation.contains("self.masks.0.capacity() != self.shape.response_count()?"));
+        assert!(relation.contains("self.masks.0.as_ptr() != masks_allocation"));
+        assert!(relation.contains("self.blind_masks.0.as_ptr() != blind_masks_allocation"));
+        assert!(relation.contains("let mut values = try_exact_capacity_vec_v1(self.shape.degree)"));
+        assert!(relation.contains("let mut wire = try_exact_capacity_vec_v1("));
+        let mut prior = 0;
+        for needle in [
+            "statement.validate_against_governed_roster(",
+            "ZkAmsMkheCpkRelationHeaderV1::new(",
+            "let _workspace = acquire_zk_ams_t256_cpk_workspace_v1()",
+            "construct_zk_ams_mkhe_cpk_responses_with_aborts_v1(",
+            "ZkAmsMkheCpkRelationProofV1::from_prover_response(",
+        ] {
+            prior += creator[prior..].find(needle).unwrap() + needle.len();
+        }
+        assert!(!creator.contains("drop(_workspace)"));
+        assert!(creator.contains("let mut digests = ["));
+        assert!(creator.contains("let mut builders = ["));
+        assert!(!creator.contains("Vec::with_capacity"));
+        assert!(!creator.contains("collect::<Result<Vec"));
+        assert!(common_a.contains("frame_prefix: [u8;"));
+        assert!(common_a.contains("let mut frame = [0_u8;"));
+        assert!(common_a.contains("try_exact_capacity_vec_v1(self.profile.ring_degree)"));
+        assert!(!common_a.contains("Vec::new"));
+        assert!(lease.contains("fn acquire_zk_ams_t256_cpk_workspace_v1()"));
+        assert!(lease.contains("T256MembershipWorkspaceRoleV1::Commitment"));
+        assert_eq!(profile.matches("try_exact_capacity_vec_v1(").count(), 3);
+        assert!(!profile.contains("Vec::with_capacity"));
+        assert!(!ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1);
     }
 }

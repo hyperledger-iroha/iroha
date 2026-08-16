@@ -8153,24 +8153,24 @@ mod kagemusha_v4_artifact_contract_tests {
             .release_attestation_subject()
             .expect("second V4 attestation subject");
         assert_eq!(first_subject, second_subject);
-        let assert_subject_changes = |tampered: &mut _| {
-                let candidate = unsigned_candidate(tampered);
-                tampered.qualified_candidate_sha256 =
-                    kagemusha_recursive_spend_qualified_candidate_sha256_v4(
-                        candidate.sha256().expect("modified V4 candidate identity"),
-                        tampered.qualification_receipt_sha256,
-                    );
-                let subject = tampered
-                    .release_attestation_subject()
-                    .expect("valid modified V4 subject");
-                assert_ne!(second_subject, subject);
-            };
+        let resealed_subject = |tampered: &mut _| {
+            let candidate = unsigned_candidate(tampered);
+            tampered.qualified_candidate_sha256 =
+                kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                    candidate.sha256().expect("modified V4 candidate identity"),
+                    tampered.qualification_receipt_sha256,
+                );
+            tampered
+                .release_attestation_subject()
+                .expect("valid modified V4 subject")
+        };
         let mut params_tamper = manifest.clone();
-        params_tamper.profiles[0].circuit_params.minimum_unusable_rows += 1;
-        assert_subject_changes(&mut params_tamper);
+        let params = &mut params_tamper.profiles[0].circuit_params;
+        params.minimum_unusable_rows += 1;
+        assert_ne!(second_subject, resealed_subject(&mut params_tamper));
         let mut bootstrap_tamper = manifest.clone();
         bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
-        assert_subject_changes(&mut bootstrap_tamper);
+        assert_ne!(second_subject, resealed_subject(&mut bootstrap_tamper));
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,

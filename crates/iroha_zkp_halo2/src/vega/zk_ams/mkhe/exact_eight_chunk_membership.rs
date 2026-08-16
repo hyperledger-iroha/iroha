@@ -7,7 +7,9 @@
 //! one another and no verified membership capability alone establishes a polynomial relation.
 use super::ZkAmsMkhePartyIdV1;
 use crate::{
-    generalized_bulletproof::ProofRandomSource,
+    generalized_bulletproof::{
+        GeneralizedBulletproofErrorV1, ProofRandomSource, try_exact_capacity_vec_v1,
+    },
     vega::{
         VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{
@@ -15,7 +17,6 @@ use crate::{
             ZkAmsT256MembershipBoundV1, ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
             preflight_zk_ams_t256_membership_chunk_wire_v1, prove_zk_ams_t256_membership_chunk_v1,
             verify_zk_ams_t256_membership_chunk_v1, verify_zk_ams_t256_membership_chunk_wire_v1,
-            zk_ams_t256_bulletproof_generator_basis_digest_v1,
         },
         sponge::Keccak256,
     },
@@ -218,6 +219,17 @@ pub(super) enum ExactEightChunkMembershipErrorV1 {
     #[error(transparent)]
     Membership(#[from] ZkAmsT256MembershipErrorV1),
 }
+fn try_exact_membership_vec_v1<T>(
+    capacity: usize,
+) -> Result<Vec<T>, ExactEightChunkMembershipErrorV1> {
+    try_exact_capacity_vec_v1(capacity)
+        .map_err(|error| ExactEightChunkMembershipErrorV1::Membership(error.into()))
+}
+fn membership_resource_overflow_v1() -> ExactEightChunkMembershipErrorV1 {
+    ExactEightChunkMembershipErrorV1::Membership(
+        GeneralizedBulletproofErrorV1::ResourceOverflow.into(),
+    )
+}
 /// Complete public context absorbed by every chunk and ordered-set root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ExactEightChunkMembershipContextV1<R> {
@@ -409,7 +421,6 @@ impl<'a, R: ExactEightChunkMembershipRoleV1> PreflightedExactEightChunkMembershi
     /// The preflighted frame remains reusable. This returns no capability or receipt and retains
     /// only the eight transcript digests needed to recheck the exact ordered transcript-set root.
     pub(super) fn verify_replayable(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
-        ensure_canonical_generator_basis()?;
         self.verify_replayable_with(|context_digest, ordinal, wire| {
             verify_zk_ams_t256_membership_chunk_wire_v1(context_digest, ordinal, R::BOUND, wire)
                 .map_err(Into::into)
@@ -506,12 +517,12 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         if coefficients.len() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 {
             return Err(ExactEightChunkMembershipErrorV1::Shape);
         }
-        ensure_canonical_generator_basis()?;
         let context_digest = context.context_digest();
         if context_digest == [0; 32] {
             return Err(ExactEightChunkMembershipErrorV1::Context);
         }
-        let mut chunks = Vec::with_capacity(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1);
+        let mut chunks = try_exact_membership_vec_v1(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1)?;
+        let chunk_allocation = chunks.as_ptr();
         let mut prover_transcripts = [[0_u8; 32]; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
         for (index, coefficients) in coefficients
             .chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
@@ -527,8 +538,19 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
                 &blindings[index],
                 random,
             )?;
+            if chunks.len() >= ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
+                return Err(ExactEightChunkMembershipErrorV1::Shape);
+            }
             chunks.push(proof);
             prover_transcripts[index] = transcript_digest;
+        }
+        if chunks.len() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
+            return Err(ExactEightChunkMembershipErrorV1::Shape);
+        }
+        if chunks.capacity() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1
+            || chunks.as_ptr() != chunk_allocation
+        {
+            return Err(membership_resource_overflow_v1());
         }
         let chunks = chunks
             .try_into()
@@ -551,7 +573,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
     ) -> Result<Self, ExactEightChunkMembershipErrorV1> {
         context.validate()?;
         validate_chunk_shape::<R>(&chunks)?;
-        ensure_canonical_generator_basis()?;
         let context_digest = context.context_digest();
         let mut transcript_digests = [[0_u8; 32]; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
         for (index, chunk) in chunks.iter().enumerate() {
@@ -619,6 +640,26 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         evidence.validate_structural_digests()?;
         Ok(evidence)
     }
+    /// Consume this container without cloning any retained proof buffer.
+    pub(super) fn into_structural_parts(
+        self,
+    ) -> (
+        ExactEightChunkMembershipContextV1<R>,
+        [u8; 32],
+        [ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
+        [u8; 32],
+        [u8; 32],
+        [u8; 32],
+    ) {
+        (
+            self.context,
+            self.generator_basis_digest,
+            self.chunks,
+            self.commitment_set_digest,
+            self.proof_set_digest,
+            self.verifier_transcript_digest,
+        )
+    }
     /// Strictly decode one exact role-specific canonical evidence frame.
     pub(super) fn from_wire_bytes_exact(
         bytes: &[u8],
@@ -652,7 +693,8 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         let proof_set_digest = array_at::<32>(bytes, OFFSET_PROOF_SET_DIGEST_V1)?;
         let verifier_transcript_digest =
             array_at::<32>(bytes, OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1)?;
-        let mut chunks = Vec::with_capacity(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1);
+        let mut chunks = try_exact_membership_vec_v1(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1)?;
+        let chunk_allocation = chunks.as_ptr();
         for index in 0..ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
             let start = EXACT_MEMBERSHIP_HEADER_BYTES_V1
                 .checked_add(
@@ -664,11 +706,22 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
             let end = start
                 .checked_add(R::CHUNK_WIRE_BYTES)
                 .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            if chunks.len() >= ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
+                return Err(ExactEightChunkMembershipErrorV1::Shape);
+            }
             chunks.push(ZkAmsT256MembershipProofV1::from_wire_bytes_exact(
                 bytes
                     .get(start..end)
                     .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?,
             )?);
+        }
+        if chunks.len() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
+            return Err(ExactEightChunkMembershipErrorV1::Shape);
+        }
+        if chunks.capacity() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1
+            || chunks.as_ptr() != chunk_allocation
+        {
+            return Err(membership_resource_overflow_v1());
         }
         let evidence = Self {
             context,
@@ -688,7 +741,8 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         self.validate_structural_digests()?;
         let coefficient_count = u32::try_from(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
             .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?;
-        let mut bytes = Vec::with_capacity(R::WIRE_BYTES);
+        let mut bytes = try_exact_membership_vec_v1(R::WIRE_BYTES)?;
+        let wire_allocation = bytes.as_ptr();
         bytes.extend_from_slice(&R::MAGIC);
         bytes.push(EXACT_MEMBERSHIP_VERSION_V1);
         bytes.push(R::BOUND as u8);
@@ -709,7 +763,7 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         bytes.extend_from_slice(&self.proof_set_digest);
         bytes.extend_from_slice(&self.verifier_transcript_digest);
         for chunk in &self.chunks {
-            let chunk_wire = chunk.to_wire_bytes();
+            let chunk_wire = chunk.try_to_wire_bytes_exact_capacity_v1()?;
             if chunk_wire.len() != R::CHUNK_WIRE_BYTES {
                 return Err(ExactEightChunkMembershipErrorV1::Shape);
             }
@@ -718,13 +772,15 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         if bytes.len() != R::WIRE_BYTES {
             return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
         }
+        if bytes.capacity() != R::WIRE_BYTES || bytes.as_ptr() != wire_allocation {
+            return Err(membership_resource_overflow_v1());
+        }
         Ok(bytes)
     }
     /// Replay all eight proofs and return a move-only membership capability.
     pub(super) fn into_verified(
         self,
     ) -> Result<VerifiedExactEightChunkMembershipV1<R>, ExactEightChunkMembershipErrorV1> {
-        ensure_canonical_generator_basis()?;
         self.verify_with(|context_digest, ordinal, chunk| {
             verify_zk_ams_t256_membership_chunk_v1(context_digest, ordinal, R::BOUND, chunk)
                 .map_err(Into::into)
@@ -732,7 +788,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
     }
     /// Replay all proofs without retaining the resulting typed capability.
     pub(super) fn verify(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
-        ensure_canonical_generator_basis()?;
         self.verify_with_ref(|context_digest, ordinal, chunk| {
             verify_zk_ams_t256_membership_chunk_v1(context_digest, ordinal, R::BOUND, chunk)
                 .map_err(Into::into)
@@ -912,14 +967,6 @@ impl<R: ExactEightChunkMembershipRoleV1> VerifiedExactEightChunkMembershipV1<R> 
         self.verifier_transcript_digest
     }
 }
-fn ensure_canonical_generator_basis() -> Result<(), ExactEightChunkMembershipErrorV1> {
-    if zk_ams_t256_bulletproof_generator_basis_digest_v1()
-        != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
-    {
-        return Err(ExactEightChunkMembershipErrorV1::GeneratorBasis);
-    }
-    Ok(())
-}
 fn validate_chunk_shape<R: ExactEightChunkMembershipRoleV1>(
     chunks: &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<(), ExactEightChunkMembershipErrorV1> {
@@ -929,8 +976,10 @@ fn validate_chunk_shape<R: ExactEightChunkMembershipRoleV1>(
             || usize::try_from(chunk.coefficient_count()).ok()
                 != Some(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
             || chunk.proof_bytes().len() != R::PROOF_BYTES
+            || chunk.proof_capacity() != R::PROOF_BYTES
             || chunk.commitment().is_identity()
-            || chunk.to_wire_bytes().len() != R::CHUNK_WIRE_BYTES
+            || MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1.checked_add(chunk.proof_bytes().len())
+                != Some(R::CHUNK_WIRE_BYTES)
         {
             return Err(ExactEightChunkMembershipErrorV1::Shape);
         }
@@ -1052,7 +1101,7 @@ pub(super) fn proof_set_digest<R: ExactEightChunkMembershipRoleV1>(
         generator_basis_digest,
     );
     for (index, chunk) in chunks.iter().enumerate() {
-        let wire = chunk.to_wire_bytes();
+        let wire = chunk.try_to_wire_bytes_exact_capacity_v1()?;
         if wire.len() != R::CHUNK_WIRE_BYTES {
             return Err(ExactEightChunkMembershipErrorV1::Shape);
         }
@@ -1914,4 +1963,5 @@ mod tests {
             keccak256(b"iroha.zk-ams.v1.mkhe.persistent-membership.context")
         );
     }
+    include!("exact_eight_chunk_membership_capacity_tests.rs");
 }

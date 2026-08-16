@@ -1,25 +1,31 @@
 //! Limb-wise multiplication from an immutable canonical residue source.
 use super::{BgvProfile, RnsPolynomial, ZeroizingRns, ZkAmsMkheErrorV1};
-struct ZeroizingU64VectorV1(Option<Vec<u64>>);
+pub(in crate::vega::zk_ams::mkhe) struct ZeroizingU64VectorV1(Option<Vec<u64>>);
 impl ZeroizingU64VectorV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
         values
             .try_reserve_exact(capacity)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if values.capacity() != capacity {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
         Ok(Self(Some(values)))
     }
-    fn values(&self) -> &[u64] {
+    pub(in crate::vega::zk_ams::mkhe) fn values(&self) -> &[u64] {
         self.0.as_deref().unwrap_or_default()
     }
-    fn values_mut(&mut self) -> &mut Vec<u64> {
+    fn vector_mut(&mut self) -> &mut Vec<u64> {
         self.0.as_mut().expect("zeroizing owner is still armed")
     }
+    pub(in crate::vega::zk_ams::mkhe) fn values_mut(&mut self) -> &mut [u64] {
+        self.vector_mut()
+    }
     fn push(&mut self, value: u64) {
-        self.values_mut().push(value);
+        self.vector_mut().push(value);
     }
     fn extend_from_slice(&mut self, values: &[u64]) -> Result<(), ZkAmsMkheErrorV1> {
-        let output = self.values_mut();
+        let output = self.vector_mut();
         let required = output
             .len()
             .checked_add(values.len())
@@ -197,7 +203,7 @@ fn validate_inputs_v1(
     }
     Ok(coefficient_count)
 }
-fn negacyclic_multiply_signed_zeroizing_v1(
+pub(in crate::vega::zk_ams::mkhe) fn negacyclic_multiply_signed_zeroizing_v1(
     left: &[u64],
     right: &[i64],
     modulus: u64,
@@ -286,6 +292,7 @@ mod tests {
         assert!(!production.contains("derive(Clone"));
         assert!(!production.contains("impl core::fmt::Debug"));
         assert!(production.contains("impl Drop for ZeroizingU64VectorV1"));
+        assert!(production.contains("fn values_mut(&mut self) -> &mut [u64]"));
         assert!(production.contains("try_reserve_exact"));
         assert!(!production.contains(".to_vec()"));
         assert!(!production.contains("vec!["));

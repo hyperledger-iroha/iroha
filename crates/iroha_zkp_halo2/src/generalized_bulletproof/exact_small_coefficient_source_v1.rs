@@ -1,8 +1,9 @@
-//! Closed verifier-side constraint source for exact small coefficients.
+//! Closed prover/verifier constraint source for exact small coefficients.
 
 use super::{
-    ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, ProofGeneratorView, ProofScalar,
-    ProofSuite, ScalarVector, SecretScalar, VerifierConstraintSourceV1, VerifierTranscript,
+    ArithmeticCircuitStatement, ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1,
+    ProofGeneratorView, ProofRandomSource, ProofScalar, ProofSuite, ProverTranscript, ScalarVector,
+    SecretScalar, VerifierConstraintSourceV1, VerifierTranscript, try_exact_capacity_vec_v1,
 };
 
 /// Exact coefficient set represented by the closed constraint source.
@@ -86,12 +87,55 @@ impl ExactSmallCoefficientConstraintSourceV1 {
         Ok(())
     }
 
+    /// Validate the unique canonical rows directly against a padded witness.
+    pub(super) fn validate_witness<S: ProofSuite>(
+        self,
+        witness: &ArithmeticCircuitWitness<S>,
+    ) -> Result<(), GeneralizedBulletproofErrorV1> {
+        if witness.a_l.len() != self.padded_gates
+            || witness.a_r.len() != self.padded_gates
+            || witness.a_o.len() != self.padded_gates
+            || witness.vector_commitments.len() != 1
+            || witness.vector_commitments[0].values.len() != self.padded_gates
+            || !witness.scalar_commitments.is_empty()
+        {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+        }
+        let opening = &witness.vector_commitments[0].values;
+        for coefficient_index in 0..self.coefficient_count {
+            let first_gate = coefficient_index * self.bound.gates_per_coefficient();
+            validate_boolean_gate(witness, first_gate)?;
+            validate_boolean_gate(witness, first_gate + 1)?;
+            let mut relation = SecretScalar::new(S::Scalar::ZERO);
+            match self.bound {
+                ExactSmallCoefficientBoundV1::One => {
+                    *relation.expose_mut() += witness.a_l[first_gate];
+                    *relation.expose_mut() -= witness.a_l[first_gate + 1];
+                }
+                ExactSmallCoefficientBoundV1::Two => {
+                    validate_boolean_gate(witness, first_gate + 2)?;
+                    *relation.expose_mut() += witness.a_l[first_gate];
+                    *relation.expose_mut() += witness.a_l[first_gate + 1];
+                    *relation.expose_mut() -= S::Scalar::from_u64(2) * witness.a_l[first_gate + 2];
+                }
+            }
+            *relation.expose_mut() -= opening[coefficient_index];
+            if !relation.is_zero() {
+                return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+            }
+        }
+        for padded_index in self.coefficient_count..self.padded_gates {
+            validate_zero(opening[padded_index])?;
+        }
+        Ok(())
+    }
+
     /// Aggregate every canonical row once under consecutive powers of `z_one`.
     pub(super) fn aggregate<F: ProofScalar>(
         self,
         z_one: F,
     ) -> Result<ExactSmallCoefficientAggregatesV1<F>, GeneralizedBulletproofErrorV1> {
-        let mut running = RunningExactSmallCoefficientAggregateV1::new(self.padded_gates, z_one);
+        let mut running = RunningExactSmallCoefficientAggregateV1::new(self.padded_gates, z_one)?;
         for coefficient_index in 0..self.coefficient_count {
             let first_gate = coefficient_index
                 .checked_mul(self.bound.gates_per_coefficient())
@@ -135,6 +179,78 @@ impl ExactSmallCoefficientConstraintSourceV1 {
     }
 }
 
+fn validate_zero<F: ProofScalar>(value: F) -> Result<(), GeneralizedBulletproofErrorV1> {
+    let value = SecretScalar::new(value);
+    if !value.is_zero() {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    Ok(())
+}
+
+fn validate_boolean_gate<S: ProofSuite>(
+    witness: &ArithmeticCircuitWitness<S>,
+    gate: usize,
+) -> Result<(), GeneralizedBulletproofErrorV1> {
+    let mut equality = SecretScalar::new(S::Scalar::ZERO);
+    *equality.expose_mut() += witness.a_l[gate];
+    *equality.expose_mut() -= witness.a_r[gate];
+    if !equality.is_zero() {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    drop(equality);
+    let mut product = SecretScalar::new(S::Scalar::ZERO);
+    *product.expose_mut() += witness.a_o[gate];
+    *product.expose_mut() -= witness.a_l[gate];
+    if !product.is_zero() {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    Ok(())
+}
+
+/// Validated prover statement which cannot select an arbitrary row source.
+pub(crate) struct ExactSmallCoefficientProverStatementV1<'a, S: ProofSuite> {
+    statement: ArithmeticCircuitStatement<'a, S>,
+}
+
+impl<'a, S: ProofSuite> ExactSmallCoefficientProverStatementV1<'a, S> {
+    /// Validate the canonical basis, sole commitment, and exact source shape.
+    pub(crate) fn new(
+        generators: ProofGeneratorView<'a, S>,
+        source: ExactSmallCoefficientConstraintSourceV1,
+        vector_commitment: S::Point,
+    ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        let mut vector_commitments = try_exact_capacity_vec_v1(1)?;
+        vector_commitments.push(vector_commitment);
+        let mut statement = ArithmeticCircuitStatement::new(
+            generators,
+            Vec::new(),
+            vector_commitments,
+            Vec::new(),
+        )?;
+        source.validate_statement_shape(
+            statement.generators.g_bold.len(),
+            statement.vector_commitments.len(),
+            statement.scalar_commitments.len(),
+        )?;
+        statement.exact_small_coefficient_prover_source = Some(source);
+        Ok(Self { statement })
+    }
+
+    /// Consume the statement through the shared generalized prover core.
+    pub(crate) fn prove<R, T>(
+        self,
+        rng: &mut R,
+        transcript: &mut T,
+        witness: ArithmeticCircuitWitness<S>,
+    ) -> Result<(), GeneralizedBulletproofErrorV1>
+    where
+        R: ProofRandomSource,
+        T: ProverTranscript<S>,
+    {
+        self.statement.prove(rng, transcript, witness)
+    }
+}
+
 /// Validated verifier statement which cannot select an arbitrary row source.
 pub(crate) struct ExactSmallCoefficientVerifierStatementV1<'a, S: ProofSuite> {
     statement: ArithmeticCircuitStatement<'a, S>,
@@ -148,10 +264,12 @@ impl<'a, S: ProofSuite> ExactSmallCoefficientVerifierStatementV1<'a, S> {
         source: ExactSmallCoefficientConstraintSourceV1,
         vector_commitment: S::Point,
     ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        let mut vector_commitments = try_exact_capacity_vec_v1(1)?;
+        vector_commitments.push(vector_commitment);
         let statement = ArithmeticCircuitStatement::new(
             generators,
             Vec::new(),
-            vec![vector_commitment],
+            vector_commitments,
             Vec::new(),
         )?;
         source.validate_statement_shape(
@@ -198,20 +316,20 @@ struct RunningExactSmallCoefficientAggregateV1<F: ProofScalar> {
 }
 
 impl<F: ProofScalar> RunningExactSmallCoefficientAggregateV1<F> {
-    fn new(padded_gates: usize, z_one: F) -> Self {
-        Self {
+    fn new(padded_gates: usize, z_one: F) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        Ok(Self {
             aggregates: ExactSmallCoefficientAggregatesV1 {
-                l_weights: ScalarVector::zero(padded_gates),
-                r_weights: ScalarVector::zero(padded_gates),
-                o_weights: ScalarVector::zero(padded_gates),
-                vector_commitment_weights: ScalarVector::zero(padded_gates),
-                scalar_commitment_weights: ScalarVector::zero(0),
+                l_weights: ScalarVector::try_zero_exact_v1(padded_gates)?,
+                r_weights: ScalarVector::try_zero_exact_v1(padded_gates)?,
+                o_weights: ScalarVector::try_zero_exact_v1(padded_gates)?,
+                vector_commitment_weights: ScalarVector::try_zero_exact_v1(padded_gates)?,
+                scalar_commitment_weights: ScalarVector::try_zero_exact_v1(0)?,
                 constraint_product: SecretScalar::new(F::ZERO),
             },
             z_one,
             running_z: z_one,
             emitted_rows: 0,
-        }
+        })
     }
 
     fn add_l(&mut self, index: usize, coefficient: F) -> Result<(), GeneralizedBulletproofErrorV1> {

@@ -85,8 +85,10 @@ pub use incremental_source::{
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
 };
 pub(super) use party_local_rkg_ephemeral_v1::DirectRkgOneProverSessionV1;
-pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::DirectRkgOnePublicationOwnerV1;
 use party_local_rkg_ephemeral_v1::PartyLocalRkgEphemeralOpeningV1;
+pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::{
+    DirectRkgOneProofDurabilityPermitV2, DirectRkgOnePublicationOwnerV1,
+};
 use persistent_direct_opening_v1::{PersistentDirectOpeningAxesV1, PersistentDirectOpeningOwnerV1};
 pub use prepared_public_a::{
     ZkAmsMkhePreparedCollectivePublicAV1, prepare_zk_ams_mkhe_collective_public_a_v1,
@@ -219,9 +221,9 @@ impl Drop for ZeroizingSecretCoefficients {
 /// The state remains the only long-lived owner. This adapter exists solely to
 /// bind the complete CPK relation to the exact state opening and erases its
 /// narrowed copy on every ordinary, error, and unwind exit.
-struct ZeroizingT256MembershipCoefficientsV1(Vec<i8>);
+pub(in crate::vega::zk_ams::mkhe) struct ZeroizingT256MembershipCoefficientsV1(Vec<i8>);
 impl ZeroizingT256MembershipCoefficientsV1 {
-    fn from_ternary_secret(secret: &SecretPolynomial) -> Result<Self, ZkAmsMkheErrorV1> {
+    fn from_bounded(secret: &SecretPolynomial, bound: i8) -> Result<Self, ZkAmsMkheErrorV1> {
         let expected_coefficients = ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
             .checked_mul(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -236,13 +238,23 @@ impl ZeroizingT256MembershipCoefficientsV1 {
             .0
             .try_reserve_exact(expected_coefficients)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if coefficients.0.capacity() != expected_coefficients {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        let allocation = coefficients.0.as_ptr();
         for coefficient in secret.coefficients.iter().copied() {
             let coefficient =
                 i8::try_from(coefficient).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-            if !(-1..=1).contains(&coefficient) {
+            if bound < 1 || !(-bound..=bound).contains(&coefficient) {
                 return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
             }
             coefficients.0.push(coefficient);
+        }
+        if coefficients.0.len() != expected_coefficients
+            || coefficients.0.capacity() != expected_coefficients
+            || coefficients.0.as_ptr() != allocation
+        {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
         Ok(coefficients)
     }
@@ -273,9 +285,10 @@ fn encode_persistent_opening_commitments_v1(
     }
     Ok(encoded)
 }
-fn commit_persistent_secret_opening_v1(
+fn commit_cpk_membership_opening_v1(
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+    bound: ZkAmsT256MembershipBoundV1,
 ) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
     let chunks = coefficients.chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1);
     if !chunks.remainder().is_empty() || chunks.len() != blindings.len() {
@@ -285,15 +298,21 @@ fn commit_persistent_secret_opening_v1(
     commitments
         .try_reserve_exact(blindings.len())
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if commitments.capacity() != blindings.len() {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = commitments.as_ptr();
     for (chunk, blinding) in chunks.zip(blindings.iter()) {
         commitments.push(
-            commit_zk_ams_t256_membership_chunk_v1(
-                ZkAmsT256MembershipBoundV1::One,
-                chunk,
-                blinding,
-            )
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+            commit_zk_ams_t256_membership_chunk_v1(bound, chunk, blinding)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
         );
+    }
+    if commitments.len() != blindings.len()
+        || commitments.capacity() != blindings.len()
+        || commitments.as_ptr() != allocation
+    {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     commitments
         .try_into()
@@ -530,8 +549,8 @@ impl Drop for PersistentSecretCommitmentBlindingEntropyV1 {
 /// This type deliberately implements neither `Clone`, `Copy`, `Default`, nor
 /// serialization. Only an immutable array borrow crosses the sibling-module
 /// proof boundary, and every named scalar is erased on drop.
-struct PersistentSecretCommitmentBlindingsV1([Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]);
-impl PersistentSecretCommitmentBlindingsV1 {
+struct ZeroizingCpkMembershipBlindingsV1([Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]);
+impl ZeroizingCpkMembershipBlindingsV1 {
     fn sample<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         // Own the complete zero-initialized array before making the first
         // fallible or panicking entropy request. This makes every partial
@@ -564,12 +583,12 @@ impl PersistentSecretCommitmentBlindingsV1 {
         &self.0
     }
 }
-impl core::fmt::Debug for PersistentSecretCommitmentBlindingsV1 {
+impl core::fmt::Debug for ZeroizingCpkMembershipBlindingsV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("PersistentSecretCommitmentBlindingsV1([REDACTED])")
     }
 }
-impl Drop for PersistentSecretCommitmentBlindingsV1 {
+impl Drop for ZeroizingCpkMembershipBlindingsV1 {
     fn drop(&mut self) {
         let blindings = core::hint::black_box(&mut self.0);
         for blinding in blindings.iter_mut() {
@@ -587,7 +606,7 @@ impl Drop for PersistentSecretCommitmentBlindingsV1 {
 const _: () = {
     assert!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 == 8);
     assert!(PERSISTENT_BLINDING_STATE_BYTES_V1 == 256);
-    assert!(core::mem::size_of::<PersistentSecretCommitmentBlindingsV1>() == 256);
+    assert!(core::mem::size_of::<ZeroizingCpkMembershipBlindingsV1>() == 256);
 };
 #[cfg(test)]
 std::thread_local! {
@@ -606,7 +625,7 @@ pub(super) struct PersistentDirectOpeningLeaseV1<'a> {
     owner: &'a mut PersistentDirectOpeningOwnerV1,
     coefficients: ZeroizingT256MembershipCoefficientsV1,
 }
-impl PersistentDirectOpeningLeaseV1<'_> {
+impl<'a> PersistentDirectOpeningLeaseV1<'a> {
     pub(super) const fn profile_digest(&self) -> [u8; 32] {
         self.owner.axes.profile_digest
     }
@@ -634,6 +653,17 @@ impl PersistentDirectOpeningLeaseV1<'_> {
     pub(super) const fn public_share_digest(&self) -> [u8; 32] {
         self.owner.axes.public_share_digest
     }
+    pub(super) fn validate_secret_membership_v1(
+        &self,
+        evidence: &ZkAmsMkhePersistentMembershipEvidenceV1,
+    ) -> Result<(), ZkAmsMkhePersistentMembershipErrorV1> {
+        let encoded = encode_persistent_opening_commitments_v1(&evidence.commitments())
+            .map_err(|_| ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)?;
+        if encoded != self.owner.retained_commitment_wire {
+            return Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch);
+        }
+        Ok(())
+    }
     /// Consume the exclusive lease into public membership evidence.
     pub(super) fn prove<R: ProofRandomSource>(
         self,
@@ -646,13 +676,61 @@ impl PersistentDirectOpeningLeaseV1<'_> {
             self.owner.blindings.as_array(),
             random,
         )?;
-        let commitments = evidence.commitments();
-        let encoded = encode_persistent_opening_commitments_v1(&commitments)
-            .map_err(|_| ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)?;
-        if encoded != self.owner.retained_commitment_wire {
-            return Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch);
-        }
+        self.validate_secret_membership_v1(&evidence)?;
         Ok(evidence)
+    }
+    pub(super) fn into_reopened_v1<R: MaskedRelaxedRandomSourceV1>(
+        self,
+        error_coefficients: ZeroizingT256MembershipCoefficientsV1,
+        random: &mut R,
+    ) -> Result<ReopenedCpkDirectOpeningLeaseV1<'a>, ZkAmsMkheErrorV1> {
+        Ok(ReopenedCpkDirectOpeningLeaseV1 {
+            opening: self,
+            error_coefficients,
+            error_blindings: ZeroizingCpkMembershipBlindingsV1::sample(random)?,
+        })
+    }
+}
+pub(super) struct ReopenedCpkDirectOpeningLeaseV1<'a> {
+    opening: PersistentDirectOpeningLeaseV1<'a>,
+    error_coefficients: ZeroizingT256MembershipCoefficientsV1,
+    error_blindings: ZeroizingCpkMembershipBlindingsV1,
+}
+impl ReopenedCpkDirectOpeningLeaseV1<'_> {
+    pub(super) fn prove_error_membership_v1<R: ProofRandomSource>(
+        &self,
+        context: super::cpk_relation::ZkAmsMkheCpkErrorMembershipContextV1,
+        random: &mut R,
+    ) -> Result<
+        super::cpk_relation::ZkAmsMkheCpkErrorMembershipEvidenceV1,
+        super::cpk_relation::ZkAmsMkheCpkRelationErrorV1,
+    > {
+        super::cpk_relation::ZkAmsMkheCpkErrorMembershipEvidenceV1::prove(
+            context,
+            self.error_coefficients.as_slice(),
+            self.error_blindings.as_array(),
+            random,
+        )
+    }
+    pub(super) fn consume_sealed_cpk_abort_session_v1<R: MaskedRelaxedRandomSourceV1>(
+        self,
+        session: super::cpk_relation::state_owned_secret_adapter_v1::StateOwnedCpkSealedAbortSessionV1,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        random: &mut R,
+    ) -> Result<
+        super::cpk_relation::state_owned_secret_adapter_v1::StateOwnedCpkProvedPublicV1,
+        super::cpk_relation::ZkAmsMkheCpkRelationErrorV1,
+    > {
+        session.prove_with_opening_v1(
+            roster,
+            share,
+            self.opening.coefficients.as_slice(),
+            self.error_coefficients.as_slice(),
+            self.opening.owner.blindings.as_array(),
+            self.error_blindings.as_array(),
+            random,
+        )
     }
 }
 /// Opaque RLWE state owned by one exact governed party and secret epoch.
@@ -808,12 +886,14 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         &self,
     ) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
         self.persistent_direct_opening.axes.validate()?;
-        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(
+        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_bounded(
             &self.persistent_direct_opening.secret,
+            1,
         )?;
-        let commitments = commit_persistent_secret_opening_v1(
+        let commitments = commit_cpk_membership_opening_v1(
             coefficients.as_slice(),
             self.persistent_direct_opening.blindings.as_array(),
+            ZkAmsT256MembershipBoundV1::One,
         )?;
         let encoded = encode_persistent_opening_commitments_v1(&commitments)?;
         if encoded != self.persistent_direct_opening.retained_commitment_wire {
@@ -836,11 +916,11 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     ) -> Result<PersistentDirectOpeningLeaseV1<'a>, ZkAmsMkheErrorV1> {
         self.validate_state_owned_cpk_source_v1(roster, share)?;
         let owner = &mut self.persistent_direct_opening;
-        let coefficients =
-            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&owner.secret)?;
-        let commitments = commit_persistent_secret_opening_v1(
+        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_bounded(&owner.secret, 1)?;
+        let commitments = commit_cpk_membership_opening_v1(
             coefficients.as_slice(),
             owner.blindings.as_array(),
+            ZkAmsT256MembershipBoundV1::One,
         )?;
         let encoded = encode_persistent_opening_commitments_v1(&commitments)?;
         if encoded != owner.retained_commitment_wire {
@@ -877,6 +957,42 @@ impl ZkAmsMkheCollectivePartyStateV1 {
             party_b_pointer,
             expected_party_b_payload_blake3,
             lease,
+            random,
+        )
+    }
+    /// Rejoin a public precursor to a fresh exclusive lease without exposing its opening.
+    pub(super) fn reopen_state_owned_cpk_relation_v1<'a, R>(
+        &'a mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,
+        precursor: super::cpk_relation::state_owned_secret_adapter_v1::StateOwnedCpkSecretMembershipPrecursorV1,
+        random: &mut R,
+    ) -> Result<super::cpk_relation::state_owned_secret_adapter_v1::ReopenedStateOwnedCpkRelationPrecursorV1<'a>, ZkAmsMkheErrorV1>
+    where
+        R: ProofRandomSource + MaskedRelaxedRandomSourceV1,
+    {
+        self.validate_state_owned_cpk_source_v1(roster, share)?;
+        let payload = cpk_party_b_payload_blake3_v1(share.party_public_b())?;
+        if party_b_pointer.payload_blake3() != payload {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let statement = super::cpk_relation::ZkAmsMkheCpkShareStatementV1::from_governed_roster(
+            roster,
+            self.transcript_digest(),
+            usize::from(self.party_index()),
+            party_b_pointer,
+        )
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        let error_coefficients =
+            ZeroizingT256MembershipCoefficientsV1::from_bounded(&self.public_error, 2)?;
+        let opening = self.persistent_direct_opening_lease_v1(roster, share)?;
+        super::cpk_relation::state_owned_secret_adapter_v1::reopen_state_owned_cpk_relation_precursor_v1(
+            precursor,
+            statement,
+            share.digest(),
+            opening,
+            error_coefficients,
             random,
         )
     }
@@ -1401,7 +1517,13 @@ pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1<
     let public_a = prepared.shared_public_a();
     public_a.encoded_len()?;
     let secret = sample_nonzero_ternary(&profile, random)?;
+    if secret.coefficients.capacity() != profile.ring_degree {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
     let public_error = SecretPolynomial::sample_error(&profile, random)?;
+    if public_error.coefficients.capacity() != profile.ring_degree {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
     let mut party_public_b_product =
         borrowed_product::multiply_public_residues_by_secret_signed_v1(
             public_a.residues(),
@@ -1410,7 +1532,8 @@ pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1<
         )?;
     negate_and_add_scaled_error_in_place(&mut party_public_b_product.0, &public_error, &profile)?;
     let party_public_b_native = party_public_b_product.into_public();
-    let party_public_b = ZkAmsMkheRnsPolynomialWireV1::new(party_public_b_native.coefficients)?;
+    let party_public_b =
+        ZkAmsMkheRnsPolynomialWireV1::new_exact_capacity_v1(party_public_b_native.coefficients)?;
     let statement = ZkAmsMkheActiveCollectivePublicKeyStatementV1::new(&public_a, &party_public_b)?;
     let witness = ZkAmsMkheActiveCollectivePublicKeyWitnessV1::new(
         &secret.coefficients,
@@ -1452,8 +1575,7 @@ pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1<
         &share,
     )?);
     validate_collective_public_key_share_active_admission_v1(&share)?;
-    let persistent_secret_commitment_blindings =
-        PersistentSecretCommitmentBlindingsV1::sample(random)?;
+    let persistent_secret_commitment_blindings = ZeroizingCpkMembershipBlindingsV1::sample(random)?;
     let persistent_direct_opening = PersistentDirectOpeningOwnerV1::new_unverified(
         PersistentDirectOpeningAxesV1 {
             profile_digest: share.profile_digest,

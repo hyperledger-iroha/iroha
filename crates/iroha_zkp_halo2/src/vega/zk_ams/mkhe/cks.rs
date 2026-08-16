@@ -1620,7 +1620,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
         &self.proof
     }
     /// Canonical native proof bytes.
-    #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.proof.encode()
     }
@@ -1741,10 +1740,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
         Ok(value)
     }
     /// Decode, bind, authenticate, and verify one exact canonical `ZACK` byte string.
-    #[expect(
-        dead_code,
-        reason = "native CKS exact decoder retained as a reference seam"
-    )]
     pub fn decode_release_wire_exact(
         statement: ZkAmsMkheCksStatementV1<'_>,
         party_index: u8,
@@ -2672,5 +2667,9 @@ mod tests {
             .expect("CKS zeroization corridor end");
         assert!(corridor.matches("core::hint::black_box").count() >= 4);
         assert!(corridor.matches("compiler_fence").count() >= 2);
+    }
+
+    mod release_proof_size_kats {
+        include!("cks_release_proof_size_kats.rs");
     }
 }

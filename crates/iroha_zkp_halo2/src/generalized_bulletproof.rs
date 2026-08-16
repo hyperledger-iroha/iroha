@@ -62,6 +62,92 @@ pub enum GeneralizedBulletproofErrorV1 {
     #[error("generalized-Bulletproof transcript was not consumed exactly")]
     TranscriptConsumption,
 }
+/// Allocate an empty vector whose reported capacity is exactly the requested
+/// public element count before any prover secret is accepted.
+///
+/// This bounds Rust-visible capacity on successful paths only. Allocator
+/// metadata, allocator slack outside `Vec::capacity`, RSS, and transient
+/// over-grants rejected here remain outside this source-level contract.
+pub(crate) fn try_exact_capacity_vec_v1<T>(
+    exact_capacity: usize,
+) -> Result<Vec<T>, GeneralizedBulletproofErrorV1> {
+    let element_bytes = core::mem::size_of::<T>();
+    if element_bytes == 0 || exact_capacity.checked_mul(element_bytes).is_none() {
+        return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+    }
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(exact_capacity)
+        .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+    if values.capacity() != exact_capacity {
+        return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+    }
+    Ok(values)
+}
+fn try_exact_filled_vec_v1<T: Copy>(
+    exact_capacity: usize,
+    value: T,
+) -> Result<Vec<T>, GeneralizedBulletproofErrorV1> {
+    let mut values = try_exact_capacity_vec_v1(exact_capacity)?;
+    for _ in 0..exact_capacity {
+        values.push(value);
+    }
+    Ok(values)
+}
+fn try_collect_public_point_fold_v1<S, F>(
+    source: &[S::Point],
+    fold: F,
+) -> Result<Vec<S::Point>, GeneralizedBulletproofErrorV1>
+where
+    S: ProofSuite,
+    F: Fn(usize, S::Point, S::Point) -> S::Point + Send + Sync,
+{
+    if source.len() <= 1 || !source.len().is_multiple_of(2) {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    let half = source.len() / 2;
+    let (left, right) = source.split_at(half);
+    let mut result = try_exact_capacity_vec_v1(half)?;
+    let allocation = result.as_ptr();
+    #[cfg(feature = "parallel")]
+    if S::ALLOW_PARALLEL_PROVER_WORKSPACE_V1 {
+        (0..half)
+            .into_par_iter()
+            .map(|index| fold(index, left[index], right[index]))
+            .collect_into_vec(&mut result);
+    } else {
+        for index in 0..half {
+            result.push(fold(index, left[index], right[index]));
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    for index in 0..half {
+        result.push(fold(index, left[index], right[index]));
+    }
+    if result.len() != half {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    if result.capacity() != half || result.as_ptr() != allocation {
+        return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+    }
+    Ok(result)
+}
+fn try_collect_public_point_fold_pair_v1<S, G, H>(
+    g_fold: G,
+    h_fold: H,
+) -> Result<(Vec<S::Point>, Vec<S::Point>), GeneralizedBulletproofErrorV1>
+where
+    S: ProofSuite,
+    G: FnOnce() -> Result<Vec<S::Point>, GeneralizedBulletproofErrorV1> + Send,
+    H: FnOnce() -> Result<Vec<S::Point>, GeneralizedBulletproofErrorV1> + Send,
+{
+    #[cfg(feature = "parallel")]
+    if S::ALLOW_PARALLEL_PROVER_WORKSPACE_V1 {
+        let (g, h) = rayon::join(g_fold, h_fold);
+        return Ok((g?, h?));
+    }
+    Ok((g_fold()?, h_fold()?))
+}
 /// Fallible cryptographic byte source.
 ///
 /// Implementations must either fill the complete destination or return an
@@ -293,6 +379,13 @@ pub trait ProofSuite: Copy + Clone + Debug + Eq + Send + Sync + 'static {
     type Scalar: ProofScalar;
     /// Prime-order group used by the suite.
     type Point: ProofPoint<Scalar = Self::Scalar>;
+    /// Whether prover workspace may fan out across the ambient Rayon pool.
+    ///
+    /// Fixed suites requiring a single-worker prover workspace set this to
+    /// `false`. This policy alone does not certify an allocation or RSS
+    /// ceiling. The default preserves the existing behavior of every other
+    /// suite and does not affect verifier scheduling.
+    const ALLOW_PARALLEL_PROVER_WORKSPACE_V1: bool = true;
     /// Return the suite's immutable generator basis.
     fn generators() -> &'static ProofGenerators<Self>;
 }
@@ -346,7 +439,12 @@ impl<S: ProofSuite> ProofGenerators<S> {
         {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-        let mut h_sum = Vec::new();
+        let h_sum_capacity = usize::try_from(h_bold.len().ilog2())
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?
+            .checked_add(1)
+            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let mut h_sum = try_exact_capacity_vec_v1(h_sum_capacity)?;
+        let h_sum_allocation = h_sum.as_ptr();
         let mut running = S::Point::identity();
         let mut next_power = 1_usize;
         for (index, point) in h_bold.iter().copied().enumerate() {
@@ -360,6 +458,12 @@ impl<S: ProofSuite> ProofGenerators<S> {
                     .checked_mul(2)
                     .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
             }
+        }
+        if h_sum.len() != h_sum_capacity
+            || h_sum.capacity() != h_sum_capacity
+            || h_sum.as_ptr() != h_sum_allocation
+        {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
         }
         Ok(Self {
             g,
@@ -463,34 +567,25 @@ impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S> {
 /// copies on success, error, or unwind.
 ///
 /// The fixed four-bit Straus evaluator has secret-independent control flow and
-/// memory access. It processes independent 256-point chunks in parallel when
-/// the `parallel` feature is enabled and sequentially otherwise, scans every
-/// one of the 16 precomputed table entries for every digit, and always executes
-/// 64 windows. Chunk results are collected into a preallocated public-size
-/// buffer and folded in input order, so scheduling cannot affect the result.
+/// memory access. It processes independent 256-point chunks in parallel only
+/// when the `parallel` feature and suite policy both permit it, scans every one
+/// of the 16 precomputed table entries for every digit, and always executes 64
+/// windows. Chunk results are collected into a preallocated public-size buffer
+/// and folded in input order, so scheduling cannot affect the result.
 /// This owner cannot erase copies retained by its caller or generated by the
 /// compiler, and destructors do not run after process abort.
 pub struct SecretMultiexpBuilder<S: ProofSuite> {
     terms: Vec<SecretMsmTerm<S>>,
     exact_capacity: usize,
-    allocation_capacity: usize,
 }
 impl<S: ProofSuite> SecretMultiexpBuilder<S> {
     /// Reserve storage for exactly `exact_capacity` subsequently supplied
     /// terms before accepting any prover secret.
     pub fn new(exact_capacity: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
-        let mut terms = Vec::new();
-        terms
-            .try_reserve_exact(exact_capacity)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let allocation_capacity = terms.capacity();
-        if allocation_capacity < exact_capacity {
-            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
-        }
+        let terms = try_exact_capacity_vec_v1(exact_capacity)?;
         Ok(Self {
             terms,
             exact_capacity,
-            allocation_capacity,
         })
     }
     /// Return the exact public term count declared at construction.
@@ -517,13 +612,12 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
         scalar: &S::Scalar,
         point: &S::Point,
     ) -> Result<(), GeneralizedBulletproofErrorV1> {
-        if self.terms.len() >= self.exact_capacity {
+        if self.terms.len() >= self.exact_capacity || self.terms.capacity() != self.exact_capacity {
             return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
         }
-        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
         self.terms
             .push(SecretMsmTerm::<S>::copy_from_borrowed(scalar, point));
-        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
+        debug_assert_eq!(self.terms.capacity(), self.exact_capacity);
         Ok(())
     }
     fn push_copy(
@@ -532,17 +626,16 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
         mut point: S::Point,
     ) -> Result<(), GeneralizedBulletproofErrorV1> {
         let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);
-        if self.terms.len() >= self.exact_capacity {
+        if self.terms.len() >= self.exact_capacity || self.terms.capacity() != self.exact_capacity {
             return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
         }
-        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
         let retained = incoming.take_term();
         self.terms.push(retained);
         // Clear the now-zero/identity private parameter slots before any later
         // assertion or return. The retained term owns the moved values through
         // every success, error, and unwind path after the handoff.
         drop(incoming);
-        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
+        debug_assert_eq!(self.terms.capacity(), self.exact_capacity);
         Ok(())
     }
     /// Evaluate exactly the declared number of terms in constant time with
@@ -567,22 +660,12 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
 struct SecretMsmChunkResults<S: ProofSuite> {
     values: Vec<Result<SecretPoint<S::Point>, GeneralizedBulletproofErrorV1>>,
     exact_len: usize,
-    allocation_capacity: usize,
 }
 impl<S: ProofSuite> SecretMsmChunkResults<S> {
     fn new(exact_len: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(exact_len)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let allocation_capacity = values.capacity();
-        if allocation_capacity < exact_len {
-            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
-        }
         Ok(Self {
-            values,
+            values: try_exact_capacity_vec_v1(exact_len)?,
             exact_len,
-            allocation_capacity,
         })
     }
     fn collect(&mut self, terms: &[SecretMsmTerm<S>]) -> Result<(), GeneralizedBulletproofErrorV1> {
@@ -591,21 +674,31 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
         {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
+        if self.values.capacity() != self.exact_len {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
         let allocation = self.values.as_ptr();
         #[cfg(feature = "parallel")]
-        terms
-            .par_chunks(SECRET_MSM_CHUNK_TERMS_V1)
-            .map(secret_straus_chunk::<S>)
-            .collect_into_vec(&mut self.values);
-        #[cfg(not(feature = "parallel"))]
-        self.values.extend(
+        if S::ALLOW_PARALLEL_PROVER_WORKSPACE_V1 {
             terms
-                .chunks(SECRET_MSM_CHUNK_TERMS_V1)
-                .map(secret_straus_chunk::<S>),
-        );
-        debug_assert_eq!(self.values.len(), self.exact_len);
-        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
-        debug_assert_eq!(self.values.as_ptr(), allocation);
+                .par_chunks(SECRET_MSM_CHUNK_TERMS_V1)
+                .map(secret_straus_chunk::<S>)
+                .collect_into_vec(&mut self.values);
+        } else {
+            for chunk in terms.chunks(SECRET_MSM_CHUNK_TERMS_V1) {
+                self.values.push(secret_straus_chunk::<S>(chunk));
+            }
+        }
+        #[cfg(not(feature = "parallel"))]
+        for chunk in terms.chunks(SECRET_MSM_CHUNK_TERMS_V1) {
+            self.values.push(secret_straus_chunk::<S>(chunk));
+        }
+        if self.values.len() != self.exact_len {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+        }
+        if self.values.capacity() != self.exact_len || self.values.as_ptr() != allocation {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
         Ok(())
     }
     fn fold_in_order(self) -> Result<SecretPoint<S::Point>, GeneralizedBulletproofErrorV1> {
@@ -694,6 +787,14 @@ impl<P: ProofPoint> Drop for SecretPoint<P> {
         self.0.clear_secret();
     }
 }
+/// Rust layout payloads used by fixed-suite source-owned workspace ledgers.
+#[cfg(target_pointer_width = "64")]
+pub(crate) const fn secret_msm_layout_bytes_v1<S: ProofSuite>() -> (usize, usize) {
+    (
+        core::mem::size_of::<SecretMsmTerm<S>>(),
+        core::mem::size_of::<Result<SecretPoint<S::Point>, GeneralizedBulletproofErrorV1>>(),
+    )
+}
 struct BorrowedSecretPoint<'a, P: ProofPoint>(&'a mut P);
 impl<'a, P: ProofPoint> BorrowedSecretPoint<'a, P> {
     fn new(point: &'a mut P) -> Self {
@@ -741,11 +842,7 @@ fn secret_straus_chunk<S: ProofSuite>(
     // materialized. Rows and their temporary source copies are still cleared
     // on every exit path because callers may conservatively treat points as
     // secret-derived.
-    let mut tables = SecretPointTable(Vec::new());
-    tables
-        .0
-        .try_reserve_exact(terms.len())
-        .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+    let mut tables = SecretPointTable(try_exact_capacity_vec_v1(terms.len())?);
     for term in terms {
         let mut row = SecretPointTableRow([S::Point::identity(); SECRET_MSM_TABLE_ENTRIES_V1]);
         for index in 1..SECRET_MSM_TABLE_ENTRIES_V1 {
@@ -794,23 +891,8 @@ impl Drop for SecretScalarBytes {
 /// access, and zero-digit branches reveal scalar values. Provers must submit
 /// secret terms through [`SecretMultiexpBuilder`].
 pub fn multiexp<S: ProofSuite>(terms: &[(S::Scalar, S::Point)]) -> S::Point {
-    if terms.is_empty() {
-        return S::Point::identity();
-    }
-    if terms.len() == 1 {
-        return terms[0].1.scale(terms[0].0);
-    }
-    if terms.len() == 2 {
-        return public_two_term_multiexp::<S>(terms);
-    }
-    let window = match terms.len() {
-        0..=124 => 4,
-        125..=274 => 5,
-        275..=474 => 6,
-        475..=874 => 7,
-        _ => 8,
-    };
-    pippenger::<S>(terms, window)
+    multiexp_with_capacity_policy_v1::<S>(terms, false)
+        .expect("unrestricted public multiexp has no fallible capacity check")
 }
 /// Simultaneous multiplication for two public-scalar terms.
 ///
@@ -864,10 +946,52 @@ fn public_two_term_multiexp<S: ProofSuite>(terms: &[(S::Scalar, S::Point)]) -> S
     }
     result
 }
-fn pippenger<S: ProofSuite>(terms: &[(S::Scalar, S::Point)], window: usize) -> S::Point {
+fn try_exact_multiexp_v1<S: ProofSuite>(
+    terms: &[(S::Scalar, S::Point)],
+) -> Result<S::Point, GeneralizedBulletproofErrorV1> {
+    multiexp_with_capacity_policy_v1::<S>(terms, true)
+}
+fn multiexp_with_capacity_policy_v1<S: ProofSuite>(
+    terms: &[(S::Scalar, S::Point)],
+    exact_capacity: bool,
+) -> Result<S::Point, GeneralizedBulletproofErrorV1> {
+    Ok(match terms.len() {
+        0 => S::Point::identity(),
+        1 => terms[0].1.scale(terms[0].0),
+        2 => public_two_term_multiexp::<S>(terms),
+        _ => {
+            let window = match terms.len() {
+                0..=124 => 4,
+                125..=274 => 5,
+                275..=474 => 6,
+                475..=874 => 7,
+                _ => 8,
+            };
+            let scalar_bytes = if exact_capacity {
+                try_exact_capacity_vec_v1(terms.len())?
+            } else {
+                Vec::with_capacity(terms.len())
+            };
+            let buckets = if exact_capacity {
+                try_exact_filled_vec_v1(1 << window, S::Point::identity())?
+            } else {
+                vec![S::Point::identity(); 1 << window]
+            };
+            pippenger_with_buffers::<S>(terms, window, SecretScalarBytes(scalar_bytes), buckets)
+        }
+    })
+}
+fn pippenger_with_buffers<S: ProofSuite>(
+    terms: &[(S::Scalar, S::Point)],
+    window: usize,
+    mut scalar_bytes: SecretScalarBytes,
+    mut buckets: Vec<S::Point>,
+) -> S::Point {
     let windows = S::Scalar::SCALAR_BITS.div_ceil(window);
     let mask = (1_u16 << window) - 1;
-    let mut scalar_bytes = SecretScalarBytes(Vec::with_capacity(terms.len()));
+    let identity = S::Point::identity();
+    debug_assert!(scalar_bytes.0.is_empty() && scalar_bytes.0.capacity() >= terms.len());
+    debug_assert_eq!(buckets.len(), 1 << window);
     for (scalar, _) in terms {
         let bytes = SecretBytes(scalar.bits_le());
         scalar_bytes.0.push(bytes.0);
@@ -878,8 +1002,8 @@ fn pippenger<S: ProofSuite>(terms: &[(S::Scalar, S::Point)], window: usize) -> S
             for _ in 0..window {
                 result = result.double();
             }
+            buckets.fill(identity);
         }
-        let mut buckets = vec![S::Point::identity(); 1 << window];
         let bit_offset = window_index * window;
         for ((_, point), bytes) in terms.iter().zip(&scalar_bytes.0) {
             let byte_index = bit_offset / 8;
@@ -894,14 +1018,14 @@ fn pippenger<S: ProofSuite>(terms: &[(S::Scalar, S::Point)], window: usize) -> S
             }
         }
         let mut running = S::Point::identity();
-        for bucket in buckets.into_iter().skip(1).rev() {
+        for bucket in buckets.iter().copied().skip(1).rev() {
             running += bucket;
             result += running;
         }
     }
     result
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct BatchVerifier<S: ProofSuite> {
     g: S::Scalar,
     h: S::Scalar,
@@ -909,45 +1033,62 @@ struct BatchVerifier<S: ProofSuite> {
     h_bold: Vec<S::Scalar>,
     h_sum: Vec<S::Scalar>,
     additional: Vec<(S::Scalar, S::Point)>,
+    additional_capacity: usize,
 }
 impl<S: ProofSuite> BatchVerifier<S> {
-    fn new() -> Self {
-        Self {
+    fn new(
+        generator_len: usize,
+        additional_capacity: usize,
+    ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        let h_sum_len = usize::from(generator_len != 0) * S::generators().h_sum.len();
+        Ok(Self {
             g: S::Scalar::ZERO,
             h: S::Scalar::ZERO,
-            g_bold: Vec::new(),
-            h_bold: Vec::new(),
-            h_sum: Vec::new(),
-            additional: Vec::new(),
-        }
+            g_bold: try_exact_filled_vec_v1(generator_len, S::Scalar::ZERO)?,
+            h_bold: try_exact_filled_vec_v1(generator_len, S::Scalar::ZERO)?,
+            h_sum: try_exact_filled_vec_v1(h_sum_len, S::Scalar::ZERO)?,
+            additional: try_exact_capacity_vec_v1(additional_capacity)?,
+            additional_capacity,
+        })
     }
-    fn ensure_len(&mut self, len: usize) {
-        if self.g_bold.len() < len {
-            self.g_bold.resize(len, S::Scalar::ZERO);
-            self.h_bold.resize(len, S::Scalar::ZERO);
-            self.h_sum.resize(len, S::Scalar::ZERO);
+    fn verify(self) -> Result<bool, GeneralizedBulletproofErrorV1> {
+        if self.additional.len() != self.additional_capacity
+            || self.additional.capacity() != self.additional_capacity
+        {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-    }
-    fn verify(self) -> bool {
         let generators = S::generators();
-        let mut terms = Vec::with_capacity(
-            2 + self.g_bold.len() + self.h_bold.len() + self.h_sum.len() + self.additional.len(),
-        );
+        let exact_terms = [
+            2,
+            self.g_bold.len().min(generators.g_bold.len()),
+            self.h_bold.len().min(generators.h_bold.len()),
+            self.h_sum.len().min(generators.h_sum.len()),
+            self.additional.len(),
+        ]
+        .into_iter()
+        .try_fold(0_usize, usize::checked_add)
+        .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let mut terms = try_exact_capacity_vec_v1(exact_terms)?;
         terms.push((self.g, generators.g));
         terms.push((self.h, generators.h));
-        terms.extend(
-            self.g_bold
-                .into_iter()
-                .zip(generators.g_bold.iter().copied()),
-        );
-        terms.extend(
-            self.h_bold
-                .into_iter()
-                .zip(generators.h_bold.iter().copied()),
-        );
-        terms.extend(self.h_sum.into_iter().zip(generators.h_sum.iter().copied()));
-        terms.extend(self.additional);
-        multiexp::<S>(&terms).is_identity()
+        let generated_terms = self
+            .g_bold
+            .into_iter()
+            .zip(generators.g_bold.iter().copied())
+            .chain(
+                self.h_bold
+                    .into_iter()
+                    .zip(generators.h_bold.iter().copied()),
+            )
+            .chain(self.h_sum.into_iter().zip(generators.h_sum.iter().copied()))
+            .chain(self.additional);
+        for term in generated_terms {
+            terms.push(term);
+        }
+        if terms.len() != exact_terms || terms.capacity() != exact_terms {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
+        Ok(try_exact_multiexp_v1::<S>(&terms)?.is_identity())
     }
 }
 /// Owned scalar vector whose elements are cleared when the vector is dropped.
@@ -1035,7 +1176,10 @@ impl<F: ProofScalar> Mul<&Self> for ScalarVector<F> {
 impl<F: ProofScalar> ScalarVector<F> {
     /// Construct a vector containing `len` zero scalars.
     pub fn zero(len: usize) -> Self {
-        Self(vec![F::ZERO; len])
+        Self::try_zero_exact_v1(len).expect("exact scalar-vector zero allocation")
+    }
+    fn try_zero_exact_v1(len: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        Ok(Self(try_exact_filled_vec_v1(len, F::ZERO)?))
     }
     /// Construct the first `len` powers of `value`, beginning with one.
     ///
@@ -1043,16 +1187,23 @@ impl<F: ProofScalar> ScalarVector<F> {
     ///
     /// Panics when `len` is zero.
     pub fn powers(value: F, len: usize) -> Self {
-        assert!(len != 0);
-        let mut result = Vec::with_capacity(len);
-        result.push(F::ONE);
+        Self::try_powers_exact_v1(value, len)
+            .expect("nonzero scalar-vector power length and exact allocation")
+    }
+    fn try_powers_exact_v1(value: F, len: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        if len == 0 {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+        }
+        let mut result = Self(try_exact_capacity_vec_v1(len)?);
+        result.0.push(F::ONE);
         if len > 1 {
-            result.push(value);
+            result.0.push(value);
         }
         for index in 2..len {
-            result.push(result[index - 1] * value);
+            let next = result[index - 1] * value;
+            result.0.push(next);
         }
-        Self(result)
+        Ok(result)
     }
     /// Return the number of scalar elements.
     pub fn len(&self) -> usize {
@@ -1072,29 +1223,21 @@ impl<F: ProofScalar> ScalarVector<F> {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
         let exact_len = left.len();
-        let mut product = Self(Vec::new());
-        product
-            .0
-            .try_reserve_exact(exact_len)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let allocation_capacity = product.0.capacity();
-        if allocation_capacity < exact_len {
-            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
-        }
+        let mut product = Self(try_exact_capacity_vec_v1(exact_len)?);
         let allocation_pointer = product.0.as_ptr();
         for _ in 0..exact_len {
-            debug_assert!(product.0.len() < allocation_capacity);
+            debug_assert!(product.0.len() < exact_len);
             product.0.push(F::ZERO);
         }
         debug_assert_eq!(product.0.len(), exact_len);
-        debug_assert_eq!(product.0.capacity(), allocation_capacity);
+        debug_assert_eq!(product.0.capacity(), exact_len);
         debug_assert_eq!(product.0.as_ptr(), allocation_pointer);
         for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0) {
             *output = *left;
             *output *= *right;
         }
         debug_assert_eq!(product.0.len(), exact_len);
-        debug_assert_eq!(product.0.capacity(), allocation_capacity);
+        debug_assert_eq!(product.0.capacity(), exact_len);
         debug_assert_eq!(product.0.as_ptr(), allocation_pointer);
         Ok(product)
     }
@@ -1137,22 +1280,14 @@ impl<F: ProofScalar> ScalarVector<F> {
         // Establish the complete final-size zeroizing destination before
         // moving any private source slot. Allocation failure therefore leaves
         // the original owner unchanged, and insertion cannot grow later.
-        let mut padded = Self(Vec::new());
-        padded
-            .0
-            .try_reserve_exact(len)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let allocation_capacity = padded.0.capacity();
-        if allocation_capacity < len {
-            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
-        }
+        let mut padded = Self(try_exact_capacity_vec_v1(len)?);
         let allocation_pointer = padded.0.as_ptr();
         for _ in 0..len {
-            debug_assert!(padded.0.len() < allocation_capacity);
+            debug_assert!(padded.0.len() < len);
             padded.0.push(F::ZERO);
         }
         debug_assert_eq!(padded.0.len(), len);
-        debug_assert_eq!(padded.0.capacity(), allocation_capacity);
+        debug_assert_eq!(padded.0.capacity(), len);
         debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);
         // Move the initialized prefix directly between owner slots. Clear
         // each now-zero source through the scalar erasure boundary before its
@@ -1165,14 +1300,14 @@ impl<F: ProofScalar> ScalarVector<F> {
         debug_assert_eq!(self.0.capacity(), source_capacity);
         debug_assert_eq!(self.0.as_ptr(), source_pointer);
         debug_assert_eq!(padded.0.len(), len);
-        debug_assert_eq!(padded.0.capacity(), allocation_capacity);
+        debug_assert_eq!(padded.0.capacity(), len);
         debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);
         self.0.truncate(0);
         debug_assert_eq!(self.0.capacity(), source_capacity);
         debug_assert_eq!(self.0.as_ptr(), source_pointer);
         core::mem::swap(&mut self.0, &mut padded.0);
         debug_assert_eq!(self.0.len(), len);
-        debug_assert_eq!(self.0.capacity(), allocation_capacity);
+        debug_assert_eq!(self.0.capacity(), len);
         debug_assert_eq!(self.0.as_ptr(), allocation_pointer);
         debug_assert!(padded.0.is_empty());
         debug_assert_eq!(padded.0.capacity(), source_capacity);
@@ -1184,38 +1319,22 @@ impl<F: ProofScalar> ScalarVector<F> {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
         let half = self.len() / 2;
-        // Establish the complete zeroizing destination before moving any
-        // private suffix slot. A fallible exact reserve keeps allocation
-        // failure ahead of the first handoff and prevents later growth.
-        let mut right = Self(Vec::new());
-        right
-            .0
-            .try_reserve_exact(half)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let allocation_capacity = right.0.capacity();
-        if allocation_capacity < half {
-            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        // Establish both complete zeroizing destinations before moving any
+        // private source slot. Allocation failure therefore leaves the
+        // original owner unchanged, and neither returned half retains the
+        // ancestor allocation's full capacity.
+        let mut left = Self(try_exact_filled_vec_v1(half, F::ZERO)?);
+        let mut right = Self(try_exact_filled_vec_v1(half, F::ZERO)?);
+        for (source, destination) in self.0[..half].iter_mut().zip(&mut left.0) {
+            core::mem::swap(source, destination);
+            source.clear_secret();
         }
-        let allocation_pointer = right.0.as_ptr();
-        for _ in 0..half {
-            debug_assert!(right.0.len() < allocation_capacity);
-            right.0.push(F::ZERO);
-        }
-        debug_assert_eq!(right.0.len(), half);
-        debug_assert_eq!(right.0.capacity(), allocation_capacity);
-        debug_assert_eq!(right.0.as_ptr(), allocation_pointer);
-        // Swap each suffix value directly between initialized owner slots.
-        // Clear the zeroed source slot through the scalar's erasure boundary
-        // before truncation moves it beyond this owner's reachable length.
         for (source, destination) in self.0[half..].iter_mut().zip(&mut right.0) {
             core::mem::swap(source, destination);
             source.clear_secret();
         }
-        debug_assert_eq!(right.0.len(), half);
-        debug_assert_eq!(right.0.capacity(), allocation_capacity);
-        debug_assert_eq!(right.0.as_ptr(), allocation_pointer);
-        self.0.truncate(half);
-        Ok((self, right))
+        self.0.truncate(0);
+        Ok((left, right))
     }
 }
 /// Sample a secret vector incrementally so successfully sampled prefixes are
@@ -1231,22 +1350,14 @@ where
     // Establish the complete retained zeroizing allocation before accepting
     // any entropy, so neither allocation nor insertion can fail after a
     // secret has been sampled.
-    let mut result = ScalarVector(Vec::new());
-    result
-        .0
-        .try_reserve_exact(len)
-        .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-    let allocation_capacity = result.0.capacity();
-    if allocation_capacity < len {
-        return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
-    }
+    let mut result = ScalarVector(try_exact_capacity_vec_v1(len)?);
     let allocation_pointer = result.0.as_ptr();
     for _ in 0..len {
-        debug_assert!(result.0.len() < allocation_capacity);
+        debug_assert!(result.0.len() < len);
         result.0.push(F::ZERO);
     }
     debug_assert_eq!(result.0.len(), len);
-    debug_assert_eq!(result.0.capacity(), allocation_capacity);
+    debug_assert_eq!(result.0.capacity(), len);
     debug_assert_eq!(result.0.as_ptr(), allocation_pointer);
     // Swap each sampled owner directly into its preinitialized destination.
     // The source receives zero and is cleared immediately before the next
@@ -1257,7 +1368,7 @@ where
         drop(sampled);
     }
     debug_assert_eq!(result.0.len(), len);
-    debug_assert_eq!(result.0.capacity(), allocation_capacity);
+    debug_assert_eq!(result.0.capacity(), len);
     debug_assert_eq!(result.0.as_ptr(), allocation_pointer);
     Ok(result)
 }
@@ -1370,10 +1481,7 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
         let a_l = ScalarVector(a_l);
         let a_r = ScalarVector(a_r);
         let scalar_commitment_inputs = ScalarCommitmentOpeningInputs(scalar_commitments);
-        let mut scalar_commitments = Vec::new();
-        scalar_commitments
-            .try_reserve_exact(scalar_commitment_inputs.0.len())
-            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let mut scalar_commitments = try_exact_capacity_vec_v1(scalar_commitment_inputs.0.len())?;
         for (value, mask) in &scalar_commitment_inputs.0 {
             scalar_commitments.push(ScalarCommitmentOpening::new(*value, *mask));
         }
@@ -1584,6 +1692,7 @@ pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
     constraints: Vec<LinComb<S::Scalar>>,
     vector_commitments: Vec<S::Point>,
     scalar_commitments: Vec<S::Point>,
+    exact_small_coefficient_prover_source: Option<ExactSmallCoefficientConstraintSourceV1>,
 }
 impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
     /// Construct and validate a statement against its suite-bound generators.
@@ -1665,6 +1774,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             constraints,
             vector_commitments,
             scalar_commitments,
+            exact_small_coefficient_prover_source: None,
         })
     }
     fn yz_challenges(
@@ -1675,7 +1785,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let y_inverse = y
             .invert()
             .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-        let y_inverse = ScalarVector::powers(y_inverse, self.generators.g_bold.len());
+        let y_inverse = ScalarVector::try_powers_exact_v1(y_inverse, self.generators.g_bold.len())?;
         let mut z = Vec::with_capacity(self.constraints.len());
         if !self.constraints.is_empty() {
             z.push(z_one);
@@ -1739,6 +1849,9 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             if !terms.evaluate()?.equals(commitment) {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
+        }
+        if let Some(source) = self.exact_small_coefficient_prover_source {
+            source.validate_witness(&witness)?;
         }
         for constraint in &self.constraints {
             let mut evaluation = SecretScalar::new(constraint.c);
@@ -1807,8 +1920,16 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         transcript.push_point(s_point.expose_ref())?;
         let y = transcript.challenge()?;
         let z_one = transcript.challenge()?;
-        let (y_inverse, z) = self.yz_challenges(y, z_one)?;
-        let y_powers = ScalarVector::powers(y, n);
+        let (y_inverse, z) = if self.exact_small_coefficient_prover_source.is_some() {
+            let y_inverse = y
+                .invert()
+                .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+            (ScalarVector::try_powers_exact_v1(y_inverse, n)?, None)
+        } else {
+            let (y_inverse, z) = self.yz_challenges(y, z_one)?;
+            (y_inverse, Some(z))
+        };
+        let y_powers = ScalarVector::try_powers_exact_v1(y, n)?;
         let ni = 2 + (2 * (commitment_count / 2));
         let ilr = ni / 2;
         let io = ni;
@@ -1818,14 +1939,37 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let js = ni + 1;
         let mut l = vec![ScalarVector(Vec::new()); is + 1];
         let mut r = vec![ScalarVector(Vec::new()); is + 1];
-        let mut l_weights = ScalarVector::zero(n);
-        let mut r_weights = ScalarVector::zero(n);
-        let mut o_weights = ScalarVector::zero(n);
-        for (constraint, z) in self.constraints.iter().zip(&z.0) {
-            accumulate(&mut l_weights, &constraint.wl, *z);
-            accumulate(&mut r_weights, &constraint.wr, *z);
-            accumulate(&mut o_weights, &constraint.wo, *z);
-        }
+        let (l_weights, r_weights, o_weights, exact_cg_weights, exact_v_weights) =
+            if let Some(source) = self.exact_small_coefficient_prover_source {
+                let ExactSmallCoefficientAggregatesV1 {
+                    l_weights,
+                    r_weights,
+                    o_weights,
+                    vector_commitment_weights,
+                    scalar_commitment_weights,
+                    ..
+                } = source.aggregate(z_one)?;
+                (
+                    l_weights,
+                    r_weights,
+                    o_weights,
+                    Some(vector_commitment_weights),
+                    Some(scalar_commitment_weights),
+                )
+            } else {
+                let z = z
+                    .as_ref()
+                    .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+                let mut l_weights = ScalarVector::try_zero_exact_v1(n)?;
+                let mut r_weights = ScalarVector::try_zero_exact_v1(n)?;
+                let mut o_weights = ScalarVector::try_zero_exact_v1(n)?;
+                for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                    accumulate(&mut l_weights, &constraint.wl, *z);
+                    accumulate(&mut r_weights, &constraint.wr, *z);
+                    accumulate(&mut o_weights, &constraint.wo, *z);
+                }
+                (l_weights, r_weights, o_weights, None, None)
+            };
         let scaled_r_weights = r_weights * &y_inverse;
         let a_l = core::mem::replace(&mut witness.a_l, ScalarVector(Vec::new()));
         l[ilr] = a_l + &scaled_r_weights;
@@ -1839,35 +1983,51 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         drop(y_powers);
         for coefficient in &mut l {
             if coefficient.0.is_empty() {
-                *coefficient = ScalarVector::zero(n);
+                *coefficient = ScalarVector::try_zero_exact_v1(n)?;
             } else if coefficient.len() != n {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
         for coefficient in &mut r {
             if coefficient.0.is_empty() {
-                *coefficient = ScalarVector::zero(n);
+                *coefficient = ScalarVector::try_zero_exact_v1(n)?;
             } else if coefficient.len() != n {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
-        let mut cg_weights = Vec::with_capacity(commitment_count);
-        for commitment in 0..commitment_count {
-            let mut weights = ScalarVector::zero(n);
-            for (constraint, z) in self.constraints.iter().zip(&z.0) {
-                if let Some(values) = constraint.wcg.get(commitment) {
-                    accumulate(&mut weights, values, *z);
+        let cg_weights = if let Some(weights) = exact_cg_weights {
+            vec![weights]
+        } else {
+            let z = z
+                .as_ref()
+                .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+            let mut cg_weights = Vec::with_capacity(commitment_count);
+            for commitment in 0..commitment_count {
+                let mut weights = ScalarVector::try_zero_exact_v1(n)?;
+                for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                    if let Some(values) = constraint.wcg.get(commitment) {
+                        accumulate(&mut weights, values, *z);
+                    }
                 }
+                cg_weights.push(weights);
             }
-            cg_weights.push(weights);
-        }
+            cg_weights
+        };
         // The omitted center coefficient commits each scalar opening with
         // q_i = -sum_j z_j w_{j,i}. Its value is already fixed by the native
         // constraint precheck; its Pedersen mask is carried by tau_x below.
-        let mut scalar_commitment_weights = ScalarVector::zero(self.scalar_commitments.len());
-        for (constraint, z) in self.constraints.iter().zip(&z.0) {
-            accumulate(&mut scalar_commitment_weights, &constraint.wv, -*z);
-        }
+        let scalar_commitment_weights = if let Some(weights) = exact_v_weights {
+            weights
+        } else {
+            let z = z
+                .as_ref()
+                .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+            let mut weights = ScalarVector::try_zero_exact_v1(self.scalar_commitments.len())?;
+            for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                accumulate(&mut weights, &constraint.wv, -*z);
+            }
+            weights
+        };
         for (mut index, (opening, weights)) in witness
             .vector_commitments
             .iter_mut()
@@ -1882,7 +2042,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             r[reverse] = weights;
         }
         let t_poly_len = 1 + (2 * (l.len() - 1));
-        let mut t = ScalarVector::zero(t_poly_len);
+        let mut t = ScalarVector::try_zero_exact_v1(t_poly_len)?;
         for (left_index, left) in l.iter().enumerate() {
             for (right_index, right) in r.iter().enumerate() {
                 let product = left.inner_product(right.0.iter());
@@ -1913,16 +2073,16 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             transcript.push_point(commitment.expose_ref())?;
         }
         drop(t);
-        let x = ScalarVector::powers(transcript.challenge()?, t_poly_len);
+        let x = ScalarVector::try_powers_exact_v1(transcript.challenge()?, t_poly_len)?;
         let evaluate = |polynomial: &[ScalarVector<S::Scalar>]| {
-            let mut result = ScalarVector::zero(n);
+            let mut result = ScalarVector::try_zero_exact_v1(n)?;
             for (index, coefficient) in polynomial.iter().enumerate() {
                 result.add_scaled_assign(coefficient, &x[index]);
             }
-            result
+            Ok::<_, GeneralizedBulletproofErrorV1>(result)
         };
-        let l_eval = evaluate(&l);
-        let r_eval = evaluate(&r);
+        let l_eval = evaluate(&l)?;
+        let r_eval = evaluate(&r)?;
         drop(l);
         drop(r);
         let t_caret = l_eval.inner_product(r_eval.0.iter());
@@ -2025,7 +2185,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 let y_inverse = y
                     .invert()
                     .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-                let y_inverse = ScalarVector::powers(y_inverse, n);
+                let y_inverse = ScalarVector::try_powers_exact_v1(y_inverse, n)?;
                 (y_inverse, None, Some(source.aggregate(z_one)?))
             }
         };
@@ -2056,9 +2216,9 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 let z = z
                     .as_ref()
                     .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-                let mut l_weights = ScalarVector::zero(n);
-                let mut r_weights = ScalarVector::zero(n);
-                let mut o_weights = ScalarVector::zero(n);
+                let mut l_weights = ScalarVector::try_zero_exact_v1(n)?;
+                let mut r_weights = ScalarVector::try_zero_exact_v1(n)?;
+                let mut o_weights = ScalarVector::try_zero_exact_v1(n)?;
                 for (constraint, z) in self.constraints.iter().zip(&z.0) {
                     accumulate(&mut l_weights, &constraint.wl, *z);
                     accumulate(&mut r_weights, &constraint.wr, *z);
@@ -2069,20 +2229,26 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         };
         let r_weights = r_weights * &y_inverse;
         let delta = r_weights.inner_product(l_weights.0.iter());
-        let mut t_before = Vec::with_capacity(ni);
+        let mut t_before = try_exact_capacity_vec_v1(ni)?;
         for _ in 0..ni {
             t_before.push(transcript.read_point()?);
         }
-        let mut t_after = Vec::with_capacity(t_poly_len - ni - 1);
+        let mut t_after = try_exact_capacity_vec_v1(t_poly_len - ni - 1)?;
         for _ in 0..(t_poly_len - ni - 1) {
             t_after.push(transcript.read_point()?);
         }
-        let x = ScalarVector::powers(transcript.challenge()?, t_poly_len);
+        let x = ScalarVector::try_powers_exact_v1(transcript.challenge()?, t_poly_len)?;
         let tau_x = transcript.read_scalar()?;
         let u = transcript.read_scalar()?;
         let t_caret = transcript.read_scalar()?;
         // Check the polynomial commitment equation independently.
-        let mut polynomial = BatchVerifier::<S>::new();
+        let polynomial_additional_capacity = self
+            .scalar_commitments
+            .len()
+            .checked_add(t_before.len())
+            .and_then(|len| len.checked_add(t_after.len()))
+            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let mut polynomial = BatchVerifier::<S>::new(0, polynomial_additional_capacity)?;
         polynomial.g += t_caret;
         polynomial.h += tau_x;
         let (mut v_weights, constraint_product) = match (exact_v_weights, exact_constraint_product)
@@ -2092,7 +2258,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 let z = z
                     .as_ref()
                     .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-                let mut v_weights = ScalarVector::zero(self.scalar_commitments.len());
+                let mut v_weights = ScalarVector::try_zero_exact_v1(self.scalar_commitments.len())?;
                 for (constraint, z) in self.constraints.iter().zip(&z.0) {
                     accumulate(&mut v_weights, &constraint.wv, -*z);
                 }
@@ -2105,38 +2271,35 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         v_weights = v_weights * x[ni];
         polynomial.g -= x[ni] * (*delta.expose_ref() - *constraint_product.expose_ref());
         drop((delta, constraint_product));
-        polynomial.additional.extend(
-            v_weights
-                .0
-                .iter()
-                .copied()
-                .zip(self.scalar_commitments.iter().copied())
-                .map(|(weight, point)| (-weight, point)),
-        );
-        polynomial.additional.extend(
-            t_before
-                .into_iter()
-                .enumerate()
-                .map(|(index, point)| (-x[index], point)),
-        );
-        polynomial.additional.extend(
-            t_after
-                .into_iter()
-                .enumerate()
-                .map(|(index, point)| (-x[ni + 1 + index], point)),
-        );
-        if !polynomial.verify() {
+        for (weight, point) in v_weights
+            .0
+            .iter()
+            .copied()
+            .zip(self.scalar_commitments.iter().copied())
+        {
+            polynomial.additional.push((-weight, point));
+        }
+        for (index, point) in t_before.into_iter().enumerate() {
+            polynomial.additional.push((-x[index], point));
+        }
+        for (index, point) in t_after.into_iter().enumerate() {
+            polynomial.additional.push((-x[ni + 1 + index], point));
+        }
+        if !polynomial.verify()? {
             return Err(GeneralizedBulletproofErrorV1::CircuitEquation);
         }
         // Build P and verify the inner-product equation independently.
-        let mut ipa = BatchVerifier::<S>::new();
-        ipa.ensure_len(n);
-        ipa.additional.push((x[ilr], ai));
-        ipa.additional.push((x[io], ao));
         let log_n = n.trailing_zeros() as usize;
+        let ipa_additional_capacity = 3_usize
+            .checked_add(self.vector_commitments.len())
+            .and_then(|len| len.checked_add(2_usize.checked_mul(log_n)?))
+            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let mut ipa = BatchVerifier::<S>::new(n, ipa_additional_capacity)?;
         if !n.is_power_of_two() || log_n >= ipa.h_sum.len() {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
+        ipa.additional.push((x[ilr], ai));
+        ipa.additional.push((x[io], ao));
         ipa.h_sum[log_n] -= S::Scalar::ONE;
         ipa.additional.push((x[is], s_point));
         let mut h_bold_scalars = l_weights * x[jlr];
@@ -2152,7 +2315,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
             let mut cg_weights = Vec::with_capacity(self.vector_commitments.len());
             for commitment in 0..self.vector_commitments.len() {
-                let mut weights = ScalarVector::zero(n);
+                let mut weights = ScalarVector::try_zero_exact_v1(n)?;
                 for (constraint, z) in self.constraints.iter().zip(&z.0) {
                     if let Some(values) = constraint.wcg.get(commitment) {
                         accumulate(&mut weights, values, *z);
@@ -2184,7 +2347,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let ip_x = transcript.challenge()?;
         ipa.g += ip_x * t_caret;
         verify_inner_product::<S, _>(self.generators, y_inverse, ip_x, &mut ipa, transcript)?;
-        if !ipa.verify() {
+        if !ipa.verify()? {
             return Err(GeneralizedBulletproofErrorV1::CircuitEquation);
         }
         Ok(())
@@ -2308,72 +2471,31 @@ where
     let inverse = challenge
         .invert()
         .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-    let (mut g_bold, mut h_bold): (Vec<S::Point>, Vec<S::Point>) = {
-        #[cfg(feature = "parallel")]
-        {
-            rayon::join(
-                || {
-                    g_left
-                        .par_iter()
-                        .copied()
-                        .zip(g_right.par_iter().copied())
-                        .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
-                        .collect()
-                },
-                || {
-                    h_left
-                        .par_iter()
-                        .copied()
-                        .zip(h_right.par_iter().copied())
-                        .zip(h_weight_left.par_iter().copied())
-                        .zip(h_weight_right.par_iter().copied())
-                        .map(|(((left, right), left_weight), right_weight)| {
-                            multiexp::<S>(&[
-                                (challenge * left_weight, left),
-                                (inverse * right_weight, right),
-                            ])
-                        })
-                        .collect()
-                },
-            )
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            (
-                g_left
-                    .iter()
-                    .copied()
-                    .zip(g_right.iter().copied())
-                    .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
-                    .collect(),
-                h_left
-                    .iter()
-                    .copied()
-                    .zip(h_right.iter().copied())
-                    .zip(h_weight_left.iter().copied())
-                    .zip(h_weight_right.iter().copied())
-                    .map(|(((left, right), left_weight), right_weight)| {
-                        multiexp::<S>(&[
-                            (challenge * left_weight, left),
-                            (inverse * right_weight, right),
-                        ])
-                    })
-                    .collect(),
-            )
-        }
-    };
+    let (mut g_bold, mut h_bold) = try_collect_public_point_fold_pair_v1::<S, _, _>(
+        || {
+            try_collect_public_point_fold_v1::<S, _>(generators.g_bold, |_, left, right| {
+                multiexp::<S>(&[(inverse, left), (challenge, right)])
+            })
+        },
+        || {
+            try_collect_public_point_fold_v1::<S, _>(generators.h_bold, |index, left, right| {
+                multiexp::<S>(&[
+                    (challenge * h_weight_left[index], left),
+                    (inverse * h_weight_right[index], right),
+                ])
+            })
+        },
+    )?;
+    drop(h_bold_weights);
     p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());
     a = (a_left * challenge) + &(a_right * inverse);
     b = (b_left * inverse) + &(b_right * challenge);
-    drop(h_bold_weights);
     while g_bold.len() > 1 {
         let (a_left, a_right) = a.split()?;
         let (b_left, b_right) = b.split()?;
         let half = g_bold.len() / 2;
-        let g_right = g_bold.split_off(half);
-        let g_left = g_bold;
-        let h_right = h_bold.split_off(half);
-        let h_left = h_bold;
+        let (g_left, g_right) = g_bold.split_at(half);
+        let (h_left, h_right) = h_bold.split_at(half);
         if a_left.len() != half
             || a_right.len() != half
             || b_left.len() != half
@@ -2387,10 +2509,10 @@ where
         let c_right = a_right.inner_product(b_left.0.iter());
         let left = {
             let mut terms = SecretMultiexpBuilder::<S>::new((2 * half) + 1)?;
-            for (scalar, point) in a_left.0.iter().zip(&g_right) {
+            for (scalar, point) in a_left.0.iter().zip(g_right) {
                 terms.push(scalar, point)?;
             }
-            for (scalar, point) in b_right.0.iter().zip(&h_left) {
+            for (scalar, point) in b_right.0.iter().zip(h_left) {
                 terms.push(scalar, point)?;
             }
             terms.push_copy(*c_left.expose_ref() * u_scalar, generators.g)?;
@@ -2398,10 +2520,10 @@ where
         };
         let right = {
             let mut terms = SecretMultiexpBuilder::<S>::new((2 * half) + 1)?;
-            for (scalar, point) in a_right.0.iter().zip(&g_left) {
+            for (scalar, point) in a_right.0.iter().zip(g_left) {
                 terms.push(scalar, point)?;
             }
-            for (scalar, point) in b_left.0.iter().zip(&h_right) {
+            for (scalar, point) in b_left.0.iter().zip(h_right) {
                 terms.push(scalar, point)?;
             }
             terms.push_copy(*c_right.expose_ref() * u_scalar, generators.g)?;
@@ -2418,51 +2540,22 @@ where
         let inverse = challenge
             .invert()
             .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-        // Every fold scalar is transcript-public. Evaluate the independent G
-        // and H halves in indexed order. The `parallel` feature uses the
-        // ambient deterministic Rayon pool; the fallback performs the same
-        // ordered maps sequentially. The two-term specialization avoids a
-        // fresh Pippenger bucket arena per pair.
-        (g_bold, h_bold) = {
-            #[cfg(feature = "parallel")]
-            {
-                rayon::join(
-                    || {
-                        g_left
-                            .into_par_iter()
-                            .zip(g_right.into_par_iter())
-                            .map(|(left, right)| {
-                                multiexp::<S>(&[(inverse, left), (challenge, right)])
-                            })
-                            .collect()
-                    },
-                    || {
-                        h_left
-                            .into_par_iter()
-                            .zip(h_right.into_par_iter())
-                            .map(|(left, right)| {
-                                multiexp::<S>(&[(challenge, left), (inverse, right)])
-                            })
-                            .collect()
-                    },
-                )
-            }
-            #[cfg(not(feature = "parallel"))]
-            {
-                (
-                    g_left
-                        .into_iter()
-                        .zip(g_right)
-                        .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
-                        .collect(),
-                    h_left
-                        .into_iter()
-                        .zip(h_right)
-                        .map(|(left, right)| multiexp::<S>(&[(challenge, left), (inverse, right)]))
-                        .collect(),
-                )
-            }
-        };
+        // Every fold scalar is transcript-public. Move each old point owner
+        // into one exact ordered fold job; fixed T256 runs G then H, while
+        // suites permitting parallel work retain the outer deterministic join.
+        let (old_g_bold, old_h_bold) = (g_bold, h_bold);
+        (g_bold, h_bold) = try_collect_public_point_fold_pair_v1::<S, _, _>(
+            move || {
+                try_collect_public_point_fold_v1::<S, _>(&old_g_bold, |_, left, right| {
+                    multiexp::<S>(&[(inverse, left), (challenge, right)])
+                })
+            },
+            move || {
+                try_collect_public_point_fold_v1::<S, _>(&old_h_bold, |_, left, right| {
+                    multiexp::<S>(&[(challenge, left), (inverse, right)])
+                })
+            },
+        )?;
         p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());
         a = (a_left * challenge) + &(a_right * inverse);
         b = (b_left * inverse) + &(b_right * challenge);
@@ -2482,8 +2575,13 @@ where
     transcript.push_scalar(&b[0])?;
     Ok(())
 }
-fn challenge_products<F: ProofScalar>(challenges: &[(F, F)]) -> Vec<F> {
-    let mut products = vec![F::ONE; 1 << challenges.len()];
+fn challenge_products<F: ProofScalar>(
+    challenges: &[(F, F)],
+) -> Result<Vec<F>, GeneralizedBulletproofErrorV1> {
+    let product_len = 1_usize
+        .checked_shl(challenges.len() as u32)
+        .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+    let mut products = try_exact_filled_vec_v1(product_len, F::ONE)?;
     if !challenges.is_empty() {
         products[0] = challenges[0].1;
         products[1] = challenges[0].0;
@@ -2496,7 +2594,7 @@ fn challenge_products<F: ProofScalar>(challenges: &[(F, F)]) -> Vec<F> {
             }
         }
     }
-    products
+    Ok(products)
 }
 fn verify_inner_product<S, T>(
     generators: ProofGeneratorView<'_, S>,
@@ -2512,12 +2610,11 @@ where
     if generators.h_bold.len() != h_bold_weights.len() {
         return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
     }
-    verifier.ensure_len(generators.g_bold.len());
     let mut lr_len = 0;
     while (1 << lr_len) < generators.g_bold.len() {
         lr_len += 1;
     }
-    let mut challenges = Vec::with_capacity(lr_len);
+    let mut challenges = try_exact_capacity_vec_v1(lr_len)?;
     for _ in 0..lr_len {
         let left = transcript.read_point()?;
         let right = transcript.read_point()?;
@@ -2529,7 +2626,7 @@ where
         verifier.additional.push((inverse.square(), right));
         challenges.push((x, inverse));
     }
-    let products = challenge_products(&challenges);
+    let products = challenge_products(&challenges)?;
     let a = transcript.read_scalar()?;
     let b = transcript.read_scalar()?;
     for index in 0..generators.g_bold.len() {

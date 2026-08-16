@@ -1,5 +1,5 @@
 //! Canonical T256 group boundary for the pinned Vega profile.
-use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::shake256};
+use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::Shake256Reader};
 use core::{
     fmt,
     ops::{Add, Neg as _, Sub},
@@ -310,22 +310,22 @@ pub fn derive_t256_generators_v1(
     if count == 0 || count > MAX_VEGA_T256_GENERATORS_V1 {
         return Err(VegaCurveError::InvalidGeneratorCount);
     }
-    let byte_len = count
-        .checked_mul(32)
-        .ok_or(VegaCurveError::InvalidGeneratorCount)?;
-    let uniform = shake256(label, byte_len);
+    let mut points = Vec::with_capacity(count);
+    let allocation = points.as_ptr();
+    let mut shake = Shake256Reader::new(label);
     let hash_to_curve = T256::hash_to_curve("from_uniform_bytes");
-    uniform
-        .chunks_exact(32)
-        .map(|message| {
-            let point = VegaT256PointV1(hash_to_curve(message));
-            if point.is_identity() {
-                Err(VegaCurveError::IdentityPoint)
-            } else {
-                Ok(point)
-            }
-        })
-        .collect()
+    let mut message = [0_u8; 32];
+    for _ in 0..count {
+        shake.read(&mut message);
+        let point = VegaT256PointV1(hash_to_curve(&message));
+        if point.is_identity() {
+            return Err(VegaCurveError::IdentityPoint);
+        }
+        points.push(point);
+    }
+    assert_eq!(points.len(), count);
+    assert_eq!(points.as_ptr(), allocation);
+    Ok(points)
 }
 #[cfg(test)]
 fn base_from_be_exact(bytes: [u8; 32]) -> Option<Fp> {
@@ -392,10 +392,9 @@ mod tests {
     }
     #[test]
     fn generator_derivation_matches_independent_rfc9380_vector() {
-        let point = derive_t256_generators_v1(b"vega-t256-kat", 1)
-            .expect("valid derivation")
-            .pop()
-            .expect("one point");
+        let mut points = derive_t256_generators_v1(b"vega-t256-kat", 1).expect("valid derivation");
+        assert_eq!((points.len(), points.capacity()), (1, 1));
+        let point = points.pop().expect("one point");
         assert_eq!(
             point.to_non_identity_wire_bytes().expect("non-identity"),
             decode_hex("8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6")

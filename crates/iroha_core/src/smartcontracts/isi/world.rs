@@ -29793,79 +29793,138 @@ seiyaku GovernanceLifecycle {
                 (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
             }
         }
-        #[test]
-        fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                BackendTag,
-                CircuitId,
-                PublicInputsSchema,
-                EmptyCircuitId,
-                EmptyPublicInputs,
-                OversizedPublicInputs,
-                EmptyProofBytes,
-                AuxiliaryBytes,
-                ZeroVerifyingKeyHash,
-                VerifyingKeyHash,
-                MissingCircuitIndex,
-            }
-            for (suffix, tamper, expected_msg) in [
+        #[derive(Clone, Copy)]
+        enum ConfidentialEnvelopeTamper {
+            BackendTag,
+            CircuitId,
+            PublicInputsSchema,
+            EmptyCircuitId,
+            EmptyPublicInputs,
+            OversizedPublicInputs,
+            EmptyProofBytes,
+            AuxiliaryBytes,
+            ZeroVerifyingKeyHash,
+            VerifyingKeyHash,
+            MissingCircuitIndex,
+        }
+        impl ConfidentialEnvelopeTamper {
+            const CASES: [(Self, &'static str, &'static str); 11] = [
                 (
+                    Self::BackendTag,
                     "backend",
-                    Tamper::BackendTag,
                     "unexpected OpenVerifyEnvelope backend tag",
                 ),
+                (Self::CircuitId, "circuit", "verifying key circuit mismatch"),
                 (
-                    "circuit",
-                    Tamper::CircuitId,
-                    "verifying key circuit mismatch",
-                ),
-                (
+                    Self::PublicInputsSchema,
                     "schema",
-                    Tamper::PublicInputsSchema,
                     "public inputs schema mismatch",
                 ),
                 (
+                    Self::EmptyCircuitId,
                     "empty_circuit",
-                    Tamper::EmptyCircuitId,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::EmptyPublicInputs,
                     "empty_public_inputs",
-                    Tamper::EmptyPublicInputs,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::OversizedPublicInputs,
                     "oversized_public_inputs",
-                    Tamper::OversizedPublicInputs,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::EmptyProofBytes,
                     "empty_proof_bytes",
-                    Tamper::EmptyProofBytes,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::AuxiliaryBytes,
                     "aux",
-                    Tamper::AuxiliaryBytes,
                     "envelope auxiliary bytes must be empty",
                 ),
                 (
+                    Self::ZeroVerifyingKeyHash,
                     "zero_vk_hash",
-                    Tamper::ZeroVerifyingKeyHash,
                     "verifier-key hash must be non-zero",
                 ),
                 (
+                    Self::VerifyingKeyHash,
                     "wrong_vk_hash",
-                    Tamper::VerifyingKeyHash,
                     "verifying key commitment mismatch",
                 ),
                 (
+                    Self::MissingCircuitIndex,
                     "missing_circuit_index",
-                    Tamper::MissingCircuitIndex,
                     "verifying key circuit/version not active",
                 ),
-            ] {
+            ];
+        }
+        #[derive(Clone, Copy)]
+        struct ConfidentialEnvelopeFixture {
+            role: &'static str,
+            label: &'static str,
+            circuit_id: &'static str,
+            expected_schema: &'static [u8],
+            verifying_key: [u8; 4],
+            proof: [u8; 3],
+            invalid_schema: &'static [u8],
+            auxiliary_bytes: &'static [u8],
+        }
+        impl ConfidentialEnvelopeFixture {
+            fn transfer_v2() -> Self {
+                use crate::zk::confidential_v2;
+
+                Self {
+                    role: "transfer_v2",
+                    label: "confidential transfer v2",
+                    circuit_id: confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                    expected_schema:
+                        confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                    verifying_key: [1, 3, 3, 7],
+                    proof: [0xAA, 0xBB, 0xCC],
+                    invalid_schema: b"not the confidential transfer schema",
+                    auxiliary_bytes: b"fee-binding",
+                }
+            }
+            fn unshield_v2() -> Self {
+                Self::unshield(
+                    "unshield_v2",
+                    "confidential unshield v2",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                )
+            }
+            fn unshield_v3() -> Self {
+                Self::unshield(
+                    "unshield_v3",
+                    "confidential unshield v3",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+                )
+            }
+            fn unshield(
+                role: &'static str,
+                label: &'static str,
+                circuit_id: &'static str,
+                expected_schema: &'static [u8],
+            ) -> Self {
+                Self {
+                    role,
+                    label,
+                    circuit_id,
+                    expected_schema,
+                    verifying_key: [5, 8, 13, 21],
+                    proof: [0xDD, 0xEE, 0xFF],
+                    invalid_schema: b"not the confidential unshield schema",
+                    auxiliary_bytes: b"side-channel",
+                }
+            }
+        }
+        fn assert_confidential_envelope_tampers_are_rejected(fixture: ConfidentialEnvelopeFixture) {
+            for (tamper, suffix, expected_msg) in ConfidentialEnvelopeTamper::CASES {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);
@@ -29880,24 +29939,24 @@ seiyaku GovernanceLifecycle {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 let vk_id =
-                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_v2_{suffix}").as_str());
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 3, 3, 7]);
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_{}_{suffix}", fixture.role));
+                let vk_box =
+                    VerifyingKeyBox::new("halo2/ipa".into(), fixture.verifying_key.to_vec());
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_schema =
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1;
-                let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema) {
-                    [0u8; 32]
-                } else {
-                    CryptoHash::new(expected_schema).into()
-                };
+                let schema_hash =
+                    if matches!(tamper, ConfidentialEnvelopeTamper::PublicInputsSchema) {
+                        [0; 32]
+                    } else {
+                        CryptoHash::new(fixture.expected_schema).into()
+                    };
                 let mut record = VerifyingKeyRecord::new_with_owner(
                     1,
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+                    fixture.circuit_id.to_owned(),
                     None,
                     "test",
                     BackendTag::Halo2IpaPasta,
                     "pallas",
-                    public_inputs_schema_hash,
+                    schema_hash,
                     vk_commitment,
                 );
                 record.vk_len = 4;
@@ -29907,7 +29966,7 @@ seiyaku GovernanceLifecycle {
                 stx.world
                     .verifying_keys
                     .insert(vk_id.clone(), record.clone());
-                if !matches!(tamper, Tamper::MissingCircuitIndex) {
+                if !matches!(tamper, ConfidentialEnvelopeTamper::MissingCircuitIndex) {
                     stx.world
                         .verifying_keys_by_circuit
                         .insert((record.circuit_id.clone(), record.version), vk_id.clone());
@@ -29916,30 +29975,34 @@ seiyaku GovernanceLifecycle {
                     backend: BackendTag::Halo2IpaPasta,
                     circuit_id: record.circuit_id.clone(),
                     vk_hash: vk_commitment,
-                    public_inputs: expected_schema.to_vec(),
-                    proof_bytes: vec![0xAA, 0xBB, 0xCC],
+                    public_inputs: fixture.expected_schema.to_vec(),
+                    proof_bytes: fixture.proof.to_vec(),
                     aux: Vec::new(),
                 };
                 match tamper {
-                    Tamper::BackendTag => envelope.backend = BackendTag::Stark,
-                    Tamper::CircuitId => envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into(),
-                    Tamper::PublicInputsSchema => {
-                        envelope.public_inputs = b"not the confidential transfer schema".to_vec();
+                    ConfidentialEnvelopeTamper::BackendTag => envelope.backend = BackendTag::Stark,
+                    ConfidentialEnvelopeTamper::CircuitId => {
+                        envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
                     }
-                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
-                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
-                    Tamper::OversizedPublicInputs => {
+                    ConfidentialEnvelopeTamper::PublicInputsSchema => {
+                        envelope.public_inputs = fixture.invalid_schema.to_vec();
+                    }
+                    ConfidentialEnvelopeTamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                    ConfidentialEnvelopeTamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                    ConfidentialEnvelopeTamper::OversizedPublicInputs => {
                         envelope.public_inputs = vec![
                             0xA5;
                             iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
                                 + 1
                         ];
                     }
-                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
-                    Tamper::AuxiliaryBytes => envelope.aux = b"fee-binding".to_vec(),
-                    Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
-                    Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
-                    Tamper::MissingCircuitIndex => {}
+                    ConfidentialEnvelopeTamper::EmptyProofBytes => envelope.proof_bytes.clear(),
+                    ConfidentialEnvelopeTamper::AuxiliaryBytes => {
+                        envelope.aux = fixture.auxiliary_bytes.to_vec();
+                    }
+                    ConfidentialEnvelopeTamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0; 32],
+                    ConfidentialEnvelopeTamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
+                    ConfidentialEnvelopeTamper::MissingCircuitIndex => {}
                 }
                 let proof_box = ProofBox::new(
                     "halo2/ipa".into(),
@@ -29947,19 +30010,25 @@ seiyaku GovernanceLifecycle {
                 );
                 let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
                 let err = super::validate_confidential_v2_open_verify_envelope_metadata(
-                    "confidential transfer v2",
+                    fixture.label,
                     &attachment,
                     &stx,
                     &record,
-                    expected_schema,
+                    fixture.expected_schema,
                 )
-                .expect_err("tampered confidential transfer v2 envelope must be rejected");
+                .expect_err("tampered confidential envelope must be rejected");
                 let msg = smart_contract_instruction_error_message(err);
                 assert!(
                     msg.contains(expected_msg),
                     "expected {expected_msg:?}, got {msg:?}"
                 );
             }
+        }
+        #[test]
+        fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
+            assert_confidential_envelope_tampers_are_rejected(
+                ConfidentialEnvelopeFixture::transfer_v2(),
+            );
         }
         #[test]
         fn confidential_transfer_v2_accepts_canonical_envelope_metadata_before_proof_decode() {
@@ -30016,189 +30085,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn confidential_unshield_v2_v3_reject_noncanonical_envelope_metadata_before_proof_decode() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                BackendTag,
-                CircuitId,
-                PublicInputsSchema,
-                EmptyCircuitId,
-                EmptyPublicInputs,
-                OversizedPublicInputs,
-                EmptyProofBytes,
-                AuxiliaryBytes,
-                ZeroVerifyingKeyHash,
-                VerifyingKeyHash,
-                MissingCircuitIndex,
-            }
-            for (role_suffix, label, circuit_id, expected_schema) in [
-                (
-                    "unshield_v2",
-                    "confidential unshield v2",
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                ),
-                (
-                    "unshield_v3",
-                    "confidential unshield v3",
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-                ),
+            for fixture in [
+                ConfidentialEnvelopeFixture::unshield_v2(),
+                ConfidentialEnvelopeFixture::unshield_v3(),
             ] {
-                for (suffix, tamper, expected_msg) in [
-                    (
-                        "backend",
-                        Tamper::BackendTag,
-                        "unexpected OpenVerifyEnvelope backend tag",
-                    ),
-                    (
-                        "circuit",
-                        Tamper::CircuitId,
-                        "verifying key circuit mismatch",
-                    ),
-                    (
-                        "schema",
-                        Tamper::PublicInputsSchema,
-                        "public inputs schema mismatch",
-                    ),
-                    (
-                        "empty_circuit_id",
-                        Tamper::EmptyCircuitId,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "empty_public_inputs",
-                        Tamper::EmptyPublicInputs,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "oversized_public_inputs",
-                        Tamper::OversizedPublicInputs,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "empty_proof_bytes",
-                        Tamper::EmptyProofBytes,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "aux",
-                        Tamper::AuxiliaryBytes,
-                        "envelope auxiliary bytes must be empty",
-                    ),
-                    (
-                        "zero_vk_hash",
-                        Tamper::ZeroVerifyingKeyHash,
-                        "verifier-key hash must be non-zero",
-                    ),
-                    (
-                        "wrong_vk_hash",
-                        Tamper::VerifyingKeyHash,
-                        "verifying key commitment mismatch",
-                    ),
-                    (
-                        "missing_circuit_index",
-                        Tamper::MissingCircuitIndex,
-                        "verifying key circuit/version not active",
-                    ),
-                ] {
-                    let kura = Kura::blank_kura_for_testing();
-                    let query_handle = LiveQueryStore::start_test();
-                    let state = State::new(World::default(), kura, query_handle);
-                    let header = iroha_data_model::block::BlockHeader::new(
-                        NonZeroU64::new(1).unwrap(),
-                        None,
-                        None,
-                        None,
-                        0,
-                        0,
-                    );
-                    let mut block = state.block(header);
-                    let mut stx = block.transaction();
-                    let vk_id = VerifyingKeyId::new(
-                        "halo2/ipa",
-                        format!("vk_conf_{role_suffix}_{suffix}").as_str(),
-                    );
-                    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 8, 13, 21]);
-                    let vk_commitment = hash_vk(&vk_box);
-                    let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema)
-                    {
-                        [0u8; 32]
-                    } else {
-                        CryptoHash::new(expected_schema).into()
-                    };
-                    let mut record = VerifyingKeyRecord::new_with_owner(
-                        1,
-                        circuit_id.to_owned(),
-                        None,
-                        "test",
-                        BackendTag::Halo2IpaPasta,
-                        "pallas",
-                        public_inputs_schema_hash,
-                        vk_commitment,
-                    );
-                    record.vk_len = 4;
-                    record.status = ConfidentialStatus::Active;
-                    record.key = Some(vk_box);
-                    record.gas_schedule_id = Some("halo2_default".into());
-                    stx.world
-                        .verifying_keys
-                        .insert(vk_id.clone(), record.clone());
-                    if !matches!(tamper, Tamper::MissingCircuitIndex) {
-                        stx.world
-                            .verifying_keys_by_circuit
-                            .insert((record.circuit_id.clone(), record.version), vk_id.clone());
-                    }
-                    let mut envelope = OpenVerifyEnvelope {
-                        backend: BackendTag::Halo2IpaPasta,
-                        circuit_id: record.circuit_id.clone(),
-                        vk_hash: vk_commitment,
-                        public_inputs: expected_schema.to_vec(),
-                        proof_bytes: vec![0xDD, 0xEE, 0xFF],
-                        aux: Vec::new(),
-                    };
-                    match tamper {
-                        Tamper::BackendTag => envelope.backend = BackendTag::Stark,
-                        Tamper::CircuitId => {
-                            envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
-                        }
-                        Tamper::PublicInputsSchema => {
-                            envelope.public_inputs =
-                                b"not the confidential unshield schema".to_vec();
-                        }
-                        Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
-                        Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
-                        Tamper::OversizedPublicInputs => {
-                            envelope.public_inputs = vec![
-                                0xA5;
-                                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
-                                    + 1
-                            ];
-                        }
-                        Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
-                        Tamper::AuxiliaryBytes => envelope.aux = b"side-channel".to_vec(),
-                        Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
-                        Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
-                        Tamper::MissingCircuitIndex => {}
-                    }
-                    let proof_box = ProofBox::new(
-                        "halo2/ipa".into(),
-                        norito::to_bytes(&envelope).expect("encode envelope"),
-                    );
-                    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-                    let err = super::validate_confidential_v2_open_verify_envelope_metadata(
-                        label,
-                        &attachment,
-                        &stx,
-                        &record,
-                        expected_schema,
-                    )
-                    .expect_err("tampered confidential unshield envelope must be rejected");
-                    let msg = smart_contract_instruction_error_message(err);
-                    assert!(
-                        msg.contains(expected_msg),
-                        "expected {expected_msg:?}, got {msg:?}"
-                    );
-                }
+                assert_confidential_envelope_tampers_are_rejected(fixture);
             }
         }
         #[test]
@@ -31451,54 +31342,103 @@ seiyaku GovernanceLifecycle {
                 "unexpected msg: {msg}"
             );
         }
-        #[test]
-        fn register_vk_rejects_protocol_names_as_backend_labels() {
-            blank_state_transaction!(state, block, state_block, stx);
-            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
-            stx.apply();
+        #[derive(Clone, Copy)]
+        enum RejectedVerifierBackendFamily {
+            ProtocolName,
+            ProductionClaim,
+            DeveloperOnly,
+            Unsupported,
+        }
+        impl RejectedVerifierBackendFamily {
+            fn key_name(self, index: usize) -> String {
+                let prefix = match self {
+                    Self::ProtocolName => "vk_pending_label",
+                    Self::ProductionClaim => "vk_production_claim",
+                    Self::DeveloperOnly => "vk_developer_only",
+                    Self::Unsupported => "vk_unsupported",
+                };
+                format!("{prefix}_{index}")
+            }
+            fn circuit_id(self, backend: &str) -> String {
+                let suffix = match self {
+                    Self::ProtocolName => "unsupported-protocol-circuit",
+                    Self::ProductionClaim => "claimed-production-circuit",
+                    Self::DeveloperOnly => "developer-only-circuit",
+                    Self::Unsupported => "unsupported-circuit",
+                };
+                format!("{backend}:{suffix}")
+            }
+            fn record_hash_byte(self) -> u8 {
+                match self {
+                    Self::ProtocolName => 0x6C,
+                    Self::ProductionClaim => 0x7B,
+                    Self::DeveloperOnly => 0x72,
+                    Self::Unsupported => 0x73,
+                }
+            }
+            fn expected_message(self) -> &'static str {
+                match self {
+                    Self::ProtocolName | Self::Unsupported => "unsupported verifying key backends",
+                    Self::ProductionClaim => "production-claim verifying key backends",
+                    Self::DeveloperOnly => "developer-only verifying key backends",
+                }
+            }
+        }
+        fn assert_registration_rejects_backend_family(
+            state_block: &mut StateBlock<'_>,
+            backends: &[&str],
+            family: RejectedVerifierBackendFamily,
+        ) {
             let exec = Executor::default();
-            for (idx, backend) in UNSUPPORTED_PROTOCOL_BACKEND_LABELS
-                .iter()
-                .copied()
-                .enumerate()
-            {
+            for (index, backend) in backends.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_pending_label_{idx}"));
+                let id = VerifyingKeyId::new(backend, family.key_name(index));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
+                let mut record = VerifyingKeyRecord::new_with_owner(
                     1,
-                    format!("{backend}:unsupported-protocol-circuit"),
+                    family.circuit_id(backend),
                     None,
                     "test",
                     record_backend,
                     curve,
-                    [0x6C; 32],
+                    [family.record_hash_byte(); 32],
                     hash_vk(&vk_box),
                 );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                record.vk_len = 3;
+                record.status = ConfidentialStatus::Active;
+                record.key = Some(vk_box);
+                record.gas_schedule_id = Some(schedule.into());
+                let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                     id: id.clone(),
-                    record: rec,
+                    record,
                 }
                 .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("protocol name must not be accepted as a verifier engine");
-                let msg = smart_contract_error_message(err);
+                let error = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                    .expect_err("rejected verifier backend must not register");
+                let message = smart_contract_error_message(error);
                 assert!(
-                    msg.contains("unsupported verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
+                    message.contains(family.expected_message()),
+                    "unexpected message for {backend}: {message}"
                 );
                 assert!(
                     stx.world.verifying_keys.get(&id).is_none(),
                     "{backend} must not be admitted to WSV"
                 );
             }
+        }
+        #[test]
+        fn register_vk_rejects_protocol_names_as_backend_labels() {
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
+            stx.apply();
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                UNSUPPORTED_PROTOCOL_BACKEND_LABELS,
+                RejectedVerifierBackendFamily::ProtocolName,
+            );
         }
         #[test]
         fn register_vk_reserves_every_active_and_retired_privacy_circuit_label() {
@@ -31620,45 +31560,11 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let (record_backend, curve, schedule) =
-                    unsupported_label_generic_record_profile(backend);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:claimed-production-circuit"),
-                    None,
-                    "test",
-                    record_backend,
-                    curve,
-                    [0x7B; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
-                    id: id.clone(),
-                    record: rec,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("production-claim verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("production-claim verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-                assert!(
-                    stx.world.verifying_keys.get(&id).is_none(),
-                    "{backend} must not be admitted to WSV"
-                );
-            }
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                PRODUCTION_CLAIM_VERIFIER_LABELS,
+                RejectedVerifierBackendFamily::ProductionClaim,
+            );
         }
         #[test]
         fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
@@ -31711,206 +31617,45 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, (backend, tag, curve, schedule)) in [
-                (
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                &[
                     "debug/halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/mock",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/debug",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:mock-proof",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:Mock-Proof",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "stark/fri/debug",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/Debug",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/mock",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_developer_only_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:developer-only-circuit"),
-                    None,
-                    "test",
-                    tag,
-                    curve,
-                    [0x72; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox =
-                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("developer-only verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("developer-only verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-            }
+                ],
+                RejectedVerifierBackendFamily::DeveloperOnly,
+            );
         }
         #[test]
         fn register_vk_rejects_unsupported_backend_labels() {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, (backend, tag, curve, schedule)) in [
-                (
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                &[
                     " halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa ",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa\n",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa\0",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "../halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa/../tiny-add",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/unknown-native-v1",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:unknown-native-v1",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "stark/unknown-native-v1",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     " stark/fri/sha256-goldilocks",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/sha256-goldilocks ",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/sha256-goldilocks\0",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "../stark/fri",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_unsupported_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:unsupported-circuit"),
-                    None,
-                    "test",
-                    tag,
-                    curve,
-                    [0x73; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox =
-                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("unsupported verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("unsupported verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-            }
+                ],
+                RejectedVerifierBackendFamily::Unsupported,
+            );
         }
         #[test]
         fn register_vk_rejects_trusted_setup_stark_backend_labels() {

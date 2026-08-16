@@ -1,7 +1,7 @@
 // Test body included from the parent module to keep its production source budget bounded.
 use super::super::authentication_challenge;
 use super::*;
-use crate::vega::MaskedRelaxedRandomErrorV1;
+use crate::vega::{MaskedRelaxedRandomErrorV1, sponge::shake256};
 const LINEAR_TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const LINEAR_TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
 fn linear_test_profile() -> super::super::BgvProfile {
@@ -896,10 +896,18 @@ fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
         secret.coefficients.as_slice(),
         error.coefficients.as_slice(),
     ];
+    let applied =
+        apply_linear_relation_from_signed_v1(&profile, &streaming, &witness_slices).unwrap();
+    let coefficient_count = profile.ring_degree * profile.moduli.len();
+    assert_eq!((applied.len(), applied.capacity()), (1, 1));
     assert_eq!(
-        apply_linear_relation_from_signed_v1(&profile, &streaming, &witness_slices).unwrap(),
-        vec![target]
+        (
+            applied[0].coefficients.len(),
+            applied[0].coefficients.capacity()
+        ),
+        (coefficient_count, coefficient_count)
     );
+    assert_eq!(applied, vec![target]);
     let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::CollectivePublicKey);
     let owned_proof = prove_linear_relation_v1(
         &profile,
@@ -918,6 +926,26 @@ fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
     )
     .unwrap();
     assert_eq!(streaming_proof, owned_proof);
+}
+#[test]
+fn active_mask_and_zero_rns_have_exact_reported_capacity() {
+    let profile = linear_test_profile();
+    let mask = sample_signed_mask(
+        profile.ring_degree,
+        1 << 20,
+        &mut KatRandom::new(b"active-mask-exact-capacity"),
+    )
+    .unwrap();
+    assert_eq!(
+        (mask.coefficients.len(), mask.coefficients.capacity()),
+        (profile.ring_degree, profile.ring_degree)
+    );
+    let zero = try_zero_active_rns_v1(&profile).unwrap();
+    let count = profile.ring_degree * profile.moduli.len();
+    assert_eq!(
+        (zero.coefficients.len(), zero.coefficients.capacity()),
+        (count, count)
+    );
 }
 #[test]
 fn active_linear_source_drops_owned_tables_between_phases() {
@@ -939,8 +967,131 @@ fn active_linear_source_drops_owned_tables_between_phases() {
         assert!(prove.contains(release), "missing release: {release}");
     }
     assert!(!prove.contains("output.target.clone()"));
+    assert!(prove.contains("try_reserve_exact(witnesses.len())"));
+    assert!(prove.contains("responses.capacity() != witnesses.len()"));
     assert!(prove.contains("try_reserve_exact(profile.ring_degree)"));
+    assert!(prove.contains("response.capacity() != profile.ring_degree"));
     assert!(source.contains("zeroizing_active_rns_from_signed_v1"));
+    let wire = source
+        .split("impl LinearRelationProofV1")
+        .nth(1)
+        .expect("linear proof implementation")
+        .split("fn decode_wire_exact")
+        .next()
+        .expect("linear proof encoder boundary");
+    assert!(wire.contains("try_reserve_exact(length)"));
+    assert!(wire.contains("bytes.capacity() != length"));
+    assert!(!wire.contains("Vec::with_capacity(length)"));
+    let cpk_prover = source
+        .split("pub fn prove_zk_ams_mkhe_active_collective_public_key_v1")
+        .nth(1)
+        .expect("collective-key prover")
+        .split("pub fn verify_zk_ams_mkhe_active_collective_public_key_v1")
+        .next()
+        .expect("collective-key prover boundary");
+    for step in [
+        "let secret = secret_polynomial_exact",
+        "let public_error =",
+        "try_reserve_exact(2)",
+        "witnesses.capacity() != 2",
+        "witnesses.as_ptr() != allocation",
+    ] {
+        assert!(
+            cpk_prover.contains(step),
+            "missing witness owner step: {step}"
+        );
+    }
+    let exact_witness = source
+        .split("fn secret_polynomial_exact")
+        .nth(1)
+        .expect("exact witness copy")
+        .split("fn round_one_witness_polynomials")
+        .next()
+        .expect("exact witness boundary");
+    for step in [
+        "let mut polynomial = super::SecretPolynomial",
+        "try_reserve_exact(coefficients.len())",
+        "polynomial.coefficients.capacity() != coefficients.len()",
+        "polynomial.coefficients.as_ptr() != allocation",
+    ] {
+        assert!(exact_witness.contains(step), "missing witness step: {step}");
+    }
+    let zero_rns = source
+        .split("fn try_zero_active_rns_v1")
+        .nth(1)
+        .expect("zero RNS owner")
+        .split("fn zeroizing_active_rns_from_signed_v1")
+        .next()
+        .expect("zero RNS boundary");
+    for step in [
+        "coefficients.capacity() != coefficient_count",
+        "let allocation = coefficients.as_ptr();",
+        "let polynomial = super::RnsPolynomial::from_flat(profile, coefficients)?;",
+        "polynomial.coefficients.as_ptr() != allocation",
+    ] {
+        assert!(zero_rns.contains(step), "missing RNS step: {step}");
+    }
+    for step in [
+        "let mask_count = statement.witness_bounds.len();",
+        "masks.capacity() != mask_count",
+        "let masks_allocation = masks.as_ptr();",
+        "masks.as_ptr() != masks_allocation",
+        "drop(masks)",
+    ] {
+        assert!(prove.contains(step), "missing mask-owner step: {step}");
+    }
+    assert!(
+        prove.find("try_reserve_exact(mask_count)").unwrap()
+            < prove
+                .find("sample_signed_mask(profile.ring_degree")
+                .unwrap()
+    );
+    let mask = source
+        .split("fn sample_signed_mask")
+        .nth(1)
+        .expect("secret mask owner")
+        .split("fn validate_linear_random_health")
+        .next()
+        .expect("secret mask boundary");
+    assert!(
+        mask.find("let mut mask = super::SecretPolynomial").unwrap()
+            < mask.find("sample_below(width, random)").unwrap()
+    );
+    for step in [
+        "mask.coefficients.capacity() != count",
+        "let allocation = mask.coefficients.as_ptr();",
+        "mask.coefficients.as_ptr() != allocation",
+    ] {
+        assert!(mask.contains(step), "missing mask step: {step}");
+    }
+    let apply_signed = source
+        .split("fn apply_linear_relation_from_signed_v1")
+        .nth(1)
+        .expect("signed relation application")
+        .split("fn apply_streaming_collective_public_key_relation_v1")
+        .next()
+        .expect("signed relation boundary");
+    let reconstruct = source
+        .split("fn reconstruct_linear_commitments_v1")
+        .nth(1)
+        .expect("commitment reconstruction")
+        .split("fn apply_linear_relation<")
+        .next()
+        .expect("commitment reconstruction boundary");
+    for (owner, label) in [(apply_signed, "outputs"), (reconstruct, "commitments")] {
+        assert!(owner.contains("let output_count = statement.output_count()?;"));
+        assert!(owner.contains(&format!("{label}.capacity() != output_count")));
+        assert!(owner.contains(&format!("{label}.as_ptr() != allocation")));
+    }
+    let parent = include_str!("../mkhe.rs");
+    let secret_drop = parent
+        .split("impl Drop for SecretPolynomial")
+        .nth(1)
+        .expect("secret polynomial drop")
+        .split("impl fmt::Debug for SecretPolynomial")
+        .next()
+        .expect("secret polynomial drop boundary");
+    assert!(secret_drop.contains("coefficients.fill(0)"));
     let apply = source
         .split("fn apply_linear_relation")
         .nth(1)
@@ -1015,13 +1166,22 @@ fn rkg_proof_wire_has_one_exact_roundtrip_and_rejects_header_splices() {
         &mut KatRandom::new(b"rkg-proof-wire-roundtrip"),
     )
     .unwrap();
+    assert_eq!(proof.responses.capacity(), proof.responses.len());
+    assert!(proof.responses.iter().all(|response| {
+        response.len() == profile.ring_degree && response.capacity() == profile.ring_degree
+    }));
     let encoded = proof.encode_wire().unwrap();
-    assert_eq!(
-        encoded.len(),
-        linear_proof_wire_bytes(2, profile.ring_degree).unwrap()
-    );
+    let expected = linear_proof_wire_bytes(2, profile.ring_degree).unwrap();
+    assert_eq!((encoded.len(), encoded.capacity()), (expected, expected));
     let decoded =
         LinearRelationProofV1::decode_wire_exact(&encoded, 2, profile.ring_degree).unwrap();
+    assert_eq!(decoded.responses.capacity(), 2);
+    assert!(
+        decoded
+            .responses
+            .iter()
+            .all(|response| response.capacity() == profile.ring_degree)
+    );
     assert_eq!(decoded, proof);
     verify_linear_relation_proof(&profile, context, &statement, &decoded).unwrap();
     assert_eq!(decoded.encode_wire().unwrap(), encoded);
@@ -1091,6 +1251,7 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
         proof_bytes,
         contribution,
     };
+    assert_eq!(evidence.proof_bytes.capacity(), evidence.proof_bytes.len());
     let encoded = evidence.encode_evidence().unwrap();
     let decoded = ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&encoded).unwrap();
     assert_eq!(decoded, evidence);
@@ -1362,6 +1523,7 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
     let profile = linear_test_profile();
     let challenge =
         derive_sparse_challenge(profile.ring_degree, keccak256(b"sparse-challenge-kat")).unwrap();
+    assert_eq!(challenge.capacity(), challenge.len());
     assert_eq!(
         challenge
             .iter()
@@ -1376,6 +1538,9 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
     );
     let dense = [-1, 0, 1, 2, -2, 1, 0, -1];
     let signed = sparse_negacyclic_mul_signed(&challenge, &dense).unwrap();
+    assert_eq!(signed.0.capacity(), signed.0.len());
+    let transformed = automorphism_signed(&challenge, 3).unwrap();
+    assert_eq!(transformed.capacity(), transformed.len());
     let expected = super::super::RnsPolynomial::from_signed(&profile, &challenge)
         .unwrap()
         .mul(
@@ -1386,6 +1551,262 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
     assert_eq!(
         super::super::RnsPolynomial::from_signed(&profile, signed.as_slice()).unwrap(),
         expected
+    );
+}
+fn buffered_sparse_challenge_reference_v1(
+    ring_degree: usize,
+    challenge_seed: [u8; 32],
+) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
+    let weight = linear_challenge_weight(ring_degree)?;
+    let mut frame = Vec::with_capacity(96);
+    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-sparse-challenge");
+    frame.extend_from_slice(&challenge_seed);
+    frame.extend_from_slice(&(ring_degree as u32).to_be_bytes());
+    frame.extend_from_slice(&(weight as u32).to_be_bytes());
+    let stream = shake256(&frame, weight * RANDOM_REJECTION_ATTEMPTS_V1 * 8);
+    let position_mask = ring_degree as u64 - 1;
+    let mut selected_positions = vec![false; ring_degree];
+    let mut terms = Vec::with_capacity(weight);
+    for chunk in stream.chunks_exact(8) {
+        let candidate = u64::from_le_bytes(chunk.try_into().unwrap());
+        let position = (candidate & position_mask) as usize;
+        if selected_positions[position] {
+            continue;
+        }
+        selected_positions[position] = true;
+        terms.push(SparseChallengeTermV1 {
+            position: position as u32,
+            sign: if candidate >> 63 == 0 { -1 } else { 1 },
+        });
+        if terms.len() == weight {
+            terms.sort_by_key(|term| term.position);
+            let sparse = SparseChallengeV1::new(ring_degree, terms)?;
+            let mut dense = vec![0_i64; ring_degree];
+            for term in sparse.terms {
+                dense[term.position as usize] = i64::from(term.sign);
+            }
+            return Ok(dense);
+        }
+    }
+    Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+}
+#[test]
+fn streaming_sparse_challenge_matches_the_buffered_transcript() {
+    for (ring_degree, label) in [
+        (8, b"sparse-stream-eight".as_slice()),
+        (256, b"sparse-stream-rate-crossing".as_slice()),
+        (131_072, b"sparse-stream-release".as_slice()),
+    ] {
+        let seed = keccak256(label);
+        assert_eq!(
+            derive_sparse_challenge(ring_degree, seed).unwrap(),
+            buffered_sparse_challenge_reference_v1(ring_degree, seed).unwrap()
+        );
+    }
+}
+#[test]
+fn sparse_challenge_capacity_and_streaming_source_are_closed() {
+    let source = include_str!("active.rs");
+    let helper = source
+        .split("fn try_exact_zero_i64_v1")
+        .nth(1)
+        .unwrap()
+        .split("trait LinearRelationRnsV1")
+        .next()
+        .unwrap();
+    for step in [
+        "try_reserve_exact(length)",
+        "values.capacity() != length",
+        "let allocation = values.as_ptr();",
+        "values.as_ptr() != allocation",
+    ] {
+        assert!(helper.contains(step));
+    }
+    let sparse = source
+        .split("fn derive_sparse_challenge")
+        .nth(1)
+        .unwrap()
+        .split("fn sparse_negacyclic_mul_signed")
+        .next()
+        .unwrap();
+    for step in [
+        "let mut frame = [0_u8; DOMAIN.len() + 40]",
+        "Shake256Reader::new(&frame)",
+        "stream.read(&mut candidate)",
+        "try_reserve_exact(weight)",
+        "terms.capacity() != weight",
+        "terms.as_ptr() != allocation",
+        "terms.iter().any",
+        "sort_unstable_by_key",
+    ] {
+        assert!(sparse.contains(step), "missing sparse step: {step}");
+    }
+    for forbidden in [
+        "shake256(",
+        "selected_positions",
+        "Vec::with_capacity",
+        ".sort_by_key",
+    ] {
+        assert!(!sparse.contains(forbidden), "sparse heap path: {forbidden}");
+    }
+    let dense = source
+        .split("fn to_dense(&self, ring_degree: usize)")
+        .nth(1)
+        .unwrap()
+        .split("fn derive_sparse_challenge")
+        .next()
+        .unwrap();
+    assert!(dense.contains("try_exact_zero_i64_v1(ring_degree)?"));
+    assert_eq!(source.matches("try_exact_zero_i64_v1(degree)?").count(), 1);
+    assert_eq!(
+        source
+            .matches("try_exact_zero_i64_v1(coefficients.len())?")
+            .count(),
+        1
+    );
+}
+#[test]
+fn linear_context_streaming_digest_matches_the_buffered_frame() {
+    let profile = linear_test_profile();
+    let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::CollectivePublicKey);
+    let mut frame = Vec::with_capacity(256);
+    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-context");
+    frame.push(MKHE_VERSION_V1);
+    frame.extend_from_slice(&context.profile_digest);
+    frame.extend_from_slice(&context.roster_digest);
+    frame.extend_from_slice(&context.epoch.to_be_bytes());
+    frame.extend_from_slice(&context.transcript_digest);
+    frame.push(context.round.tag());
+    frame.push(context.party_index);
+    frame.extend_from_slice(&context.party.to_bytes());
+    frame.extend_from_slice(&context.record_index.to_be_bytes());
+    frame.extend_from_slice(&context.relation_index.to_be_bytes());
+    assert_eq!(
+        linear_context_digest(&profile, context).unwrap(),
+        keccak256(&frame)
+    );
+}
+#[test]
+fn linear_relation_temporary_owner_capacity_source_is_closed() {
+    let source = include_str!("active.rs");
+    let helper = source
+        .split("fn try_exact_collect_v1")
+        .nth(1)
+        .unwrap()
+        .split("trait LinearRelationRnsV1")
+        .next()
+        .unwrap();
+    for step in [
+        "size_of::<T>() == 0",
+        "try_reserve_exact(length)",
+        "output.capacity() != length",
+        "let allocation = output.as_ptr();",
+        "output.as_ptr() != allocation",
+    ] {
+        assert!(helper.contains(step));
+    }
+    assert_eq!(source.matches("try_exact_collect_v1(").count(), 4);
+    let statement = source
+        .split("fn collective_public_key_relation")
+        .nth(1)
+        .unwrap()
+        .split("fn rkg_round_one_relation")
+        .next()
+        .unwrap();
+    assert!(statement.contains("relation.witness_bounds.capacity() != 2"));
+    assert!(statement.contains("relation.outputs.capacity() != 0"));
+    let validation = source
+        .split("impl LinearRelationStatementV1")
+        .nth(1)
+        .unwrap()
+        .split("fn prove_linear_relation_v1")
+        .next()
+        .unwrap();
+    assert!(validation.contains("[false; RKG_LINEAR_PROOF_MAX_WITNESSES_V1]"));
+    assert!(!validation.contains("vec![false"));
+    let context = source
+        .split("fn linear_context_digest")
+        .nth(1)
+        .unwrap()
+        .split("fn linear_commitment_challenge_seed")
+        .next()
+        .unwrap();
+    assert!(context.contains("let mut hash = Keccak256::new()"));
+    assert!(!context.contains("Vec::"));
+    assert!(!context.contains("keccak256("));
+    let decode = source
+        .split("fn decode_wire_exact")
+        .nth(1)
+        .unwrap()
+        .split("fn digest")
+        .next()
+        .unwrap();
+    assert_eq!(decode.matches("try_exact_capacity_vec_v1(").count(), 2);
+    assert!(!decode.contains("Vec::with_capacity"));
+}
+#[test]
+fn governed_roster_and_authentication_capacity_source_is_stack_only() {
+    let active = include_str!("active.rs");
+    let mkhe = include_str!("../mkhe.rs");
+    let wire = include_str!("wire.rs");
+    let roster = active
+        .split("impl ZkAmsMkheGovernedActiveRosterV1")
+        .nth(1)
+        .unwrap()
+        .split("fn assemble_governed_active_roster")
+        .next()
+        .unwrap();
+    let identity = active
+        .split("fn active_roster_identity(")
+        .nth(1)
+        .unwrap()
+        .split("fn prove_roster_key_possession")
+        .next()
+        .unwrap();
+    let pop = active
+        .split("fn roster_pop_challenge(")
+        .nth(1)
+        .unwrap()
+        .split("fn sample_nonzero_scalar")
+        .next()
+        .unwrap();
+    let party = mkhe
+        .split("fn from_authentication_key(")
+        .nth(1)
+        .unwrap()
+        .split("impl fmt::Debug for ZkAmsMkhePartyIdV1")
+        .next()
+        .unwrap();
+    let authentication = mkhe
+        .split("fn authentication_challenge(")
+        .nth(1)
+        .unwrap()
+        .split("fn random_scalar")
+        .next()
+        .unwrap();
+    let roster_digest = wire
+        .split("pub(super) fn governed_roster_digest(")
+        .nth(1)
+        .unwrap()
+        .split("pub struct ZkAmsMkheRnsPolynomialWireV1")
+        .next()
+        .unwrap();
+    for corridor in [roster, identity, pop, party, authentication, roster_digest] {
+        assert!(!corridor.contains("Vec"));
+    }
+    assert!(roster.contains(".map(|participant| participant.authentication_public_key)"));
+    assert!(identity.contains("[ZkAmsMkhePartyIdV1([0; 32]);"));
+    assert_eq!(pop.matches("Shake256Reader::new(").count(), 1);
+    assert_eq!(authentication.matches("Shake256Reader::new(").count(), 1);
+    assert!(!pop.contains("shake256("));
+    assert!(!authentication.contains("shake256("));
+    assert!(party.contains("let mut hash = Keccak256::new()"));
+    assert!(identity.contains("let mut hash = Keccak256::new()"));
+    assert!(roster_digest.contains("let mut hash = Keccak256::new()"));
+    assert_eq!(ROSTER_POP_FRAME_BYTES_V1, 249);
+    assert_eq!(
+        super::super::AUTHENTICATION_CHALLENGE_MAX_FRAME_BYTES_V1,
+        429
     );
 }
 #[test]

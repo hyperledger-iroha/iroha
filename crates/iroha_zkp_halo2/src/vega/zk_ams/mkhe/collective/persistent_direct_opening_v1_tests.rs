@@ -37,7 +37,7 @@ fn owner_is_move_only_private_and_contains_one_opening() {
     assert_eq!(owner.matches("secret: SecretPolynomial").count(), 1);
     assert_eq!(
         owner
-            .matches("blindings: PersistentSecretCommitmentBlindingsV1")
+            .matches("blindings: ZeroizingCpkMembershipBlindingsV1")
             .count(),
         1
     );
@@ -98,10 +98,10 @@ fn constructor_commits_before_retaining_public_encodings() {
         .find("axes.validate()?")
         .expect("axis validation");
     let narrowing = constructor
-        .find("from_ternary_secret(&secret)?")
+        .find("from_bounded(&secret, 1)?")
         .expect("erasing narrowing");
     let commitment = constructor
-        .find("commit_persistent_secret_opening_v1(")
+        .find("commit_cpk_membership_opening_v1(")
         .expect("eight commitment construction");
     let encoding = constructor
         .find("encode_persistent_opening_commitments_v1(&commitments)?")
@@ -156,7 +156,7 @@ fn collective_state_has_no_parallel_secret_or_blinding_owner() {
 #[test]
 fn sealed_lease_rechecks_all_eight_canonical_points() {
     let lease = COLLECTIVE_SOURCE_V1
-        .split("impl PersistentDirectOpeningLeaseV1")
+        .split("impl<'a> PersistentDirectOpeningLeaseV1<'a>")
         .nth(1)
         .expect("exclusive lease implementation")
         .split("/// Opaque RLWE state")
@@ -165,16 +165,16 @@ fn sealed_lease_rechecks_all_eight_canonical_points() {
     let proof = lease
         .find("ZkAmsMkhePersistentMembershipEvidenceV1::prove(")
         .expect("membership proof");
-    let commitments = lease
-        .find("let commitments = evidence.commitments()")
-        .expect("all evidence commitments");
     let encoding = lease
-        .find("encode_persistent_opening_commitments_v1(&commitments)")
+        .find("encode_persistent_opening_commitments_v1(&evidence.commitments())")
         .expect("canonical commitment encoding");
     let comparison = lease
         .find("encoded != self.owner.retained_commitment_wire")
         .expect("retained-point comparison");
-    assert!(proof < commitments && commitments < encoding && encoding < comparison);
+    let recheck = lease
+        .find("self.validate_secret_membership_v1(&evidence)?")
+        .expect("proof recheck");
+    assert!(proof < recheck && encoding < comparison);
     assert!(!lease.contains("pub(super) const fn blindings"));
     assert!(!lease.contains("pub(super) const fn coefficients"));
 }

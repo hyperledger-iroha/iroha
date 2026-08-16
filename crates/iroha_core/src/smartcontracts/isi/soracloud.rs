@@ -39265,6 +39265,67 @@ mod tests {
         );
         Ok(())
     }
+    struct TrainingStartFixture {
+        service_name: iroha_data_model::name::Name,
+    }
+    impl TrainingStartFixture {
+        fn portal() -> Self {
+            Self {
+                service_name: "portal".parse().expect("valid"),
+            }
+        }
+        fn execute(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
+                service_name: self.service_name.clone(),
+                model_name: "vision_model".to_string(),
+                job_id: "job-1".to_string(),
+                worker_group_size: 4,
+                target_steps: 100,
+                checkpoint_interval_steps: 20,
+                max_retries: 3,
+                step_compute_units: 50,
+                compute_budget_units: 40_000,
+                storage_budget_bytes: 8_192,
+                provenance: training_start_provenance(
+                    &self.service_name,
+                    "vision_model",
+                    "job-1",
+                    4,
+                    100,
+                    20,
+                    3,
+                    50,
+                    40_000,
+                    8_192,
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+        fn checkpoint(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            metrics_hash: Hash,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
+                service_name: self.service_name.clone(),
+                job_id: "job-1".to_string(),
+                completed_step: 100,
+                checkpoint_size_bytes: 1_024,
+                metrics_hash,
+                provenance: training_checkpoint_provenance(
+                    &self.service_name,
+                    "job-1",
+                    100,
+                    1_024,
+                    metrics_hash,
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+    }
     #[test]
     fn start_soracloud_training_job_records_authoritative_job_state() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
@@ -39272,32 +39333,9 @@ mod tests {
         let bundle = sample_training_bundle("portal", "1.0.0");
         begin_soracloud_test_transaction!(state, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
+        let service_name = training.service_name;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
@@ -39327,48 +39365,11 @@ mod tests {
         let bundle = sample_training_bundle("portal", "1.0.0");
         begin_soracloud_test_transaction!(state, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
@@ -39392,32 +39393,9 @@ mod tests {
         let bundle = sample_training_bundle("portal", "1.0.0");
         begin_soracloud_test_transaction!(state, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
+        let service_name = training.service_name;
         iroha_data_model::isi::InstructionBox::from(isi::RetrySoracloudTrainingJob {
             service_name: service_name.clone(),
             job_id: "job-1".to_string(),
@@ -39456,48 +39434,11 @@ mod tests {
         let bundle = sample_training_bundle("portal", "1.0.0");
         begin_soracloud_test_transaction!(state, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         let weight_artifact_hash = Hash::new(b"weights");
         let training_config_hash = Hash::new(b"train-config");
         let reproducibility_hash = Hash::new(b"repro");
@@ -39551,48 +39492,11 @@ mod tests {
         let bundle = sample_training_bundle("portal", "1.0.0");
         begin_soracloud_test_transaction!(state, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         let weight_artifact_hash = Hash::new(b"weights");
         let training_config_hash = Hash::new(b"train-config");
         let reproducibility_hash = Hash::new(b"repro");

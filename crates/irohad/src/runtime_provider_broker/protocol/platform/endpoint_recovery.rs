@@ -1,6 +1,6 @@
 //! Exclusive broker-instance locking and identity-pinned endpoint removal.
-use std::{ffi::OsStr, fmt::Write as _, fs};
 use super::{RuntimeProviderBrokerServerErrorV1, SocketIdentity, socket_identity_from_stat};
+use std::{ffi::OsStr, fmt::Write as _, fs};
 const INSTANCE_LOCK_NAME: &str = ".runtime-provider-broker-v1.lock";
 const INSTANCE_LOCK_MODE: u32 = 0o600;
 const QUARANTINE_NAME_ATTEMPTS: usize = 4;

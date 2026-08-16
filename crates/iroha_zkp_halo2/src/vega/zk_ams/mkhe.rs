@@ -8,9 +8,10 @@
 use super::super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1, VegaT256ScalarV1 as Scalar,
     derive_t256_generators_v1,
-    sponge::{Shake256Reader, keccak256, shake256},
+    sponge::{Keccak256, Shake256Reader, keccak256, shake256},
 };
 use super::MaskedRelaxedRandomSourceV1;
+use crate::generalized_bulletproof::try_exact_capacity_vec_v1;
 #[cfg(test)]
 use core::cmp::Ordering;
 use core::fmt;
@@ -302,6 +303,8 @@ pub enum ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2 {
 /// `load_exact_v2` must bypass caches and obtain the committed value width from backend metadata;
 /// zero padding alone is not a width discriminator. `Absent` zeros all 640 output bytes;
 /// `Legacy334` writes exactly 334 bytes then zeros the remainder; `Lifecycle640` writes all bytes.
+/// The supplied key is the exact legacy V1 transaction hash: both widths must occupy the same
+/// physical address, with no schema-specific namespace or cross-key migration race.
 /// Mutations are atomic, linearizable, and crash-durable before a successful return. This raw API
 /// additionally requires one protected singleton root plus global same-key fencing and
 /// rollback-resistant absence/CAS state: rollback to `Absent` could otherwise mint a second Fresh
@@ -316,6 +319,7 @@ pub trait ZkAmsMkheDirectRkgOneLifecycleStoreV2 {
     ) -> Result<ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2, ZkAmsMkheErrorV1>;
 
     /// Insert exactly one V2 record without overwriting any existing-width value.
+    /// An error or unwind may follow a committed write and never proves caller ownership.
     fn put_if_absent_exact_v2(
         &mut self,
         storage_key: &[u8; 32],
@@ -323,6 +327,7 @@ pub trait ZkAmsMkheDirectRkgOneLifecycleStoreV2 {
     ) -> Result<ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2, ZkAmsMkheErrorV1>;
 
     /// Replace exactly one V2 value only when every expected byte matches.
+    /// An error or unwind may follow a committed replacement and never proves caller ownership.
     fn compare_exchange_exact_v2(
         &mut self,
         storage_key: &[u8; 32],
@@ -425,6 +430,9 @@ const SCHNORR_SIGNATURE_BYTES_V1: usize = 65;
 const MAX_RANDOM_REJECTION_ATTEMPTS_V1: usize = 128;
 const MAX_TERNARY_SAMPLE_BYTES_PER_COEFFICIENT_V1: usize = 16;
 const AUTH_GENERATOR_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.mkhe-auth-t256";
+const AUTHENTICATION_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.schnorr-authentication";
+const AUTHENTICATION_CHALLENGE_MAX_FRAME_BYTES_V1: usize =
+    AUTHENTICATION_CHALLENGE_DOMAIN_V1.len() + 1 + u8::MAX as usize + 32 + 32 + 33 + 33;
 const T256_CENTERED_MAX_BE_V1: [u8; 32] = [
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -511,10 +519,10 @@ impl ZkAmsMkhePartyIdV1 {
         self.0
     }
     fn from_authentication_key(public_key: &[u8; 33]) -> Result<Self, ZkAmsMkheErrorV1> {
-        let mut frame = Vec::with_capacity(80);
-        frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.authentication-party-id");
-        frame.extend_from_slice(public_key);
-        Self::new(keccak256(&frame))
+        let mut hash = Keccak256::new();
+        hash.update(b"iroha.zk-ams.v1.mkhe.authentication-party-id");
+        hash.update(public_key);
+        Self::new(hash.finalize())
     }
 }
 impl fmt::Debug for ZkAmsMkhePartyIdV1 {
@@ -737,17 +745,26 @@ fn authentication_challenge(
     public_key: &[u8; 33],
     commitment: &[u8; 33],
 ) -> Result<Scalar, ZkAmsMkheErrorV1> {
-    let mut frame = Vec::with_capacity(180 + domain.len());
-    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.schnorr-authentication");
-    frame.push(u8::try_from(domain.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?);
-    frame.extend_from_slice(domain);
-    frame.extend_from_slice(&transcript_digest);
-    frame.extend_from_slice(&party.0);
-    frame.extend_from_slice(public_key);
-    frame.extend_from_slice(commitment);
-    let uniform: [u8; 64] = shake256(&frame, 64)
-        .try_into()
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
+    let domain_len =
+        u8::try_from(domain.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
+    let domain_len = [domain_len];
+    let mut frame = [0_u8; AUTHENTICATION_CHALLENGE_MAX_FRAME_BYTES_V1];
+    let mut cursor = 0;
+    for bytes in [
+        AUTHENTICATION_CHALLENGE_DOMAIN_V1,
+        &domain_len,
+        domain,
+        &transcript_digest,
+        &party.0,
+        public_key,
+        commitment,
+    ] {
+        let end = cursor + bytes.len();
+        frame[cursor..end].copy_from_slice(bytes);
+        cursor = end;
+    }
+    let mut uniform = [0_u8; 64];
+    Shake256Reader::new(&frame[..cursor]).read(&mut uniform);
     Ok(Scalar::from_uniform_le_bytes(uniform))
 }
 fn random_scalar<R: MaskedRelaxedRandomSourceV1>(
@@ -878,7 +895,8 @@ impl BgvProfile {
     }
     fn digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
-        let mut frame = Vec::with_capacity(256 + self.moduli.len() * 16);
+        let mut frame = try_exact_capacity_vec_v1(256 + self.moduli.len() * 16)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rns-bgv-profile");
         frame.extend_from_slice(&self.profile_id);
         frame.extend_from_slice(
@@ -936,7 +954,8 @@ impl BgvProfile {
     /// wire/profile identity remains [`Self::digest`].
     fn security_parameters_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
-        let mut frame = Vec::with_capacity(192 + self.moduli.len() * 16);
+        let mut frame = try_exact_capacity_vec_v1(192 + self.moduli.len() * 16)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rns-bgv-security-parameters");
         frame.extend_from_slice(&self.profile_id);
         frame.extend_from_slice(
@@ -963,7 +982,8 @@ impl BgvProfile {
     /// Digest only the governed deployment resource ceilings.
     fn resource_policy_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
-        let mut frame = Vec::with_capacity(128);
+        let mut frame = try_exact_capacity_vec_v1(128)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.resource-policy");
         frame.extend_from_slice(&self.profile_id);
         for ceiling in [

@@ -203,8 +203,8 @@ fn persistent_blinding_drop_audits() -> (usize, usize) {
     let owner = PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1.with(std::cell::Cell::get);
     (entropy, owner)
 }
-fn test_persistent_secret_commitment_blindings() -> PersistentSecretCommitmentBlindingsV1 {
-    PersistentSecretCommitmentBlindingsV1(core::array::from_fn(|index| {
+fn test_persistent_secret_commitment_blindings() -> ZeroizingCpkMembershipBlindingsV1 {
+    ZeroizingCpkMembershipBlindingsV1(core::array::from_fn(|index| {
         Scalar::from_u64(u64::try_from(index + 17).expect("test blinding index fits u64"))
     }))
 }
@@ -1545,7 +1545,7 @@ fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
         1..=u64::try_from(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1)
             .expect("release chunk count fits u64"),
     );
-    let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
+    let owner = ZeroizingCpkMembershipBlindingsV1::sample(&mut random)
         .expect("eight nonzero scripted blindings");
     assert_eq!(
         random.request_lengths,
@@ -1566,7 +1566,7 @@ fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
     assert_eq!(canonical_bytes.len(), PERSISTENT_BLINDING_STATE_BYTES_V1);
     assert_eq!(canonical_bytes.len(), 256);
     assert_eq!(
-        core::mem::size_of::<PersistentSecretCommitmentBlindingsV1>(),
+        core::mem::size_of::<ZeroizingCpkMembershipBlindingsV1>(),
         256
     );
     assert_eq!(
@@ -1586,7 +1586,7 @@ fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state()
     };
     valid.coefficients[0] = -1;
     valid.coefficients[exact_len - 1] = 1;
-    let narrowed = ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&valid)
+    let narrowed = ZeroizingT256MembershipCoefficientsV1::from_bounded(&valid, 1)
         .expect("exact release ternary secret narrows without changing order");
     assert_eq!(narrowed.as_slice().len(), exact_len);
     assert_eq!(narrowed.as_slice()[0], -1);
@@ -1596,12 +1596,12 @@ fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state()
         coefficients: vec![0; exact_len - 1],
     };
     assert!(matches!(
-        ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&short),
+        ZeroizingT256MembershipCoefficientsV1::from_bounded(&short, 1),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
     valid.coefficients[ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1] = 2;
     assert!(matches!(
-        ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&valid),
+        ZeroizingT256MembershipCoefficientsV1::from_bounded(&valid, 1),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
 }
@@ -1615,7 +1615,8 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
     let blindings = core::array::from_fn(|index| {
         Scalar::from_u64(u64::try_from(index + 17).expect("test index fits u64"))
     });
-    let expected = commit_persistent_secret_opening_v1(&coefficients, &blindings)
+    let bound = ZkAmsT256MembershipBoundV1::One;
+    let expected = commit_cpk_membership_opening_v1(&coefficients, &blindings, bound)
         .expect("exact state-owned opening commits all eight chunks");
     ensure_state_owned_cpk_commitments_v1(&expected, &expected)
         .expect("the exact ordered set is accepted");
@@ -1656,11 +1657,11 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
     let mut zero_blinding = blindings;
     zero_blinding[3] = Scalar::zero();
     assert!(matches!(
-        commit_persistent_secret_opening_v1(&coefficients, &zero_blinding),
+        commit_cpk_membership_opening_v1(&coefficients, &zero_blinding, bound),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
     assert!(matches!(
-        commit_persistent_secret_opening_v1(&coefficients[..exact_len - 1], &blindings),
+        commit_cpk_membership_opening_v1(&coefficients[..exact_len - 1], &blindings, bound),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
 }
@@ -1669,7 +1670,7 @@ fn persistent_commitment_blindings_retry_zero_without_reordering() {
     reset_persistent_blinding_drop_audits();
     let mut random =
         ScriptedPersistentBlindingRandom::from_scalars(core::iter::once(0).chain(1..=8));
-    let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
+    let owner = ZeroizingCpkMembershipBlindingsV1::sample(&mut random)
         .expect("zero is retried before the ordered nonzero values");
     assert_eq!(random.request_lengths, vec![64; 9]);
     assert_eq!(
@@ -1692,7 +1693,7 @@ fn persistent_commitment_blindings_stop_at_exact_zero_rejection_ceiling() {
         MAX_RANDOM_REJECTION_ATTEMPTS_V1,
     ));
     assert!(matches!(
-        PersistentSecretCommitmentBlindingsV1::sample(&mut random),
+        ZeroizingCpkMembershipBlindingsV1::sample(&mut random),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
     assert_eq!(random.next, MAX_RANDOM_REJECTION_ATTEMPTS_V1);
@@ -1714,7 +1715,7 @@ fn persistent_commitment_blindings_erase_partial_state_on_rng_failure() {
         partial_bytes: 23,
     };
     assert!(matches!(
-        PersistentSecretCommitmentBlindingsV1::sample(&mut random),
+        ZeroizingCpkMembershipBlindingsV1::sample(&mut random),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
     assert_eq!(random.calls, 4);
@@ -1729,7 +1730,7 @@ fn persistent_commitment_blindings_erase_partial_state_during_unwind() {
         partial_bytes: 41,
     };
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = PersistentSecretCommitmentBlindingsV1::sample(&mut random);
+        let _ = ZeroizingCpkMembershipBlindingsV1::sample(&mut random);
     }));
     assert!(panic.is_err());
     assert_eq!(random.calls, 3);
@@ -1737,15 +1738,13 @@ fn persistent_commitment_blindings_erase_partial_state_during_unwind() {
 }
 #[test]
 fn persistent_commitment_blindings_move_without_duplicate_drop() {
-    fn move_once(
-        owner: PersistentSecretCommitmentBlindingsV1,
-    ) -> PersistentSecretCommitmentBlindingsV1 {
+    fn move_once(owner: ZeroizingCpkMembershipBlindingsV1) -> ZeroizingCpkMembershipBlindingsV1 {
         owner
     }
     reset_persistent_blinding_drop_audits();
     let mut random = ScriptedPersistentBlindingRandom::from_scalars(1..=8);
-    let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
-        .expect("scripted nonzero blindings");
+    let owner =
+        ZeroizingCpkMembershipBlindingsV1::sample(&mut random).expect("scripted nonzero blindings");
     let owner = move_once(owner);
     let owner = move_once(owner);
     assert_eq!(persistent_blinding_drop_audits(), (8, 0));

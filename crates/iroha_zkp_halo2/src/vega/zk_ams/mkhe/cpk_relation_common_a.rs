@@ -4,7 +4,10 @@ use super::{
     Shake256Reader, ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheGovernedActiveRosterV1,
     active_collective_public_a_context_v1,
 };
+use crate::generalized_bulletproof::try_exact_capacity_vec_v1;
 const ACTIVE_COLLECTIVE_PUBLIC_A_CONTEXT_BYTES_V1: usize = 1 + 32 + 8 + 32;
+const ACTIVE_COLLECTIVE_PUBLIC_A_PREFIX_BYTES_V1: usize =
+    active_collective_public_a_limb_frame_bytes_v1() - 2;
 /// Opaque, non-cloneable common-`a` frame authority validated once per worker.
 pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1 {
     profile: BgvProfile,
@@ -13,7 +16,7 @@ pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1 {
     _roster_key_material_digest: [u8; 32],
     _epoch: u64,
     _cpk_transcript_digest: [u8; 32],
-    frame_prefix: Vec<u8>,
+    frame_prefix: [u8; ACTIVE_COLLECTIVE_PUBLIC_A_PREFIX_BYTES_V1],
 }
 /// Validate the complete immutable profile/roster/transcript axes once and
 /// freeze the native frame prefix used by every subsequent limb.
@@ -30,22 +33,22 @@ pub(in super::super) fn prepare_active_collective_public_a_v1(
     if context.len() != ACTIVE_COLLECTIVE_PUBLIC_A_CONTEXT_BYTES_V1 {
         return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
     }
-    let prefix_bytes = active_collective_public_a_limb_frame_bytes_v1()
-        .checked_sub(2)
-        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    let mut frame_prefix = Vec::new();
-    frame_prefix
-        .try_reserve_exact(prefix_bytes)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    frame_prefix.extend_from_slice(ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1);
-    frame_prefix.extend_from_slice(&profile_digest);
-    frame_prefix.extend_from_slice(
-        &u32::try_from(context.len())
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
-            .to_be_bytes(),
-    );
-    frame_prefix.extend_from_slice(&context);
-    if frame_prefix.len() != prefix_bytes {
+    let context_len = u32::try_from(context.len())
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
+        .to_be_bytes();
+    let mut frame_prefix = [0_u8; ACTIVE_COLLECTIVE_PUBLIC_A_PREFIX_BYTES_V1];
+    let mut cursor = 0;
+    for bytes in [
+        ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1,
+        profile_digest.as_slice(),
+        context_len.as_slice(),
+        context.as_slice(),
+    ] {
+        let end = cursor + bytes.len();
+        frame_prefix[cursor..end].copy_from_slice(bytes);
+        cursor = end;
+    }
+    if cursor != frame_prefix.len() {
         return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
     }
     Ok(ZkAmsMkhePreparedCollectivePublicAContextV1 {
@@ -94,25 +97,17 @@ impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
         if limb >= self.profile.moduli.len() {
             return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
         }
-        let mut frame = Vec::new();
-        frame
-            .try_reserve_exact(active_collective_public_a_limb_frame_bytes_v1())
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-        frame.extend_from_slice(&self.frame_prefix);
-        frame.extend_from_slice(
+        let mut frame = [0_u8; active_collective_public_a_limb_frame_bytes_v1()];
+        frame[..ACTIVE_COLLECTIVE_PUBLIC_A_PREFIX_BYTES_V1].copy_from_slice(&self.frame_prefix);
+        frame[ACTIVE_COLLECTIVE_PUBLIC_A_PREFIX_BYTES_V1..].copy_from_slice(
             &u16::try_from(limb)
                 .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
                 .to_be_bytes(),
         );
-        if frame.len() != active_collective_public_a_limb_frame_bytes_v1() {
-            return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
-        }
         let modulus = self.profile.moduli[limb];
         let zone = u64::MAX - u64::MAX % modulus;
         let mut stream = Shake256Reader::new(&frame);
-        let mut coefficients = Vec::new();
-        coefficients
-            .try_reserve_exact(self.profile.ring_degree)
+        let mut coefficients = try_exact_capacity_vec_v1(self.profile.ring_degree)
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
         for _ in 0..self.profile.ring_degree {
             let mut accepted = None;

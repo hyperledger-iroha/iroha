@@ -6,15 +6,18 @@
 //! and receipts survive a transition.  The final aggregate is allocated only
 //! after every full share and relation proof has been released.
 use super::{
-    Scalar, ZkAmsMkheErrorV1,
-    active::{ZkAmsMkheGovernedActiveRosterV1, zk_ams_mkhe_active_rkg_linear_proof_security_v1},
+    MaskedRelaxedRandomSourceV1, Scalar, ZkAmsMkheErrorV1,
+    active::{
+        ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1,
+        zk_ams_mkhe_active_rkg_linear_proof_security_v1,
+    },
     collective::{
         ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1, ZkAmsMkheCollectivePartyStateV1,
         ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkhePreparedCollectivePublicAV1,
         ZkAmsMkheStreamingCollectiveCiphertextV1,
         ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
         ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
-        bind_zk_ams_mkhe_streaming_collective_eval_key_v1,
+        bind_zk_ams_mkhe_streaming_collective_eval_key_v1, cpk_party_b_payload_blake3_v1,
         fork_zk_ams_mkhe_staged_collective_key_admission_v1,
         mint_zk_ams_mkhe_streaming_collective_encryption_key_authority_v1,
     },
@@ -30,7 +33,8 @@ use super::{
         ZK_AMS_MKHE_CPK_RING_DEGREE_V1, ZK_AMS_MKHE_CPK_RNS_LIMBS_V1,
         ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1, ZkAmsMkheCpkPartyBPointerV1,
         ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheCpkRelationProofPointerV1,
-        ZkAmsMkheCpkShareStatementV1, verify_zk_ams_mkhe_cpk_relation_v1,
+        ZkAmsMkheCpkShareStatementV1, authenticate_zk_ams_mkhe_cpk_contribution_v1,
+        publish_canonical_cpk_relation_proof_v1, verify_zk_ams_mkhe_cpk_relation_v1,
     },
     decryption::ZkAmsMkheStreamingDecryptionStatementV1,
     direct_object_transport::{
@@ -42,10 +46,11 @@ use super::{
     persistent_decryption_equality::{
         ZkAmsMkheFinalizedStagedCpkV1, ZkAmsMkhePersistentDecryptionVerificationContextV1,
         ZkAmsMkheStreamingDecryptionAuthorityBuilderV1, ZkAmsMkheStreamingDecryptionAuthorityV1,
+        publish_canonical_party_b_v1,
     },
     wire::{ZkAmsMkheAuthenticationWireV1, ZkAmsMkheGovernedRosterWireV1},
 };
-use crate::vega::VegaT256PointV1;
+use crate::{generalized_bulletproof::ProofRandomSource, vega::VegaT256PointV1};
 use core::mem::size_of;
 /// Exact canonical bytes in one persistent-secret membership frame.
 pub const ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1: usize =
@@ -362,11 +367,124 @@ impl ZkAmsMkheCpkPartyInputV1 {
             authentication,
         })
     }
+    /// Prove the exact state-owned opening and publish both immutable relation objects.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_and_publish_state_owned_v1<R, P>(
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        mut state: ZkAmsMkheCollectivePartyStateV1,
+        share: ZkAmsMkheCollectivePublicKeyShareV1,
+        party_secret: &ZkAmsMkheActivePartySecretV1,
+        random: &mut R,
+        publisher: &mut P,
+    ) -> Result<Self, ZkAmsMkheErrorV1>
+    where
+        R: ProofRandomSource + MaskedRelaxedRandomSourceV1,
+        P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+    {
+        roster.validate()?;
+        let party_index = usize::from(state.party_index());
+        if party_index >= roster.participants().len()
+            || party_secret.party()? != state.party()
+            || party_secret.public_key()?
+                != roster.participants()[party_index].authentication_public_key()
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let party_b = ZkAmsMkheCpkPartyBPointerV1::new(cpk_party_b_payload_blake3_v1(
+            share.party_public_b(),
+        )?)
+        .map_err(map_cpk_relation_error_v1)?;
+        let precursor =
+            state.prove_state_owned_cpk_secret_membership_v1(roster, &share, party_b, random)?;
+        let proved = state
+            .reopen_state_owned_cpk_relation_v1(roster, &share, party_b, precursor, random)?
+            .into_proved_public_v1(roster, &share, random)?;
+        let super::cpk_relation::state_owned_secret_adapter_v1::StateOwnedCpkProvedPublicV1 {
+            statement,
+            secret_wire,
+            error_wire,
+            header,
+            proof,
+        } = proved;
+        let party_b_receipt = publish_canonical_party_b_v1(share.party_public_b(), publisher)?;
+        let expected_party_b = party_b.direct_object_pointer();
+        if party_b_receipt.pointer() != expected_party_b {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let proof_receipt = publish_canonical_cpk_relation_proof_v1(proof, publisher)
+            .map_err(map_cpk_relation_error_v1)?;
+        validate_cpk_publication_pair_v1(
+            expected_party_b,
+            proof_receipt.pointer(),
+            &party_b_receipt,
+            &proof_receipt,
+        )?;
+        let proof_pointer = ZkAmsMkheCpkRelationProofPointerV1::from_wire_bytes_exact(
+            &proof_receipt.pointer().encode(),
+        )
+        .map_err(map_cpk_relation_error_v1)?;
+        let authentication = authenticate_zk_ams_mkhe_cpk_contribution_v1(
+            statement,
+            header,
+            &*secret_wire,
+            &*error_wire,
+            proof_pointer,
+            party_secret,
+            random,
+        )
+        .map_err(map_cpk_relation_error_v1)?;
+        Self::new(
+            state,
+            share,
+            expected_party_b,
+            secret_wire,
+            error_wire,
+            proof_receipt.pointer(),
+            authentication,
+        )
+    }
     /// Exact governed roster position consumed by this transition.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
         self.state.party_index()
     }
+}
+
+fn validate_cpk_publication_pair_v1(
+    expected_party_b: ZkAmsMkheDirectObjectPointerV1,
+    expected_proof: ZkAmsMkheDirectObjectPointerV1,
+    party_b: &ZkAmsMkheDirectObjectPublicationReceiptV1,
+    proof: &ZkAmsMkheDirectObjectPublicationReceiptV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    for (receipt, expected) in [(party_b, expected_party_b), (proof, expected_proof)] {
+        let binding = receipt.published_binding();
+        let read = receipt.post_publish_read_receipt();
+        if receipt.pointer() != expected
+            || binding.pointer() != expected
+            || binding.publication_identity() != receipt.publication_identity()
+            || read.snapshot().pointer() != expected
+            || read.canonical_bytes() != expected.payload_bytes()
+            || read.payload_blake3() != expected.payload_blake3()
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+    }
+    let party_b_snapshot = party_b.post_publish_read_receipt().snapshot();
+    let proof_snapshot = proof.post_publish_read_receipt().snapshot();
+    if party_b.publication_identity() == [0; 32]
+        || party_b.publication_identity() != proof.publication_identity()
+        || party_b_snapshot.provider_identity() == [0; 32]
+        || party_b_snapshot.provider_identity() != proof_snapshot.provider_identity()
+        || party_b_snapshot.snapshot_identity() == [0; 32]
+        || party_b_snapshot.snapshot_identity() != proof_snapshot.snapshot_identity()
+        || party_b.staging_identity() == proof.staging_identity()
+        || party_b.seal_identity() == proof.seal_identity()
+        || party_b.published_binding().published_object_identity()
+            == proof.published_binding().published_object_identity()
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
 }
 /// Admitted small state returned after its full public share and proof die.
 ///

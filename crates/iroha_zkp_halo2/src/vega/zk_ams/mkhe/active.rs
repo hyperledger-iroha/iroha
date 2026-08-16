@@ -25,9 +25,10 @@ use super::{
     cpk_relation::derive_active_collective_public_a_limb_v1,
     manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
 };
+use crate::generalized_bulletproof::try_exact_capacity_vec_v1;
 use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1,
-    sponge::{Keccak256, keccak256, shake256},
+    sponge::{Keccak256, Shake256Reader, keccak256},
 };
 use std::sync::Arc;
 #[path = "active/source_stream.rs"]
@@ -40,6 +41,8 @@ pub(super) use source_stream::{
 const ACTIVE_ROSTER_KEY_MATERIAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-governed-key-material";
 const ROSTER_POP_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.active-roster-key-pop";
+const ROSTER_POP_FRAME_BYTES_V1: usize =
+    ROSTER_POP_DOMAIN_V1.len() + 1 + 32 + 8 + 32 + 32 + 4 + 32 + 33 + 33;
 const ACTIVE_CONTRIBUTION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-contribution-authentication";
 const ACTIVE_ROUND_RECEIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.active-round-receipt";
@@ -232,11 +235,9 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
         }
         let keys = self
             .participants
-            .iter()
-            .map(|participant| participant.authentication_public_key)
-            .collect::<Vec<_>>();
+            .map(|participant| participant.authentication_public_key);
         let (parties, roster_digest, key_material_digest) =
-            active_roster_identity(self.profile_digest, self.epoch, keys.as_slice(), true)?;
+            active_roster_identity(self.profile_digest, self.epoch, &keys, true)?;
         if roster_digest != self.roster_digest
             || key_material_digest != self.key_material_digest
             || self
@@ -326,7 +327,11 @@ fn assemble_governed_active_roster<R: MaskedRelaxedRandomSourceV1>(
     roster.validate()?;
     Ok(roster)
 }
-type ActiveRosterIdentityV1 = (Vec<ZkAmsMkhePartyIdV1>, [u8; 32], [u8; 32]);
+type ActiveRosterIdentityV1 = (
+    [ZkAmsMkhePartyIdV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    [u8; 32],
+    [u8; 32],
+);
 fn active_roster_identity(
     profile_digest: [u8; 32],
     epoch: u64,
@@ -340,33 +345,33 @@ fn active_roster_identity(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
-    let mut parties = Vec::with_capacity(keys.len());
-    for key in keys {
+    let mut parties = [ZkAmsMkhePartyIdV1([0; 32]); ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
+    for (party, key) in parties.iter_mut().zip(keys) {
         VegaT256PointV1::from_non_identity_wire_bytes_exact(key)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
-        parties.push(ZkAmsMkhePartyIdV1::from_authentication_key(key)?);
+        *party = ZkAmsMkhePartyIdV1::from_authentication_key(key)?;
     }
     if parties.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
     let roster_digest = super::wire::governed_roster_digest(profile_digest, epoch, &parties);
-    let mut frame = Vec::with_capacity(128 + keys.len() * 69);
-    frame.extend_from_slice(ACTIVE_ROSTER_KEY_MATERIAL_DOMAIN_V1);
-    frame.push(MKHE_VERSION_V1);
-    frame.extend_from_slice(&profile_digest);
-    frame.extend_from_slice(&epoch.to_be_bytes());
-    frame.extend_from_slice(&roster_digest);
-    frame.push(u8::try_from(keys.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?);
+    let mut hash = Keccak256::new();
+    hash.update(ACTIVE_ROSTER_KEY_MATERIAL_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&profile_digest);
+    hash.update(&epoch.to_be_bytes());
+    hash.update(&roster_digest);
+    hash.update(&[u8::try_from(keys.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?]);
     for (index, (party, key)) in parties.iter().zip(keys).enumerate() {
-        frame.extend_from_slice(
+        hash.update(
             &u32::try_from(index)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?
                 .to_be_bytes(),
         );
-        frame.extend_from_slice(&party.to_bytes());
-        frame.extend_from_slice(key);
+        hash.update(&party.to_bytes());
+        hash.update(key);
     }
-    Ok((parties, roster_digest, keccak256(&frame)))
+    Ok((parties, roster_digest, hash.finalize()))
 }
 #[allow(clippy::too_many_arguments)]
 fn prove_roster_key_possession<R: MaskedRelaxedRandomSourceV1>(
@@ -474,35 +479,46 @@ fn roster_pop_challenge(
     public_key: [u8; 33],
     commitment: [u8; 33],
 ) -> Result<Scalar, ZkAmsMkheErrorV1> {
-    let mut frame = Vec::with_capacity(256);
-    frame.extend_from_slice(ROSTER_POP_DOMAIN_V1);
-    frame.push(MKHE_VERSION_V1);
-    frame.extend_from_slice(&profile_digest);
-    frame.extend_from_slice(&epoch.to_be_bytes());
-    frame.extend_from_slice(&roster_digest);
-    frame.extend_from_slice(&key_material_digest);
-    frame.extend_from_slice(
-        &u32::try_from(index)
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?
-            .to_be_bytes(),
-    );
-    frame.extend_from_slice(&party.to_bytes());
-    frame.extend_from_slice(&public_key);
-    frame.extend_from_slice(&commitment);
+    let index = u32::try_from(index)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?
+        .to_be_bytes();
+    let version = [MKHE_VERSION_V1];
+    let epoch = epoch.to_be_bytes();
+    let party = party.to_bytes();
+    let mut frame = [0_u8; ROSTER_POP_FRAME_BYTES_V1];
+    let mut cursor = 0;
+    for bytes in [
+        ROSTER_POP_DOMAIN_V1,
+        &version,
+        &profile_digest,
+        &epoch,
+        &roster_digest,
+        &key_material_digest,
+        &index,
+        &party,
+        &public_key,
+        &commitment,
+    ] {
+        let end = cursor + bytes.len();
+        frame[cursor..end].copy_from_slice(bytes);
+        cursor = end;
+    }
+    if cursor != frame.len() {
+        return Err(ZkAmsMkheErrorV1::InvalidAuthentication);
+    }
     scalar_challenge(&frame)
 }
-fn scalar_challenge(frame: &[u8]) -> Result<Scalar, ZkAmsMkheErrorV1> {
+fn scalar_challenge(frame: &[u8; ROSTER_POP_FRAME_BYTES_V1]) -> Result<Scalar, ZkAmsMkheErrorV1> {
+    let mut challenge_frame = [0_u8; ROSTER_POP_FRAME_BYTES_V1 + 4];
+    challenge_frame[..frame.len()].copy_from_slice(frame);
     for counter in 0..RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut challenge_frame = Vec::with_capacity(frame.len() + 4);
-        challenge_frame.extend_from_slice(frame);
-        challenge_frame.extend_from_slice(
+        challenge_frame[frame.len()..].copy_from_slice(
             &u32::try_from(counter)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?
                 .to_be_bytes(),
         );
-        let uniform: [u8; 64] = shake256(&challenge_frame, 64)
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
+        let mut uniform = [0_u8; 64];
+        Shake256Reader::new(&challenge_frame).read(&mut uniform);
         let challenge = Scalar::from_uniform_le_bytes(uniform);
         if !challenge.is_zero() {
             return Ok(challenge);
@@ -2059,7 +2075,7 @@ pub fn zk_ams_mkhe_active_collective_public_a_v1(
 ) -> Result<super::ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     let polynomial = derive_active_collective_public_a(&profile, roster, transcript_digest)?;
-    super::ZkAmsMkheRnsPolynomialWireV1::new(polynomial.coefficients)
+    super::ZkAmsMkheRnsPolynomialWireV1::new_exact_capacity_v1(polynomial.coefficients)
 }
 /// Prove and authenticate one bounded collective-public-key share relation.
 #[allow(clippy::too_many_arguments)]
@@ -2084,10 +2100,22 @@ pub fn prove_zk_ams_mkhe_active_collective_public_key_v1<R: MaskedRelaxedRandomS
         0,
     )?;
     let relation = collective_public_key_relation(&profile, statement)?;
-    let witnesses = vec![
-        secret_polynomial_exact(&profile, witness.secret, 1)?,
-        secret_polynomial_exact(&profile, witness.public_error, i64::from(profile.error_eta))?,
-    ];
+    let secret = secret_polynomial_exact(&profile, witness.secret, 1)?;
+    let public_error =
+        secret_polynomial_exact(&profile, witness.public_error, i64::from(profile.error_eta))?;
+    let mut witnesses = Vec::new();
+    witnesses
+        .try_reserve_exact(2)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if witnesses.capacity() != 2 {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = witnesses.as_ptr();
+    witnesses.push(secret);
+    witnesses.push(public_error);
+    if witnesses.len() != 2 || witnesses.capacity() != 2 || witnesses.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
     prove_authenticated_active_relation(
         &profile,
         roster,
@@ -2566,6 +2594,50 @@ impl Drop for ZeroizingActiveI64V1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
+fn try_exact_zero_i64_v1(length: usize) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(length)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if values.capacity() != length {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = values.as_ptr();
+    values.resize(length, 0);
+    if values.len() != length || values.capacity() != length || values.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    Ok(values)
+}
+fn try_exact_collect_v1<T, I>(length: usize, values: I) -> Result<Vec<T>, ZkAmsMkheErrorV1>
+where
+    I: IntoIterator<Item = T>,
+{
+    if core::mem::size_of::<T>() == 0 {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(length)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if output.capacity() != length {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = output.as_ptr();
+    for value in values {
+        if output.len() == length {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        output.push(value);
+    }
+    if output.len() != length {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    if output.capacity() != length || output.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    Ok(output)
+}
 trait LinearRelationRnsV1 {
     fn linear_relation_polynomial(&self) -> &super::RnsPolynomial;
 }
@@ -2591,8 +2663,19 @@ fn try_zero_active_rns_v1(
     coefficients
         .try_reserve_exact(coefficient_count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if coefficients.capacity() != coefficient_count {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = coefficients.as_ptr();
     coefficients.resize(coefficient_count, 0);
-    super::RnsPolynomial::from_flat(profile, coefficients)
+    let polynomial = super::RnsPolynomial::from_flat(profile, coefficients)?;
+    if polynomial.coefficients.len() != coefficient_count
+        || polynomial.coefficients.capacity() != coefficient_count
+        || polynomial.coefficients.as_ptr() != allocation
+    {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    Ok(polynomial)
 }
 fn zeroizing_active_rns_from_signed_v1(
     profile: &super::BgvProfile,
@@ -2680,6 +2763,7 @@ fn collective_public_key_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveCollectivePublicKeyStatementV1<'_>,
 ) -> Result<LinearRelationStatementV1, ZkAmsMkheErrorV1> {
+    profile.validate()?;
     let relation = LinearRelationStatementV1 {
         witness_bounds: vec![1, i64::from(profile.error_eta)],
         witness_challenge_automorphism_exponents: vec![1, 1],
@@ -2689,6 +2773,12 @@ fn collective_public_key_relation(
             party_public_b: statement.party_public_b.shared_residues(),
         }),
     };
+    if relation.witness_bounds.capacity() != 2
+        || relation.witness_challenge_automorphism_exponents.capacity() != 2
+        || relation.outputs.capacity() != 0
+    {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
     relation.validate(profile)?;
     Ok(relation)
 }
@@ -2851,9 +2941,25 @@ fn secret_polynomial_exact(
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    Ok(super::SecretPolynomial {
-        coefficients: coefficients.to_vec(),
-    })
+    let mut polynomial = super::SecretPolynomial {
+        coefficients: Vec::new(),
+    };
+    polynomial
+        .coefficients
+        .try_reserve_exact(coefficients.len())
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if polynomial.coefficients.capacity() != coefficients.len() {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = polynomial.coefficients.as_ptr();
+    polynomial.coefficients.extend_from_slice(coefficients);
+    if polynomial.coefficients.len() != coefficients.len()
+        || polynomial.coefficients.capacity() != coefficients.len()
+        || polynomial.coefficients.as_ptr() != allocation
+    {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    Ok(polynomial)
 }
 #[cfg(test)]
 fn round_one_witness_polynomials(
@@ -2878,7 +2984,7 @@ fn prove_authenticated_active_relation<R: MaskedRelaxedRandomSourceV1>(
     authentication_secret: &AuthenticationSecret,
     random: &mut R,
 ) -> Result<ZkAmsMkheActiveRkgProofV1, ZkAmsMkheErrorV1> {
-    let witness_refs = witnesses.iter().collect::<Vec<_>>();
+    let witness_refs = try_exact_collect_v1(witnesses.len(), witnesses.iter())?;
     let proof = prove_linear_relation_v1(profile, context, statement, &witness_refs, random)?;
     let statement_digest = statement.digest(profile)?;
     let proof_bytes = proof.encode_wire()?;
@@ -3063,7 +3169,7 @@ impl LinearRelationStatementV1 {
                 return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
             }
         }
-        let mut used_witnesses = vec![false; self.witness_bounds.len()];
+        let mut used_witnesses = [false; RKG_LINEAR_PROOF_MAX_WITNESSES_V1];
         if let Some(streaming) = &self.streaming_collective_public_key {
             if self.witness_bounds.get(..2) != Some([1, i64::from(profile.error_eta)].as_slice())
                 || self.witness_challenge_automorphism_exponents.get(..2) != Some([1, 1].as_slice())
@@ -3120,7 +3226,10 @@ impl LinearRelationStatementV1 {
                 used_witnesses[term.witness_index] = true;
             }
         }
-        if used_witnesses.iter().any(|used| !used) {
+        if used_witnesses[..self.witness_bounds.len()]
+            .iter()
+            .any(|used| !used)
+        {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         let response_bytes = self
@@ -3260,7 +3369,13 @@ impl LinearRelationProofV1 {
         if length > super::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1 {
             return Err(ZkAmsMkheErrorV1::WireTooLarge);
         }
-        let mut bytes = Vec::with_capacity(length);
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if bytes.capacity() != length {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
         bytes.extend_from_slice(&RKG_LINEAR_PROOF_WIRE_TAG_V1);
         bytes.push(MKHE_VERSION_V1);
         bytes.extend_from_slice(&self.challenge_seed);
@@ -3333,9 +3448,11 @@ impl LinearRelationProofV1 {
         if usize::try_from(ring_degree).ok() != Some(expected_ring_degree) {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
-        let mut responses = Vec::with_capacity(expected_witnesses);
+        let mut responses = try_exact_capacity_vec_v1(expected_witnesses)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for _ in 0..expected_witnesses {
-            let mut response = Vec::with_capacity(expected_ring_degree);
+            let mut response = try_exact_capacity_vec_v1(expected_ring_degree)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             for _ in 0..expected_ring_degree {
                 let coefficient = i64::from_be_bytes(
                     bytes
@@ -3398,10 +3515,12 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     context.validate(profile)?;
     statement.validate(profile)?;
     validate_linear_witnesses(profile, statement, witnesses)?;
-    let witness_slices = witnesses
-        .iter()
-        .map(|witness| witness.coefficients.as_slice())
-        .collect::<Vec<_>>();
+    let witness_slices = try_exact_collect_v1(
+        witnesses.len(),
+        witnesses
+            .iter()
+            .map(|witness| witness.coefficients.as_slice()),
+    )?;
     let applied_witness =
         apply_linear_relation_from_signed_v1(profile, statement, &witness_slices)?;
     if !statement.outputs_match(&applied_witness)? {
@@ -3412,18 +3531,29 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     validate_linear_random_health(random)?;
     let challenge_weight = linear_challenge_weight(profile.ring_degree)?;
     for _ in 0..RANDOM_REJECTION_ATTEMPTS_V1 {
-        let masks = statement
-            .witness_bounds
-            .iter()
-            .map(|bound| {
-                let (mask_bound, _) = linear_response_parameters(*bound, challenge_weight)?;
-                sample_signed_mask(profile.ring_degree, mask_bound, random)
-            })
-            .collect::<Result<Vec<_>, ZkAmsMkheErrorV1>>()?;
-        let mask_slices = masks
-            .iter()
-            .map(|mask| mask.coefficients.as_slice())
-            .collect::<Vec<_>>();
+        let mask_count = statement.witness_bounds.len();
+        let mut masks = Vec::new();
+        masks
+            .try_reserve_exact(mask_count)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if masks.capacity() != mask_count {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        let masks_allocation = masks.as_ptr();
+        for bound in &statement.witness_bounds {
+            let (mask_bound, _) = linear_response_parameters(*bound, challenge_weight)?;
+            masks.push(sample_signed_mask(profile.ring_degree, mask_bound, random)?);
+        }
+        if masks.len() != mask_count
+            || masks.capacity() != mask_count
+            || masks.as_ptr() != masks_allocation
+        {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        let mask_slices = try_exact_collect_v1(
+            mask_count,
+            masks.iter().map(|mask| mask.coefficients.as_slice()),
+        )?;
         let commitments = apply_linear_relation_from_signed_v1(profile, statement, &mask_slices)?;
         let challenge_seed =
             linear_commitment_challenge_seed(profile, context, statement, &commitments)?;
@@ -3437,6 +3567,9 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
         responses
             .try_reserve_exact(witnesses.len())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if responses.capacity() != witnesses.len() {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
         let mut accepted = true;
         for (((mask, witness), bound), challenge_exponent) in masks
             .iter()
@@ -3451,6 +3584,9 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
             response
                 .try_reserve_exact(profile.ring_degree)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            if response.capacity() != profile.ring_degree {
+                return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+            }
             for (mask, folded) in mask
                 .coefficients
                 .iter()
@@ -3506,11 +3642,10 @@ fn verify_linear_relation_proof(
             challenge_weight,
         )?;
     }
-    let response_slices = proof
-        .responses
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
+    let response_slices = try_exact_collect_v1(
+        proof.responses.len(),
+        proof.responses.iter().map(Vec::as_slice),
+    )?;
     let applied = apply_linear_relation_from_signed_v1(profile, statement, &response_slices)?;
     drop(response_slices);
     let challenge = derive_sparse_challenge(profile.ring_degree, proof.challenge_seed)?;
@@ -3603,10 +3738,15 @@ fn apply_linear_relation_from_signed_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    let output_count = statement.output_count()?;
     let mut outputs = Vec::new();
     outputs
-        .try_reserve_exact(statement.output_count()?)
+        .try_reserve_exact(output_count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if outputs.capacity() != output_count {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = outputs.as_ptr();
     if let Some(streaming) = &statement.streaming_collective_public_key {
         outputs.push(apply_streaming_collective_public_key_relation_v1(
             profile, streaming, witnesses,
@@ -3620,6 +3760,12 @@ fn apply_linear_relation_from_signed_v1(
         let mut owned_outputs = apply_linear_relation(profile, statement, &witness_rns)?;
         drop(witness_rns);
         outputs.append(&mut owned_outputs);
+    }
+    if outputs.len() != output_count {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    if outputs.capacity() != output_count || outputs.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     Ok(outputs)
 }
@@ -3686,14 +3832,19 @@ fn reconstruct_linear_commitments_v1(
     applied: Vec<super::RnsPolynomial>,
     challenge: &[i64],
 ) -> Result<Vec<super::RnsPolynomial>, ZkAmsMkheErrorV1> {
-    if applied.len() != statement.output_count()? {
+    let output_count = statement.output_count()?;
+    if applied.len() != output_count {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut applied = applied.into_iter();
     let mut commitments = Vec::new();
     commitments
-        .try_reserve_exact(statement.output_count()?)
+        .try_reserve_exact(output_count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if commitments.capacity() != output_count {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = commitments.as_ptr();
     if let Some(streaming) = &statement.streaming_collective_public_key {
         let mut response = applied.next().ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         super::collective::borrowed_product::accumulate_public_residues_times_signed_v1(
@@ -3712,6 +3863,12 @@ fn reconstruct_linear_commitments_v1(
         let target_product = output.target.mul(&output_challenge_rns, profile)?;
         combine_rns_in_place(&mut response, &target_product, profile, super::mod_sub)?;
         commitments.push(response);
+    }
+    if commitments.len() != output_count {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    if commitments.capacity() != output_count || commitments.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     Ok(commitments)
 }
@@ -3800,6 +3957,10 @@ fn sample_signed_mask<R: MaskedRelaxedRandomSourceV1>(
     mask.coefficients
         .try_reserve_exact(count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if mask.coefficients.capacity() != count {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = mask.coefficients.as_ptr();
     for _ in 0..count {
         let sample = super::sample_below(width, random)?;
         mask.coefficients.push(
@@ -3808,6 +3969,12 @@ fn sample_signed_mask<R: MaskedRelaxedRandomSourceV1>(
                 .checked_sub(bound)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         );
+    }
+    if mask.coefficients.len() != count
+        || mask.coefficients.capacity() != count
+        || mask.coefficients.as_ptr() != allocation
+    {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     Ok(mask)
 }
@@ -3864,7 +4031,7 @@ impl SparseChallengeV1 {
         Ok(Self { terms })
     }
     fn to_dense(&self, ring_degree: usize) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
-        let mut dense = vec![0_i64; ring_degree];
+        let mut dense = try_exact_zero_i64_v1(ring_degree)?;
         for term in &self.terms {
             let position =
                 usize::try_from(term.position).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
@@ -3887,53 +4054,57 @@ fn derive_sparse_challenge(
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let weight = linear_challenge_weight(ring_degree)?;
-    let mut frame = Vec::with_capacity(96);
-    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-sparse-challenge");
-    frame.extend_from_slice(&challenge_seed);
-    frame.extend_from_slice(
+    const DOMAIN: &[u8] = b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-sparse-challenge";
+    let mut frame = [0_u8; DOMAIN.len() + 40];
+    frame[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    frame[DOMAIN.len()..DOMAIN.len() + 32].copy_from_slice(&challenge_seed);
+    frame[DOMAIN.len() + 32..DOMAIN.len() + 36].copy_from_slice(
         &u32::try_from(ring_degree)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
             .to_be_bytes(),
     );
-    frame.extend_from_slice(
+    frame[DOMAIN.len() + 36..].copy_from_slice(
         &u32::try_from(weight)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
             .to_be_bytes(),
     );
-    let stream = shake256(
-        &frame,
-        weight
-            .checked_mul(RANDOM_REJECTION_ATTEMPTS_V1)
-            .and_then(|bytes| bytes.checked_mul(8))
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-    );
+    let stream_bytes = weight
+        .checked_mul(RANDOM_REJECTION_ATTEMPTS_V1)
+        .and_then(|bytes| bytes.checked_mul(8))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut stream = Shake256Reader::new(&frame);
     let position_mask =
         u64::try_from(ring_degree - 1).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
-    let mut selected_positions = vec![false; ring_degree];
-    let mut terms = Vec::with_capacity(weight);
-    let mut selected = 0;
-    for chunk in stream.chunks_exact(8) {
-        let candidate = u64::from_le_bytes(
-            chunk
-                .try_into()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
-        );
+    let mut terms = Vec::new();
+    terms
+        .try_reserve_exact(weight)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if terms.capacity() != weight {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = terms.as_ptr();
+    for _ in 0..stream_bytes / 8 {
+        let mut candidate = [0_u8; 8];
+        stream.read(&mut candidate);
+        let candidate = u64::from_le_bytes(candidate);
         // The governed degree is a power of two. Low position bits are
         // therefore exactly uniform and independent of the high sign bit;
         // no modulo-reduction bias or sign-skewing rejection zone exists.
         let position = usize::try_from(candidate & position_mask)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
-        if selected_positions[position] {
+        let position = u32::try_from(position).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+        if terms.iter().any(|term| term.position == position) {
             continue;
         }
-        selected_positions[position] = true;
         terms.push(SparseChallengeTermV1 {
-            position: u32::try_from(position).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+            position,
             sign: if candidate >> 63 == 0 { -1 } else { 1 },
         });
-        selected += 1;
-        if selected == weight {
-            terms.sort_by_key(|term| term.position);
+        if terms.len() == weight {
+            terms.sort_unstable_by_key(|term| term.position);
+            if terms.capacity() != weight || terms.as_ptr() != allocation {
+                return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+            }
             return SparseChallengeV1::new(ring_degree, terms)?.to_dense(ring_degree);
         }
     }
@@ -3947,7 +4118,7 @@ fn sparse_negacyclic_mul_signed(
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let degree = sparse.len();
-    let mut output = ZeroizingActiveI64V1(vec![0_i64; degree]);
+    let mut output = ZeroizingActiveI64V1(try_exact_zero_i64_v1(degree)?);
     for (shift, sign) in sparse.iter().copied().enumerate() {
         if sign == 0 {
             continue;
@@ -3987,7 +4158,7 @@ fn automorphism_signed(
     if exponent == 0 || exponent >= twice_degree || exponent.is_multiple_of(2) {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    let mut output = vec![0_i64; coefficients.len()];
+    let mut output = try_exact_zero_i64_v1(coefficients.len())?;
     for (index, coefficient) in coefficients.iter().copied().enumerate() {
         let mapped = index
             .checked_mul(exponent)
@@ -4009,19 +4180,18 @@ fn linear_context_digest(
     context: LinearProofContextV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     context.validate(profile)?;
-    let mut frame = Vec::with_capacity(256);
-    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-context");
-    frame.push(MKHE_VERSION_V1);
-    frame.extend_from_slice(&context.profile_digest);
-    frame.extend_from_slice(&context.roster_digest);
-    frame.extend_from_slice(&context.epoch.to_be_bytes());
-    frame.extend_from_slice(&context.transcript_digest);
-    frame.push(context.round.tag());
-    frame.push(context.party_index);
-    frame.extend_from_slice(&context.party.to_bytes());
-    frame.extend_from_slice(&context.record_index.to_be_bytes());
-    frame.extend_from_slice(&context.relation_index.to_be_bytes());
-    Ok(keccak256(&frame))
+    let mut hash = Keccak256::new();
+    hash.update(b"iroha.zk-ams.v1.mkhe.rkg-linear-proof-context");
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&context.profile_digest);
+    hash.update(&context.roster_digest);
+    hash.update(&context.epoch.to_be_bytes());
+    hash.update(&context.transcript_digest);
+    hash.update(&[context.round.tag(), context.party_index]);
+    hash.update(&context.party.to_bytes());
+    hash.update(&context.record_index.to_be_bytes());
+    hash.update(&context.relation_index.to_be_bytes());
+    Ok(hash.finalize())
 }
 fn linear_commitment_challenge_seed(
     profile: &super::BgvProfile,

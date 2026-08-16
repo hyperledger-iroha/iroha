@@ -1,35 +1,69 @@
-//! Sealed adapter from a collective-state lease to public CPK membership data.
-//!
-//! This module proves only bound-one membership of the exact state opening. It
-//! neither proves the native CPK equation nor creates any verified binding,
-//! receipt, contribution, admission, or release authority.
+//! Sealed full-relation adapter; creates no binding, receipt, contribution, admission, or release authority.
 
 use super::super::{
-    ZkAmsMkheErrorV1,
+    MaskedRelaxedRandomSourceV1, ZkAmsMkheErrorV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
-    collective::PersistentDirectOpeningLeaseV1,
+    collective::{
+        PersistentDirectOpeningLeaseV1, ReopenedCpkDirectOpeningLeaseV1,
+        ZeroizingT256MembershipCoefficientsV1, ZkAmsMkheCollectivePublicKeyShareV1,
+    },
     persistent_membership_evidence::{
         ZkAmsMkhePersistentMembershipContextV1, ZkAmsMkhePersistentMembershipErrorV1,
         ZkAmsMkhePersistentMembershipEvidenceV1,
     },
 };
 use super::{
-    ZkAmsMkheCpkPartyBPointerV1, ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheCpkShareStatementV1,
+    ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1, ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1,
+    ZkAmsMkheCpkErrorMembershipContextV1, ZkAmsMkheCpkPartyBPointerV1, ZkAmsMkheCpkRelationErrorV1,
+    ZkAmsMkheCpkRelationHeaderV1, ZkAmsMkheCpkRelationProofV1, ZkAmsMkheCpkShareStatementV1,
 };
-use crate::{
-    generalized_bulletproof::{GeneralizedBulletproofErrorV1, ProofRandomSource},
-    vega::bulletproof_t256::ZkAmsT256MembershipErrorV1,
-};
+use crate::{generalized_bulletproof::ProofRandomSource, vega::VegaT256ScalarV1 as Scalar};
 
-/// Opaque, public-data-only precursor emitted from the exclusive state lease.
-///
-/// The fields remain sealed because no incomplete CPK prover or verifier is
-/// admitted yet.  This type intentionally implements neither `Clone`, `Copy`,
-/// a codec, nor a conversion to any verified capability.
+/// Public-data-only precursor sealed against incomplete CPK provers and verifiers.
+/// It implements neither `Clone`, `Copy`, a codec, nor conversion to verified authority.
 pub(in crate::vega::zk_ams::mkhe) struct StateOwnedCpkSecretMembershipPrecursorV1 {
     statement: ZkAmsMkheCpkShareStatementV1,
     public_share_digest: [u8; 32],
     secret_membership: ZkAmsMkhePersistentMembershipEvidenceV1,
+}
+
+pub(in crate::vega::zk_ams::mkhe) struct StateOwnedCpkSealedAbortSessionV1 {
+    statement: ZkAmsMkheCpkShareStatementV1,
+    public_share_digest: [u8; 32],
+    secret_wire: Box<[u8; ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1]>,
+    error_wire: Box<[u8; ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1]>,
+    header: ZkAmsMkheCpkRelationHeaderV1,
+}
+pub(in crate::vega::zk_ams::mkhe) struct ReopenedStateOwnedCpkRelationPrecursorV1<'a> {
+    opening: ReopenedCpkDirectOpeningLeaseV1<'a>,
+    session: StateOwnedCpkSealedAbortSessionV1,
+}
+pub(in crate::vega::zk_ams::mkhe) struct StateOwnedCpkProvedPublicV1 {
+    pub(in crate::vega::zk_ams::mkhe) statement: ZkAmsMkheCpkShareStatementV1,
+    pub(in crate::vega::zk_ams::mkhe) secret_wire:
+        Box<[u8; ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1]>,
+    pub(in crate::vega::zk_ams::mkhe) error_wire:
+        Box<[u8; ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1]>,
+    pub(in crate::vega::zk_ams::mkhe) header: ZkAmsMkheCpkRelationHeaderV1,
+    pub(in crate::vega::zk_ams::mkhe) proof: ZkAmsMkheCpkRelationProofV1,
+}
+fn into_exact_wire_box_v1<const N: usize>(
+    bytes: Vec<u8>,
+) -> Result<Box<[u8; N]>, ZkAmsMkheErrorV1> {
+    if bytes.len() != N {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
+    if bytes.capacity() != N {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let allocation = bytes.as_ptr();
+    let boxed = bytes.into_boxed_slice();
+    if boxed.as_ptr() != allocation {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    boxed
+        .try_into()
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
 
 /// Derive the exact CPK statement/context and consume one unforgeable opening
@@ -95,6 +129,111 @@ pub(in crate::vega::zk_ams::mkhe) fn prove_state_owned_cpk_secret_membership_v1<
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(in crate::vega::zk_ams::mkhe) fn reopen_state_owned_cpk_relation_precursor_v1<'a, R>(
+    precursor: StateOwnedCpkSecretMembershipPrecursorV1,
+    statement: ZkAmsMkheCpkShareStatementV1,
+    public_share_digest: [u8; 32],
+    opening: PersistentDirectOpeningLeaseV1<'a>,
+    error_coefficients: ZeroizingT256MembershipCoefficientsV1,
+    random: &mut R,
+) -> Result<ReopenedStateOwnedCpkRelationPrecursorV1<'a>, ZkAmsMkheErrorV1>
+where
+    R: ProofRandomSource + MaskedRelaxedRandomSourceV1,
+{
+    if precursor.statement != statement
+        || precursor.public_share_digest != public_share_digest
+        || public_share_digest == [0; 32]
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    opening
+        .validate_secret_membership_v1(&precursor.secret_membership)
+        .map_err(map_membership_error_v1)?;
+    let opening = opening.into_reopened_v1(error_coefficients, random)?;
+    let error = opening
+        .prove_error_membership_v1(
+            ZkAmsMkheCpkErrorMembershipContextV1::from_share_statement(statement)
+                .map_err(map_relation_error_v1)?,
+            random,
+        )
+        .map_err(map_relation_error_v1)?;
+    let secret_wire = into_exact_wire_box_v1(
+        precursor
+            .secret_membership
+            .into_wire_bytes()
+            .map_err(map_membership_error_v1)?,
+    )?;
+    let error_wire =
+        into_exact_wire_box_v1(error.into_wire_bytes().map_err(map_relation_error_v1)?)?;
+    let header = ZkAmsMkheCpkRelationHeaderV1::new(statement, &*secret_wire, &*error_wire)
+        .map_err(map_relation_error_v1)?;
+    Ok(ReopenedStateOwnedCpkRelationPrecursorV1 {
+        opening,
+        session: StateOwnedCpkSealedAbortSessionV1 {
+            statement,
+            public_share_digest,
+            secret_wire,
+            error_wire,
+            header,
+        },
+    })
+}
+
+impl ReopenedStateOwnedCpkRelationPrecursorV1<'_> {
+    pub(in crate::vega::zk_ams::mkhe) fn into_proved_public_v1<R: MaskedRelaxedRandomSourceV1>(
+        self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        random: &mut R,
+    ) -> Result<StateOwnedCpkProvedPublicV1, ZkAmsMkheErrorV1> {
+        self.opening
+            .consume_sealed_cpk_abort_session_v1(self.session, roster, share, random)
+            .map_err(map_relation_error_v1)
+    }
+}
+
+impl StateOwnedCpkSealedAbortSessionV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::vega::zk_ams::mkhe) fn prove_with_opening_v1<R: MaskedRelaxedRandomSourceV1>(
+        self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        secret: &[i8],
+        error: &[i8],
+        secret_blindings: &[Scalar],
+        error_blindings: &[Scalar],
+        random: &mut R,
+    ) -> Result<StateOwnedCpkProvedPublicV1, ZkAmsMkheCpkRelationErrorV1> {
+        if self.public_share_digest != share.digest() {
+            return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
+        }
+        let (header, proof) = super::state_owned_creator_v1::prove_state_owned_opening_v1(
+            roster,
+            self.statement.cpk_transcript_digest,
+            share.public_a().residues(),
+            self.statement,
+            &*self.secret_wire,
+            &*self.error_wire,
+            secret,
+            error,
+            secret_blindings,
+            error_blindings,
+            random,
+        )?;
+        if header != self.header {
+            return Err(ZkAmsMkheCpkRelationErrorV1::RelationHeader);
+        }
+        Ok(StateOwnedCpkProvedPublicV1 {
+            statement: self.statement,
+            secret_wire: self.secret_wire,
+            error_wire: self.error_wire,
+            header,
+            proof,
+        })
+    }
+}
+
 fn map_relation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
         ZkAmsMkheCpkRelationErrorV1::ResourceCeiling => ZkAmsMkheErrorV1::ResourceCeilingExceeded,
@@ -105,13 +244,9 @@ fn map_relation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErrorV1
 
 fn map_membership_error_v1(error: ZkAmsMkhePersistentMembershipErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
-        ZkAmsMkhePersistentMembershipErrorV1::Membership(ZkAmsT256MembershipErrorV1::Backend(
-            GeneralizedBulletproofErrorV1::RandomnessUnavailable
-            | GeneralizedBulletproofErrorV1::ProverRandomnessExhausted,
-        )) => ZkAmsMkheErrorV1::RandomUnavailable,
-        ZkAmsMkhePersistentMembershipErrorV1::Membership(ZkAmsT256MembershipErrorV1::Backend(
-            GeneralizedBulletproofErrorV1::ResourceOverflow,
-        )) => ZkAmsMkheErrorV1::ResourceCeilingExceeded,
+        ZkAmsMkhePersistentMembershipErrorV1::Membership(error) => {
+            map_relation_error_v1(super::map_membership_prover_error_v1(error))
+        }
         _ => ZkAmsMkheErrorV1::InvalidKeyMaterial,
     }
 }

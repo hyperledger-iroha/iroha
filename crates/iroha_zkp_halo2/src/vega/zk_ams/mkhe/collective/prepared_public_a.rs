@@ -124,4 +124,41 @@ mod tests {
         assert!(generator.contains("let public_a = prepared.shared_public_a()"));
         assert!(!generator.contains("zk_ams_mkhe_active_collective_public_a_v1("));
     }
+
+    #[test]
+    fn retained_common_a_and_party_b_require_exact_vec_capacity() {
+        let wire = include_str!("../wire.rs");
+        let exact = wire
+            .split("pub(super) fn new_exact_capacity_v1")
+            .nth(1)
+            .expect("exact wire constructor")
+            .split("fn new_with_dimensions")
+            .next()
+            .expect("exact constructor boundary");
+        for needle in [
+            "residues.capacity() != expected",
+            "polynomial.residues.capacity() != expected",
+            "polynomial.residues.as_slice().as_ptr() != allocation",
+        ] {
+            assert!(exact.contains(needle));
+        }
+        let active = include_str!("../active.rs")
+            .split("pub fn zk_ams_mkhe_active_collective_public_a_v1")
+            .nth(1)
+            .expect("common-a creator")
+            .split("/// Prove and authenticate")
+            .next()
+            .expect("common-a boundary");
+        assert!(active.contains("new_exact_capacity_v1(polynomial.coefficients)"));
+        let collective = include_str!("../collective.rs")
+            .split("pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1")
+            .nth(1)
+            .expect("party generator")
+            .split("fn aggregate_zk_ams_mkhe_collective_public_key_v1")
+            .next()
+            .expect("party generator boundary");
+        assert!(collective.contains(
+            "ZkAmsMkheRnsPolynomialWireV1::new_exact_capacity_v1(party_public_b_native.coefficients)"
+        ));
+    }
 }

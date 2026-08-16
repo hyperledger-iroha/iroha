@@ -8,6 +8,13 @@ static CLEAR_CALLS: AtomicUsize = AtomicUsize::new(0);
 static POINT_CLEAR_CALLS: AtomicUsize = AtomicUsize::new(0);
 static POINT_ADD_CALLS: AtomicUsize = AtomicUsize::new(0);
 static PANIC_ON_POINT_ADD: AtomicUsize = AtomicUsize::new(usize::MAX);
+macro_rules! assert_source_steps {
+    ($source:expr; [$($step:expr),* $(,)?]) => {{
+        let mut source = $source;
+        $(source = source.split_once($step).unwrap_or_else(|| panic!("missing ordered source step {}", $step)).1;)*
+        let _ = source;
+    }};
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TrackingScalar(u64);
 impl Add for TrackingScalar {
@@ -627,20 +634,14 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .split_once("fn take_term(&mut self) -> SecretMsmTerm<S> {")
         .expect("computed-value owner handoff")
         .1;
-    let mut cursor = 0;
-    for step in [
-        "let mut retained = SecretMsmTerm",
-        "scalar: S::Scalar::ZERO,",
-        "point: S::Point::identity(),",
-        "core::mem::swap(&mut retained.scalar, &mut *self.scalar);",
-        "core::mem::swap(&mut retained.point, &mut *self.point);",
-        "retained",
-    ] {
-        let offset = handoff[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing owner-first MSM handoff step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(handoff; [
+            "let mut retained = SecretMsmTerm",
+            "scalar: S::Scalar::ZERO,",
+            "point: S::Point::identity(),",
+            "core::mem::swap(&mut retained.scalar, &mut *self.scalar);",
+            "core::mem::swap(&mut retained.point, &mut *self.point);",
+            "retained",
+    ]);
     assert_eq!(handoff.matches("core::mem::swap(").count(), 2);
 
     let owned_push = production
@@ -652,21 +653,15 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .0;
     assert!(owned_push.contains("mut scalar: S::Scalar,"));
     assert!(owned_push.contains("mut point: S::Point,"));
-    let mut cursor = 0;
-    for step in [
-        "let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);",
-        "if self.terms.len() >= self.exact_capacity",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let retained = incoming.take_term();",
-        "self.terms.push(retained);",
-        "drop(incoming);",
-        "Ok(())",
-    ] {
-        let offset = owned_push[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing computed-term insertion step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(owned_push; [
+            "let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);",
+            "if self.terms.len() >= self.exact_capacity",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let retained = incoming.take_term();",
+            "self.terms.push(retained);",
+            "drop(incoming);",
+            "Ok(())",
+    ]);
     assert_eq!(owned_push.matches("incoming.take_term()").count(), 1);
     assert_eq!(owned_push.matches("self.terms.push(retained);").count(), 1);
     assert_eq!(owned_push.matches("drop(incoming);").count(), 1);
@@ -720,18 +715,12 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .find("transcript.push_scalar(tau_x.expose_ref())?;")
         .expect("prover P-term boundary");
     let p_terms = &prover[p_terms_start..p_terms_end];
-    let mut cursor = 0;
-    for step in [
-        "let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;",
-        "for (index, (left, right)) in l_eval.0.iter().zip(&r_eval.0).enumerate()",
-        "p_terms.push(left, &self.generators.g_bold[index])?;",
-        "p_terms.push_copy(y_inverse[index] * *right, self.generators.h_bold[index])?;",
-    ] {
-        let offset = p_terms[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing fixed P-term step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(p_terms; [
+            "let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;",
+            "for (index, (left, right)) in l_eval.0.iter().zip(&r_eval.0).enumerate()",
+            "p_terms.push(left, &self.generators.g_bold[index])?;",
+            "p_terms.push_copy(y_inverse[index] * *right, self.generators.h_bold[index])?;",
+    ]);
     assert_eq!(p_terms.matches("p_terms.push(").count(), 1);
     assert_eq!(p_terms.matches("p_terms.push_copy(").count(), 1);
 
@@ -751,17 +740,11 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .split_once("let mut accumulator = SecretPoint::new(S::Point::identity());")
         .expect("secret scalar encoding boundary")
         .0;
-    let mut cursor = 0;
-    for step in [
-        "let mut encoding = SecretBytes(term.scalar.bits_le());",
-        "core::mem::swap(&mut encodings.0[index], &mut encoding.0);",
-        "drop(encoding);",
-    ] {
-        let offset = scalar_encodings[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing scalar-encoding owner-transfer step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(scalar_encodings; [
+            "let mut encoding = SecretBytes(term.scalar.bits_le());",
+            "core::mem::swap(&mut encodings.0[index], &mut encoding.0);",
+            "drop(encoding);",
+    ]);
     for (needle, expected) in [
         ("let mut encoding = SecretBytes(term.scalar.bits_le());", 1),
         (
@@ -857,27 +840,21 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .split_once("Ok(accumulator)")
         .expect("secret-window scan boundary")
         .0;
-    let mut cursor = 0;
-    for step in [
-        "for window in (0..SECRET_MSM_WINDOWS_V1).rev()",
-        "for _ in 0..SECRET_MSM_WINDOW_BITS_V1",
-        "accumulator.double_assign();",
-        "let byte_index = window / 2;",
-        "let shift = (window % 2) * SECRET_MSM_WINDOW_BITS_V1;",
-        "for index in 0..terms.len()",
-        "let mut selected = SecretPoint::new(S::Point::identity());",
-        "for candidate in 0..SECRET_MSM_TABLE_ENTRIES_V1",
-        "ct_eq_window_nibble(",
-        "&encodings.0[index][byte_index],",
-        "shift,",
-        "candidate as u8,",
-        "accumulator.add_assign_secret(selected);",
-    ] {
-        let offset = window_scan[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing fused secret-window scan step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(window_scan; [
+            "for window in (0..SECRET_MSM_WINDOWS_V1).rev()",
+            "for _ in 0..SECRET_MSM_WINDOW_BITS_V1",
+            "accumulator.double_assign();",
+            "let byte_index = window / 2;",
+            "let shift = (window % 2) * SECRET_MSM_WINDOW_BITS_V1;",
+            "for index in 0..terms.len()",
+            "let mut selected = SecretPoint::new(S::Point::identity());",
+            "for candidate in 0..SECRET_MSM_TABLE_ENTRIES_V1",
+            "ct_eq_window_nibble(",
+            "&encodings.0[index][byte_index],",
+            "shift,",
+            "candidate as u8,",
+            "accumulator.add_assign_secret(selected);",
+    ]);
     for (needle, expected) in [
         ("for index in 0..terms.len()", 1),
         ("ct_eq_window_nibble(", 1),
@@ -1044,17 +1021,11 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .split_once("fn add_scaled_pair_assign(")
         .expect("owned secret-point addition boundary")
         .0;
-    let mut cursor = 0;
-    for step in [
-        "let mut sum = self.0 + rhs.0;",
-        "drop(rhs);",
-        "self.replace(&mut sum);",
-    ] {
-        let offset = owned_add[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing owned secret-point addition step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(owned_add; [
+            "let mut sum = self.0 + rhs.0;",
+            "drop(rhs);",
+            "self.replace(&mut sum);",
+    ]);
     for (needle, expected) in [
         ("let mut sum = self.0 + rhs.0;", 1),
         ("drop(rhs);", 1),
@@ -1106,19 +1077,13 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .split_once("fn select_assign(")
         .expect("owned scaled-pair point addition boundary")
         .0;
-    let mut cursor = 0;
-    for step in [
-        "let mut updated =",
-        "left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);",
-        "drop(right);",
-        "drop(left);",
-        "self.replace(&mut updated);",
-    ] {
-        let offset = owned_scaled_pair[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing owned scaled-pair addition step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(owned_scaled_pair; [
+            "let mut updated =",
+            "left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);",
+            "drop(right);",
+            "drop(left);",
+            "self.replace(&mut updated);",
+    ]);
     for (needle, expected) in [
         ("let mut updated =", 1),
         (
@@ -1921,30 +1886,19 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
         .split_once("/// Add one borrowed vector multiplied by one borrowed scalar")
         .expect("borrowed product owner boundary")
         .0;
-    let mut cursor = 0;
-    for step in [
-        "if left.len() != right.len()",
-        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-        "let exact_len = left.len();",
-        "let mut product = Self(Vec::new());",
-        ".try_reserve_exact(exact_len)",
-        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
-        "let allocation_capacity = product.0.capacity();",
-        "if allocation_capacity < exact_len",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let allocation_pointer = product.0.as_ptr();",
-        "for _ in 0..exact_len",
-        "product.0.push(F::ZERO);",
-        "for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0)",
-        "*output = *left;",
-        "*output *= *right;",
-        "Ok(product)",
-    ] {
-        let offset = borrowed_product[cursor..]
-            .find(step)
-            .unwrap_or_else(|| panic!("missing borrowed-product step {step}"));
-        cursor += offset + step.len();
-    }
+    assert_source_steps!(borrowed_product; [
+            "if left.len() != right.len()",
+            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+            "let exact_len = left.len();",
+            "let mut product = Self(try_exact_capacity_vec_v1(exact_len)?);",
+            "let allocation_pointer = product.0.as_ptr();",
+            "for _ in 0..exact_len",
+            "product.0.push(F::ZERO);",
+            "for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0)",
+            "*output = *left;",
+            "*output *= *right;",
+            "Ok(product)",
+    ]);
     assert_eq!(
         borrowed_product.matches("product.0.push(F::ZERO);").count(),
         1
@@ -1957,7 +1911,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
     );
     assert_eq!(
         borrowed_product
-            .matches("debug_assert_eq!(product.0.capacity(), allocation_capacity);")
+            .matches("debug_assert_eq!(product.0.capacity(), exact_len);")
             .count(),
         2
     );
@@ -2225,7 +2179,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .expect("generalized prover boundary")
         .0;
     let polynomial_evaluation = prover
-        .split_once("let x = ScalarVector::powers(transcript.challenge()?, t_poly_len);")
+        .split_once(
+            "let x = ScalarVector::try_powers_exact_v1(transcript.challenge()?, t_poly_len)?;",
+        )
         .expect("polynomial evaluation challenge")
         .1
         .split_once("let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);")
@@ -2233,7 +2189,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .0;
     assert_eq!(
         polynomial_evaluation
-            .matches("ScalarVector::zero(n)")
+            .matches("ScalarVector::try_zero_exact_v1(n)?")
             .count(),
         1
     );
@@ -2247,7 +2203,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("let evaluate = |polynomial: &[ScalarVector<S::Scalar>]| {")
         .expect("borrowed polynomial evaluation closure");
     let result_owner = polynomial_evaluation
-        .find("let mut result = ScalarVector::zero(n);")
+        .find("let mut result = ScalarVector::try_zero_exact_v1(n)?;")
         .expect("polynomial result owner");
     let coefficient_loop = polynomial_evaluation
         .find("for (index, coefficient) in polynomial.iter().enumerate()")
@@ -2256,10 +2212,10 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("result.add_scaled_assign(coefficient, &x[index]);")
         .expect("borrowed polynomial accumulation call");
     let l_eval = polynomial_evaluation
-        .find("let l_eval = evaluate(&l);")
+        .find("let l_eval = evaluate(&l)?;")
         .expect("left polynomial evaluation");
     let r_eval = polynomial_evaluation
-        .find("let r_eval = evaluate(&r);")
+        .find("let r_eval = evaluate(&r)?;")
         .expect("right polynomial evaluation");
     let drop_l = polynomial_evaluation
         .find("drop(l);")

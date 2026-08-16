@@ -7511,19 +7511,39 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-    #[test]
-    fn manifest_access_set_hints_conservatively_serialize_alias_shorthand_account_id() {
+    #[derive(Clone, Copy)]
+    enum AliasTransferDestination {
+        Literal(&'static str),
+        Resolved(&'static str),
+    }
+    impl AliasTransferDestination {
+        fn source_expression(self) -> String {
+            match self {
+                Self::Literal(alias) => format!(r#"AccountId::parse("{alias}")"#),
+                Self::Resolved(alias) => format!(r#"ledger::account::resolve_alias("{alias}")"#),
+            }
+        }
+    }
+    fn assert_alias_transfer_uses_scoped_access(destination: AliasTransferDestination) {
         let from_literal = sample_account_literal();
+        let destination = destination.source_expression();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{
+  ledger::asset::transfer(
+    source: AccountId::parse("{from_literal}"),
+    destination: {destination},
+    asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+    amount: 1,
+    dataspace: DataSpaceId::parse("0"),
+  );
+}}
 }}
 "#
         );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
+        let (_bytes, manifest) = test_mode_compiler()
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let hints = manifest
@@ -7531,231 +7551,66 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
+        let main = manifest
+            .entrypoints
+            .expect("entrypoints present")
+            .into_iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
         assert_no_global_access_key(&main.read_keys);
         assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+    }
+    #[test]
+    fn manifest_access_set_hints_conservatively_serialize_alias_shorthand_account_id() {
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Literal(
+            "merchant@paynet",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_alias_shorthand_account_id_transfer()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Literal("merchant@"));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_alias_shorthand_account_id()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@bank.paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Literal(
+            "merchant@bank.paynet",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_alias_shorthand_account_id_transfer()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@bank."), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Literal(
+            "merchant@bank.",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_resolve_account_alias_builtin_transfer() {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Resolved(
+            "merchant@paynet",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_resolve_account_alias_builtin_transfer()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Resolved("merchant@"));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_resolve_account_alias_builtin_transfer()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@bank.paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Resolved(
+            "merchant@bank.paynet",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_resolve_account_alias_builtin_transfer()
      {
-        let from_literal = sample_account_literal();
-        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@bank."), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0")); }}
-}}
-"#
-        );
-        let compiler = test_mode_compiler();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_no_global_access_key(&hints.read_keys);
-        assert_no_global_access_key(&hints.write_keys);
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_no_global_access_key(&main.read_keys);
-        assert_no_global_access_key(&main.write_keys);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_alias_transfer_uses_scoped_access(AliasTransferDestination::Resolved(
+            "merchant@bank.",
+        ));
     }
     #[test]
     fn manifest_access_set_hints_preserve_coarse_asset_keys_for_dynamic_asset_contract() {

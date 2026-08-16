@@ -96,8 +96,7 @@ mod direct_rkg_one_creator_adapter_v1;
 pub(in crate::vega::zk_ams::mkhe) use direct_relation_wire_v1::{
     DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, PreparedDirectRkgOneStatementCoreV1,
     PublishedDirectRkgOneProofOwnerV2, RkgH0ObjectRoleV1, RkgH1ObjectRoleV1,
-    SealedDirectRkgOneProofOwnerV1,
-    seal_direct_rkg_one_proof_owner_v1,
+    SealedDirectRkgOneProofOwnerV1, seal_direct_rkg_one_proof_owner_v1,
 };
 pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_creator_adapter_v1::{
     CompletedDirectRkgOneCreatorV1, DirectRkgOneCreatorH0ReadyV1, DirectRkgOneCreatorH1ReadyV1,

@@ -20,11 +20,12 @@ use crate::{
     vega::{
         MaskedRelaxedRandomSourceV1,
         zk_ams::mkhe::{
-            ZkAmsMkheErrorV1, direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
+            ZkAmsMkheErrorV1,
+            collective::DirectRkgOneProofDurabilityPermitV2,
+            direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
             direct_object_transport::{
-                ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
-                ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
-                ZkAmsMkheDirectObjectPublicationReceiptV1,
+                ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1, ZkAmsMkheDirectObjectCasPublicationV1,
+                ZkAmsMkheDirectObjectKindV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
                 ZkAmsMkheDirectObjectPublicationTransactionV1,
                 ZkAmsMkheDirectObjectReadAtProviderV1,
             },
@@ -137,6 +138,7 @@ impl<'a> PublishedDirectRkgOneProofOwnerV2<'a> {
 
     pub(in crate::vega::zk_ams::mkhe) fn verify_semantic_candidate_v1<P>(
         self,
+        _durability_permit: DirectRkgOneProofDurabilityPermitV2,
         context: ZkAmsMkheDirectCeremonyContextV1,
         objects: DirectRelationPublicObjectsV1,
         provider: &mut P,
@@ -144,10 +146,14 @@ impl<'a> PublishedDirectRkgOneProofOwnerV2<'a> {
     where
         P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
     {
+        let Self {
+            sealed,
+            publication,
+        } = self;
         let SealedDirectRkgOneProofOwnerV1 {
             _finalized_capability,
             proof,
-        } = self.sealed;
+        } = sealed;
         let semantic_owner = verify_finalized_direct_rkg_one_semantic_candidate_v1(
             _finalized_capability,
             context,
@@ -158,7 +164,7 @@ impl<'a> PublishedDirectRkgOneProofOwnerV2<'a> {
         Ok(PostSemanticDirectRkgOneProofOwnerV1 {
             _semantic_owner: semantic_owner,
             _proof: proof,
-            _publication: self.publication,
+            _publication: publication,
         })
     }
 }

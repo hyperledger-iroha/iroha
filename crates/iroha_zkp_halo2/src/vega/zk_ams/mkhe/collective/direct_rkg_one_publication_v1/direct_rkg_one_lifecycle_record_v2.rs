@@ -1,6 +1,6 @@
 use super::super::{
-    DirectRkgOnePublicationOwnerV1, DirectRkgOnePublicationScopeV1,
-    RKG_ONE_POLYNOMIAL_BYTES_V1, validate_publication_pair_v1,
+    DirectRkgOnePublicationOwnerV1, DirectRkgOnePublicationScopeV1, RKG_ONE_POLYNOMIAL_BYTES_V1,
+    validate_publication_pair_v1,
 };
 use crate::vega::{
     sponge::Keccak256,
@@ -14,8 +14,7 @@ use crate::vega::{
     },
 };
 
-const STORAGE_KEY_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.direct-rkg-one-orphan-transaction";
+const STORAGE_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-rkg-one-orphan-transaction";
 const RECORD_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-rkg-one-lifecycle-record.v2";
 const RECEIPT_SET_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-rkg-one-publication-receipt-set.v2";
@@ -104,16 +103,14 @@ pub(super) fn published_axes_v2(
     let h1 = &publication.h1.publication;
     let h0_snapshot = h0.post_publish_read_receipt().snapshot();
     let h1_snapshot = h1.post_publish_read_receipt().snapshot();
-    let mut hash = Keccak256::new();
-    hash.update(RECEIPT_SET_DOMAIN_V2);
-    hash.update(&[MKHE_VERSION_V1, SCHEMA_VERSION_V2]);
-    hash.update(&h0.receipt_digest());
-    hash.update(&h1.receipt_digest());
     let axes = PublishedAxesV2 {
         publication_identity: h0.publication_identity(),
         h0: h0.pointer(),
         h1: h1.pointer(),
-        receipt_set_digest: hash.finalize(),
+        receipt_set_digest: publication_receipt_set_digest_v2(
+            h0.receipt_digest(),
+            h1.receipt_digest(),
+        ),
         provider_identity: h0_snapshot.provider_identity(),
         snapshot_identity: h0_snapshot.snapshot_identity(),
     };
@@ -127,10 +124,51 @@ pub(super) fn published_axes_v2(
     Ok(axes)
 }
 
+pub(super) fn publication_receipt_set_digest_v2(
+    h0_receipt_digest: [u8; 32],
+    h1_receipt_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(RECEIPT_SET_DOMAIN_V2);
+    hash.update(&[MKHE_VERSION_V1, SCHEMA_VERSION_V2]);
+    hash.update(&h0_receipt_digest);
+    hash.update(&h1_receipt_digest);
+    hash.finalize()
+}
+
+fn receipt_identity_axes_v2(receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1) -> [[u8; 32]; 3] {
+    [
+        receipt.staging_identity(),
+        receipt.seal_identity(),
+        receipt.published_binding().published_object_identity(),
+    ]
+}
+
+pub(super) fn proof_identity_axes_are_distinct_v2(
+    proof: [[u8; 32]; 3],
+    h0: [[u8; 32]; 3],
+    h1: [[u8; 32]; 3],
+) -> bool {
+    proof
+        .into_iter()
+        .zip(h0)
+        .zip(h1)
+        .all(|((proof_axis, h0_axis), h1_axis)| proof_axis != h0_axis && proof_axis != h1_axis)
+}
+
 pub(super) fn proof_axes_v2(
     published: PublishedAxesV2,
+    publication: &DirectRkgOnePublicationOwnerV1,
     receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1,
 ) -> Result<ProofAxesV2, ZkAmsMkheErrorV1> {
+    if published_axes_v2(publication)? != published {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let h0 = &publication.h0.publication;
+    let h1 = &publication.h1.publication;
+    let proof_identities = receipt_identity_axes_v2(receipt);
+    let h0_identities = receipt_identity_axes_v2(h0);
+    let h1_identities = receipt_identity_axes_v2(h1);
     let pointer = receipt.pointer();
     let snapshot = receipt.post_publish_read_receipt().snapshot();
     let axes = ProofAxesV2 {
@@ -140,13 +178,13 @@ pub(super) fn proof_axes_v2(
     };
     if axes.publication_identity != published.publication_identity
         || pointer.kind() != ZkAmsMkheDirectObjectKindV1::ProofEnvelope
-        || pointer.payload_bytes()
-            != SealedDirectRkgOneProofOwnerV1::CANONICAL_PROOF_BYTES_V1
+        || pointer.payload_bytes() != SealedDirectRkgOneProofOwnerV1::CANONICAL_PROOF_BYTES_V1
         || receipt.post_publish_read_receipt().canonical_bytes() != pointer.payload_bytes()
         || snapshot.pointer() != pointer
         || snapshot.provider_identity() != published.provider_identity
         || snapshot.snapshot_identity() != published.snapshot_identity
         || axes.receipt_digest == [0; 32]
+        || !proof_identity_axes_are_distinct_v2(proof_identities, h0_identities, h1_identities)
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -222,14 +260,10 @@ pub(super) fn decode_record_v2(
         FRESH_TAG_V2 if generation == 0 && record[114..608] == [0; 494] => {
             Ok(DecodedStateV2::Fresh)
         }
-        PUBLISHED_UNBOUND_TAG_V2 if generation == 1 && record[398..608] == [0; 210] => {
-            Ok(DecodedStateV2::PublishedUnbound(
-                decode_published_axes_v2(record)?,
-            ))
-        }
-        PROOF_PUBLISHED_UNVERIFIED_TAG_V2
-            if generation == 2 && record[540..608] == [0; 68] =>
-        {
+        PUBLISHED_UNBOUND_TAG_V2 if generation == 1 && record[398..608] == [0; 210] => Ok(
+            DecodedStateV2::PublishedUnbound(decode_published_axes_v2(record)?),
+        ),
+        PROOF_PUBLISHED_UNVERIFIED_TAG_V2 if generation == 2 && record[540..608] == [0; 68] => {
             let published = decode_published_axes_v2(record)?;
             let proof = ProofAxesV2 {
                 publication_identity: array_at_v2(record, PROOF_PUBLICATION_IDENTITY_RANGE_V2)?,
@@ -243,9 +277,7 @@ pub(super) fn decode_record_v2(
             if proof.publication_identity != published.publication_identity {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }
-            Ok(DecodedStateV2::ProofPublishedUnverified(
-                published, proof,
-            ))
+            Ok(DecodedStateV2::ProofPublishedUnverified(published, proof))
         }
         VERIFIED_BOUND_RESERVED_TAG_V2 => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
@@ -336,8 +368,7 @@ fn validate_proof_axes_v2(axes: ProofAxesV2) -> Result<(), ZkAmsMkheErrorV1> {
     if axes.publication_identity == [0; 32]
         || axes.receipt_digest == [0; 32]
         || axes.pointer.kind() != ZkAmsMkheDirectObjectKindV1::ProofEnvelope
-        || axes.pointer.payload_bytes()
-            != SealedDirectRkgOneProofOwnerV1::CANONICAL_PROOF_BYTES_V1
+        || axes.pointer.payload_bytes() != SealedDirectRkgOneProofOwnerV1::CANONICAL_PROOF_BYTES_V1
     {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }

@@ -1068,7 +1068,7 @@ pub(super) fn begin_zk_ams_mkhe_streaming_decryption_authority_from_verified_cpk
     ZkAmsMkheStreamingDecryptionAuthorityBuilderV1::new(roster, cpk_transcript_digest)
 }
 #[allow(dead_code)]
-fn publish_canonical_party_b_v1<P>(
+pub(super) fn publish_canonical_party_b_v1<P>(
     party_b: &ZkAmsMkheRnsPolynomialWireV1,
     publisher: &mut P,
 ) -> Result<ZkAmsMkheDirectObjectPublicationReceiptV1, ZkAmsMkheErrorV1>

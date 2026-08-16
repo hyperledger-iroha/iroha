@@ -312,15 +312,15 @@ pub(super) fn governed_roster_digest(
     epoch: u64,
     parties: &[ZkAmsMkhePartyIdV1],
 ) -> [u8; 32] {
-    let mut frame = Vec::with_capacity(96 + parties.len() * 32);
-    frame.extend_from_slice(GOVERNED_ROSTER_DOMAIN_V1);
-    frame.extend_from_slice(&profile_digest);
-    frame.extend_from_slice(&epoch.to_be_bytes());
-    frame.push(u8::try_from(parties.len()).unwrap_or(u8::MAX));
+    let mut hash = Keccak256::new();
+    hash.update(GOVERNED_ROSTER_DOMAIN_V1);
+    hash.update(&profile_digest);
+    hash.update(&epoch.to_be_bytes());
+    hash.update(&[u8::try_from(parties.len()).unwrap_or(u8::MAX)]);
     for party in parties {
-        frame.extend_from_slice(&party.to_bytes());
+        hash.update(&party.to_bytes());
     }
-    keccak256(&frame)
+    hash.finalize()
 }
 /// Canonical limb-major RNS residue vector for the frozen release profile.
 #[derive(Clone, PartialEq, Eq)]
@@ -339,6 +339,26 @@ impl ZkAmsMkheRnsPolynomialWireV1 {
     /// Construct a release polynomial from exact canonical limb-major residues.
     pub fn new(residues: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
         Self::new_with_dimensions(residues, release_dimensions()?)
+    }
+    /// Retain one internally generated polynomial only at its exact reported capacity.
+    pub(super) fn new_exact_capacity_v1(residues: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
+        let dimensions = release_dimensions()?;
+        validate_residues(&residues, dimensions)?;
+        let expected = dimensions.coefficient_count()?;
+        if residues.capacity() != expected {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        let allocation = residues.as_ptr();
+        let polynomial = Self {
+            residues: Arc::new(residues),
+        };
+        if polynomial.residues.len() != expected
+            || polynomial.residues.capacity() != expected
+            || polynomial.residues.as_slice().as_ptr() != allocation
+        {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        Ok(polynomial)
     }
     fn new_with_dimensions(
         residues: Vec<u64>,

@@ -7260,6 +7260,52 @@ mod sorafs_tests {
         );
         build_envelope(record, keypair)
     }
+    fn registered_manifest_approval_envelope(
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> (Vec<u8>, String, String) {
+        RegisterPinManifest {
+            manifest_payload: default_manifest_payload(),
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), state_transaction)
+        .expect("register manifest");
+        let stored_record = state_transaction
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = checked_ed25519_keypair();
+        let (_, signer_bytes) = council_key
+            .public_key()
+            .try_to_bytes()
+            .expect("council signer key bytes");
+        let signer_hex = hex::encode(signer_bytes);
+        let (envelope, signature_hex) =
+            build_trusted_envelope(state_transaction, &stored_record, &council_key);
+        (envelope, signature_hex, signer_hex)
+    }
+    fn rejected_manifest_approval_message(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        council_envelope: Vec<u8>,
+        council_envelope_digest: Option<[u8; 32]>,
+        expectation: &str,
+    ) -> String {
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            council_envelope: Some(council_envelope),
+            council_envelope_digest,
+        }
+        .execute(&alice(), state_transaction)
+        .expect_err(expectation);
+        match error {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected manifest approval error: {other:?}"),
+        }
+    }
     fn council_envelope_error(
         record: &PinManifestRecord,
         envelope: &[u8],
@@ -8905,6 +8951,80 @@ mod sorafs_tests {
         pdp_failures: u32,
         potr_windows: u32,
         potr_breaches: u32,
+    }
+    #[derive(Clone, Copy)]
+    struct ProofHealthFixture {
+        strike_threshold: u32,
+        penalty_bond_bps: u16,
+        cooldown_windows: u32,
+        max_pdp_failures: u32,
+        max_potr_breaches: u32,
+    }
+    impl ProofHealthFixture {
+        fn all_proofs(strike_threshold: u32, penalty_bond_bps: u16, cooldown_windows: u32) -> Self {
+            Self {
+                strike_threshold,
+                penalty_bond_bps,
+                cooldown_windows,
+                max_pdp_failures: 0,
+                max_potr_breaches: 0,
+            }
+        }
+        fn pdp(strike_threshold: u32, penalty_bond_bps: u16, cooldown_windows: u32) -> Self {
+            Self {
+                max_potr_breaches: u32::MAX,
+                ..Self::all_proofs(strike_threshold, penalty_bond_bps, cooldown_windows)
+            }
+        }
+        fn potr(strike_threshold: u32, penalty_bond_bps: u16, cooldown_windows: u32) -> Self {
+            Self {
+                max_pdp_failures: u32::MAX,
+                ..Self::all_proofs(strike_threshold, penalty_bond_bps, cooldown_windows)
+            }
+        }
+        fn install(self, stx: &mut StateTransaction<'_, '_>, bonded_nanos: u128) -> ProviderId {
+            stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
+                utilisation_floor_bps: 7_500,
+                uptime_floor_bps: 9_000,
+                por_success_floor_bps: 9_000,
+                strike_threshold: self.strike_threshold,
+                penalty_bond_bps: self.penalty_bond_bps,
+                cooldown_windows: self.cooldown_windows,
+                max_pdp_failures: self.max_pdp_failures,
+                max_potr_breaches: self.max_potr_breaches,
+            };
+            let (provider, record) = sample_capacity_record();
+            register_governed_capacity_declaration(stx, &alice(), record)
+                .expect("register capacity declaration");
+            let mut schedule = PricingScheduleRecord::launch_default();
+            schedule.credit = CreditPolicy {
+                settlement_window_secs: SECONDS_PER_BILLING_MONTH,
+                settlement_grace_secs: 0,
+                low_balance_alert_bps: 1_000,
+            };
+            schedule.collateral = CollateralPolicy {
+                multiplier_bps: 20_000,
+                onboarding_discount_bps: 1,
+                onboarding_period_secs: 1,
+            };
+            SetPricingSchedule { schedule }
+                .execute(&alice(), stx)
+                .expect("set pricing schedule");
+            let credit = provider_credit_nanos(provider, 1_000_000_000_000, bonded_nanos);
+            upsert_provider_credit_with_reserve_fixture(stx, &alice(), credit)
+                .expect("seed provider credit");
+            provider
+        }
+    }
+    fn proof_health_alerts(stx: &StateTransaction<'_, '_>) -> Vec<SorafsProofHealthAlert> {
+        stx.world
+            .internal_event_buf
+            .iter()
+            .filter_map(|entry| match entry.as_ref() {
+                DataEvent::Sorafs(SorafsGatewayEvent::ProofHealth(alert)) => Some(alert.clone()),
+                _ => None,
+            })
+            .collect()
     }
     #[allow(clippy::too_many_arguments)]
     fn record_capacity_window(
@@ -11039,43 +11159,18 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
+        let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
         let manifest_hex = hex::encode(default_digest().as_bytes());
         let bogus_manifest = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
         invalid_json = invalid_json.replacen(&manifest_hex, bogus_manifest, 1);
-        let invalid_envelope = invalid_json.into_bytes();
-        let approve = ApprovePinManifest {
-            digest: default_digest(),
-            council_envelope: Some(invalid_envelope),
-            council_envelope_digest: None,
-        };
-        let err = approve
-            .execute(&alice(), &mut stx)
-            .expect_err("approval must reject mismatched manifest digest");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let message = rejected_manifest_approval_message(
+            &mut stx,
+            invalid_json.into_bytes(),
+            None,
+            "approval must reject mismatched manifest digest",
+        );
         assert!(
             message.contains("manifest digest"),
             "unexpected error message: {message}"
@@ -11087,23 +11182,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
+        let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         let mut modified_signature =
             hex::decode(&signature_hex).expect("signature hex decodes cleanly");
         modified_signature[0] ^= 0xFF;
@@ -11111,21 +11190,12 @@ mod sorafs_tests {
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
         invalid_json = invalid_json.replacen(&signature_hex, &bad_signature_hex, 1);
-        let invalid_envelope = invalid_json.into_bytes();
-        let approve = ApprovePinManifest {
-            digest: default_digest(),
-            council_envelope: Some(invalid_envelope),
-            council_envelope_digest: None,
-        };
-        let err = approve
-            .execute(&alice(), &mut stx)
-            .expect_err("approval must reject invalid signature");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let message = rejected_manifest_approval_message(
+            &mut stx,
+            invalid_json.into_bytes(),
+            None,
+            "approval must reject invalid signature",
+        );
         assert!(
             message.contains("failed to verify council signature")
                 || message.contains("invalid council signature material"),
@@ -11138,42 +11208,17 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
+        let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         let inert_signature_hex = hex::encode([0_u8; 64]);
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
         invalid_json = invalid_json.replacen(&signature_hex, &inert_signature_hex, 1);
-        let invalid_envelope = invalid_json.into_bytes();
-        let approve = ApprovePinManifest {
-            digest: default_digest(),
-            council_envelope: Some(invalid_envelope),
-            council_envelope_digest: None,
-        };
-        let err = approve
-            .execute(&alice(), &mut stx)
-            .expect_err("approval must reject all-zero signature material");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let message = rejected_manifest_approval_message(
+            &mut stx,
+            invalid_json.into_bytes(),
+            None,
+            "approval must reject all-zero signature material",
+        );
         assert!(
             message.contains("signature payload must not be all zero"),
             "unexpected error message: {message}"
@@ -11185,28 +11230,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
-        let (_, signer_bytes) = council_key
-            .public_key()
-            .try_to_bytes()
-            .expect("council signer key bytes");
-        let signer_hex = hex::encode(signer_bytes);
+        let (envelope, _, signer_hex) = registered_manifest_approval_envelope(&mut stx);
         for (label, malformed_signer) in [
             ("all-zero", [0_u8; 32]),
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -11216,20 +11240,12 @@ mod sorafs_tests {
             let mut invalid_json =
                 String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
             invalid_json = invalid_json.replacen(&signer_hex, &malformed_signer_hex, 1);
-            let approve = ApprovePinManifest {
-                digest: default_digest(),
-                council_envelope: Some(invalid_json.into_bytes()),
-                council_envelope_digest: None,
-            };
-            let err = approve
-                .execute(&alice(), &mut stx)
-                .expect_err("approval must reject malformed signer public key material");
-            let message = match err {
-                InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message),
-                ) => message,
-                other => panic!("unexpected error for {label} signer key: {other:?}"),
-            };
+            let message = rejected_manifest_approval_message(
+                &mut stx,
+                invalid_json.into_bytes(),
+                None,
+                "approval must reject malformed signer public key material",
+            );
             assert!(
                 message.contains("failed to parse council signer"),
                 "{label} signer key produced unexpected error message: {message}"
@@ -11242,23 +11258,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
+        let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -11270,20 +11270,12 @@ mod sorafs_tests {
             let mut invalid_json =
                 String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
             invalid_json = invalid_json.replacen(&signature_hex, &bad_signature_hex, 1);
-            let approve = ApprovePinManifest {
-                digest: default_digest(),
-                council_envelope: Some(invalid_json.into_bytes()),
-                council_envelope_digest: None,
-            };
-            let err = approve
-                .execute(&alice(), &mut stx)
-                .expect_err("approval must reject malformed signature R");
-            let message = match err {
-                InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message),
-                ) => message,
-                other => panic!("unexpected error: {other:?}"),
-            };
+            let message = rejected_manifest_approval_message(
+                &mut stx,
+                invalid_json.into_bytes(),
+                None,
+                "approval must reject malformed signature R",
+            );
             assert!(
                 message.contains("invalid council signature material"),
                 "{label} signature R produced unexpected error message: {message}"
@@ -11625,37 +11617,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) =
-            build_trusted_envelope(&mut stx, &stored_record, &council_key);
-        let approve = ApprovePinManifest {
-            digest: default_digest(),
-            council_envelope: Some(envelope),
-            council_envelope_digest: Some([0x42; 32]),
-        };
-        let err = approve
-            .execute(&alice(), &mut stx)
-            .expect_err("approval must reject digest mismatch");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
+        let message = rejected_manifest_approval_message(
+            &mut stx,
+            envelope,
+            Some([0x42; 32]),
+            "approval must reject digest mismatch",
+        );
         assert!(
             message.contains("approval digest mismatch"),
             "unexpected error message: {message}"
@@ -11667,36 +11635,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let register = RegisterPinManifest {
-            manifest_payload: default_manifest_payload(),
-            alias: None,
-            successor_of: None,
-        };
-        register
-            .execute(&alice(), &mut stx)
-            .expect("register manifest");
-        let stored_record = stx
-            .world
-            .pin_manifests
-            .get(&default_digest())
-            .expect("manifest stored")
-            .clone();
-        let council_key = checked_ed25519_keypair();
-        let (envelope, _) = build_trusted_envelope(&mut stx, &stored_record, &council_key);
-        let approve = ApprovePinManifest {
-            digest: default_digest(),
-            council_envelope: Some(envelope),
-            council_envelope_digest: Some([0x24; 32]),
-        };
-        let err = approve
-            .execute(&alice(), &mut stx)
-            .expect_err("approval must reject provided digest mismatch with envelope");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
+        let message = rejected_manifest_approval_message(
+            &mut stx,
+            envelope,
+            Some([0x24; 32]),
+            "approval must reject provided digest mismatch with envelope",
+        );
         assert!(
             message.contains("approval digest mismatch with provided envelope"),
             "unexpected error message: {message}"
@@ -14646,45 +14591,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 3,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 1,
-            max_pdp_failures: 0,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = ProviderCreditRecord::new(
-            provider,
-            xor_quantity_nanos(1_000_000_000_000),
-            xor_quantity_nanos(6_000_000_000),
-            Quantity::zero(),
-            Quantity::zero(),
-            0,
-            0,
-            Metadata::default(),
-        );
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
             &mut stx,
@@ -14728,45 +14635,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 3,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 1,
-            max_pdp_failures: 0,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = ProviderCreditRecord::new(
-            provider,
-            xor_quantity_nanos(1_000_000_000_000),
-            xor_quantity_nanos(6_000_000_000),
-            Quantity::zero(),
-            Quantity::zero(),
-            0,
-            0,
-            Metadata::default(),
-        );
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
             &mut stx,
@@ -14809,36 +14678,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 3,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 1,
-            max_pdp_failures: 0,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         let proof = ProofWindowCounters {
             pdp_challenges: 5,
@@ -14861,36 +14701,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 3,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 1,
-            max_pdp_failures: 0,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         let telemetry = CapacityTelemetryRecord::new(
             provider, 0, window, 100, 90, 40, 1, 1, 7_500, 7_400, 128, 5, 1, 0, 0,
@@ -14915,36 +14726,8 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
-            stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-                utilisation_floor_bps: 7_500,
-                uptime_floor_bps: 9_000,
-                por_success_floor_bps: 9_000,
-                strike_threshold: 3,
-                penalty_bond_bps: 5_000,
-                cooldown_windows: 1,
-                max_pdp_failures: 0,
-                max_potr_breaches: 0,
-            };
-            let (provider, record) = sample_capacity_record();
-            register_governed_capacity_declaration(&mut stx, &alice(), record)
-                .expect("register capacity declaration");
-            let mut schedule = PricingScheduleRecord::launch_default();
-            schedule.credit = CreditPolicy {
-                settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-                settlement_grace_secs: 0,
-                low_balance_alert_bps: 1_000,
-            };
-            schedule.collateral = CollateralPolicy {
-                multiplier_bps: 20_000,
-                onboarding_discount_bps: 1,
-                onboarding_period_secs: 1,
-            };
-            SetPricingSchedule { schedule }
-                .execute(&alice(), &mut stx)
-                .expect("set pricing schedule");
-            let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
-            upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-                .expect("seed provider credit");
+            let provider =
+                ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
             let window = SECONDS_PER_BILLING_MONTH;
             record_capacity_window_with_proofs(
                 &mut stx,
@@ -14994,36 +14777,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 2,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 0,
-            max_pdp_failures: 0,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 5_000_000_000);
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::all_proofs(2, 5_000, 0).install(&mut stx, 5_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
             &mut stx,
@@ -15042,14 +14796,9 @@ mod sorafs_tests {
                 ..ProofWindowCounters::default()
             },
         );
-        let event = stx
-            .world
-            .internal_event_buf
-            .iter()
-            .find_map(|entry| match entry.as_ref() {
-                DataEvent::Sorafs(SorafsGatewayEvent::ProofHealth(alert)) => Some(alert.clone()),
-                _ => None,
-            })
+        let event = proof_health_alerts(&stx)
+            .into_iter()
+            .next()
             .expect("proof health alert should be emitted");
         assert_eq!(event.provider_id, provider);
         assert_eq!(event.window_end_epoch, window);
@@ -15073,36 +14822,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 1,
-            penalty_bond_bps: 4_000,
-            cooldown_windows: 0,
-            max_pdp_failures: u32::MAX,
-            max_potr_breaches: 0,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 3_500_000_000);
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::potr(1, 4_000, 0).install(&mut stx, 3_500_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
             &mut stx,
@@ -15121,14 +14841,9 @@ mod sorafs_tests {
                 ..ProofWindowCounters::default()
             },
         );
-        let event = stx
-            .world
-            .internal_event_buf
-            .iter()
-            .find_map(|entry| match entry.as_ref() {
-                DataEvent::Sorafs(SorafsGatewayEvent::ProofHealth(alert)) => Some(alert.clone()),
-                _ => None,
-            })
+        let event = proof_health_alerts(&stx)
+            .into_iter()
+            .next()
             .expect("proof health alert should be emitted");
         assert_eq!(event.provider_id, provider);
         assert!(event.triggered_by_potr);
@@ -15151,36 +14866,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
-            utilisation_floor_bps: 7_500,
-            uptime_floor_bps: 9_000,
-            por_success_floor_bps: 9_000,
-            strike_threshold: 1,
-            penalty_bond_bps: 5_000,
-            cooldown_windows: 2,
-            max_pdp_failures: 0,
-            max_potr_breaches: u32::MAX,
-        };
-        let (provider, record) = sample_capacity_record();
-        register_governed_capacity_declaration(&mut stx, &alice(), record)
-            .expect("register capacity declaration");
-        let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.credit = CreditPolicy {
-            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
-            settlement_grace_secs: 0,
-            low_balance_alert_bps: 1_000,
-        };
-        schedule.collateral = CollateralPolicy {
-            multiplier_bps: 20_000,
-            onboarding_discount_bps: 1,
-            onboarding_period_secs: 1,
-        };
-        SetPricingSchedule { schedule }
-            .execute(&alice(), &mut stx)
-            .expect("set pricing schedule");
-        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 4_000_000_000);
-        upsert_provider_credit_with_reserve_fixture(&mut stx, &alice(), credit)
-            .expect("seed provider credit");
+        let provider = ProofHealthFixture::pdp(1, 5_000, 2).install(&mut stx, 4_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
             &mut stx,
@@ -15216,15 +14902,7 @@ mod sorafs_tests {
                 ..ProofWindowCounters::default()
             },
         );
-        let alerts: Vec<_> = stx
-            .world
-            .internal_event_buf
-            .iter()
-            .filter_map(|entry| match entry.as_ref() {
-                DataEvent::Sorafs(SorafsGatewayEvent::ProofHealth(alert)) => Some(alert.clone()),
-                _ => None,
-            })
-            .collect();
+        let alerts = proof_health_alerts(&stx);
         assert_eq!(alerts.len(), 2);
         let first = &alerts[0];
         let second = &alerts[1];
