@@ -4586,8 +4586,10 @@ def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
             materialize(package_root, backend["package_path"], executable=executable)
             materialize(build_tree, backend["build_path"], executable=executable)
         else:
-            materialize(package_root, f"{backend['package_path']}/bin/isabelle", executable=True)
-            materialize(build_tree, f"{backend['build_path']}/bin/isabelle", executable=True)
+            for root, relative in ((package_root, backend["package_path"]), (build_tree, backend["build_path"])):
+                materialize(root, f"{relative}/bin/isabelle", executable=True)
+    for path in (package_root / "lib/tlapm/backends/Isabelle.exec-files", build_tree / "_build/default/deps/isabelle/Isabelle.exec-files"):
+        path.write_text("Isabelle/bin/isabelle\n", encoding="utf-8")
     for build_relative, package_relative in (
         ("_build/default/translate/main.exe", "lib/tlapm/backends/bin/ptl_to_trp"),
         ("_build/default/deps/zenon/zenon", "lib/tlapm/backends/bin/zenon"),
@@ -4595,8 +4597,7 @@ def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
         materialize(package_root, package_relative, executable=True)
         materialize(build_tree, build_relative, executable=True)
 
-    archive = tmp_path / "source-built.tar.gz"
-    archive.write_bytes(fixture_bytes)
+    archive = tmp_path / "source-built.tar.gz"; archive.write_bytes(fixture_bytes)
     attestation = tmp_path / "attestation.json"
     locked_wget = formal_scripts / "sumeragi_v2_tlapm_locked_wget.sh"
     source_builder = formal_scripts / "build_sumeragi_v2_tlapm_from_source.sh"
