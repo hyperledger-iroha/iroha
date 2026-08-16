@@ -35,15 +35,13 @@ def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
         / "scaling_evidence.json"
     )
     observed_environment = release_fixture.root / "observed-scaling-environment"
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "success",
             observed_scaling_environment=observed_environment,
         ),
-        0o500,
     )
 
     scaling_environment = {

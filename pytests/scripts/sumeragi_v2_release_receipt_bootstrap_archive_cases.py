@@ -677,6 +677,60 @@ def exercise_release_helper_fail_atomicity(
         )
     )
 
+    for layout in ("hardlink", "symlink", "missing"):
+        unsafe_invocation = private_directory(
+            tmp_path / f"failure-unsafe-{layout}"
+        )
+        unsafe_release = private_directory(
+            unsafe_invocation / "output" / "release"
+        )
+        unsafe_bootstrap = private_directory(
+            tmp_path / f"failure-unsafe-bootstrap-{layout}"
+        )
+        unsafe_receipt = unsafe_release / "RELEASE_COMPLETED.json"
+        outside_receipt = tmp_path / f"failure-unsafe-outside-{layout}"
+        if layout != "missing":
+            outside_receipt.write_bytes(b'{"unverified":true}\n')
+            outside_receipt.chmod(0o400)
+            if layout == "hardlink":
+                os.link(outside_receipt, unsafe_receipt)
+            else:
+                unsafe_receipt.symlink_to(outside_receipt)
+        for name, data in (
+            ("receipt-validator.stdout", b""),
+            ("receipt-validator.stderr", b"validator rejected fixture\n"),
+        ):
+            (unsafe_invocation / name).write_bytes(data)
+        for path, data in (
+            (
+                unsafe_bootstrap / "candidate-identity.json",
+                canonical_json(failure_identity),
+            ),
+            (unsafe_bootstrap / "BOOTSTRAP_COMPLETED.json", b"{}\n"),
+            (unsafe_bootstrap / "validate-receipt.py", b"# protected validator\n"),
+        ):
+            path.write_bytes(data)
+            path.chmod(0o400)
+
+        with pytest.raises(
+            helper.CacheCopyError, match="unverified aggregate receipt"
+        ):
+            helper.publish_validation_failure(
+                unsafe_invocation,
+                unsafe_bootstrap,
+                tmp_path,
+                "failure-unsafe-",
+                "5" * 64,
+                72,
+            )
+
+        assert not unsafe_invocation.exists()
+        assert not (
+            unsafe_bootstrap / "RECEIPT_VALIDATION_FAILED.json"
+        ).exists()
+        if layout != "missing":
+            assert outside_receipt.read_bytes() == b'{"unverified":true}\n'
+
 
 @pytest.mark.parametrize("layout", ("nested", "alias"))
 def test_prebuilt_release_root_authentication_rejects_nesting_or_alias(
@@ -1126,6 +1180,8 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         == runtime / "swift-toolchain/bin/swift-frontend"
     assert (runtime / "swift-toolchain/bin/swiftc").resolve() \
         == runtime / "swift-toolchain/bin/swift-frontend"
+    assert os.readlink(runtime / "bin/swift") \
+        == "../swift-toolchain/bin/swift-frontend"
     assert (runtime / "bin/tlapm").resolve() == runtime / "tlapm-distribution/bin/tlapm"
     assert (runtime / "bin/apalache-mc").resolve() \
         == runtime / "apalache-distribution/bin/apalache-mc"

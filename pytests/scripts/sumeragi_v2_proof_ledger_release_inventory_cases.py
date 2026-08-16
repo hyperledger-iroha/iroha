@@ -422,19 +422,22 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         *paths,
     ]
     expanded: list[Path] = []
-    for relative in reviewed_paths:
+    while reviewed_paths:
+        relative = reviewed_paths.pop(0)
+        if relative in expanded:
+            continue
         expanded.append(relative)
-        expanded.extend(
+        reviewed_paths.extend(
             relative.parent / component
             for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
                 relative.as_posix(), ()
             )
         )
         if relative == Path("scripts/write_sumeragi_v2_release_receipt.py"):
-            expanded.extend(RELEASE_RECEIPT_COMPONENT_FILES)
+            reviewed_paths.extend(RELEASE_RECEIPT_COMPONENT_FILES)
         if relative == Path("scripts/bootstrap_sumeragi_v2_release.py"):
-            expanded.extend(RELEASE_BOOTSTRAP_COMPONENT_FILES)
-    return tuple(dict.fromkeys(expanded))
+            reviewed_paths.extend(RELEASE_BOOTSTRAP_COMPONENT_FILES)
+    return tuple(expanded)
 
 
 @pytest.mark.parametrize(
@@ -1080,7 +1083,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+                "tests/v2_adapter_main_00.rs"
             ),
             "successor_context_requires_the_durable_cryptographic_parent",
             "let admitted = adapter\n        .receive_authenticated(authenticated)",
@@ -1089,7 +1092,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_ingress_authentication_tests.rs"
+                "tests/v2_adapter_main_04.rs"
             ),
             "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter",
             "adapter.authenticate(conflicting_proposal_message),\n"
@@ -1118,7 +1121,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+                "tests/v2_adapter_main_00.rs"
             ),
             "Hash::new(b\"substituted successor execution policy\")",
             "successor.execution_policy_hash",
@@ -1128,7 +1131,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+                "tests/v2_adapter_main_00.rs"
             ),
             "proposal_subject.payload_hash = Hash::new(&proposal_body);",
             "proposal_subject.payload_hash = Hash::new(b\"unbound parent body\");",
@@ -1138,7 +1141,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_ingress_authentication_tests.rs"
+                "tests/v2_adapter_main_04.rs"
             ),
             "&locally_validated_payload,",
             "&[0x88, 2],",
@@ -1148,7 +1151,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"
-                "v2_adapter_inline_ingress_authentication_tests.rs"
+                "tests/v2_adapter_main_04.rs"
             ),
             "encode_payload(&context, proposal_round, proposal_subject, &proposal_body)\n"
             "            .expect(\"encode later-view proposal payload\")",

@@ -1546,8 +1546,8 @@ if decided_subject.is_some() {
         ),
         (
             "runtime",
-            "body_available_rebind_rejects_two_persistent_roots_before_mutation",
-            "rejects two durable roots before either serialized owner changes",
+            "body_available_rejects_second_persistent_lifecycle_before_mutation",
+            "rejects a second durable producer lifecycle before the original owner changes",
         ),
         (
             "runtime",
@@ -3742,9 +3742,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "RecoveredWalStartupAuthorityV1::ControlSign(control)",
             "Self::open_recovered_control_authority_branch(",
+            "verified, adapter, effects, control, body_store,",
         ),
     )
-    proposal_control = item("adapter", "open_recovered_control_authority_branch")
+    proposal_control = item(
+        "adapter", "open_recovered_control_authority_branch"
+    )
     require_order(
         "adapter",
         proposal_control,
@@ -3754,9 +3757,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "project_recovered_wal_control_sign(&verified, control)",
             "Self::ensure_recovered_body_store_context(&body_store, &verified)",
             "Self::open_recovered_control_projection_branch(",
+            "projected, local_proposal_attempt, body_store,",
         ),
     )
-    proposal_projection = item("adapter", "open_recovered_control_projection_branch")
+    proposal_projection = item(
+        "adapter", "open_recovered_control_projection_branch"
+    )
     require_order(
         "adapter",
         proposal_projection,

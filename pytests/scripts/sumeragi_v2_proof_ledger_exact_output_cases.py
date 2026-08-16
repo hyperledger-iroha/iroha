@@ -902,21 +902,21 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
+            "fn dispatch_lane_work_effects_with_progress(",
             "let scan_limit = lane_work.effect_count();",
             "let scan_limit = limit.max(1);",
             "lane scheduler must scan past unserviceable heads without losing ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
+            "fn dispatch_lane_work_effects_with_progress(",
             "continue;",
             "break;",
             "lane scheduler must scan past unserviceable heads without losing ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
+            "fn dispatch_lane_work_effects_with_progress(",
             "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
             "let _ = (lane_work, services, limit);",
             "runner lane dispatch must apply writer receipts before selecting owned work",
@@ -2872,3 +2872,87 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
         item_name in error and "exact reviewed token digest" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize(
+    ("owner", "old", "new", "expected_error"),
+    (
+        (
+            "worker",
+            "if current_sources != self.source_fifo_owners\n"
+            "            || current_reservations != self.reservation_owner_counts",
+            "if current_sources == self.source_fifo_owners\n"
+            "            || current_reservations != self.reservation_owner_counts",
+            "worker cancellation must validate the complete pre-mutation FIFO and reservation projection",
+        ),
+        (
+            "dispatch",
+            "let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;",
+            "let _ = apply_retired_historical_recovery_requests(lane_work, services)?;",
+            "runner lane dispatch must cancel retired source owners and close prefixes before admitting or dispatching later chunks",
+        ),
+        (
+            "drain",
+            "if retired == 0 && dispatched == 0 && after >= before {",
+            "if retired == 0 && dispatched == 0 && after > before {",
+            "durable finalization must cancel retired sources, apply receipts on both sides of handoff, drain dispatchable work, and reject a non-descending loop",
+        ),
+        (
+            "schedule",
+            "let _ = self.retire_inactive_merge_sidecar_requests(active_requests)?;",
+            "let _ = active_requests;",
+            "sidecar retransmission must cancel every retired transport attempt before handing off bounded successor posts",
+        ),
+        (
+            "prune",
+            "let _ = self.retire_inactive_merge_sidecar_requests(active_requests)?;",
+            "let _ = active_requests;",
+            "finalized sidecar pruning must retire exact requester output before Kura cleanup without fabricating a cursor receipt",
+        ),
+    ),
+)
+def test_extracted_exact_output_owner_mutations_survive_digest_refresh(
+    tmp_path: Path, owner: str, old: str, new: str, expected_error: str
+) -> None:
+    """Extracted ownership helpers retain semantic checks after seal refresh."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    if owner == "worker":
+        path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        item_name = "remove_fanouts_matching"
+        context = (("impl", "PendingExactOutput"),)
+        bindings = ((module._PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256,
+                     "PendingExactOutput::remove_fanouts_matching"),)
+    elif owner in {"schedule", "prune"}:
+        path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+        item_name = ("schedule_retransmission_at" if owner == "schedule" else
+                     "prune_finalized_merge_sidecars")
+        context = (("impl", "V2LaneWorkAdapter"),)
+        bindings = ((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256,
+                     f"V2LaneWorkAdapter::{item_name}"),)
+    else:
+        item_name = ("dispatch_lane_work_effects_with_progress"
+                     if owner == "dispatch" else "drain_finalized_lane_work_output")
+        path = tmp_path / ("crates/iroha_core/src/sumeragi/v2_runner.rs"
+                           if owner == "dispatch" else
+                           "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs")
+        context = ()
+        bindings = (
+            (module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256, item_name),
+            (module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256, item_name),
+        )
+        if owner == "dispatch":
+            bindings += ((module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256,
+                          f"runner::{item_name}"),)
+    mutate_rust_item_source_in_context(module, path, item_name, context, old, new)
+    original = rebind_reviewed_rust_item_digests(
+        module, path, item_name, context, bindings
+    )
+    try:
+        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+    assert any(expected_error in error for error in errors), errors
+    assert not any(item_name in error and "exact reviewed token digest" in error
+                   for error in errors), errors

@@ -23,7 +23,6 @@ use std::{
     thread::sleep,
     time::{Duration, Instant},
 };
-use toml::Value as TomlValue;
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
 const QUERY_RETRIES: usize = 1_200;
@@ -262,30 +261,13 @@ fn ivm_build_profile_exists() -> bool {
 }
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
-    let mut sumeragi = toml::Table::new();
-    let mut advanced = toml::Table::new();
-    let mut rbc = toml::Table::new();
-    rbc.insert("pending_ttl_ms".into(), TomlValue::Integer(120_000));
-    rbc.insert("session_ttl_ms".into(), TomlValue::Integer(240_000));
-    advanced.insert("rbc".into(), TomlValue::Table(rbc));
-    // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
-    let mut da = toml::Table::new();
-    da.insert("quorum_timeout_multiplier".into(), TomlValue::Integer(6));
-    da.insert(
-        "availability_timeout_multiplier".into(),
-        TomlValue::Integer(3),
-    );
-    advanced.insert("da".into(), TomlValue::Table(da));
-    sumeragi.insert("advanced".into(), TomlValue::Table(advanced));
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), TomlValue::Boolean(false));
+    nexus.insert("enabled".into(), toml::Value::Boolean(false));
     let mut layer = toml::Table::new();
-    layer.insert("sumeragi".into(), TomlValue::Table(sumeragi));
-    layer.insert("nexus".into(), TomlValue::Table(nexus));
+    layer.insert("nexus".into(), toml::Value::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
         .with_block_cadence(FAST_PIPELINE_TIME)
-        // Make DA/RBC traffic more tolerant of dropped packets during local runs.
         .with_config_table(layer)
         .with_ivm_fuel(IvmFuelConfig::Unset)
 }

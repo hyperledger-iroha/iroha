@@ -18870,7 +18870,7 @@ pub mod isi {
                                     {
                                         return Err(InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(format!(
-                                                "sumeragi.npos.reconfig.{field} must be greater than zero"
+                                                "SumeragiNposParameters.reconfig.{field} must be greater than zero"
                                             )),
                                         ));
                                     }
@@ -33013,7 +33013,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.evidence_horizon_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),
@@ -33033,7 +33033,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.activation_lag_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),
@@ -33053,7 +33053,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.slashing_delay_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),

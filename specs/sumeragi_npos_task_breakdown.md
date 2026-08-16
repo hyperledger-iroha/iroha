@@ -1,63 +1,45 @@
-## Sumeragi + NPoS Task Breakdown
+## Sumeragi revision-4 NPoS validation map
 
-This note expands the Phase A roadmap into bite-sized engineering tasks so we can land the
-remaining Sumeragi/NPoS work incrementally. Status annotations follow the convention:
-`✅` done, `⚙️` in progress, `⬜` not started, and `🧪` needs tests.
+Revision 4 is the first-release production protocol. The former Phase A list
+described V1 collectors, global RBC storage, adaptive pacemaker settings, and
+local debug fault tables; those surfaces and their integration scenarios are
+retired rather than carried into the release inventory.
 
-### A2 — Wire-Level Message Adoption
-- ✅ Surface Norito `Proposal`/`Vote`/`CommitCertificate` types in `BlockMessage` and exercise encode/decode
-  round-trips (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
-- ✅ Gate the former `BlockSigned/BlockCommitted` frames; migration toggle defaulted to `false`
-  before retirement.
-- ✅ Retire the migration knob that toggled the old block messages; Vote/commit-certificate mode is now the only
-  wire path.
-- ✅ Update Torii routers, CLI commands, and telemetry consumers to prefer
-  `/v1/sumeragi/*` JSON snapshots over the older block frames.
-- ✅ Integration coverage exercises `/v1/sumeragi/*` endpoints purely over the Vote/commit-certificate pipeline
-  (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
-- ✅ Remove the old frames once feature parity & interop tests are in place.
+### Current executable coverage
 
-### Frame Removal Plan
-1. ✅ Multi-node soak tests ran for 72 h on both telemetry and CI harnesses; captured Torii snapshots showed stable proposer throughput and commit certificate formation with no regressions.
-2. ✅ Integration test coverage now runs purely on the Vote/commit-certificate path (`sumeragi_vote_qc_commit.rs`), ensuring mixed peers reach consensus without the old frames.
-3. ✅ Operator documentation and CLI help no longer mention the previous wire path; troubleshooting guidance now points at the Vote/commit-certificate telemetry.
-4. ✅ Former message variants, telemetry counters, and pending commit caches were deleted; the compatibility matrix now reflects the Vote/commit-certificate-only surface.
+- `integration_tests/tests/sumeragi_v2_runner.rs` exercises signed revision-4
+  genesis, four-validator restart finality, leader timeout/TC rotation, and
+  authenticated controlled release of same- and distinct-subject QC evidence.
+- `integration_tests/tests/sumeragi_npos_liveness.rs` verifies that a
+  four-validator NPoS network produces and commits blocks without local timing
+  or DA overrides.
+- `integration_tests/tests/sumeragi_npos_performance.rs` retains the 1-second
+  baseline and transaction-queue saturation/backpressure scenarios. These use
+  signed genesis parameters plus current finite queue configuration.
+- `integration_tests/tests/sumeragi_localnet_smoke.rs` retains permissioned and
+  NPoS load/throughput coverage. Its long-running rotating scenario now stops
+  one validator process at a time, restarts it with the unmodified base
+  configuration, and verifies catch-up and convergence.
+- Torii/CLI endpoint suites continue to check authenticated revision-4 status
+  and telemetry serialization independently of the retired V1 RBC soak.
 
-### A3 — Engine & Pacemaker Enforcement
-- ✅ Lock/Highest QC invariants enforced in `handle_message` (see `block_created_header_sanity`).
-- ✅ Data-availability tracking validates the RBC payload hash when recording delivery (`Actor::ensure_block_matches_rbc_payload`) so mismatched sessions cannot be treated as delivered.
-- ✅ Wire precommit commit-certificate requirement (`require_precommit_qc`) into default configs and add negative tests (default now `true`; tests cover both gated and opt-out paths).
-- ✅ Replace view-wide redundant-send heuristics with EMA-backed pacemaker controllers (`aggregator_retry_deadline` now derives from the live EMA and drives redundant send deadlines).
-- ✅ Gate proposal assembly on queue backpressure (`BackpressureGate` now halts the pacemaker when the queue is saturated and records deferrals for status/telemetry).
-- ✅ Availability votes are emitted after proposal validation whenever DA is required (without waiting for local RBC `DELIVER`), and availability evidence is tracked via `availability evidence` as the safety proof while commit proceeds without waiting. This avoids circular waits between payload transport and voting.
-- ✅ Restart/liveness coverage now exercises cold-start RBC recovery (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) and pacemaker resume after downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
-- ✅ Add deterministic restart/view-change regression tests covering lock convergence (`integration_tests/tests/sumeragi_lock_convergence.rs`).
+### Retired scenario classes
 
-### A4 — Collector & Randomness Pipeline
-- ✅ Deterministic collector rotation helpers live in `collectors.rs`.
-- ✅ GA-A4.1 — PRF-backed collector selection now records deterministic seeds and height/view in `/status` and telemetry; VRF refresh hooks propagate the context after commits and reveals. Owners: `@sumeragi-core`. Tracker: `project_tracker/npos_sumeragi_phase_a.md` (closed).
-- ✅ GA-A4.2 — Surface reveal participation telemetry + CLI inspection commands and update Norito manifests. Owners: `@telemetry-ops`, `@torii-sdk`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:6`.
-- ✅ GA-A4.3 — Codify late-reveal recovery and zero-participation epoch tests under `integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), exercising penalty-clearing telemetry. Owners: `@sumeragi-core`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:7`.
+- local RBC chunk corruption, duplicate-init, conflicting-ready, selective-drop,
+  and forced-delivery tests driven by debug configuration;
+- global RBC store-pressure and chunk-loss performance tests;
+- EMA/jitter/local-timeout pacemaker tests and the downtime test that attempted
+  to mutate removed timing fields;
+- the adversarial-collector telemetry soak tied to V1 counters.
 
-### A5 — Joint Reconfiguration & Evidence
-- ✅ Evidence scaffolding, WSV persistence, and Norito roundtrips now cover double-vote, invalid proposal, invalid commit certificate, and double exec variants with deterministic deduplication and horizon pruning (`sumeragi::evidence`).
-- ✅ GA-A5.1 — Joint-consensus activation (old set commits, new set activates on the next block) enforced with targeted integration coverage.
-- ✅ GA-A5.2 — Governance docs and CLI flows for slashing/jailing updated, complete with mdBook synchronization tests to lock defaults and evidence horizon wording.
-- ✅ GA-A5.3 — Negative-path evidence tests (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) plus fuzz fixtures landed and run nightly to guard Norito roundtrip validation.
+Equivalent safety properties are covered at the authenticated revision-4
+message boundary. Availability and recovery properties use the signed DA
+layout, real validator outages, or block/body recovery. No test configures a
+lower quorum, disables mandatory DA, or selects a local protocol version.
 
-### A6 — Tooling, Docs, Validation
-- ✅ RBC telemetry/reporting in place; DA report generates real metrics (including eviction counters).
-- ✅ GA-A6.1 — VRF-enabled 4-peer NPoS happy-path test now runs in CI with pacemaker/RBC thresholds enforced via `integration_tests/tests/sumeragi_npos_happy_path.rs`. Owners: `@qa-consensus`, `@telemetry-ops`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:11`.
-- ✅ GA-A6.2 — Capture NPoS performance baseline (1 s blocks, k=3) and publish in `status.md`/operator docs with reproducible harness seeds + hardware matrix. Owners: `@performance-lab`, `@telemetry-ops`. Report: `specs/generated/sumeragi_baseline_report.md`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:12`. Live run recorded on Apple M2 Ultra (24 cores, 192 GB RAM, macOS 15.0) using the command documented in `scripts/run_sumeragi_baseline.py`.
-- ✅ GA-A6.3 — Operator troubleshooting guides for RBC/pacemaker/backpressure instrumentation landed (`specs/telemetry.md:523`); log correlation is now handled by `scripts/sumeragi_backpressure_log_scraper.py`, so operators can pull pacemaker deferral/missing-availability pairings without manual grepping. Owners: `@operator-docs`, `@telemetry-ops`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:13`.
-- ✅ Added RBC store/chunk-loss performance scenarios (`npos_rbc_store_backpressure_records_metrics`, `npos_rbc_chunk_loss_fault_reports_backlog`), redundant fan-out coverage (`npos_redundant_send_retries_update_metrics`), and a bounded-jitter harness (`npos_pacemaker_jitter_within_band`) so the A6 suite exercises store soft-limit deferrals, deterministic chunk drops, redundant-send telemetry, and pacemaker jitter bands under stress.【integration_tests/tests/sumeragi_npos_performance.rs:633】【integration_tests/tests/sumeragi_npos_performance.rs:760】【integration_tests/tests/sumeragi_npos_performance.rs:800】【integration_tests/tests/sumeragi_npos_performance.rs:639】
+### Remaining validation
 
-### Immediate Next Steps
-1. ✅ Bounded-jitter harness exercises pacemaker jitter metrics under a deterministic band (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
-2. ✅ Promote RBC deferral assertions in `npos_queue_backpressure_triggers_metrics` by priming deterministic RBC store pressure (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ Extend `/v1/sumeragi/telemetry` soak to cover long-running epochs and adversarial collectors,
-   comparing snapshots against Prometheus counters over multiple heights. Covered by
-   `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
-
-Tracking this list here keeps `roadmap.md` focused on milestones while giving the team a live
-checklist to burn down. Update entries (and mark completion) as patches land.
+Runtime validation still requires the canonical Cargo suites and ignored
+multi-peer soaks on representative binaries. Static source checks can prove
+that retired config keys are gone and inventories are aligned, but cannot prove
+wall-clock liveness, process recovery, or telemetry population under load.

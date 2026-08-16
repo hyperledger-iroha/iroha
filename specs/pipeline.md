@@ -1,4 +1,4 @@
-# Iroha v1 Transaction Processing Pipeline
+# Iroha 3 Transaction Processing Pipeline
 
 This document describes the end‑to‑end path a transaction follows through an Iroha node and the network, from submission at the API boundary to final commitment and post‑commit effects. It focuses on architectural steps, components involved, and how different transaction types flow through the system. Names in backticks refer to crates or major modules in this repository.
 
@@ -70,9 +70,20 @@ All of the above share the same validation and consensus pipeline once they beco
 
 8) Commit (Quorum Reached)
   - Once the leader (or the network) observes a quorum of approvals, `sumeragi` finalizes the block after verifying the required conditions:
-  - Commit certificate: validators send `CommitVote` signatures to the deterministic collector set (PRF-selected collectors for the `(height, view)` pair, excluding the leader). When a PRF seed is unavailable the collector list falls back to the wraparound slice starting at `proxy_tail_index()`, and fan-out only falls back to the full commit topology when collectors are disabled or local-only. Any collector that reaches quorum aggregates `2f+1` signatures (permissioned) or ≥2/3 total stake (NPoS) into a `CommitCertificate`. Peers commit when the certificate and payload are both available.
-  - Data availability: when `SumeragiParameter::DaEnabled = true` (`sumeragi.da.enabled=true` in local config), availability evidence is tracked via availability votes or an RBC `READY` quorum (>= `Topology::min_votes_for_commit()`), and commit waits for that evidence.
-  - Reliable broadcast (RBC): enabled automatically when `sumeragi.da.enabled=true` as a transport/recovery path for block payload distribution; commit waits for the local payload (RBC `RbcDeliver` or block sync can satisfy it).
+  - CommitQC: every validator sends its equal-weight `CommitVote` to
+    the complete frozen committee. Any validator may aggregate exactly
+    `q = 2f + 1` distinct equal-weight votes into a `CommitQC`; stake
+    affects NPoS seat eligibility, not vote weight. A peer applies only when it
+    holds both that exact certificate and the locally authenticated canonical
+    body.
+  - Data availability: revision 4 always uses the signed RS16
+    `PayloadManifest`/`PayloadChunk` layout. A validator may Prepare-vote only
+    after reconstructing, authenticating, durably storing, and deterministically
+    validating the complete canonical body. There is no local DA-enable switch
+    or separate RBC READY gate.
+  - Payload recovery: the leader sends chunks to Set A first and expands to Set
+    B on recovery. A peer finalizes only when it holds both the exact CommitQC
+    and its locally authenticated canonical body.
   - State roots: commit QCs always bind `parent_state_root` and `post_state_root` derived from execution witness snapshots; there is no separate execution QC gate.
 - After the required checks succeed, all committee peers persist the block to `kura` (append‑only block store) and advance their canonical state by applying the block contents in a single atomic commit.
 - Non‑committee peers learn of the commit via gossip and catch up by fetching and applying the committed block(s).
@@ -114,7 +125,14 @@ Determinism:
 - Round lifecycle: propose → validate → vote → commit.
 - Leader responsibilities: gather txs, validate (stateless+stateful), include triggers, build and sign the block, collect approvals.
 - Validator responsibilities: verify proposal integrity, independently re‑validate, vote.
-- Commit rule: once a valid `CommitCertificate` is available and the payload is present, the block is finalized; DA evidence is tracked but never blocks commit.
+- Commit rule: once a valid `CommitCertificate` and its exact locally
+  authenticated canonical body are available, the block is finalized. The
+  signed manifest/chunk layout is part of body authentication, not a second
+  post-QC availability certificate.
+- Lifecycle ownership: one crate-internal `LifecycleCoordinator` and durable
+  `LifecycleLedgerV1` own admission, selection, launch, retry, completion,
+  finalization, restart, and rollover. Retired Serve/witness/latch scheduling
+  state is not a second authority.
 - Fault handling: if the leader is faulty or slow, the round times out and leadership rotates; pending txs remain available for the next leader.
 
 ## Executor & IVM
@@ -213,10 +231,10 @@ Operator access (Torii)
 - After validating a proposal and capturing the execution witness (the source of
   `parent_state_root`/`post_state_root` bound into commit QCs), Sumeragi emits a
   `PipelineEventBox::Witness` containing block metadata (`block_hash`, `height`,
-  `view`, `epoch`) and the execution witness (`reads`/`writes`). Events surface
-  immediately before the witness is forwarded to deterministic collectors (with
-  commit-topology fallback when the collector set is empty, local-only, or below
-  quorum), giving observers deterministic access to read/write sets.
+  `view`, `epoch`) and the execution witness (`reads`/`writes`). The ordinary
+  pipeline event stream, Kura sidecar persistence, and background prover lane
+  expose or consume that witness; it is not routed through a consensus collector
+  set.
 - Torii’s streaming/JSON adapters summarise the payload with read/write counts; clients that need the full witness should subscribe to the Norito-encoded stream and decode the `ExecWitnessMsg`.
 - `ExecWitness` now also carries the per-transaction `fastpq_transcripts` bundles (entry hash plus transcripts) **and** a `fastpq_batches: Vec<FastpqTransitionBatch>` field. Each batch embeds `public_inputs` (dsid, slot, old/new roots, perm_root, tx_set_hash), making witness batches the canonical prover inputs instead of ad-hoc transcript re-encoding.
 - Operators can fetch those batches via `iroha_cli audit witness --decode` (FASTPQ batches now emit by default; use `--no-fastpq-batches` to suppress them); `--fastpq-parameter` now asserts the expected parameter set and the CLI no longer synthesizes batches from transcripts.

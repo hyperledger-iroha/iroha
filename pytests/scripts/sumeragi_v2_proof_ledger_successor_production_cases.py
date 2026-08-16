@@ -806,6 +806,34 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs",
+        "fn prepare_cold_adapter_startup(",
+        "Self::prepare_cold_signed_broadcast_branch(",
+        "Self::prepare_cold_signed_broadcast_branch_unchecked(",
+        "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs",
+        "fn prepare_cold_signed_broadcast_branch(",
+        "drop(matching);",
+        "let _ = matching;",
+        "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs",
+        "fn prepare_cold_signed_broadcast_branch(",
+        "Self::prepare_cold_single_signed_broadcast_branch(",
+        "Self::prepare_cold_single_signed_broadcast_branch_unchecked(",
+        "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs",
+        "fn install_recovered_wal_sign(",
+        "Self::install_recovered_broadcast_and_next_vote_branch(",
+        "Self::install_recovered_broadcast_and_next_vote_branch_unchecked(",
+        "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         "fn open_recovered_decision_apply_startup(",
         ".stage_authenticated_wal_decision_fetch(projection.fetch())",
@@ -1387,18 +1415,74 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "cold recovered phase owner handoff omits production refinement tokens",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_control_authority_branch(",
+        "Self::ensure_recovered_body_store_context(&body_store, &verified)?;",
+        "Self::ensure_recovered_body_store_context_unchecked(&body_store, &verified)?;",
+        "recovered local-Proposal owner factory handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_control_projection_branch(",
+        "ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(",
+        "ProductionLifecycleAdapterStartupV1::recovered(",
+        "recovered local-Proposal owner factory handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::ensure_recovered_body_store_context(&body_store, &verified)?;",
+        "Self::ensure_recovered_body_store_context_unchecked(&body_store, &verified)?;",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::persist_recovered_phase_vote_stage(authenticated)",
+        "Self::persist_recovered_phase_vote_stage_unchecked(authenticated)",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage_unchecked(persisted, &body_store)",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::install_recovered_phase_vote_sign_stage(prepared)",
+        "Self::install_recovered_phase_vote_sign_stage_unchecked(prepared)",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::open_recovered_phase_vote_seals_stage(",
+        "Self::open_recovered_phase_vote_seals_stage_unchecked(",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn open_recovered_phase_vote_branch(",
+        "Self::finish_recovered_phase_vote_owner_stage(",
+        "Self::finish_recovered_phase_vote_owner_stage_unchecked(",
+        "cold recovered phase owner handoff",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn authenticate_recovered_phase_vote_stage<'registry>(",
+        "Ok(Box::new(authenticated))",
+        "Ok(authenticated)",
+        "cold recovered phase owner handoff",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
         ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
         ".prepare_recovered_lifecycle_sign_completion(completion)",
         "single-preview recovered next-Vote body service join must preserve exact production order",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2.rs",
-        "fn project_proposal_exact_output_authority(",
-        "self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
-        "false",
-        "affine recovered Proposal exact-output projection must remain shape closed",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2363,7 +2447,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 312
+) == 324
 
 
 @pytest.mark.parametrize(

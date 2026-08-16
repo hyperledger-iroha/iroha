@@ -770,6 +770,7 @@
       "javascript/iroha_js/src/proofAttachment.js",
       "javascript/iroha_js/src/sccp.js",
       "javascript/iroha_js/src/smartContractDeployment.js",
+      "javascript/iroha_js/src/smartContractDeploymentSubmit.js",
       "javascript/iroha_js/src/soracles.js",
       "javascript/iroha_js/src/soracloud.js",
       "javascript/iroha_js/src/soradns.js",

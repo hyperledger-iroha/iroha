@@ -1,7 +1,5 @@
-//! Production boundary for the executable Sumeragi v2 reducer.
-//!
-//! The reducer crate intentionally has no codec, cryptography, filesystem, or
-//! networking dependencies.  This module is the narrow adapter which binds it
+//! Production boundary for the executable Sumeragi v2 reducer. The reducer crate has no
+//! codec, cryptography, filesystem, or networking dependencies. This module is the adapter binding it
 //! to the canonical data-model wire types and the crash-safe safety WAL.  WAL
 //! effects are handled synchronously: a complete frame is encoded, appended,
 //! flushed, and synchronised, and only then is the exact persistence identifier

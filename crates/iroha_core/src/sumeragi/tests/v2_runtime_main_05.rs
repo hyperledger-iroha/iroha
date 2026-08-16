@@ -143,10 +143,7 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         .rebind_as_inherited_adapter_effect(&store_effect)
         .expect("certified Fetch passes its authority to Store");
     let certified_store_owner = body_effect_ownership[0]
-        .adopt_incumbent_body_stage_for_retry_or_authority(
-            &certified_store_owner,
-            &store_effect,
-        )
+        .adopt_incumbent_body_stage_for_retry_or_authority(&certified_store_owner, &store_effect)
         .expect("the certified Store carrier upgrades the incumbent physical task owner");
     assert_eq!(
         certified_store_owner.owner(),

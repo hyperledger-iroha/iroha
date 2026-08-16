@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "6ec6a174349fa3b98dc62b5f3f5f052f017e93c4d71ecf5821dfc1be1ea08943"
+    "2deadb2515adc35dabe2808e920e7c592c84169639242e5a6a121ea7e0b5b88a"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae",
+            "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'

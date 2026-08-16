@@ -160,7 +160,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "74e55a2d544b76342d57f24eb901c4432b10e484a6044fbfcc7c8d7878288578"
+    "9dab3cd31c184be81838db6df78146914a85d228400a7bb07b916f5f41e679e8"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
@@ -4284,7 +4284,8 @@ def _populate_runtime(
                 "apalache-mc": "apalache-distribution/bin",
                 "verus": "verus-distribution", "cargo-verus": "verus-distribution",
             }[name]
-            os.symlink(f"../{root_name}/{name}", link)
+            target_name = source.name if name == "swift" else name
+            os.symlink(f"../{root_name}/{target_name}", link)
     if framework_python is not None:
         copy_stable_file(
             version_root / framework,

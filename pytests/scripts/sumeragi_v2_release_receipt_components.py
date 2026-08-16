@@ -115,15 +115,13 @@ def install_cache_helper(source_root: Path, repository_root: Path) -> None:
 
 
 def fixture_corridor_legs(
-    writer_symbols: dict[str, object], bootstrap: dict[str, object]
+    writer_symbols: dict[str, object], cargo_path: Path
 ) -> object:
     """Return receipt fixture legs bound to its authenticated Cargo path."""
 
-    fixture_cargo = bootstrap["bootstrap_runner_cargo"]
-    assert isinstance(fixture_cargo, Path)
     corridor_legs = writer_symbols["_corridor_legs"]
     assert callable(corridor_legs)
-    return corridor_legs(str(fixture_cargo.resolve()))
+    return corridor_legs(str(cargo_path.resolve()))
 
 
 def run_fixture_cargo_cache_copy(

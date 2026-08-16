@@ -307,6 +307,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
         Path('v2_runtime_effect_ownership_core_impl.rs'),
         Path('v2_runtime_effect_ownership_rebind_impl.rs'),
+        Path('v2_runtime/network_ingress_classification.rs'),
         Path('tests/v2_runtime_pending_binding_cases.rs'),
         Path('tests/v2_runtime_main_00.rs'),
         Path('tests/v2_runtime_main_01.rs'),
@@ -323,6 +324,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_worker/autonomous_lane_output_retirement.rs'),
         Path('v2_worker/kura_replica_advert_refresh.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('v2_worker/effect_services_impl.rs'),
         Path('tests/v2_worker_main_00.rs'),
         Path('tests/v2_worker_main_01.rs'),
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
@@ -399,6 +401,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lane_work_lifecycle_and_recovery_cases.rs'),
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
+        Path('v2_lane_work/autonomous_retirement_and_merge_tests.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs'): (
         Path('v2_lane_work_effect_queue.rs'),

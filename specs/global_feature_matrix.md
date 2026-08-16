@@ -6,16 +6,14 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 
 | Feature | Status | Notes | Evidence |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| Signed committee and manifest context | ◉ | Consensus mode, validator set, quorum, cadence, and RS16 geometry are signed chain context; peers reject mismatched manifests instead of consulting local Sumeragi switches. | `sumeragi.md`; `sumeragi_v2.md` |
+| Deterministic pacemaker | ◉ | The view timeout is derived from signed cadence and view number. Local EMA/RTT/jitter/backoff knobs are not authoritative inputs. | `sumeragi_pacemaker.md` |
+| NEW_VIEW gating & highest QC tracking | ◉ | Authenticated control flow carries timeout certificates and evidence; the highest justified QC advances monotonically. | `sumeragi.md`; `sumeragi_v2.md` |
+| Availability-certified commit | ◉ | Revision-4 commits require the signed manifest, RS16 availability proof, and a `2f + 1` commit QC before local application. | `sumeragi.md`; `sumeragi_v2.md` |
+| Commit QC state-root binding | ◉ | Commit QCs bind the canonical block and state transition in the signed consensus context. | `sumeragi.md`; `sumeragi_v2.md` |
+| Evidence propagation & audit endpoints | ◉ | Authenticated evidence is governed by `SumeragiNposParameters.reconfig`; Torii exposes read-only evidence and consensus diagnostics. | `sumeragi_evidence_api.md`; `governance_api.md` |
+| Consensus observability | ◉ | `/status` is authoritative. Older collector/RBC and adaptive-pacemaker fields are legacy-labeled, non-authoritative observations and may remain zero. | `telemetry.md`; `references/operator_aids.md` |
+| Consensus fingerprint verification | ◉ | Peers derive and compare the canonical signed-context fingerprint; obsolete local K/r or DA tables cannot select protocol behavior. | `sumeragi.md`; `references/configuration.md` |
 
 ## Pipeline, Kura & State
 

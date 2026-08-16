@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
-
 set -euo pipefail
 umask 077
 
@@ -4345,16 +4344,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^367 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^368 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 367 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 368 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 367 \
+  preflight-release-receipt pytest 368 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -4555,6 +4554,13 @@ publish_corridor_completion() {
     return 1
   fi
   corridor_cargo_version="$(run_cargo --version)"
+  corridor_cargo_version_size_bytes="$(
+    printf '%s\n' "$corridor_cargo_version" | wc -c | tr -d '[:space:]'
+  )"
+  corridor_rustc_version="$("$corridor_rustc_path" --version)"
+  corridor_rustc_version_size_bytes="$(
+    "$corridor_rustc_path" -vV | wc -c | tr -d '[:space:]'
+  )"
   corridor_cargo_cache_final_inventory="${IROHA_RELEASE_ARTIFACT_ROOT}/cargo-cache-final.json"
   "$IROHA_RELEASE_PYTHON_BIN" -I -S \
     "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" \
@@ -4588,9 +4594,11 @@ publish_corridor_completion() {
     cargo_path "$corridor_cargo_path" \
     cargo_sha256 "$(sha256_file "$corridor_cargo_path")" \
     cargo_version "$corridor_cargo_version" \
+    cargo_version_size_bytes "$corridor_cargo_version_size_bytes" \
     rustc_path "$corridor_rustc_path" \
     rustc_sha256 "$(sha256_file "$corridor_rustc_path")" \
-    rustc_version "$("$corridor_rustc_path" --version)" \
+    rustc_version "$corridor_rustc_version" \
+    rustc_version_size_bytes "$corridor_rustc_version_size_bytes" \
     python3_path "$corridor_python_path" \
     python3_sha256 "$(sha256_file "$corridor_python_path")" \
     node_path "$corridor_node_path" \

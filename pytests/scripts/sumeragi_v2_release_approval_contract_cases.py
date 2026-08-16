@@ -684,7 +684,7 @@ def _case_release_approval_file_protection_and_bounds_fail_closed() -> None:
 
 # The receipt aggregate lexically executes this component and calls the three
 # case helpers from its existing approval/provenance selectors, preserving the
-# exact 367-selector aggregate.  Direct collection retains the focused 3-case
+# exact 368-selector aggregate.  Direct collection retains the focused 3-case
 # component surface for isolated validation.
 if "RELEASE_RECEIPT_TEST_COMPONENT_FILES" not in globals():
 

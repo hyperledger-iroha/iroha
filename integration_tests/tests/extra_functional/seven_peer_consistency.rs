@@ -32,21 +32,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "advanced", "rbc", "chunk_fanout"], 7_i64)
-                .write(
-                    ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
-                    64_i64,
-                )
-                .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "rbc",
-                        "rebroadcast_sessions_per_tick",
-                    ],
-                    32_i64,
-                );
+                .write("telemetry_profile", "full");
         })
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(

@@ -10,7 +10,10 @@ operator procedures for VRF randomness and slashing evidence. Use it alongside
 a new validator build or capture readiness artefacts for governance.
 
 
-Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
+For the first release, VRF penalties jail offenders after the governed activation
+lag. `SumeragiNposParameters.reconfig.slashing_delay_blocks` delays consensus
+slashing so governance can cancel it with `CancelConsensusEvidencePenalty`
+before it applies; this is governed chain state, not local `[sumeragi]` config.
 
 ## Scope & prerequisites
 
@@ -26,9 +29,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
 ## 1. Confirm mode selection and epoch context
 
-1. Run `iroha --output-format text ops sumeragi params` to prove the binary loaded
-   `sumeragi.consensus_mode="npos"` and to record `k_aggregators`,
-   `redundant_send_r`, epoch length, and the VRF commit/reveal offsets.
+1. Run `iroha --output-format text ops sumeragi status` to prove that the signed
+   revision-4 height context selected NPoS and to record its context fingerprint,
+   committee, and epoch. Use `ops sumeragi params` only to inspect governed NPoS
+   election/reconfiguration records; it is not a mutable local mode selector.
 2. Inspect the runtime view:
 
    ```bash
@@ -36,7 +40,9 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
    iroha --output-format text ops sumeragi telemetry
    ```
 
-   The status output records the leader/view and durable consensus state. The telemetry output provides aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields; it is not a collector-plan or per-session RBC API.
+   The status output records authoritative leader/view and durable consensus
+   state. Collector/RBC-named fields in the legacy aggregate telemetry endpoint
+   are compatibility diagnostics and may remain zero on revision 4.
 3. Capture the epoch number you intend to audit:
 
    ```bash
@@ -62,7 +68,7 @@ iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EP
 The summaries show whether the epoch is finalized, how many participants
 submitted commits/reveals, the roster length, and the derived seed. The JSON
 captures the participant list, per-signer penalty status, and the `seed_hex`
-value used by the pacemaker. Compare the participant count against the staking
+value used for deterministic election. Compare the participant count against the staking
 roster, and verify that the penalty arrays reflect the alerts triggered during
 chaos testing (late reveals should appear under `late_reveals`, forfeited
 validators under `no_participation`).
@@ -116,7 +122,7 @@ iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 
 Verify that the reported `total` matches the Grafana widget fed by
 `sumeragi_evidence_records_total`, and confirm that records older than
-`sumeragi.npos.reconfig.evidence_horizon_blocks` are rejected. Alert drills must
+`SumeragiNposParameters.reconfig.evidence_horizon_blocks` are rejected. Alert drills must
 produce evidence through the authenticated peer protocol; Torii and the CLI do
 not provide an evidence-injection path.
 
@@ -145,10 +151,12 @@ trail back to the captured metrics and CLI snapshots.
 
 ## 6. Troubleshooting signals
 
-- **Mode selection mismatch** — If `iroha --output-format text ops sumeragi params` shows
-  `consensus_mode="permissioned"` or `k_aggregators` differs from the manifest,
-  delete the captured artefacts, correct `iroha_config`, restart the validator,
-  and re-run the validation flow described in {doc}`sumeragi`.
+- **Mode or roster mismatch** — Compare the authoritative Sumeragi status and
+  signed genesis/governed height context with the intended consensus mode,
+  revision-4 `3f + 1` roster, and VRF seed. Correct the signed chain input (or
+  governed chain state), restart the validator, and re-run the validation flow
+  described in {doc}`sumeragi`. Legacy `consensus_mode` or collector fields in
+  compatibility output are not runtime authority.
 - **Missing commits or reveals** — A flat `sumeragi_vrf_commits_emitted_total`
   or `sumeragi_vrf_reveals_emitted_total` time series means the authenticated
   peer path is not broadcasting VRF frames. Check the validator logs for

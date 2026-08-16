@@ -161,6 +161,38 @@ def test_release_runner_waits_for_natural_completion(
     assert "start_new_session" not in spawned[0]
 
 
+def test_authenticated_sdk_source_manifest_pruning_is_exact(
+    tmp_path: Path,
+) -> None:
+    module = _load_bootstrap_module()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir(mode=0o700)
+    manifest = _write(
+        evidence / "sdk-dependency-bundle-manifest.json",
+        b'{"schema_version":1}\n',
+        0o400,
+    )
+    snapshot = module._read_file(
+        manifest,
+        "SDK source manifest fixture",
+        maximum_bytes=module._MAX_SDK_MANIFEST_BYTES,
+    )
+    evidence_fd = os.open(evidence, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._prune_authenticated_sdk_source_manifest(evidence_fd, snapshot)
+        module._require_sdk_source_manifest_pruned(evidence_fd, snapshot)
+        assert not os.path.lexists(manifest)
+
+        _write(manifest, snapshot.data, snapshot.mode)
+        with pytest.raises(
+            module.BootstrapError,
+            match="survived acknowledgment pruning",
+        ):
+            module._require_sdk_source_manifest_pruned(evidence_fd, snapshot)
+    finally:
+        os.close(evidence_fd)
+
+
 @pytest.mark.parametrize(
     ("timeout_seconds", "maximum_output_bytes", "program", "message"),
     [
@@ -304,6 +336,29 @@ def _approval_fixture_files(
             0o400,
         )
     return paths
+
+
+def _candidate_release_identity(candidate: Path, manifest: Path) -> dict[str, object]:
+    result = subprocess.run(
+        [
+            str(PYTHON),
+            "-I",
+            "-S",
+            str(manifest),
+            "--root",
+            str(candidate),
+            "--release-identity-json",
+        ],
+        cwd=candidate,
+        env={"PATH": os.environ.get("PATH", "")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    identity = json.loads(result.stdout)
+    assert isinstance(identity, dict)
+    return identity
 
 
 def _fixture_canonical(value: object) -> bytes:
@@ -1114,7 +1169,7 @@ def _runner(
         "success": ":",
         "slow-success": _isolated_python_action(
             "import time\n"
-            "time.sleep(2)"
+            "time.sleep(21)"
         ),
         "unlisted-command": "iroha-unlisted-release-command",
         "fail": "exit 37",
@@ -2130,6 +2185,23 @@ class Fixture:
     def retained_root(self) -> Path:
         return self.root / "release-runner"
 
+    def install_planned_runner(self, source: str | bytes) -> None:
+        """Install a fixture runner and rebind only its identity-bound approvals."""
+        _write(
+            self.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+            source,
+            0o500,
+        )
+        identity = _candidate_release_identity(self.candidate, self.manifest)
+        approvals = _approval_fixture_files(
+            contract=self.approval_contract,
+            trust=self.trust,
+            identity=identity,
+            tool_manifest_sha256=_sha256(self.tool_manifest),
+        )
+        assert set(approvals) == set(self.approvals)
+        self.approvals = approvals
+
     def arguments(self) -> list[str]:
         arguments = [
             str(PYTHON),
@@ -2208,14 +2280,19 @@ class Fixture:
             )
         return arguments
 
-    def run(self, arguments: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+    def run(
+        self,
+        arguments: list[str] | None = None,
+        *,
+        timeout_seconds: float = 30,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             arguments or self.arguments(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=30,
+            timeout=timeout_seconds,
             check=False,
             env={"PATH": os.environ.get("PATH", "")},
         )
@@ -2313,24 +2390,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         _runner(launch_count, candidate, "success"),
         0o500,
     )
-    identity_result = subprocess.run(
-        [
-            str(PYTHON),
-            "-I",
-            "-S",
-            str(manifest),
-            "--root",
-            str(candidate),
-            "--release-identity-json",
-        ],
-        cwd=candidate,
-        env={"PATH": os.environ.get("PATH", "")},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    assert identity_result.returncode == 0, identity_result.stderr.decode()
-    identity = json.loads(identity_result.stdout)
+    identity = _candidate_release_identity(candidate, manifest)
     approvals = _approval_fixture_files(
         contract=approval_contract,
         trust=trust,
@@ -2539,6 +2599,31 @@ def _rebind_bootstrap_trusted_input(
                 "size_bytes": component_archive.stat().st_size,
             }
     digest = _sha256(source)
+    runtime_name = {"python": "python3", "bash": "bash", "git": "git"}.get(label)
+    if runtime_name is not None:
+        runtime_tools = evidence.get("runtime_tool_probe_tools")
+        corridor_completion = evidence.get("corridor_completion")
+        assert isinstance(runtime_tools, dict)
+        assert isinstance(corridor_completion, Path)
+        runtime_tool = runtime_tools[runtime_name]
+        assert isinstance(runtime_tool, Path)
+        runtime_tool.chmod(0o700)
+        runtime_tool.write_bytes(source.read_bytes())
+        runtime_tool.chmod(0o500)
+        completion_lines = corridor_completion.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        digest_field = "python3_sha256" if label == "python" else f"{label}_sha256"
+        completion_lines = [
+            f"{digest_field}\t{digest}" if line.startswith(f"{digest_field}\t")
+            else line
+            for line in completion_lines
+        ]
+        corridor_completion.chmod(0o600)
+        corridor_completion.write_text(
+            "\n".join(completion_lines) + "\n", encoding="utf-8"
+        )
+        corridor_completion.chmod(0o400)
     marker["trusted_inputs"][label] = {
         "archive_id": f"release-bootstrap.{label.replace('_', '-')}.v1",
         "archive_name": archive_name,
@@ -2782,14 +2867,12 @@ _execute_bootstrap_test_component(RELEASE_BOOTSTRAP_TEST_COMPONENT_FILES[0])
 def test_undeclared_runner_tool_has_no_ambient_path_fallback(
     release_fixture: Fixture,
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "unlisted-command",
         ),
-        0o500,
     )
 
     result = release_fixture.run()

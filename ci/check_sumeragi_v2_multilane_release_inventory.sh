@@ -715,6 +715,7 @@ expected_receipt_corridor_component_symbols = (
     "_sdk_suite_source_manifest",
     "_test_count_from_log",
     "_prebuilt_artifact_root",
+    "_require_pruned_private_root",
     "_prebuilt_release_roots",
     "_prebuilt_directory",
     "_publish_receipt_validation_ack",
@@ -744,7 +745,8 @@ expected_receipt_gate_component_symbols = (
     "_runtime_tool_probe_evidence",
 )
 expected_receipt_publication_component_symbols = (
-    "build_receipt", "_iter_artifact_records", "_capture_path_contract",
+    "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
+    "_capture_path_contract",
     "_snapshot_receipt_inputs", "_capture_directory_contract",
     "_revalidate_receipt_inputs", "_fsync_receipt_inputs",
     "_existing_receipt_contract", "_complete_write",

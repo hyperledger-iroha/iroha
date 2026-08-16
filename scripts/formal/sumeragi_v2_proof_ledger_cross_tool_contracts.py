@@ -2807,6 +2807,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/status.rs",
                     "crates/iroha_core/src/sumeragi/v2_effects.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
                     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
                 ),
                 verus_parameters=(

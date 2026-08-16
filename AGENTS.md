@@ -18,7 +18,9 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## Overview
 - Hyperledger Iroha 3 is a blockchain platform in its first release.
-- DA/RBC is mandatory in Iroha 3.
+- Sumeragi v2 DA/RBC availability is mandatory in Iroha 3 and is realized by
+  the signed RS16 `PayloadManifest`/`PayloadChunk` layout. Legacy global-RBC
+  and consensus fault-injection configuration is not a second production path.
 - IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
@@ -164,9 +166,15 @@ Note: First release policy
 - Update documentation and examples when public APIs or behavior change.
 - Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
 - Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
-- Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
-- QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
-- DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 3 * commit_time`) to let RBC/availability QC finish on slower hosts.
+- Do not attempt to disable DA/RBC in tests or add a legacy RBC bypass.
+  Revision-4 genesis and every height context must carry one valid signed RS16
+  DA layout.
+- Revision-4 QCs require exactly `2f + 1` equal validator votes from an exact
+  `3f + 1` committee; observers never pad Prepare, Commit, or Timeout quorum.
+- Exercise message loss with the feature-isolated authenticated consensus
+  message controller (`with_consensus_message_control`) and prove its hold/drop
+  acknowledgement before healing. Retired `[sumeragi.debug.rbc]` keys are
+  configuration errors, not fault-injection controls.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
   prefer the curated `iroha.*` tool surface. Treat

@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "cdb9c8d7a6a8e5896d43a5d080a496a5d3465d7ff461e433a5b0560638565ab4"
+    "67988ccaef27eb51f0e2605a5f073049db054168943bc2b34c773e7150f9a1b3"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -194,6 +194,22 @@ ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
 }
 ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
 ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
+
+# The chain/epoch refinement is a second mechanically reconstructed proof
+# family.  Its ledger-facing name remains a declaration-free source-name
+# facade, while these ordered physical roots keep each TLAPM invocation to at
+# most sixteen top-level theorem declarations.  The digest covers the exact
+# pre-split body (everything after the original module header and before its
+# footer), so changing a cut cannot authorize source drift or reordering.
+CHAIN_EPOCH_REFINEMENT_FACADE = "SumeragiV2ChainEpochRefinement"
+CHAIN_EPOCH_REFINEMENT_SHARDS = tuple(
+    f"SumeragiV2ChainEpochRefinementShard{index:02d}"
+    for index in range(1, 17)
+)
+CHAIN_EPOCH_REFINEMENT_PRE_SPLIT_BODY_SHA256 = (
+    "36408a103692f02a94e03f524b998d3505f42ff80754df002a916412c2b720ca"
+)
+CHAIN_EPOCH_REFINEMENT_SHARD_MAX_THEOREMS = 16
 ASYNC_NETWORK_RELEASE_THEOREMS = (
     'AsyncCandidateServiceStageCarrierHasExactlyElevenClasses',
     'AsyncCandidateServiceStageOrdinalIsBounded',
@@ -672,18 +688,71 @@ ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
 }
 
 
-def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
-    """Return the exact reviewed header/import prefix for one proof shard."""
+def _mechanical_shard_source_prefix(
+    module: str,
+    index: int,
+    shards: tuple[str, ...],
+    *,
+    extends_overrides: dict[str, tuple[str, ...]] | None = None,
+    multiline_extends: frozenset[str] = frozenset(),
+) -> str:
+    """Return exact header/import framing for an ordered mechanical shard."""
 
     header = f"---- MODULE {module} ----\n"
     if index == 0:
         return header
-    dependencies = ASYNC_LIVENESS_EXTENDS_OVERRIDES.get(
-        module, (ASYNC_LIVENESS_SHARDS[index - 1][0],)
+    overrides = extends_overrides or {}
+    dependencies = overrides.get(
+        module, (shards[index - 1],)
     )
-    if module == "SumeragiV2AsyncTemporalRankProofs":
+    if module in multiline_extends:
         return header + "EXTENDS " + ",\n        ".join(dependencies) + "\n\n"
     return header + f"EXTENDS {', '.join(dependencies)}\n\n"
+
+
+def _mechanical_shard_bodies(
+    sources: dict[str, str],
+    shards: tuple[str, ...],
+    prefix_for: Any,
+    *,
+    family: str,
+) -> tuple[list[str], list[str]]:
+    """Strip exact mechanical framing, failing closed on any family drift."""
+
+    bodies: list[str] = []
+    errors: list[str] = []
+    footer = "=============================================================================\n"
+    for index, module in enumerate(shards):
+        source = sources.get(module)
+        if source is None:
+            errors.append(f"missing required {family} shard {module}.tla")
+            continue
+        prefix = prefix_for(module, index)
+        prefix_matches = source.startswith(prefix)
+        footer_matches = source.endswith(footer)
+        if not prefix_matches:
+            errors.append(
+                f"{module}.tla must start with its exact reviewed {family} shard prefix"
+            )
+        if not footer_matches:
+            errors.append(
+                f"{module}.tla must end with its exact reviewed {family} shard footer"
+            )
+        if prefix_matches and footer_matches:
+            bodies.append(source[len(prefix) : -len(footer)])
+    return bodies, errors
+
+
+def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
+    """Return the exact reviewed header/import prefix for one proof shard."""
+
+    return _mechanical_shard_source_prefix(
+        module,
+        index,
+        tuple(item[0] for item in ASYNC_LIVENESS_SHARDS),
+        extends_overrides=ASYNC_LIVENESS_EXTENDS_OVERRIDES,
+        multiline_extends=frozenset({"SumeragiV2AsyncTemporalRankProofs"}),
+    )
 
 
 def _async_liveness_shard_bodies(
@@ -691,28 +760,35 @@ def _async_liveness_shard_bodies(
 ) -> tuple[list[str], list[str]]:
     """Strip exact reviewed shard framing, failing closed on any drift."""
 
-    bodies: list[str] = []
-    errors: list[str] = []
-    footer = "=============================================================================\n"
-    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
-        source = sources.get(module)
-        if source is None:
-            errors.append(f"missing required async liveness shard {module}.tla")
-            continue
-        prefix = _async_liveness_shard_source_prefix(module, index)
-        prefix_matches = source.startswith(prefix)
-        footer_matches = source.endswith(footer)
-        if not prefix_matches:
-            errors.append(
-                f"{module}.tla must start with its exact reviewed async liveness shard prefix"
-            )
-        if not footer_matches:
-            errors.append(
-                f"{module}.tla must end with its exact reviewed async liveness shard footer"
-            )
-        if prefix_matches and footer_matches:
-            bodies.append(source[len(prefix) : -len(footer)])
-    return bodies, errors
+    return _mechanical_shard_bodies(
+        sources,
+        tuple(item[0] for item in ASYNC_LIVENESS_SHARDS),
+        _async_liveness_shard_source_prefix,
+        family="async liveness",
+    )
+
+
+def _chain_epoch_refinement_shard_source_prefix(module: str, index: int) -> str:
+    """Return exact framing for one physical chain/epoch refinement shard."""
+
+    return _mechanical_shard_source_prefix(
+        module,
+        index,
+        CHAIN_EPOCH_REFINEMENT_SHARDS,
+    )
+
+
+def _chain_epoch_refinement_shard_bodies(
+    sources: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Strip exact chain/epoch shard framing, failing closed on any drift."""
+
+    return _mechanical_shard_bodies(
+        sources,
+        CHAIN_EPOCH_REFINEMENT_SHARDS,
+        _chain_epoch_refinement_shard_source_prefix,
+        family="chain/epoch refinement",
+    )
 
 
 ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
@@ -4556,3 +4632,216 @@ def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
                     f"liveness vocabulary operator {symbol}"
                 )
     return errors
+
+
+def _chain_epoch_refinement_shard_contract(
+    sources: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Authenticate the bounded physical chain/epoch refinement sequence."""
+
+    errors: list[str] = []
+    providers: dict[str, str] = {}
+    provider_indices: dict[str, int] = {}
+    facade = sources.get(CHAIN_EPOCH_REFINEMENT_FACADE)
+    expected_facade = (
+        f"---- MODULE {CHAIN_EPOCH_REFINEMENT_FACADE} ----\n"
+        f"EXTENDS {CHAIN_EPOCH_REFINEMENT_SHARDS[-1]}\n\n"
+        "=============================================================================\n"
+    )
+    if facade is not None and facade != expected_facade:
+        errors.append(
+            f"{CHAIN_EPOCH_REFINEMENT_FACADE}.tla must be the exact theorem-free "
+            "ledger-facing facade over the final physical refinement shard"
+        )
+
+    reconstructed_parts, framing_errors = (
+        _chain_epoch_refinement_shard_bodies(sources)
+    )
+    errors.extend(framing_errors)
+    if len(reconstructed_parts) == len(CHAIN_EPOCH_REFINEMENT_SHARDS):
+        reconstructed = "".join(reconstructed_parts)
+        actual_digest = hashlib.sha256(reconstructed.encode("utf-8")).hexdigest()
+        if actual_digest != CHAIN_EPOCH_REFINEMENT_PRE_SPLIT_BODY_SHA256:
+            errors.append(
+                "chain/epoch refinement shards are not an exact ordered "
+                "reconstruction of the reviewed pre-split body: expected "
+                f"SHA-256 {CHAIN_EPOCH_REFINEMENT_PRE_SPLIT_BODY_SHA256}, "
+                f"found {actual_digest}"
+            )
+
+    expected_base_extends = (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "TLAPS",
+    )
+    identifier = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+    shard_identifiers: list[set[str]] = []
+    for index, module in enumerate(CHAIN_EPOCH_REFINEMENT_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            shard_identifiers.append(set())
+            continue
+        expected_extends = (
+            expected_base_extends
+            if index == 0
+            else (CHAIN_EPOCH_REFINEMENT_SHARDS[index - 1],)
+        )
+        actual_extends = _module_extends(source)
+        if actual_extends != expected_extends:
+            errors.append(
+                f"{module}.tla must EXTEND exactly {list(expected_extends)}, "
+                f"found {list(actual_extends)}"
+            )
+
+        declarations = _top_level_declarations(source)
+        theorem_count = sum(kind == "theorem" for _, kind, _, _ in declarations)
+        if theorem_count > CHAIN_EPOCH_REFINEMENT_SHARD_MAX_THEOREMS:
+            errors.append(
+                f"{module}.tla exceeds "
+                f"{CHAIN_EPOCH_REFINEMENT_SHARD_MAX_THEOREMS} top-level "
+                f"theorems: found {theorem_count}"
+            )
+        if theorem_count == 0:
+            errors.append(
+                f"{module}.tla must remain a theorem-bearing physical release root"
+            )
+        for name, _kind, _start, _end in declarations:
+            prior = providers.get(name)
+            if prior is not None:
+                errors.append(
+                    f"chain/epoch refinement declaration {name} is duplicated by "
+                    f"{prior}.tla and {module}.tla"
+                )
+                continue
+            providers[name] = module
+            provider_indices[name] = index
+        shard_identifiers.append(
+            set(identifier.findall(strip_tla_comments(source)))
+        )
+
+    # Original declaration order is part of the digest.  This additional
+    # dependency check proves that no shard relies on a declaration hidden in
+    # a later physical root, which would make the textual partition invalid as
+    # a sequential EXTENDS chain even though concatenation still matched.
+    for index, (module, symbols) in enumerate(
+        zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_identifiers, strict=True)
+    ):
+        for symbol in sorted(symbols):
+            provider_index = provider_indices.get(symbol)
+            if provider_index is not None and provider_index > index:
+                errors.append(
+                    f"{module}.tla has forward chain/epoch-family reference "
+                    f"{symbol} provided by "
+                    f"{CHAIN_EPOCH_REFINEMENT_SHARDS[provider_index]}.tla"
+                )
+    return errors, providers
+
+
+def _chain_epoch_refinement_source(formal_dir: Path) -> str:
+    """Read the virtual pre-split chain/epoch source for source contracts."""
+
+    shard_paths = [
+        formal_dir / f"{module}.tla"
+        for module in CHAIN_EPOCH_REFINEMENT_SHARDS
+    ]
+    if all(path.is_file() for path in shard_paths):
+        sources = {
+            module: path.read_text(encoding="utf-8")
+            for module, path in zip(
+                CHAIN_EPOCH_REFINEMENT_SHARDS, shard_paths, strict=True
+            )
+        }
+        bodies, errors = _chain_epoch_refinement_shard_bodies(sources)
+        if errors:
+            raise ValueError("; ".join(errors))
+        return (
+            f"---- MODULE {CHAIN_EPOCH_REFINEMENT_FACADE} ----\n"
+            + "".join(bodies)
+            + "=============================================================================\n"
+        )
+    return (
+        formal_dir / f"{CHAIN_EPOCH_REFINEMENT_FACADE}.tla"
+    ).read_text(encoding="utf-8")
+
+
+def _async_liveness_source(formal_dir: Path) -> str:
+    """Read the virtual façade source, falling back for compact test fixtures."""
+
+    shard_paths = [formal_dir / f"{module}.tla" for module, _ in ASYNC_LIVENESS_SHARDS]
+    if all(path.is_file() for path in shard_paths):
+        return "\n".join(path.read_text(encoding="utf-8") for path in shard_paths)
+    return (formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla").read_text(encoding="utf-8")
+
+
+def _facade_provider_entries(
+    formal_dir: Path, root_dir: Path = ROOT_DIR
+) -> list[dict[str, Any]]:
+    """Resolve every ledger-facing façade symbol to its unique physical shard."""
+
+    async_sources = {
+        module: (formal_dir / f"{module}.tla").read_text(encoding="utf-8")
+        for module, _ in ASYNC_LIVENESS_SHARDS
+    }
+    async_errors, async_providers = _async_liveness_shard_contract(
+        {
+            **async_sources,
+            ASYNC_LIVENESS_FACADE: (
+                formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla"
+            ).read_text(encoding="utf-8"),
+        }
+    )
+    if async_errors:
+        raise ValueError(
+            "invalid async liveness shard contract: " + "; ".join(async_errors)
+        )
+    chain_sources = {
+        module: (formal_dir / f"{module}.tla").read_text(encoding="utf-8")
+        for module in CHAIN_EPOCH_REFINEMENT_SHARDS
+    }
+    chain_errors, chain_providers = _chain_epoch_refinement_shard_contract(
+        {
+            **chain_sources,
+            CHAIN_EPOCH_REFINEMENT_FACADE: (
+                formal_dir / f"{CHAIN_EPOCH_REFINEMENT_FACADE}.tla"
+            ).read_text(encoding="utf-8"),
+        }
+    )
+    if chain_errors:
+        raise ValueError(
+            "invalid chain/epoch refinement shard contract: "
+            + "; ".join(chain_errors)
+        )
+    facade_providers = {
+        ASYNC_LIVENESS_FACADE: async_providers,
+        CHAIN_EPOCH_REFINEMENT_FACADE: chain_providers,
+    }
+    ledger = load_ledger(formal_dir / "proof_coverage.json")
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list):
+        raise ValueError("proof coverage obligations must be an array")
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        ledger_module = obligation.get("module")
+        providers = facade_providers.get(ledger_module)
+        if providers is None:
+            continue
+        for symbol in _symbol_names(obligation.get("symbol", "")):
+            qualified_symbol = f"{ledger_module}!{symbol}"
+            if qualified_symbol in seen:
+                continue
+            seen.add(qualified_symbol)
+            provider = providers.get(symbol)
+            if provider is None:
+                raise ValueError(
+                    f"facade ledger symbol {qualified_symbol} has no unique "
+                    "physical shard provider"
+                )
+            log = (
+                _formal_evidence_logical_path("tlaps", f"{provider}.log")
+                if provider in RELEASE_PROOF_MODULES
+                else None
+            )
+            entries.append({"symbol": symbol, "module": provider, "log": log})
+    return entries

@@ -24,9 +24,10 @@ key, token, environment variable, or client TOML credential.
   - Set `Accept: application/json` to receive a JSON object `{ "total": <u64>, "items": [ ... ] }`.
   - `EvidenceRecord` entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, `penalty_applied_at_height`, and `consensus_admitted_at_height`. For exact Sumeragi v2 equivocation evidence, a missing admission height means the proof is only a node-local pending observation and cannot drive penalties; a committed admission height is identical on every peer.
   - Governance cancellation of exact v2 evidence is accepted only after that admission height is committed. This prevents a transaction from depending on a node-local pending observation that other validators may not have received.
-- Evidence with a subject height older than `sumeragi.npos.reconfig.evidence_horizon_blocks`
-  (default 7 200) is dropped on ingress; the actor logs the rejection to help operators
-  investigate stale submissions.
+- Evidence with a subject height older than governed
+  `SumeragiNposParameters.reconfig.evidence_horizon_blocks` is dropped on
+  ingress; the actor logs the rejection to help operators investigate stale
+  submissions. This value is on-chain state, not local `[sumeragi]` config.
 
 Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
 authenticated consensus peer path and, for exact v2 equivocation proofs,
