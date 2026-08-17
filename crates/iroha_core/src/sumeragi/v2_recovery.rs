@@ -1277,6 +1277,29 @@ impl RecoveredCompleteTipActivationAuthority {
                 &self.artifact.commit_qc,
             )
     }
+    /// Return whether height-one CompleteTip may retire an empty genesis ledger.
+    ///
+    /// Signed genesis uses the authenticated bootstrap rather than the ordinary
+    /// Decision body lifecycle, so its canonical height-one ledger is empty.
+    /// The exception remains bound to the Kura-authenticated genesis artifact,
+    /// genesis body-signature policy, and exact lifecycle context.
+    pub(in crate::sumeragi) fn authorizes_empty_genesis_lifecycle(
+        &self,
+        context: LifecycleContext,
+    ) -> bool {
+        let verified = self.verified_predecessor.context();
+        self.artifact.height == 1
+            && self.artifact.height_context == *verified
+            && verified.height == 1
+            && verified.parent_commit_qc.is_none()
+            && verified.snapshot_bootstrap.is_none()
+            && matches!(
+                &self.predecessor_signature_policy,
+                BlockSignaturePolicy::GenesisAuthority(_)
+            )
+            && context.height() == 1
+            && context.id().as_bytes() == self.artifact.context_id().0.as_ref()
+    }
     /// Compare one opened lifecycle-ledger root with the exact Kura-bound
     /// predecessor target retained at CompleteTip authentication.
     pub(in crate::sumeragi) fn authorizes_predecessor_lifecycle_root(&self, root: &Path) -> bool {

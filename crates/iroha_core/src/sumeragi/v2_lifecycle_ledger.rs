@@ -1280,23 +1280,24 @@ pub(in crate::sumeragi) struct LifecycleLedgerV1 {
     records: Vec<LifecycleLedgerRecordV1>,
     producer_debts: Vec<LifecycleProducerDebtV1>,
 }
-/// Move-only CompleteTip terminal-Apply join to the Kura-bound predecessor store.
+/// Move-only CompleteTip predecessor join to the Kura-bound lifecycle store.
 ///
 /// This cut owns the full Kura CompleteTip evidence, the exact opened LedgerV1
 /// store handle, and the byte-equivalent frame. The store target is compared
 /// with the lifecycle root retained when the same `Kura` instance authenticated
 /// CompleteTip, so a copied frame at a caller-selected root cannot enter this
-/// cut. It still proves only the terminal recovered-Decision body chain: it does
+/// cut. It proves either the terminal recovered-Decision body chain or the
+/// exact empty height-one ledger owned by authenticated signed genesis. It does
 /// not publish the successor or claim that unrelated live rows, Serve payloads,
 /// leases, waits, debts, or capacity have been retired. The outer canonical
 /// predecessor-storage transaction supplies and discharges those remaining
 /// durable owners before it can mint successor activation.
-#[must_use = "the CompleteTip terminal-Apply store join must enter retirement or be dropped"]
+#[must_use = "the CompleteTip predecessor store join must enter retirement or be dropped"]
 struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
     complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
     ledger_store: LifecycleLedgerStoreV1,
     ledger: LifecycleLedgerV1,
-    apply_ordinal: u128,
+    apply_ordinal: Option<u128>,
 }
 /// Opaque failure while authenticating all canonical CompleteTip predecessor stores.
 #[derive(Debug, Error)]
@@ -1808,12 +1809,22 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             retired,
         } = staged;
         debug_assert_eq!(staged_current, terminal.ledger);
-        if !retired
-            .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
-            .is_ok_and(|ordinal| ordinal == terminal.apply_ordinal)
-        {
+        let retained_predecessor_is_exact = match terminal.apply_ordinal {
+            Some(apply_ordinal) => retired
+                .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
+                .is_ok_and(|ordinal| ordinal == apply_ordinal),
+            None => {
+                retired.high_water() == 0
+                    && retired.records().is_empty()
+                    && retired.producer_debts.is_empty()
+                    && terminal
+                        .complete_tip
+                        .authorizes_empty_genesis_lifecycle(retired.context())
+            }
+        };
+        if !retained_predecessor_is_exact {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip all-row retirement changed its terminal Apply authority".to_owned(),
+                "CompleteTip all-row retirement changed its predecessor authority".to_owned(),
             )
             .into());
         }
@@ -1867,7 +1878,18 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
         .into());
     }
     let context = projection::lifecycle_context(verified_predecessor.context());
-    let (ledger_store, ledger) = LifecycleLedgerStoreV1::open(predecessor_root, context)?;
+    let (ledger_store, opened_ledger) = LifecycleLedgerStoreV1::open(predecessor_root, context)?;
+    let (ledger, repaired_live_apply) =
+        opened_ledger.stage_complete_tip_terminal_apply_recovery(&complete_tip)?;
+    if repaired_live_apply {
+        ledger_store.persist_exact_successor(&opened_ledger, &ledger)?;
+        if ledger_store.load()? != ledger {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered CompleteTip terminal Apply changed after publication".to_owned(),
+            )
+            .into());
+        }
+    }
     let terminal =
         ledger.into_complete_tip_terminal_apply_store_join(ledger_store, complete_tip)?;
     let (payload_store, recovered) =
@@ -1900,11 +1922,21 @@ impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
             return Ok(false);
         }
         let opened = self.ledger_store.load()?;
-        Ok(opened == self.ledger
-            && self
+        let predecessor_is_exact = match self.apply_ordinal {
+            Some(apply_ordinal) => self
                 .ledger
                 .authenticate_complete_tip_terminal_apply(&self.complete_tip)
-                .is_ok_and(|ordinal| ordinal == self.apply_ordinal))
+                .is_ok_and(|ordinal| ordinal == apply_ordinal),
+            None => {
+                self.ledger.high_water() == 0
+                    && self.ledger.records().is_empty()
+                    && self.ledger.producer_debts.is_empty()
+                    && self
+                        .complete_tip
+                        .authorizes_empty_genesis_lifecycle(self.ledger.context())
+            }
+        };
+        Ok(opened == self.ledger && predecessor_is_exact)
     }
 }
 /// Move-only storage recovery cut for every durable Ready-Fetch row.

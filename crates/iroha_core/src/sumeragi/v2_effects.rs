@@ -6073,9 +6073,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             if let Some(incumbent) = exact_incumbent.as_ref()
                 && incumbent != &*evidence
             {
-                return Err(EffectExecutorError::Contract(
-                    "one semantic candidate lifecycle attempted exact owner replacement".to_owned(),
-                ));
+                *evidence = incumbent
+                    .adopt_incumbent_candidate_for_semantic_retry(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
             }
             let runtime_terminal_ownership = self
                 .runtime

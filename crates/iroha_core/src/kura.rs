@@ -5847,6 +5847,18 @@ impl Kura {
             && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
             && Self::sidecar_directory_metadata_unchanged(&left.directory, &right.directory)
     }
+    fn stable_sidecar_file_binding_unchanged(
+        left: &StableSidecarMetadata,
+        right: &StableSidecarMetadata,
+    ) -> bool {
+        // A sibling publication legitimately advances the directory timestamps
+        // without changing this file. Single-file reads bind the directory by
+        // object identity; inventory scans use the stronger timestamp check in
+        // `stable_sidecar_metadata_unchanged` to detect sibling mutations.
+        left.canonical_path == right.canonical_path
+            && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
+            && Self::sidecar_directory_binding_unchanged(&left.directory, &right.directory)
+    }
     fn stable_sidecar_directory_metadata_unchanged(
         left: &StableSidecarDirectoryMetadata,
         right: &StableSidecarDirectoryMetadata,
@@ -7661,6 +7673,15 @@ impl Kura {
                 path.to_path_buf(),
             ));
         };
+        if !Self::sidecar_directory_binding_unchanged(&directory_before, &metadata.directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory changed before bounded read",
+                ),
+                path.to_path_buf(),
+            ));
+        }
         if metadata.file.len() > u64::try_from(byte_limit)? {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -7712,7 +7733,7 @@ impl Kura {
             || u64::try_from(bytes.len())? != metadata.file.len()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_after)
             || !path_after.as_ref().is_some_and(|after| {
-                Self::stable_sidecar_metadata_unchanged(&metadata, after)
+                Self::stable_sidecar_file_binding_unchanged(&metadata, after)
                     && Self::sidecar_metadata_same_object(&directory_before, &after.directory)
             })
         {
@@ -42780,6 +42801,25 @@ pub(crate) mod tests {
                 .len(),
             9
         );
+    }
+    #[test]
+    fn stable_bounded_sidecar_read_allows_sibling_publication() {
+        let root = tempfile::tempdir().expect("create bounded-read root");
+        let path = root.path().join("bounded.norito");
+        let bytes = [7_u8; 8];
+        std::fs::write(&path, bytes).expect("write admitted sidecar");
+        let sibling = root.path().join("concurrent-sibling.norito");
+        let snapshot = super::Kura::read_regular_sidecar_snapshot_for_with_admission_hook(
+            root.path(),
+            &path,
+            root.path(),
+            bytes.len(),
+            || std::fs::write(&sibling, [9_u8]).expect("publish sibling sidecar"),
+        )
+        .expect("sibling publication must not invalidate the bounded file read")
+        .expect("admitted sidecar remains present");
+        assert_eq!(snapshot.bytes, bytes);
+        assert_eq!(std::fs::read(sibling).expect("read sibling sidecar"), [9]);
     }
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");

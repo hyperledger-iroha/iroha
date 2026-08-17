@@ -386,12 +386,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         std::slice::from_ref(&effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
     )
-    .expect("construct an independently owned mutation candidate");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect.clone()], conflicting),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct an independently produced semantic retry");
+    executor
+        .retain_effect_batch(vec![effect.clone()], conflicting)
+        .expect("independent causal producer coalesces under the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -411,12 +409,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
             1_000,
         )],
     )
-    .expect("construct a local-incarnation owner replacement");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect], reincarnated),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct a later-incarnation semantic retry");
+    executor
+        .retain_effect_batch(vec![effect], reincarnated)
+        .expect("later causal producer cannot replace the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -466,13 +462,14 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     );
     let foreign_owner = foreign[1].owner().clone();
     assert_ne!(foreign[1].owner(), incumbent.owner());
-    assert!(matches!(
-        fetch_executor.retain_effect_batch(retry_effects, foreign),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    fetch_executor
+        .retain_effect_batch(retry_effects, foreign)
+        .expect("route-neutral Fetch retry retains the incumbent owner");
+    fetch_executor
+        .drain_retained_effect_batch(&mut fetch_services, false)
+        .expect("redispatch the Fetch idempotently under the incumbent owner");
     assert_eq!(fetch_executor.pending_fetches.len(), 1);
-    assert_eq!(fetch_services.fetch_tasks.len(), 1);
+    assert_eq!(fetch_services.fetch_tasks.len(), 2);
     let retained_fetch = fetch_executor
         .pending_fetches
         .values()
@@ -489,7 +486,7 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     assert!(fetch_executor.retained_effect_batch.is_none());
     let external = fetch_executor
         .external_lifecycle_owners()
-        .expect("inspect external lifecycle ownership after rejecting replacement");
+        .expect("inspect ownership after coalescing the independent producer");
     assert!(
         external.iter().all(|owner| owner != incumbent.owner()),
         "passive network Fetch ownership is deliberately not runnable clock work"

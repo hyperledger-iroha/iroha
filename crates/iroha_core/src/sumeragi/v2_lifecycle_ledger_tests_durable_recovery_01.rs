@@ -1118,6 +1118,20 @@ fn complete_tip_for_terminal_decision_on_kura(
     projection: &TerminalDecisionProjectionFixture,
     kura: &Kura,
 ) -> crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority {
+    complete_tip_for_terminal_decision_on_kura_with_policy(
+        fixture,
+        projection,
+        kura,
+        crate::sumeragi::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+    )
+}
+
+fn complete_tip_for_terminal_decision_on_kura_with_policy(
+    fixture: &RecoveryFixture,
+    projection: &TerminalDecisionProjectionFixture,
+    kura: &Kura,
+    predecessor_signature_policy: crate::sumeragi::v2_body_store::BlockSignaturePolicy,
+) -> crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority {
     let artifact = wire::finality::V2FinalityArtifact::new(
         fixture.verified.context().clone(),
         projection.subject.clone(),
@@ -1139,7 +1153,7 @@ fn complete_tip_for_terminal_decision_on_kura(
                 artifact,
                 receipt,
                 fixture.verified.clone(),
-                crate::sumeragi::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                predecessor_signature_policy,
                 successor_context_id,
                 activation,
                 kura,
@@ -1437,6 +1451,181 @@ fn complete_tip_terminal_apply_store_join_consumes_the_exact_opened_frame() {
             .and_then(|cut| cut.is_exact())
             .is_ok_and(|exact| exact),
         "the capability must open its exact ledger, body, and Serve-payload owners"
+    );
+}
+
+#[test]
+fn empty_genesis_complete_tip_retires_without_a_synthetic_decision_chain() {
+    let fixture = RecoveryFixture::new("empty-genesis-complete-tip", 0x95);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open canonical empty genesis predecessor store");
+    assert_eq!(empty.high_water(), 0);
+    assert!(empty.records().is_empty());
+    let complete_tip = complete_tip_for_terminal_decision_on_kura_with_policy(
+        &fixture,
+        &projection,
+        kura.as_ref(),
+        crate::sumeragi::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+            fixture.keys[0].public_key().clone(),
+        ),
+    );
+
+    let retired = complete_tip
+        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+        .expect("retire authenticated empty genesis predecessor");
+    assert_eq!(retired.retained_high_water(), 0);
+    assert!(retired.authorizes_retained_successor());
+    let persisted = predecessor_store
+        .load()
+        .expect("reload durably retired empty genesis predecessor");
+    assert_eq!(persisted.high_water(), 0);
+    assert!(persisted.records().is_empty());
+}
+
+#[test]
+fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger() {
+    let fixture = RecoveryFixture::new("empty-genesis-complete-tip-negative", 0x99);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let rotating_kura = Kura::blank_kura_for_testing();
+    let rotating =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, rotating_kura.as_ref());
+    assert!(!rotating.authorizes_empty_genesis_lifecycle(fixture.lifecycle_context()));
+
+    let genesis_kura = Kura::blank_kura_for_testing();
+    let genesis = complete_tip_for_terminal_decision_on_kura_with_policy(
+        &fixture,
+        &projection,
+        genesis_kura.as_ref(),
+        crate::sumeragi::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+            fixture.keys[0].public_key().clone(),
+        ),
+    );
+    assert!(!genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+        fixture.lifecycle_context().id(),
+        2,
+    )));
+    assert!(!genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+        LifecycleDigest::new([0xFF; 32]),
+        1,
+    )));
+
+    let predecessor_root = genesis_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open malformed genesis predecessor store");
+    let malformed = LifecycleLedgerV1::new(
+        fixture.lifecycle_context(),
+        1,
+        vec![unrelated_live_record(
+            fixture.lifecycle_context(),
+            OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xAB; 32])), 1),
+            1,
+            0xBC,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct valid but nonempty genesis lifecycle ledger");
+    store
+        .persist_exact_successor(&empty, &malformed)
+        .expect("persist nonempty genesis lifecycle ledger");
+    assert!(
+        genesis
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .is_err(),
+        "empty-genesis authority must not retire any nonempty malformed ledger"
+    );
+}
+
+#[test]
+fn complete_tip_recovery_terminalizes_the_exact_live_apply_crash_window() {
+    let fixture = RecoveryFixture::new("complete-tip-live-apply-recovery", 0xA5);
+    let (terminal, projection) = terminal_decision_chain_fixture(&fixture);
+    let mut live_records = terminal.records.clone();
+    live_records[3].terminal = None;
+    let live = LifecycleLedgerV1::new(
+        terminal.context(),
+        terminal.high_water(),
+        live_records,
+        BTreeMap::new(),
+    )
+    .expect("construct exact live Apply crash-window predecessor");
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open canonical live-Apply predecessor store");
+    assert!(empty.records().is_empty());
+    predecessor_store
+        .persist(&live)
+        .expect("persist live Apply crash-window predecessor");
+
+    let complete_tip =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
+    let retired = complete_tip
+        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+        .expect("recover live Apply and retire its CompleteTip predecessor exactly");
+    assert_eq!(retired.retained_high_water(), 4);
+    let reopened = predecessor_store
+        .load()
+        .expect("reload recovered and retired CompleteTip predecessor");
+    assert!(
+        reopened
+            .records()
+            .iter()
+            .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+    );
+}
+
+#[test]
+fn complete_tip_live_apply_recovery_rejects_foreign_and_multiple_candidates() {
+    let fixture = RecoveryFixture::new("complete-tip-live-apply-negative", 0xB1);
+    let (terminal, projection) = terminal_decision_chain_fixture(&fixture);
+    let mut live_records = terminal.records.clone();
+    live_records[3].terminal = None;
+    let live = LifecycleLedgerV1::new(
+        terminal.context(),
+        terminal.high_water(),
+        live_records,
+        BTreeMap::new(),
+    )
+    .expect("construct exact live Apply negative fixture");
+
+    let foreign_fixture = RecoveryFixture::new("complete-tip-live-apply-foreign", 0xB9);
+    let (_, foreign_projection) = terminal_decision_chain_fixture(&foreign_fixture);
+    let foreign_complete_tip =
+        complete_tip_for_terminal_decision(&foreign_fixture, &foreign_projection);
+    assert!(
+        live.stage_complete_tip_terminal_apply_recovery(&foreign_complete_tip)
+            .is_err(),
+        "foreign finality must not terminalize a live Apply"
+    );
+
+    let complete_tip = complete_tip_for_terminal_decision(&fixture, &projection);
+    let mut multiple = live.clone();
+    let mut duplicate = multiple.records[3].clone();
+    duplicate.ordinal = 5;
+    multiple.records.push(duplicate);
+    multiple.high_water = 5;
+    assert!(
+        multiple
+            .stage_complete_tip_terminal_apply_recovery(&complete_tip)
+            .is_err(),
+        "multiple matching live Apply rows must fail closed"
     );
 }
 
