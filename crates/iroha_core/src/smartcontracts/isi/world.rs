@@ -9215,7 +9215,9 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if self.owner != *authority {
+            if self.owner != *authority
+                && !crate::executor::is_initial_genesis_context(state_transaction)
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "owner must equal authority".into(),
                 ));
@@ -16823,6 +16825,9 @@ pub mod isi {
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if crate::executor::is_initial_genesis_context(state_transaction) {
+            return Ok(());
+        }
         let delegated = state_transaction
             .world
             .account_permissions
@@ -17553,16 +17558,26 @@ pub mod isi {
                 program_id.sponsor.clone(),
                 fee_sponsor_asset_scope(&definition, dataspace),
             );
-            Transfer::<Asset, Quantity, Account>::asset_quantity(
-                source,
-                self.amount().clone(),
-                state_transaction
-                    .nexus
-                    .fees
-                    .sponsor_vault_custody_account_id
-                    .clone(),
-            )
-            .execute(authority, state_transaction)?;
+            if crate::executor::is_initial_genesis_context(state_transaction) {
+                crate::smartcontracts::isi::asset::isi::execute_initial_genesis_fee_sponsor_funding_transfer(
+                    state_transaction,
+                    authority,
+                    &program_id,
+                    source,
+                    self.amount().clone(),
+                )?;
+            } else {
+                Transfer::<Asset, Quantity, Account>::asset_quantity(
+                    source,
+                    self.amount().clone(),
+                    state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id
+                        .clone(),
+                )
+                .execute(authority, state_transaction)?;
+            }
             let key = FeeSponsorVaultKey {
                 program_id: program_id.clone(),
                 asset_definition_id: self.asset_definition_id().clone(),

@@ -73,6 +73,14 @@ runtime signer bindings; the deployment signer then replaces both commitments,
 refreshes the fingerprint, and signs the resulting exact manifest. Never treat
 the source template's execution-policy value as proof of the deployed policy.
 
+The authenticated signer is the root authority only while executing height 1
+over an empty committed-block history. In that initial context, the manifest
+may seed owner-gated citizen and fee-sponsor records and debit only their exact
+prefunded owner balances into configured custody. The signer need not equal
+those fixed owners. From height 2 onward, the ordinary owner or delegated
+capability checks apply; a genesis-shaped header replayed over committed state
+does not regain bootstrap authority.
+
 The v2 chain is a fresh-genesis reset. Never point a v2 validator at the archived chain's Kura,
 queue journal, or RBC session directories, and never attempt a mixed v1/v2 rolling upgrade. Keep
 the archived chain data read-only for incident analysis.
@@ -728,6 +736,12 @@ validator `genesis.expected_hash`; deployment automation must consume that
 paired artifact and reject either independently supplied value. The published
 template resolves `/run/iroha/genesis.expected_hash` through
 `genesis.expected_hash_file`; clients mount the same file as `network_id_file`.
+The signer's expected-hash output file and reset manifest retain the raw
+lowercase 64-hex hash.
+When the renderer writes an inline `genesis.expected_hash`, it uppercases that
+body and emits the canonical CRC-bound `hash:<64-hex>#<CRC16>` literal required
+by the config parser. Omitting `--genesis-expected-hash` preserves the
+pre-signing `genesis.expected_hash_file` assignment.
 The signer owns its isolated external software-signing service and encrypted
 runtime-only key access internally; it must never accept a private-key path or
 key bytes through argv, environment, or the rendered tree. Source-built Kagami
@@ -833,7 +847,8 @@ The first private renderer pass contains the policy and artifact paths but no
 seal path, and uses only a canonical marker-bearing staging hash while the
 external signer computes the final hash. The signer authenticates the policy
 without opening the not-yet-generated artifact directory. The second pass
-embeds the final genesis hash and adds the future seal path. Both passes bind
+embeds the final genesis hash and adds the future seal path. Both inline hashes
+use the canonical uppercase CRC-bound `hash:` literal. Both passes bind
 the same policy digest, recorded as `kagemusha_release_policy_sha256` in the
 reset manifest; changing the policy after signing makes the reset fail. The
 composer also requires the derived policy, catalog, qualification-seal, and
@@ -2711,7 +2726,10 @@ activate` order. Pass canonical Norito JSON through `--revision-json` and
 `--fee-payment-json`; the helper quotes the complete unsigned payload, replaces
 only its fee intent with the response, and signs once. The signer loaded from
 `--profile-config` must own the program—there is no implicit policy-account or
-default-sponsor fallback.
+default-sponsor fallback. The helper accepts only a runnable post-sign profile
+whose inline `[genesis].expected_hash` is the canonical uppercase CRC-bound
+`hash:` literal; it rejects raw hashes and pre-signing `expected_hash_file`
+profiles.
 
 Normal CLI submissions also quote before signing and require an explicit payer:
 

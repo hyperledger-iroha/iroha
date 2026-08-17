@@ -2173,7 +2173,12 @@ def render_validator_config(
                     'expected_hash_file = "/run/iroha/genesis.expected_hash"'
                 )
             else:
-                rendered.append(f'expected_hash = "{genesis_expected_hash}"')
+                # Inline config hashes use the Norito JSON literal grammar; the
+                # signer/file contract remains raw lowercase hexadecimal.
+                expected_hash_literal = _format_literal(
+                    "hash", genesis_expected_hash.upper()
+                )
+                rendered.append(f'expected_hash = "{expected_hash_literal}"')
             continue
 
         if current_section == "[network]" and stripped.startswith("address = "):
@@ -2722,6 +2727,7 @@ def main(argv: list[str] | None = None) -> int:
         "--genesis-expected-hash",
         help=(
             "exact lowercase consensus-header hash printed by `kagami genesis sign`; "
+            "the inline config value is emitted as an uppercase CRC-bound hash literal; "
             "omit only for the non-runnable pre-signing bundle"
         ),
     )

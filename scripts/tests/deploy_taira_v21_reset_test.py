@@ -32,6 +32,10 @@ from scripts.tests.deploy_taira_v21_reset_test_support import (
     MODULE,
 )
 
+GENESIS_EXPECTED_HASH_LITERAL = MODULE.validator_renderer._format_literal(
+    "hash", GENESIS_EXPECTED_HASH.upper()
+)
+
 
 def _receipt_keypair(index: int) -> tuple[str, str, str]:
     return _support_receipt_keypair(index)
@@ -187,7 +191,7 @@ soravpn_spool_bps = 250
 [genesis]
 file = "{bundle / "genesis.signed.nrt"}"
 public_key = "{GENESIS_PUBLIC_KEY}"
-expected_hash = "{GENESIS_EXPECTED_HASH}"
+expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"
 """
         _write(workdir / "config.toml", config.encode())
         config_hashes[slug] = hashlib.sha256(config.encode()).hexdigest()
@@ -355,7 +359,7 @@ def test_projection_parser_extracts_all_required_fields() -> None:
     assert config["chain"] == MODULE.CHAIN_ID
     assert config["chain_discriminant"] == MODULE.CHAIN_DISCRIMINANT
     assert config["genesis"]["public_key"] == GENESIS_PUBLIC_KEY
-    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH
+    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH_LITERAL
     assert (
         config["nexus"]["storage"]["disk_budget_weights"] == MODULE.NODE_STORAGE_WEIGHTS
     )
@@ -780,9 +784,12 @@ def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
     slug = MODULE.SLUGS[0]
     config_path = bundle / "rendered" / slug / "config.toml"
     alternate_hash = "02" * 31 + "03"
+    alternate_hash_literal = MODULE.validator_renderer._format_literal(
+        "hash", alternate_hash.upper()
+    )
     config = config_path.read_text().replace(
-        f'expected_hash = "{GENESIS_EXPECTED_HASH}"',
-        f'expected_hash = "{alternate_hash}"',
+        f'expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"',
+        f'expected_hash = "{alternate_hash_literal}"',
     )
     _write(config_path, config.encode())
     manifest_path = bundle / "reset-manifest.json"
@@ -795,6 +802,30 @@ def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
 
     with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
         _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_a_raw_unwrapped_genesis_hash(tmp_path: Path) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text().replace(
+        f'expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"',
+        f'expected_hash = "{GENESIS_EXPECTED_HASH}"',
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write(
+        manifest_path,
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
+        _validate(bundle, binary_sha, source_commit)
+
 
 def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
     tmp_path: Path,
