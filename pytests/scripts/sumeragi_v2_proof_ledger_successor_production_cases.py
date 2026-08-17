@@ -1534,7 +1534,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "retry-safe recovered Proposal exact-output capture omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker/effect_services_impl.rs",
         "fn broadcast_consensus(",
         "self.enqueue_atomic_fanout_batch_while_guarded(",
         "self.enqueue_exact_fanout_while_guarded(",

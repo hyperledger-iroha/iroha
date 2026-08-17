@@ -233,7 +233,8 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             | SoftwareSignerRoleV1::BillingStatement
             | SoftwareSignerRoleV1::EvidenceViewer
             | SoftwareSignerRoleV1::StreamToken
-            | SoftwareSignerRoleV1::PopCredentials => {
+            | SoftwareSignerRoleV1::PopCredentials
+            | SoftwareSignerRoleV1::TairaAuthority => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };

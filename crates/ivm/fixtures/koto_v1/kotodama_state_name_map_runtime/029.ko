@@ -1,0 +1,31 @@
+
+        seiyaku C {
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> CountByKey;
+            state StateMap<Name, int> IndexById;
+            state StateMap<int, int> EntryByPosition;
+
+            fn next_index() -> int {
+                let value = Counter.ensure(key: 1, default: 0);
+                Counter[1] = value + 1;
+                return value;
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let tranche_id = Name::parse("t2");
+                let beneficiary_lookup_key = Name::parse("alice");
+                CountByKey[beneficiary_lookup_key] = 1;
+
+                let index = next_index();
+                var beneficiary_lookup_position = 0;
+                if (CountByKey.contains(beneficiary_lookup_key)) {
+                    beneficiary_lookup_position = CountByKey.get(beneficiary_lookup_key).unwrap_or(0);
+                }
+
+                IndexById[tranche_id] = index;
+                CountByKey[beneficiary_lookup_key] = beneficiary_lookup_position + 1;
+                EntryByPosition[beneficiary_lookup_position] = index;
+                return CountByKey.get(beneficiary_lookup_key).unwrap_or(0);
+            }
+        }
+    

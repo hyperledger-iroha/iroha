@@ -535,16 +535,7 @@ mod tests {
     }
     #[test]
     fn identical_spellings_keep_distinct_cst_ranges() {
-        let text = r#"
-seiyaku Same {
-    struct Packet { Missing left; Missing right; }
-    fn repeated(Missing first, int first) {
-        absent();
-        absent();
-    }
-    fn repeated() {}
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/001.ko");
         let source = SourceFile::new(SourceId(37), "same_tokens.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("the adversarial source is syntactically valid");
@@ -591,16 +582,7 @@ seiyaku Same {
     }
     #[test]
     fn diagnostic_targets_bind_to_exact_nested_source_nodes() {
-        let text = r#"
-module Origins {
-    fn mutate(List<int, 4> values, int outer, int inner) {
-        values[outer][inner] = 1;
-        let selected = values[inner];
-        let quantity price = 1.250_0;
-        let copy = [item for item in values if true];
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/002.ko");
         let source = SourceFile::new(SourceId(41), "origins.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("diagnostic-target source parses");
@@ -715,15 +697,7 @@ module Origins {
     }
     #[test]
     fn successful_resolution_retains_declarations_types_and_calls() {
-        let text = r#"
-誓約 Sample {
-    struct Pair { int left; int right; }
-    fn helper(int value) -> int { value }
-    言挙げ fn run(int value) -> int authorize("CanRun") {
-        helper(value)
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/003.ko");
         let source = SourceFile::new(SourceId(9), "japanese.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("Japanese declaration spellings parse");
@@ -741,22 +715,7 @@ module Origins {
     }
     #[test]
     fn parser_binding_facts_have_direct_owners_and_exact_utf8_ranges() {
-        let text = r#"
-誓約 ExactFacts {
-    fn inspect(Option<int> input, List<int, 4> values) {
-        // 雪 before every repeated ASCII binding makes character and byte offsets differ.
-        let int repeated = 1;
-        if let Option::some(repeated) = input {
-            let int repeated = 2;
-        }
-        let List<int, 4> mapped = [repeated for repeated in values if true];
-        match input {
-            Option::some(repeated) => { repeated },
-            Option::none => { 0 },
-        };
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/004.ko");
         let source = SourceFile::new(SourceId(75), "utf8-binding-facts.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("adversarial repeated-name source parses");
@@ -819,13 +778,7 @@ module Origins {
     }
     #[test]
     fn parenthesized_if_let_keeps_its_direct_binding_owner_when_becoming_a_statement() {
-        let text = r#"
-module Parenthesized {
-    fn inspect(Option<int> input) {
-        (if let Option::some(payload) = input { return; })
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/005.ko");
         let source = SourceFile::new(SourceId(81), "parenthesized-if-let.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("parenthesized if-let statement parses");
@@ -851,17 +804,7 @@ module Parenthesized {
         resolve(ast, &source).expect("direct binding owner survives statement conversion");
     }
     fn binding_fact_fixture() -> (SourceFile, SpannedProgram) {
-        let text = r#"
-誓約 BindingIntegrity {
-    fn inspect(Option<int> input, List<int, 4> values) -> int {
-        let int base = 1;
-        if let Option::some(payload) = input { return payload; }
-        if let Option::some(payload) = input { return payload; }
-        let List<int, 4> mapped = [item for item in values if true];
-        return base;
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/006.ko");
         let source = SourceFile::new(SourceId(76), "binding-integrity.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("binding-integrity fixture parses");
@@ -965,13 +908,7 @@ module Parenthesized {
     }
     #[test]
     fn state_and_lifecycle_diagnostic_ranges_come_from_resolved_nodes() {
-        let text = r#"
-seiyaku Init {
-    state StateMap<AccountId, int> entries;
-    state int count;
-    始まり() { count = 0; }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/007.ko");
         let source = SourceFile::new(SourceId(11), "state.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("state source parses");
@@ -986,17 +923,7 @@ seiyaku Init {
         assert_eq!(source.slice(lifecycle.range), Some("始まり"));
     }
     fn resolved_local_program() -> (SourceFile, ResolvedProgram) {
-        let text = r#"
-seiyaku Stable {
-    fn helper(int value) -> int {
-        let int copy = value;
-        return copy;
-    }
-    view fn read(int value) -> int {
-        return helper(value: value);
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/008.ko");
         let source = SourceFile::new(SourceId(73), "stable.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("stable local source parses");
@@ -1138,11 +1065,7 @@ seiyaku Stable {
         assert_internal_resolution_failure(&wrong_source);
     }
     fn resolved_type_program() -> (SourceFile, ResolvedProgram) {
-        let text = r#"
-module ResolvedTypes {
-    fn inspect((int, bool) pair, List<int, 4> values) { return; }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/009.ko");
         let source = SourceFile::new(SourceId(80), "resolved-types.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("resolved type fixture parses");
@@ -1233,15 +1156,7 @@ module ResolvedTypes {
     }
     #[test]
     fn resolver_reports_shadowing_and_multiple_unknown_values_with_locations() {
-        let text = r#"
-module BadLocals {
-    fn broken(int value) {
-        let int value = 1;
-        let int first = missing_one;
-        let int second = missing_two;
-    }
-}
-"#;
+        let text = include_str!("../fixtures/koto_v1/resolved/010.ko");
         let source = SourceFile::new(SourceId(74), "bad-locals.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("adversarial local source parses");

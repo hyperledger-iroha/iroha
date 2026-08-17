@@ -1,0 +1,15 @@
+
+誓約 ExactFacts {
+    fn inspect(Option<int> input, List<int, 4> values) {
+        // 雪 before every repeated ASCII binding makes character and byte offsets differ.
+        let int repeated = 1;
+        if let Option::some(repeated) = input {
+            let int repeated = 2;
+        }
+        let List<int, 4> mapped = [repeated for repeated in values if true];
+        match input {
+            Option::some(repeated) => { repeated },
+            Option::none => { 0 },
+        };
+    }
+}

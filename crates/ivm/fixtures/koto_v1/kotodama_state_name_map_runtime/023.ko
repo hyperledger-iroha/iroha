@@ -1,0 +1,11 @@
+
+        seiyaku C {
+            state StateMap<Name, AccountId> Foo;
+
+            view fn main() -> bool {
+                let key = Name::parse("alice");
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
+            }
+        }
+    

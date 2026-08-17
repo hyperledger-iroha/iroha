@@ -50,6 +50,7 @@ fn provisioning(
         SoftwareSignerRoleV1::EvidenceViewer => "evidence-viewer",
         SoftwareSignerRoleV1::StreamToken => "stream-token",
         SoftwareSignerRoleV1::PopCredentials => "pop-credentials",
+        SoftwareSignerRoleV1::TairaAuthority => "taira-authority",
     };
     let purpose_binding = match role {
         SoftwareSignerRoleV1::ProofOutcome
@@ -76,6 +77,9 @@ fn provisioning(
         SoftwareSignerRoleV1::StreamToken => SoftwareSignerPurposeBindingV1::StreamToken,
         SoftwareSignerRoleV1::PopCredentials => SoftwareSignerPurposeBindingV1::PopCredentials {
             issuer_id: "pop-issuer-primary".to_owned(),
+        },
+        SoftwareSignerRoleV1::TairaAuthority => SoftwareSignerPurposeBindingV1::TairaAuthority {
+            role: "native-evidence".to_owned(),
         },
     };
     let instance = match role {

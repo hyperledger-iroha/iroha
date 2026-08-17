@@ -24,6 +24,8 @@ mod domains_endpoints;
 mod first_release_api;
 #[path = "../nfts_endpoints.rs"]
 mod nfts_endpoints;
+#[path = "../operator_core_pipeline_reads.rs"]
+mod operator_core_pipeline_reads;
 #[path = "../router_feature_matrix.rs"]
 mod router_feature_matrix;
 #[path = "../runtime_endpoints.rs"]

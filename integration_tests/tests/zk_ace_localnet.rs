@@ -1,11 +1,6 @@
 //! Taira-shaped local-node lifecycle coverage for the canonical typed ZK-ACE
 //! privacy transfer.
 #![cfg(feature = "zk-stark")]
-use std::{
-    num::NonZeroU32,
-    thread::sleep,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -42,6 +37,11 @@ use iroha_core::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+use std::{
+    num::NonZeroU32,
+    thread::sleep,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use zk_ace_prover::{
     SignedZkAcePrivacyTransferV1, ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1,
     ZkAcePrivacyWitnessV1, build_signed_zk_ace_privacy_transfer_v1,

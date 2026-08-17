@@ -911,7 +911,7 @@ pub fn parse_transfer_public_inputs(
 > {
     let columns = extract_confidential_public_columns(proof_bytes)
         .ok_or_else(|| "failed to decode transfer proof public inputs".to_owned())?;
-    if columns.len() < 9 || columns.iter().take(9).any(|column| column.len() != 1) {
+    if columns.len() != 9 || columns.iter().any(|column| column.len() != 1) {
         return Err("transfer proof must expose 9 single-row instance columns".to_owned());
     }
     Ok((

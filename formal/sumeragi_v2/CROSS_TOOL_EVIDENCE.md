@@ -179,15 +179,17 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The canonical ledger promotes all three production-refinement rows to
-`cross_tool_proved`, and `--print-cross-tool-obligations` returns their exact
-ordered IDs. The code-owned `4 + 7 + 6` inventory has named Verus signatures,
-non-vacuous postconditions, shared Rust/Verus kernels, sealed projection
-builders and identity extractors, and fail-closed production call-site
-expressions. The checker seals all 22 primary production call-site contracts
-and the two supplemental reliable-flush kernel/call-site contracts. Those 24
-triples span 23 unique production call items; no call site remains
-intentionally unfrozen.
+The checked-in legacy/revision-3-rooted ledger declares all three
+production-refinement rows `cross_tool_proved`, and
+`--print-cross-tool-obligations` returns their exact ordered IDs. That status
+does not prove the separate revision-4 exact-cardinality corridor. The
+code-owned `4 + 7 + 6` inventory has named Verus signatures, non-vacuous
+postconditions, shared Rust/Verus kernels, sealed projection builders and
+identity extractors, and fail-closed production call-site expressions. The
+checker binds 24 primary production call contracts, six supplemental call
+contracts, and six linked-consumer contracts. Their call multiplicities cover
+33 guarded invocations plus six linked-consumer seams; all 39 seams carry
+reviewed item-token seals.
 
 The checked-in status is not backend evidence by itself. Release mode accepts
 the three rows only after fresh strict provider logs, the pinned Verus run,
@@ -219,3 +221,8 @@ Mutable `target/formal/sumeragi_v2` contents are never durable status authority.
 The formal release wrapper removes prior outputs, regenerates every evidence
 document, and validates them against the frozen ledger and source before
 publishing completion.
+
+The mutable evidence directory is currently absent, so the checked-in status
+declaration and its three-entry `--print-cross-tool-obligations` inventory are
+not current backend evidence. Fresh provider TLAPS logs, `verus.log`,
+`verus_evidence.json`, and derived `cross_tool_evidence.json` remain required.

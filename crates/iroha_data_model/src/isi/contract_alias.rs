@@ -90,9 +90,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetContractAlias {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::assert_slice_roundtrip;
     use crate::nexus::DataSpaceId;
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked contract-alias ISI fixture keypair");
@@ -111,16 +111,6 @@ mod tests {
     }
     fn contract_alias() -> ContractAlias {
         ContractAlias::from_components("router", Some("dex"), "universal").expect("contract alias")
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
     }
     #[test]
     fn contract_alias_decode_from_slice_roundtrips() {

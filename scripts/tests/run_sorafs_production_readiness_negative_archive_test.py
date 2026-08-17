@@ -662,6 +662,29 @@ def test_receipt_and_manifest_reject_unknown_fields() -> None:
             toolchain_sha256=digest,
         )
     )
+    receipt.pop("raw_payload")
+    assert (
+        MODULE.validate_receipt(
+            receipt,
+            case=case,
+            baseline_input_set_sha256=digest,
+            checker_sha256=digest,
+            toolchain_sha256=digest,
+        )
+        == []
+    )
+    for malformed_exit_code in (True, 1.0):
+        receipt["expected_rejection"]["checker_exit_code"] = malformed_exit_code
+        assert any(
+            "expected rejection must match the matrix" in error
+            for error in MODULE.validate_receipt(
+                receipt,
+                case=case,
+                baseline_input_set_sha256=digest,
+                checker_sha256=digest,
+                toolchain_sha256=digest,
+            )
+        )
 
     runtime = MODULE.PythonRuntime(
         executable=Path(sys.executable),
@@ -708,3 +731,30 @@ def test_receipt_and_manifest_reject_unknown_fields() -> None:
             python_runtime=runtime,
         )
     )
+    manifest.pop("evidence")
+    assert (
+        MODULE.validate_archive_manifest(
+            manifest,
+            baseline_input_set_sha256=digest,
+            runner_sha256=digest,
+            checker_sha256=digest,
+            toolchain_sha256=digest,
+            python_runtime=runtime,
+        )
+        == []
+    )
+    for field, substituted in (
+        ("baseline_input_count", float(MODULE.BASELINE_INPUT_COUNT)),
+        ("mutation_count", 6.0),
+    ):
+        original = manifest[field]
+        manifest[field] = substituted
+        assert MODULE.validate_archive_manifest(
+            manifest,
+            baseline_input_set_sha256=digest,
+            runner_sha256=digest,
+            checker_sha256=digest,
+            toolchain_sha256=digest,
+            python_runtime=runtime,
+        )
+        manifest[field] = original

@@ -275,18 +275,20 @@ pub fn poseidon2_params_width6() -> Poseidon2Params<6> {
     params_to_bytes(poseidon6_params())
 }
 #[cfg(test)]
-fn pack_bytes_to_fr(bytes: &[u8]) -> Vec<Fr> {
-    if bytes.is_empty() {
-        return Vec::new();
-    }
-    bytes
-        .chunks(8)
+fn pack_bytes_to_fr_with_delimiter(bytes: &[u8]) -> Vec<Fr> {
+    let mut chunks = bytes.chunks_exact(8);
+    let mut words = chunks
+        .by_ref()
         .map(|chunk| {
-            let mut buf = [0u8; 8];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            Fr::from(u64::from_le_bytes(buf))
+            Fr::from(u64::from_le_bytes(
+                chunk.try_into().expect("eight-byte chunk"),
+            ))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let remainder = chunks.remainder();
+    let delimiter_word = partial_u64_from_le_slice(remainder) | (1u64 << (remainder.len() * 8));
+    words.push(Fr::from(delimiter_word));
+    words
 }
 fn hash_words_internal(words: &[Fr]) -> Fr {
     let mut state = [Fr::ZERO; 3];
@@ -326,6 +328,9 @@ fn hash_u64_words_internal(words: &[u64]) -> Fr {
     state[0]
 }
 /// Streaming byte hasher matching [`hash_bytes`] without materializing field words.
+///
+/// Finalization appends a byte-level `0x01` delimiter before the field-sponge padding. This keeps
+/// distinct byte strings distinct at the packing layer, including trailing-zero extensions.
 #[derive(Debug, Clone)]
 pub struct PoseidonByteHasher {
     state: [Fr; 3],
@@ -413,17 +418,13 @@ impl PoseidonByteHasher {
     #[must_use]
     #[inline(always)]
     pub fn finalize(mut self) -> [u8; 32] {
-        if self.pending_len > 0 {
-            self.state[self.rate_len] += Fr::from(partial_u64_from_le_bytes(
-                &self.pending_bytes,
-                self.pending_len,
-            ));
-            self.rate_len += 1;
-            if self.rate_len == 2 {
-                poseidon3_permute(&mut self.state);
-                self.rate_len = 0;
-            }
-        }
+        let delimiter_word = if self.pending_len == 0 {
+            1
+        } else {
+            partial_u64_from_le_bytes(&self.pending_bytes, self.pending_len)
+                | (1u64 << (self.pending_len * 8))
+        };
+        self.absorb_word(Fr::from(delimiter_word));
         match self.rate_len {
             0 => self.state[0] += Fr::ONE,
             1 => self.state[1] += Fr::ONE,
@@ -458,6 +459,10 @@ pub fn hash_u64_words_bytes(words: &[u64]) -> [u8; 32] {
     field_to_bytes(hash_u64_words_internal(words))
 }
 /// Hash an arbitrary byte slice using the Poseidon2 sponge.
+///
+/// Bytes are packed into little-endian `u64` field words and terminated with an unambiguous
+/// byte-level `0x01` delimiter before the field-sponge padding. The delimiter is placed in a new
+/// word when the input length is a multiple of eight.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut state = [Fr::ZERO; 3];
@@ -475,14 +480,13 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     } else {
         0
     };
-    if !bytes.is_empty() {
-        debug_assert!(bytes.len() < 8);
-        state[rate_len] += Fr::from(partial_u64_from_le_slice(bytes));
-        rate_len += 1;
-        if rate_len == 2 {
-            poseidon3_permute(&mut state);
-            rate_len = 0;
-        }
+    debug_assert!(bytes.len() < 8);
+    let delimiter_word = partial_u64_from_le_slice(bytes) | (1u64 << (bytes.len() * 8));
+    state[rate_len] += Fr::from(delimiter_word);
+    rate_len += 1;
+    if rate_len == 2 {
+        poseidon3_permute(&mut state);
+        rate_len = 0;
     }
     match rate_len {
         0 => state[0] += Fr::ONE,
@@ -568,22 +572,22 @@ mod tests {
             (
                 b"",
                 [
-                    8, 67, 194, 8, 22, 178, 229, 240, 102, 97, 83, 149, 171, 96, 134, 190, 43, 147,
-                    105, 171, 134, 224, 225, 65, 17, 39, 233, 125, 191, 232, 56, 48,
+                    243, 205, 86, 36, 245, 81, 231, 108, 183, 109, 57, 130, 206, 249, 41, 36, 115,
+                    18, 192, 23, 20, 230, 172, 138, 197, 140, 22, 254, 129, 111, 173, 40,
                 ],
             ),
             (
                 b"poseidon",
                 [
-                    0, 85, 138, 198, 129, 161, 139, 250, 58, 61, 11, 20, 118, 192, 98, 213, 242,
-                    123, 213, 245, 248, 208, 48, 83, 132, 50, 13, 171, 162, 58, 138, 4,
+                    244, 151, 234, 73, 131, 173, 212, 69, 53, 172, 84, 37, 206, 174, 222, 161, 128,
+                    208, 66, 101, 230, 145, 137, 166, 7, 14, 229, 87, 175, 182, 122, 5,
                 ],
             ),
             (
                 b"\x00\x01\x02\x03\x04\x05\x06\x07\x08",
                 [
-                    74, 93, 102, 31, 250, 207, 83, 16, 39, 42, 230, 225, 6, 130, 26, 222, 47, 33,
-                    160, 220, 38, 95, 46, 37, 137, 14, 152, 198, 101, 168, 47, 8,
+                    218, 213, 40, 11, 90, 109, 25, 232, 109, 150, 205, 126, 114, 219, 117, 205, 93,
+                    5, 156, 147, 110, 175, 109, 166, 97, 220, 229, 188, 97, 76, 91, 15,
                 ],
             ),
         ];
@@ -593,22 +597,18 @@ mod tests {
         }
     }
     #[test]
-    fn hash_bytes_streaming_matches_word_path() {
+    fn hash_bytes_matches_delimited_word_path() {
         for len in [
             0usize, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 96, 127, 128, 129, 255, 256, 257, 511,
         ] {
             let input = (0..len)
                 .map(|idx| idx.wrapping_mul(31) as u8)
                 .collect::<Vec<_>>();
-            let words = pack_bytes_to_fr(&input);
+            let words = pack_bytes_to_fr_with_delimiter(&input);
             assert_eq!(hash_bytes(&input), hash_words_bytes(&words), "len {len}");
-            let u64_words = input
-                .chunks(8)
-                .map(|chunk| {
-                    let mut word = [0u8; 8];
-                    word[..chunk.len()].copy_from_slice(chunk);
-                    u64::from_le_bytes(word)
-                })
+            let u64_words = words
+                .iter()
+                .map(|word| field_to_u64(*word))
                 .collect::<Vec<_>>();
             assert_eq!(
                 hash_bytes(&input),
@@ -618,20 +618,38 @@ mod tests {
         }
     }
     #[test]
+    fn byte_hash_rejects_the_legacy_trailing_zero_collision() {
+        for (short, extended) in [
+            (b"\x01".as_slice(), b"\x01\x00".as_slice()),
+            (b"1234567".as_slice(), b"1234567\x00".as_slice()),
+        ] {
+            assert_ne!(hash_bytes(short), hash_bytes(extended));
+        }
+
+        let mut short_stream = PoseidonByteHasher::new();
+        short_stream.update(b"\x01");
+        let mut extended_stream = PoseidonByteHasher::new();
+        extended_stream.update(b"\x01");
+        extended_stream.update(b"\x00");
+        assert_ne!(short_stream.finalize(), extended_stream.finalize());
+    }
+    #[test]
     fn poseidon_byte_hasher_split_updates_match_one_shot() {
-        let input = (0..97).map(|idx| (idx * 17 + 3) as u8).collect::<Vec<_>>();
-        let one_shot = hash_bytes(&input);
-        for split in [0usize, 1, 2, 7, 8, 9, 16, 33, input.len()] {
-            let mut hasher = PoseidonByteHasher::new();
-            hasher.update(&input[..split]);
-            hasher.update(&input[split..]);
-            assert_eq!(hasher.finalize(), one_shot, "split {split}");
+        for len in [0usize, 1, 7, 8, 9, 15, 16, 17, 97] {
+            let input = (0..len).map(|idx| (idx * 17 + 3) as u8).collect::<Vec<_>>();
+            let one_shot = hash_bytes(&input);
+            for split in 0..=input.len() {
+                let mut hasher = PoseidonByteHasher::new();
+                hasher.update(&input[..split]);
+                hasher.update(&input[split..]);
+                assert_eq!(hasher.finalize(), one_shot, "len {len}, split {split}");
+            }
+            let mut bytewise = PoseidonByteHasher::new();
+            for byte in &input {
+                bytewise.update(core::slice::from_ref(byte));
+            }
+            assert_eq!(bytewise.finalize(), one_shot, "len {len}, bytewise");
         }
-        let mut bytewise = PoseidonByteHasher::new();
-        for byte in &input {
-            bytewise.update(core::slice::from_ref(byte));
-        }
-        assert_eq!(bytewise.finalize(), one_shot, "bytewise updates");
     }
     #[test]
     fn poseidon_byte_hasher_packed_word_after_partial_update_matches_one_shot() {

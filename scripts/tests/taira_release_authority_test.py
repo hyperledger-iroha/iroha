@@ -27,11 +27,69 @@ DPN_COMMIT = "5" * 40
 def _exercise_structural_checks_behind_native_authority_barrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    result = authority.taira_authority_client.AuthorityResult(
+        role="native-evidence",
+        operation_id="a" * 64,
+        run_id="b" * 64,
+        status="authorized",
+        authority_envelope={"schema": "test-native-evidence-envelope"},
+        durable_receipt={"schema": "test-native-evidence-receipt"},
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "preflight",
+        lambda role: {"role": role, "status": "ready"},
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "authorize",
+        lambda *_args, **_kwargs: result,
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "verify_receipt",
+        lambda *_args, **_kwargs: result,
+    )
+
+
+def test_native_client_preflight_precedes_subject_and_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public builder authenticates before inspecting its request."""
+
+    calls: list[tuple[str, str]] = []
+    result = authority.taira_authority_client.AuthorityResult(
+        role="native-evidence",
+        operation_id="c" * 64,
+        run_id="d" * 64,
+        status="authorized",
+        authority_envelope={},
+        durable_receipt={},
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(("preflight", role)),
+    )
     monkeypatch.setattr(
         authority,
-        "require_independent_native_evidence_authority_provisioned",
-        lambda: None,
+        "_build_untrusted_authority_structure",
+        lambda _args: calls.append(("subject", "native-evidence")) or {"ok": True},
     )
+    monkeypatch.setattr(authority, "_authority_artifacts", lambda _args: ())
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "authorize",
+        lambda role, _subject, **_kwargs: calls.append(("authorize", role))
+        or result,
+    )
+
+    assert authority.build_authority(argparse.Namespace()) == {"ok": True}
+    assert calls == [
+        ("preflight", "native-evidence"),
+        ("subject", "native-evidence"),
+        ("authorize", "native-evidence"),
+    ]
 
 
 def _evidence_root(tmp_path: Path) -> Path:

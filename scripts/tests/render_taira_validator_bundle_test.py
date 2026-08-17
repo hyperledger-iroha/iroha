@@ -812,10 +812,26 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert manifest["governance"] == "parliament"
     assert manifest["quorum"] == 3
     assert manifest["validators"] == [
-        {"validator": "test-validator-1", "peer_id": "peer-1-public"},
-        {"validator": "test-validator-2", "peer_id": "peer-2-public"},
-        {"validator": "test-validator-3", "peer_id": "peer-3-public"},
-        {"validator": "test-validator-4", "peer_id": "peer-4-public"},
+        {
+            "validator": "test-validator-1",
+            "peer_id": "peer-1-public",
+            "torii_url": "https://taira-validator-1.sora.org",
+        },
+        {
+            "validator": "test-validator-2",
+            "peer_id": "peer-2-public",
+            "torii_url": "https://taira-validator-2.sora.org",
+        },
+        {
+            "validator": "test-validator-3",
+            "peer_id": "peer-3-public",
+            "torii_url": "https://taira-validator-3.sora.org",
+        },
+        {
+            "validator": "test-validator-4",
+            "peer_id": "peer-4-public",
+            "torii_url": "https://taira-validator-4.sora.org",
+        },
     ]
 
 
@@ -1695,6 +1711,55 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
         assert "must set `torii_public_address` explicitly" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("load_roster accepted a roster without public Torii URLs")
+
+
+def test_load_roster_canonicalizes_and_deduplicates_torii_origins(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster = roster_path.read_text(encoding="utf-8").replace(
+        'torii_public_address = "https://taira-validator-2.sora.org"',
+        'torii_public_address = "https://TAIRA-VALIDATOR-1.SORA.ORG.:443/"',
+        1,
+    )
+    roster_path.write_text(roster, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="torii_public_address.*duplicated"):
+        MODULE.load_roster(roster_path)
+
+
+@pytest.mark.parametrize(
+    "torii_origin",
+    (
+        "http://taira-validator-1.sora.org",
+        "https://user@taira-validator-1.sora.org",
+        "https://taira-validator-1.sora.org/v1",
+        "https://taira-validator-1.sora.org?query=1",
+        "https://taira-validator-1.sora.org#fragment",
+        "https://bad host.example",
+        "https://%41.example",
+        "https://127.000.000.001",
+        "https://taira-validator-1.sora.org:0",
+        "https://taira-validator-1.sora.org:65536",
+        " https://taira-validator-1.sora.org",
+    ),
+)
+def test_load_roster_rejects_noncanonical_torii_origin(
+    tmp_path: Path,
+    torii_origin: str,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster = roster_path.read_text(encoding="utf-8").replace(
+        "https://taira-validator-1.sora.org",
+        torii_origin,
+        1,
+    )
+    roster_path.write_text(roster, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="torii_public_address"):
+        MODULE.load_roster(roster_path)
 
 
 def test_load_roster_requires_four_validators(tmp_path: Path) -> None:

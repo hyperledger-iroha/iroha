@@ -1,5 +1,20 @@
 # Sumeragi v2 safety and liveness argument
 
+## Current proof-ledger status
+
+The checked-in legacy/revision-3-rooted ledger declares 44 `tlaps_proved`, 3
+`cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`, with `machine_checked_completion: true`. This declaration is
+the byte-exact input to the release proof wave, not proof evidence by itself
+and not a deductive proof of revision 4. Release completion still requires
+strict TLAPS, pinned Verus, derived cross-tool and production-trace evidence,
+the separate revision-4 exact-cardinality TLC/mutation corridor, and
+receipt/completion-marker checks against one frozen signed candidate.
+Mechanization-status statements below that report the earlier 35/12 split,
+call an obligation `specified_unproved`, or set
+`machine_checked_completion: false` are historical snapshots retained as
+provenance; they do not override the current status declaration.
+
 ## Revision-4 argument
 
 Revision 4 is a fresh-genesis protocol. For each frozen height context, let
@@ -967,12 +982,14 @@ proofs change.
 
 The reviewed top-level inventory contains exactly 54 obligations: 44
 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
-`out_of_scope`, with no `specified_unproved` rows. Sixteen source-bound proof/evidence decomposition leaves remain
-checked transitively through those top-level obligations and are not additional
-ledger rows. `machine_checked_completion` is true for this archived
-revision-3-rooted status inventory. The flag is not independent proof
-authority: release mode still requires fresh strict TLAPS, pinned Verus, and
-derived cross-tool evidence bound to the exact source and ledger.
+`out_of_scope`, with no `specified_unproved` rows. Sixteen source-bound
+proof/evidence decomposition leaves remain checked transitively through those
+top-level obligations and are not additional ledger rows.
+`machine_checked_completion` is true for this legacy/revision-3-rooted status
+inventory. It is not a deductive proof of revision 4, and the flag is not
+independent proof authority: release mode still requires fresh strict TLAPS,
+pinned Verus, derived cross-tool evidence, and the separate revision-4
+exact-cardinality corridor bound to the exact source and ledger.
 
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
@@ -1242,9 +1259,10 @@ proved fair-action prerequisites. The aggregate
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
 abstract results. The 54-entry top-level ledger contains 44 `tlaps_proved`, 3
 `cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
-`specified_unproved` rows and machine-checked completion true. Sixteen decomposition declarations remain source-bound and
-transitively checked through their reviewed top-level consumers rather than
-appearing as extra claims. Fresh exact-source release evidence remains mandatory.
+`specified_unproved` rows and machine-checked completion true. Sixteen
+decomposition declarations remain source-bound and transitively checked through
+their reviewed top-level consumers rather than appearing as extra claims. Fresh
+exact-source release evidence remains mandatory.
 The aggregate temporal closure now gives
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
@@ -1455,7 +1473,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 857 tests across forty Rust
+The current pre-network release inventory names 860 tests across forty Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1571,9 +1589,12 @@ Kura recovery regressions and the governance-unlock audit yield the 861-test,
 41-module checkpoint. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
-yields the current 857-test, 40-module inventory. The complete source-sealed
+yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
+accessor, mixed-carrier successor, two-link cold-restart hydration, and
+noncanonical autonomous-output retirement regressions yield the
+current 860-test, 40-module inventory. The complete source-sealed
 pre-network corridor
-contains 89 legs. Six source-
+contains 88 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1643,11 +1664,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433`.
-The separate source-sealed G-UNIT inventory contains 532 focused tests,
-including 321 `iroha_core` and five `iroha_zkp_halo2` tests. Its 533-line
+`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
+The separate source-sealed G-UNIT inventory contains 527 focused tests,
+including 321 `iroha_core` tests. Its 528-line
 canonical TSV has SHA-256
-`f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431`;
+`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1684,8 +1705,8 @@ anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
-The five integration names share a module-filtered leg; the pre-network corridor
-now has 89 legs, including the governance-unlock audit module, the autonomous
+The four integration names share a module-filtered leg; the pre-network corridor
+now has 88 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1693,7 +1714,7 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-nine-leg corridor. It
+tests are not claimed by the forty-module, eighty-eight-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1773,7 +1794,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 857-name tree still requires a clean committed, detached,
+names; the current 860-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

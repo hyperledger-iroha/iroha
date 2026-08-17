@@ -1,0 +1,7 @@
+
+seiyaku MyC {
+  hajimari() {
+    let _digest = crypto::iroha_hash(b"build-options");
+    let a = 1;
+  }
+}

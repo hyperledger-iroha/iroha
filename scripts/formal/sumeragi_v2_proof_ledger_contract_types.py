@@ -47,6 +47,7 @@ class CrossToolTotalGateContract:
     verus_item_sha256: str
     production_visibility: str = "pub(crate)"
     verus_kernel_arguments: str | None = None
+    production_success_value: str | None = None
 
 
 @dataclass(frozen=True)

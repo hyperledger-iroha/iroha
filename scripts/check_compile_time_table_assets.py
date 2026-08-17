@@ -22,7 +22,9 @@ MANIFEST_PATHS = (
     Path("crates/iroha_core/src/privacy_engines/zk_x509/assets/manifest.json"),
     Path("crates/iroha_sccp/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/manifest.json"),
+    Path("crates/ivm/src/assets/iso20022_schema_v1/manifest.json"),
     Path("crates/ivm/src/assets/text_v1/manifest.json"),
+    Path("crates/kotodama_lang/src/assets/diagnostics_v1/manifest.json"),
     Path("crates/fastpq_isi/src/assets/manifest.json"),
     Path("crates/iroha_cli/src/soracloud/assets/v1/template_manifest.json"),
     Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
@@ -32,6 +34,9 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 DECLARATION_HASH_SCOPE = "complete Rust constant declaration including trailing LF"
 LINE_SPAN_HASH_SCOPE = "line-count-pinned Rust extraction span including trailing LF"
+STRUCTURED_TABLE_HASH_SCOPE = (
+    "line-count-pinned Rust structured-table projection span including trailing LF"
+)
 FORMAT_TEMPLATE_HASH_SCOPE = (
     "line-count-pinned Rust format! template transformed to Soracloud symbolic asset"
 )
@@ -282,7 +287,11 @@ def _crate_root(path: Path, repository_root: Path) -> Path:
 
 def _include_consumers(crate_root: Path) -> dict[Path, list[IncludeConsumer]]:
     consumers: dict[Path, list[IncludeConsumer]] = {}
-    for source in sorted((crate_root / "src").rglob("*.rs")):
+    sources = list((crate_root / "src").rglob("*.rs"))
+    build_script = crate_root / "build.rs"
+    if build_script.is_file():
+        sources.append(build_script)
+    for source in sorted(sources):
         if source.is_symlink() or not source.is_file():
             continue
         text = source.read_text(encoding="utf-8")
@@ -376,6 +385,7 @@ def audit_repository(root: Path) -> AuditCounts:
         if scope not in {
             DECLARATION_HASH_SCOPE,
             LINE_SPAN_HASH_SCOPE,
+            STRUCTURED_TABLE_HASH_SCOPE,
             FORMAT_TEMPLATE_HASH_SCOPE,
         }:
             raise AssetError(f"{relative_manifest}: unsupported source hash scope")
@@ -529,20 +539,21 @@ def audit_repository(root: Path) -> AuditCounts:
                         historical, start_line, physical_lines
                     )
                     source_label = f":{start_line}+{physical_lines}"
-                    if scope == FORMAT_TEMPLATE_HASH_SCOPE:
-                        expected_asset = soracloud_format_template_payload(source_slice)
-                    else:
-                        expected_asset = rust_raw_string_payload(source_slice)
-                    if expected_asset != data:
-                        transformation = (
-                            " transformed format template"
-                            if scope == FORMAT_TEMPLATE_HASH_SCOPE
-                            else " raw string"
-                        )
-                        raise AssetError(
-                            f"historical {relative_source}{source_label}{transformation} "
-                            f"does not equal {asset.relative_to(root)}"
-                        )
+                    if scope != STRUCTURED_TABLE_HASH_SCOPE:
+                        if scope == FORMAT_TEMPLATE_HASH_SCOPE:
+                            expected_asset = soracloud_format_template_payload(source_slice)
+                        else:
+                            expected_asset = rust_raw_string_payload(source_slice)
+                        if expected_asset != data:
+                            transformation = (
+                                " transformed format template"
+                                if scope == FORMAT_TEMPLATE_HASH_SCOPE
+                                else " raw string"
+                            )
+                            raise AssetError(
+                                f"historical {relative_source}{source_label}{transformation} "
+                                f"does not equal {asset.relative_to(root)}"
+                            )
                 observed_preimage_sha = _sha256(source_slice)
                 if observed_preimage_sha != expected_preimage_sha:
                     raise AssetError(

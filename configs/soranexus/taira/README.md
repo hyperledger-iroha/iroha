@@ -298,9 +298,15 @@ barriers into multi-second stalls.
   from an exact-NetworkId operator-signed `/v1/sumeragi/status` request and an
   optional signed write canary for final public cutover. It verifies ordinary
   node/consensus health, the common `is` and `is2` dataspace catalog, and
-  universal ABI-21 `cash_handoff_v1` discovery. It never treats an asset,
-  application proof release, or device UI state as a validator admission
-  condition.
+  universal ABI-21 `cash_handoff_v1` discovery. The validator-fleet gate also
+  requires each roster-bearing manifest projection to publish the exact
+  schema-closed validator-account/`PeerId`/canonical HTTPS Torii bindings,
+  keeps those projections identical within one physical dataspace and across
+  advancing samples, and rejects identity or route reuse between dataspaces.
+  These checks prove the declared identities and routes are disjoint; they do
+  not attest that the routes terminate on distinct physical machines. The
+  script never treats an asset, application proof release, or device UI state
+  as a validator admission condition.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
@@ -823,7 +829,11 @@ external signer computes the final hash. The signer authenticates the policy
 without opening the not-yet-generated artifact directory. The second pass
 embeds the final genesis hash and adds the future seal path. Both passes bind
 the same policy digest, recorded as `kagemusha_release_policy_sha256` in the
-reset manifest; changing the policy after signing makes the reset fail.
+reset manifest; changing the policy after signing makes the reset fail. The
+composer also requires the derived policy, catalog, qualification-seal, and
+decoded-byte-limit fields to match on all four rendered configs. It records
+that canonical object and its SHA-256 as `kagemusha_config_projection` and
+`kagemusha_config_projection_sha256` in the reset manifest.
 
 Select and validate the release heights before producing the roster or any
 candidate bytes. A fresh reset starts with height-one genesis committed, but
@@ -1069,8 +1079,8 @@ and mode identity, zero untracked files, present-empty tracked gitlink directori
 and the separately bound root `Cargo.lock`) before
 building the exact candidate binary and entering the non-raiseable 64 GiB /
 half-physical-RAM generation guard. Its polling stop uses process-tree RSS and
-its final gate uses the direct child's kernel peak RSS; macOS footprint remains
-diagnostic only. Keep at least 16 GiB free on its pinned
+the greater of process-tree RSS or physical footprint on macOS; its final gate
+independently uses the direct child's kernel peak RSS. Keep at least 16 GiB free on its pinned
 disk-backed output filesystem for the raw proving-key spools and framed
 artifact copy.
 Retain the helper's canonical JSON report. The reviewed source closure and its
@@ -1157,6 +1167,7 @@ KAGEMUSHA_V4_ARTIFACT_ROOT=/srv/iroha-kagemusha/taira-v4-r1/catalog \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/absolute/root-custodied/ios-device-evidence \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID='<reviewed-key-id>' \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/absolute/root-custodied/ios-evidence-ed25519.pub.pem \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/absolute/root-custodied/production-ios-policy-v1.json \
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 

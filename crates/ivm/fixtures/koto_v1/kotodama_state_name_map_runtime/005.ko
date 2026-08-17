@@ -1,0 +1,14 @@
+
+        seiyaku C {
+            state StateMap<Name, int> Foo;
+
+            fn read_value(Name key) -> int {
+                return Foo.ensure(key, 0);
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                return read_value(Name::parse("alice"));
+            }
+        }
+    

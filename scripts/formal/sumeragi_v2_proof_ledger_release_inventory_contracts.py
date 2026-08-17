@@ -1,3 +1,174 @@
+@dataclass(frozen=True)
+class ProductionLivenessHelperSeal:
+    """One whole-item seal for production code owned by a release regression."""
+
+    source: str
+    item: str
+    item_token_sha256: str
+    kind: str = "item"
+    brace_context: tuple[tuple[str, ...], ...] = ()
+
+
+_PRODUCTION_LIVENESS_HELPER_SEALS = (
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/kura.rs",
+        "AutonomousLaneRetiredAttempt",
+        "fd49299fd0080279e3a51be3f8a16aa9ede49635c608d033913d8e4ca8912b76",
+        "struct",
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/kura.rs",
+        "read_autonomous_lane_retired_attempt",
+        "cd7120b23a8a22f1704b7ead6ca258242faba7e4c491b599f88d2b297a61349d",
+        brace_context=(("impl", "Kura"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "outbound_lane_message_predecessor_is_ready",
+        "e1adbe51e47c7d2e3629d63279b377473b9140e49e6a1b1970c9483818ebcf4d",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "historical_raw_proposal_can_solicit_certificate",
+        "f2ce1439fa32ab3dd5df854d4cf6837cab71da5ca74f9cafb5ef040d43b3a8c9",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "proposal_can_be_transported",
+        "bb0f15aaf294aa9667b9cf86bd4e1afc86af8d0044d506d50522b30d40fb9900",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "proposal_predecessor_is_ready_for_progress",
+        "af90f5ebe15136bfc8255dc8d1a8aeac7101d4226c79ef8a94e4821eeeb0d78a",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "proposal_can_progress",
+        "eed1b8bf381b8ffe749d5ac1080d5bb23620b70d95b86ee75303ffec9606ffd0",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "historical_lane_recovery_message_is_authorized",
+        "a9a193ee69dca20a51183279bc12e98480cad6c99dfbb7f22f81aa6b01458c7f",
+        brace_context=(("impl", "V2LaneWorkAdapter"),),
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "autonomous_lane_output_matches_payload_identity",
+        "6ad31433c9592ac390c299fb4bc0d7174b9dc36cde05a8168f208482a6ac9d18",
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "autonomous_lane_output_has_exact_retirement_source",
+        "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6",
+    ),
+    ProductionLivenessHelperSeal(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "autonomous_lane_output_has_durable_reconstruction_source",
+        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b",
+    ),
+)
+
+_PRODUCTION_LIVENESS_HELPER_FIXTURE_SOURCES = {
+    "crates/iroha_core/src/kura.rs": (
+        "crates/iroha_core/src/kura/autonomous_retired_attempt.rs"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "crates/iroha_core/src/sumeragi/v2_worker/"
+        "autonomous_lane_output_reconstruction.rs"
+    ),
+}
+
+
+def _production_liveness_helper_source_seal_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind release-regression helpers to authenticated whole Rust items."""
+
+    errors: list[str] = []
+    sources: dict[str, tuple[Path, str]] = {}
+    for relative in dict.fromkeys(
+        seal.source for seal in _PRODUCTION_LIVENESS_HELPER_SEALS
+    ):
+        logical_path = repo_root / relative
+        if repo_root.resolve() == ROOT_DIR.resolve():
+            path, source = _read_reviewed_rust_source(
+                repo_root,
+                relative,
+                errors,
+                "production liveness helper source",
+            )
+        else:
+            # Synthetic mutation roots are not Git worktrees. Read only the
+            # reviewed fragment under mutation; the real repository path above
+            # remains authenticated by the recursive staged-source resolver.
+            fixture_relative = _PRODUCTION_LIVENESS_HELPER_FIXTURE_SOURCES[relative]
+            fixture_path = repo_root / fixture_relative
+            path = logical_path
+            if not fixture_path.is_file() or fixture_path.is_symlink():
+                errors.append(
+                    f"{fixture_path}: production liveness helper fixture must "
+                    "be a regular non-symlink file"
+                )
+                source = ""
+            else:
+                try:
+                    source = fixture_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as error:
+                    errors.append(
+                        f"{fixture_path}: cannot read production liveness "
+                        f"helper fixture: {error}"
+                    )
+                    source = ""
+        sources[relative] = (path, source)
+
+    for seal in _PRODUCTION_LIVENESS_HELPER_SEALS:
+        path, source = sources[seal.source]
+        if seal.kind == "struct":
+            matches = rust_struct_items(source, seal.item)
+            if len(matches) != 1:
+                errors.append(
+                    f"{path}: require exactly one real Rust struct item named "
+                    f"{seal.item}; found {len(matches)}"
+                )
+                item = None
+            else:
+                item = matches[0]
+        elif seal.kind == "item":
+            item = _require_rust_item(path, source, seal.item, errors)
+        else:
+            errors.append(
+                "internal production liveness helper seal has unsupported "
+                f"kind {seal.kind!r} for {seal.source}!{seal.item}"
+            )
+            continue
+        description = f"production liveness helper {seal.item}"
+        _require_rust_item_context(
+            path,
+            item,
+            seal.brace_context,
+            description,
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            seal.item_token_sha256,
+            description,
+            errors,
+        )
+    return errors
+
+
 def _relative_to_root(path: Path, root_dir: Path = ROOT_DIR) -> str:
     try:
         return path.resolve().relative_to(root_dir.resolve()).as_posix()
@@ -44,6 +215,7 @@ def _production_liveness_release_inventory_errors(
         ]
     source = release_path.read_text(encoding="utf-8")
     errors.extend(_production_liveness_release_inventory_guard_errors(repo_root))
+    errors.extend(_production_liveness_helper_source_seal_errors(repo_root))
 
     def shell_array(name: str) -> list[str]:
         marker = f"{name}=(\n"
@@ -690,8 +862,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 438:
-        errors.append("internal release-regression seal must contain exactly 438 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 441:
+        errors.append("internal release-regression seal must contain exactly 441 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1627,13 +1799,13 @@ def _production_liveness_release_inventory_errors(
                     "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "1848bd131e3dca9bb3ebab62974e6c7a79216f9ad125e450fd9e969cd98cfe41"
+                    "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
                     "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+                    "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1821,7 +1993,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+            "783d0eec35169a98663b14be54ba5ada430f8d385ee4142fc7772fe85934e53a"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -1967,21 +2139,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 857 tests across 40 modules.\n"
+            "current\ninventory to 860 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 857-test, 40-module inventory. The complete source-sealed\n"
+            "current 860-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 857 exact tests across 40 modules and "
+            "current\nsource-bound inventory to 860 exact tests across 40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -1996,8 +2168,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 321 core, 143 queue-journal, 13 configuration, eight data-model, five\n"
-            "iroha_zkp_halo2, 39 Torii, one Torii-shared, and two integration.",
+            "tests: 321 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",
             "The G-UNIT static inventory checks establish exact "

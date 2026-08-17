@@ -1,0 +1,7 @@
+
+        seiyaku RegisterDomain {
+            kotoage fn register() authorize("Admin") {
+                ledger::domain::register(DomainId::parse("wonderland.universal"));
+            }
+        }
+    

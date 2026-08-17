@@ -23,10 +23,10 @@ SPEC.loader.exec_module(MODULE)
 def test_checked_in_compile_time_assets_and_preimages_are_exact() -> None:
     counts = MODULE.audit_repository(ROOT)
     assert counts == MODULE.AuditCounts(
-        manifests=9,
-        assets=81,
-        bytes=188_882,
-        source_preimages=89,
+        manifests=11,
+        assets=85,
+        bytes=271_751,
+        source_preimages=93,
     )
 
 

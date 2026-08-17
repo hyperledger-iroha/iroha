@@ -5,6 +5,7 @@
 //! the eventual multi-lane feeds by swapping in the real scheduler hooks once they land; until then
 //! we keep the fallback values in this module to avoid breaking operator dashboards.
 pub mod capability;
+mod manifest_status;
 #[cfg(feature = "telemetry")]
 use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -84,8 +85,9 @@ pub use iroha_telemetry::metrics::{
     GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
     MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
-    NexusDataspaceTeuStatus, NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
+    NexusDataspaceTeuStatus, NexusLaneManifestValidatorBindingStatus,
+    NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets, NexusLaneTeuStatus,
+    SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
     SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
     TxGossipSnapshot, TxGossipStatus,
 };
@@ -635,6 +637,7 @@ fn reset_nexus_metrics(metrics: &Metrics) {
         .expect("dataspace TEU status cache lock poisoned")
         .clear();
 }
+include!("telemetry/enabled_metric_macros.rs");
 impl StateTelemetry {
     /// Create from [`Metrics`]
     pub fn new(metrics: Arc<Metrics>, enabled: bool) -> Self {
@@ -1848,31 +1851,12 @@ impl StateTelemetry {
                 .as_ref()
                 .map(|path| path.display().to_string());
             entry.manifest_validators = Vec::new();
+            entry.manifest_validator_bindings = Vec::new();
             entry.manifest_quorum = None;
             entry.manifest_protected_namespaces = Vec::new();
             entry.manifest_runtime_upgrade = None;
             if let Some(rules) = status.rules() {
-                entry.manifest_validators =
-                    rules.validators.iter().map(ToString::to_string).collect();
-                entry.manifest_quorum = rules.quorum;
-                entry.manifest_protected_namespaces = rules
-                    .protected_namespaces
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect();
-                entry.manifest_runtime_upgrade = rules.hooks.runtime_upgrade.as_ref().map(|hook| {
-                    let allowed_ids = hook
-                        .allowed_ids
-                        .as_ref()
-                        .map(|ids| ids.iter().cloned().collect())
-                        .unwrap_or_default();
-                    NexusLaneRuntimeUpgradeHookStatus {
-                        allow: hook.allow,
-                        require_metadata: hook.require_metadata,
-                        metadata_key: hook.metadata_key.as_ref().map(ToString::to_string),
-                        allowed_ids,
-                    }
-                });
+                manifest_status::populate_manifest_rules(entry, rules);
             }
             return;
         }
@@ -1880,6 +1864,7 @@ impl StateTelemetry {
         entry.manifest_ready = true;
         entry.manifest_path = None;
         entry.manifest_validators = Vec::new();
+        entry.manifest_validator_bindings = Vec::new();
         entry.manifest_quorum = None;
         entry.manifest_protected_namespaces = Vec::new();
         entry.manifest_runtime_upgrade = None;
@@ -2256,26 +2241,14 @@ impl StateTelemetry {
             .with_label_values(&[component])
             .set(limit);
     }
+    state_telemetry_enabled_metric_methods_early_return! {
     /// Record a storage budget exceed event for a component.
-    pub fn inc_storage_budget_exceeded(&self, component: &'static str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .storage_budget_exceeded_total
-            .with_label_values(&[component])
-            .inc();
-    }
+    [inc_storage_budget_exceeded(component: &'static str) =>
+        .storage_budget_exceeded_total.with_label_values(&[component]).inc();]
     /// Record a DA cache hit/miss for a component.
     #[cfg(feature = "telemetry")]
-    pub fn inc_storage_da_cache(&self, component: &'static str, result: &'static str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .storage_da_cache_total
-            .with_label_values(&[component, result])
-            .inc();
+    [inc_storage_da_cache(component: &'static str, result: &'static str) =>
+        .storage_da_cache_total.with_label_values(&[component, result]).inc();]
     }
     /// No-op when telemetry is disabled.
     #[cfg(not(feature = "telemetry"))]
@@ -2368,19 +2341,11 @@ impl StateTelemetry {
     pub fn disable(&self) {
         self.set_enabled(false);
     }
+    state_telemetry_enabled_metric_methods_early_return! {
     /// Record an ISI execution attempt.
-    pub fn record_isi_total(&self, name: &str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics.isi.with_label_values(&[name, "total"]).inc();
-    }
+    [record_isi_total(name: &str) => .isi.with_label_values(&[name, "total"]).inc();]
     /// Record a successful ISI execution.
-    pub fn record_isi_success(&self, name: &str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics.isi.with_label_values(&[name, "success"]).inc();
+    [record_isi_success(name: &str) => .isi.with_label_values(&[name, "success"]).inc();]
     }
     /// Record ISI execution latency.
     pub fn record_isi_time(&self, name: &str, elapsed: Duration) {
@@ -2668,50 +2633,19 @@ impl StateTelemetry {
         let now = self.time_source.now().as_millis();
         u64::try_from(now).unwrap_or(u64::MAX)
     }
+    state_telemetry_enabled_metric_methods! {
     /// Record a successful SM helper syscall invocation.
-    pub fn note_sm_syscall_success(&self, kind: &'static str, mode: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .sm_syscall_total
-                .with_label_values(&[kind, mode])
-                .inc();
-        }
-    }
+    [note_sm_syscall_success(kind: &'static str, mode: &'static str) =>
+        .sm_syscall_total.with_label_values(&[kind, mode]).inc();]
     /// Record a failed SM helper syscall invocation with a reason label.
-    pub fn note_sm_syscall_failure(
-        &self,
-        kind: &'static str,
-        mode: &'static str,
-        reason: &'static str,
-    ) {
-        if self.is_enabled() {
-            self.metrics
-                .sm_syscall_failures_total
-                .with_label_values(&[kind, mode, reason])
-                .inc();
-        }
-    }
+    [note_sm_syscall_failure(kind: &'static str, mode: &'static str, reason: &'static str) =>
+        .sm_syscall_failures_total.with_label_values(&[kind, mode, reason]).inc();]
     /// Record a subscription billing attempt grouped by pricing kind.
-    pub fn record_subscription_billing_attempt(&self, pricing: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .subscription_billing_attempts_total
-                .with_label_values(&[pricing])
-                .inc();
-        }
-    }
+    [record_subscription_billing_attempt(pricing: &'static str) =>
+        .subscription_billing_attempts_total.with_label_values(&[pricing]).inc();]
     /// Record a subscription billing outcome grouped by pricing kind and result.
-    pub fn record_subscription_billing_outcome(
-        &self,
-        pricing: &'static str,
-        outcome: &'static str,
-    ) {
-        if self.is_enabled() {
-            self.metrics
-                .subscription_billing_outcomes_total
-                .with_label_values(&[pricing, outcome])
-                .inc();
-        }
+    [record_subscription_billing_outcome(pricing: &'static str, outcome: &'static str) =>
+        .subscription_billing_outcomes_total.with_label_values(&[pricing, outcome]).inc();]
     }
     /// Record an AXT policy rejection grouped by lane id and reason.
     pub fn note_axt_policy_reject(
@@ -2958,23 +2892,13 @@ impl StateTelemetry {
             hints: self.axt_reject_hints_snapshot(),
         }
     }
+    state_telemetry_enabled_metric_methods! {
     /// Record a settlement completion event.
-    pub fn note_settlement_success(&self, kind: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .settlement_events_total
-                .with_label_values(&[kind, "success", "-"])
-                .inc();
-        }
-    }
+    [note_settlement_success(kind: &'static str) =>
+        .settlement_events_total.with_label_values(&[kind, "success", "-"]).inc();]
     /// Record a settlement failure with a categorized reason.
-    pub fn note_settlement_failure(&self, kind: &'static str, reason: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .settlement_events_total
-                .with_label_values(&[kind, "failure", reason])
-                .inc();
-        }
+    [note_settlement_failure(kind: &'static str, reason: &'static str) =>
+        .settlement_events_total.with_label_values(&[kind, "failure", reason]).inc();]
     }
     fn settlement_order_label(order: SettlementExecutionOrder) -> &'static str {
         match order {
@@ -3517,11 +3441,9 @@ impl StateTelemetry {
             .with_label_values(&labels)
             .inc();
     }
+    state_telemetry_enabled_metric_methods! {
     /// Commit an observation of amounts used in transactions
-    pub fn observe_tx_amount(&self, value: f64) {
-        if self.is_enabled() {
-            self.metrics.tx_amounts.observe(value);
-        }
+    [observe_tx_amount(value: f64) => .tx_amounts.observe(value);]
     }
     /// Set DAG vertices/edges for the latest validated block.
     pub fn set_pipeline_dag(&self, lane_id: LaneId, vertices: u64, edges: u64) {
@@ -3560,14 +3482,10 @@ impl StateTelemetry {
                 .inc_by(count);
         }
     }
+    state_telemetry_enabled_metric_methods! {
     /// Increment runtime upgrade event counter labeled by kind
-    pub fn inc_runtime_upgrade_event(&self, kind: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .runtime_upgrade_events_total
-                .with_label_values(&[kind])
-                .inc();
-        }
+    [inc_runtime_upgrade_event(kind: &'static str) =>
+        .runtime_upgrade_events_total.with_label_values(&[kind]).inc();]
     }
     /// Increment runtime upgrade provenance rejection counter labeled by reason.
     pub fn record_runtime_upgrade_provenance_rejection(
@@ -3611,22 +3529,12 @@ impl StateTelemetry {
         let current = gauge.get();
         gauge.set(current.saturating_add(1));
     }
+    state_telemetry_enabled_metric_methods_early_return! {
     /// Increment a governance bond lifecycle counter.
-    pub fn record_governance_bond_event(&self, event: &'static str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .governance_bond_events_total
-            .with_label_values(&[event])
-            .inc();
-    }
+    [record_governance_bond_event(event: &'static str) =>
+        .governance_bond_events_total.with_label_values(&[event]).inc();]
     /// Set the total citizen count gauge.
-    pub fn record_citizens_total(&self, total: u64) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics.governance_citizens_total.set(total);
+    [record_citizens_total(total: u64) => .governance_citizens_total.set(total);]
     }
     /// Increment citizen service discipline counters.
     pub fn record_citizen_service_event(
@@ -3712,41 +3620,19 @@ impl StateTelemetry {
                 .set(count);
         }
     }
+    state_telemetry_enabled_metric_methods! {
     /// Record protected-namespace enforcement outcome (allowed or rejected).
-    pub fn record_protected_namespace_enforcement(&self, outcome: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .governance_protected_namespace_total
-                .with_label_values(&[outcome])
-                .inc();
-        }
-    }
+    [record_protected_namespace_enforcement(outcome: &'static str) =>
+        .governance_protected_namespace_total.with_label_values(&[outcome]).inc();]
     /// Record manifest quorum enforcement outcome (satisfied or rejected).
-    pub fn record_manifest_quorum_enforcement(&self, outcome: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .governance_manifest_quorum_total
-                .with_label_values(&[outcome])
-                .inc();
-        }
-    }
+    [record_manifest_quorum_enforcement(outcome: &'static str) =>
+        .governance_manifest_quorum_total.with_label_values(&[outcome]).inc();]
     /// Record overall manifest admission outcome (allowed or rejected by reason).
-    pub fn record_manifest_admission(&self, result: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .governance_manifest_admission_total
-                .with_label_values(&[result])
-                .inc();
-        }
-    }
+    [record_manifest_admission(result: &'static str) =>
+        .governance_manifest_admission_total.with_label_values(&[result]).inc();]
     /// Record manifest hook enforcement outcome for a specific hook.
-    pub fn record_manifest_hook_enforcement(&self, hook: &'static str, outcome: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .governance_manifest_hook_total
-                .with_label_values(&[hook, outcome])
-                .inc();
-        }
+    [record_manifest_hook_enforcement(hook: &'static str, outcome: &'static str) =>
+        .governance_manifest_hook_total.with_label_values(&[hook, outcome]).inc();]
     }
     /// Record a manifest activation event emitted by governance enactment.
     pub fn record_manifest_activation(
@@ -4044,11 +3930,9 @@ impl StateTelemetry {
             self.metrics.pipeline_detached_fallback.get(),
         )
     }
+    state_telemetry_enabled_metric_methods! {
     /// Set total gas used for the current (latest) block.
-    pub fn set_block_gas_used(&self, gas: u64) {
-        if self.is_enabled() {
-            self.metrics.block_gas_used.set(gas);
-        }
+    [set_block_gas_used(gas: u64) => .block_gas_used.set(gas);]
     }
     /// Set confidential gas usage for the current transaction/block pair.
     pub fn set_confidential_gas_usage(&self, tx_gas: u64, block_gas: u64) {
@@ -4322,6 +4206,33 @@ impl core::fmt::Debug for StreamingTelemetry {
     }
 }
 #[cfg(feature = "telemetry")]
+macro_rules! streaming_telemetry_enabled_metric_methods {
+    ($( $(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] )+) => {
+        $(
+            $(#[$attr])*
+            pub fn $name(&self $(, $arg: $arg_ty)*) {
+                if self.is_enabled() {
+                    self.metrics $($op)*
+                }
+            }
+        )+
+    };
+}
+#[cfg(feature = "telemetry")]
+macro_rules! streaming_telemetry_enabled_metric_methods_early_return {
+    ($( $(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] )+) => {
+        $(
+            $(#[$attr])*
+            pub fn $name(&self $(, $arg: $arg_ty)*) {
+                if !self.is_enabled() {
+                    return;
+                }
+                self.metrics $($op)*
+            }
+        )+
+    };
+}
+#[cfg(feature = "telemetry")]
 impl StreamingTelemetry {
     /// Construct a streaming telemetry handle backed by the shared metrics registry.
     pub fn new(metrics: Arc<Metrics>, enabled: bool) -> Self {
@@ -4521,15 +4432,10 @@ impl StreamingTelemetry {
             .with_label_values(&[component])
             .set(limit);
     }
+    streaming_telemetry_enabled_metric_methods_early_return! {
     /// Record storage budget exceed events for streaming components.
-    pub fn inc_storage_budget_exceeded(&self, component: &'static str) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .storage_budget_exceeded_total
-            .with_label_values(&[component])
-            .inc();
+    [inc_storage_budget_exceeded(component: &'static str) =>
+        .storage_budget_exceeded_total.with_label_values(&[component]).inc();]
     }
     /// Update the active parity bucket for the given peer.
     pub fn record_fec_parity(&self, peer: &PeerId, parity: u8) {
@@ -4572,48 +4478,21 @@ impl StreamingTelemetry {
             }
         }
     }
+    streaming_telemetry_enabled_metric_methods! {
     /// Increment the sent datagram counter by the provided delta.
-    pub fn inc_quic_datagrams_sent(&self, delta: u64) {
-        if self.is_enabled() {
-            self.metrics
-                .streaming_quic_datagrams_sent_total
-                .inc_by(delta);
-        }
-    }
+    [inc_quic_datagrams_sent(delta: u64) => .streaming_quic_datagrams_sent_total.inc_by(delta);]
     /// Increment the dropped datagram counter by the provided delta.
-    pub fn inc_quic_datagrams_dropped(&self, delta: u64) {
-        if self.is_enabled() {
-            self.metrics
-                .streaming_quic_datagrams_dropped_total
-                .inc_by(delta);
-        }
-    }
+    [inc_quic_datagrams_dropped(delta: u64) =>
+        .streaming_quic_datagrams_dropped_total.inc_by(delta);]
     /// Record a feedback timeout event.
-    pub fn inc_feedback_timeout(&self) {
-        if self.is_enabled() {
-            self.metrics.streaming_feedback_timeout_total.inc();
-        }
-    }
+    [inc_feedback_timeout() => .streaming_feedback_timeout_total.inc();]
     /// Record a `SoraNet` provisioning failure.
-    pub fn inc_soranet_provision_failure(&self) {
-        if self.is_enabled() {
-            self.metrics.streaming_soranet_provision_fail_total.inc();
-        }
-    }
+    [inc_soranet_provision_failure() => .streaming_soranet_provision_fail_total.inc();]
     /// Record a `SoraNet` provisioning queue drop with the provided reason.
-    pub fn inc_soranet_provision_queue_drop(&self, reason: &'static str) {
-        if self.is_enabled() {
-            self.metrics
-                .streaming_soranet_provision_queue_drop_total
-                .with_label_values(&[reason])
-                .inc();
-        }
-    }
+    [inc_soranet_provision_queue_drop(reason: &'static str) =>
+        .streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]).inc();]
     /// Record a privacy redaction failure event.
-    pub fn inc_privacy_redaction_failure(&self) {
-        if self.is_enabled() {
-            self.metrics.streaming_privacy_redaction_fail_total.inc();
-        }
+    [inc_privacy_redaction_failure() => .streaming_privacy_redaction_fail_total.inc();]
     }
     fn emit_event(&self, msg: &str, event: &TelemetryEvent) {
         if !self.is_enabled() {
@@ -5108,6 +4987,49 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
         }
     }
 }
+macro_rules! telemetry_atomic_enabled_metric_methods {
+    () => {};
+    ($(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] $($rest:tt)*) => {
+        $(#[$attr])*
+        pub fn $name(&self $(, $arg: $arg_ty)*) {
+            if self.enabled.load(Ordering::Relaxed) {
+                self.metrics $($op)*
+            }
+        }
+        telemetry_atomic_enabled_metric_methods! { $($rest)* }
+    };
+    ($(#[$attr:meta])* [$name:ident($first:ident: $first_ty:ty, $($arg:ident: $arg_ty:ty,)*) ;] $($rest:tt)*) => {
+        $(#[$attr])*
+        pub fn $name(&self, $first: $first_ty $(, $arg: $arg_ty)*) {
+            if self.enabled.load(Ordering::Relaxed) {
+                self.metrics.$name($first $(, $arg)*,);
+            }
+        }
+        telemetry_atomic_enabled_metric_methods! { $($rest)* }
+    };
+    ($(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) ;] $($rest:tt)*) => {
+        $(#[$attr])*
+        pub fn $name(&self $(, $arg: $arg_ty)*) {
+            if self.enabled.load(Ordering::Relaxed) {
+                self.metrics.$name($($arg),*);
+            }
+        }
+        telemetry_atomic_enabled_metric_methods! { $($rest)* }
+    };
+}
+macro_rules! telemetry_atomic_enabled_metric_methods_early_return {
+    ($( $(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] )+) => {
+        $(
+            $(#[$attr])*
+            pub fn $name(&self $(, $arg: $arg_ty)*) {
+                if !self.enabled.load(Ordering::Relaxed) {
+                    return;
+                }
+                self.metrics $($op)*
+            }
+        )+
+    };
+}
 impl Telemetry {
     #[inline]
     fn default_micropayment_samples() -> MicropaymentSampleStore {
@@ -5183,11 +5105,10 @@ impl Telemetry {
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record one bounded Musubi finalized-query cursor failure.
-    pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.musubi.inc_cursor_failure(reason);
-        }
+    [record_musubi_cursor_failure(reason: MusubiCursorFailureReasonV1) =>
+        .musubi.inc_cursor_failure(reason);]
     }
     /// Enable telemetry observations at runtime.
     #[inline]
@@ -5199,29 +5120,15 @@ impl Telemetry {
     pub fn disable(&self) {
         self.set_enabled(false);
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record `NEW_VIEW` publish (counter placeholder; wired later).
-    pub fn inc_new_view_publish(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_new_view_publish_total.inc();
-        }
-    }
+    [inc_new_view_publish() => .sumeragi_new_view_publish_total.inc();]
     /// Record `NEW_VIEW` received (counter placeholder; wired later).
-    pub fn inc_new_view_recv(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_new_view_recv_total.inc();
-        }
-    }
+    [inc_new_view_recv() => .sumeragi_new_view_recv_total.inc();]
     /// Record `NEW_VIEW` dropped because the peer holds a conflicting lock.
-    pub fn inc_new_view_dropped_by_lock(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_new_view_dropped_by_lock_total.inc();
-        }
-    }
+    [inc_new_view_dropped_by_lock() => .sumeragi_new_view_dropped_by_lock_total.inc();]
     /// Record commit-conflict detection (safety recovery).
-    pub fn inc_commit_conflict_detected(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_commit_conflict_detected_total.inc();
-        }
+    [inc_commit_conflict_detected() => .sumeragi_commit_conflict_detected_total.inc();]
     }
     /// Record the outcome of planning a missing-block fetch on QC-first arrival.
     #[allow(clippy::cast_precision_loss)]
@@ -5251,132 +5158,46 @@ impl Telemetry {
             .sumeragi_missing_block_fetch_dwell_ms
             .observe(dwell.as_millis() as f64);
     }
+    telemetry_atomic_enabled_metric_methods_early_return! {
     /// Record that a block-sync QC was quarantined due to missing context.
-    pub fn inc_blocksync_qc_quarantine(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.blocksync_qc_quarantine_total.inc();
-    }
+    [inc_blocksync_qc_quarantine() => .blocksync_qc_quarantine_total.inc();]
     /// Record that a quarantined block-sync QC was revalidated.
-    pub fn inc_blocksync_qc_revalidated(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.blocksync_qc_revalidated_total.inc();
-    }
+    [inc_blocksync_qc_revalidated() => .blocksync_qc_revalidated_total.inc();]
     /// Record a permanent block-sync QC drop grouped by reason.
-    pub fn inc_blocksync_qc_final_drop(&self, reason: &'static str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .blocksync_qc_final_drop_total
-            .with_label_values(&[reason])
-            .inc();
-    }
+    [inc_blocksync_qc_final_drop(reason: &'static str) =>
+        .blocksync_qc_final_drop_total.with_label_values(&[reason]).inc();]
     /// Record that a QC was deferred due to missing payload.
-    pub fn inc_qc_deferred_missing_payload(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.qc_deferred_missing_payload_total.inc();
-    }
+    [inc_qc_deferred_missing_payload() => .qc_deferred_missing_payload_total.inc();]
     /// Record that a deferred QC was resolved.
-    pub fn inc_qc_deferred_resolved(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.qc_deferred_resolved_total.inc();
-    }
+    [inc_qc_deferred_resolved() => .qc_deferred_resolved_total.inc();]
     /// Record that a deferred QC expired.
-    pub fn inc_qc_deferred_expired(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.qc_deferred_expired_total.inc();
-    }
+    [inc_qc_deferred_expired() => .qc_deferred_expired_total.inc();]
     /// Record a consensus defer caused by an empty commit topology.
-    pub fn inc_consensus_empty_commit_topology_defer(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .consensus_empty_commit_topology_defer_total
-            .inc();
-    }
+    [inc_consensus_empty_commit_topology_defer() =>
+        .consensus_empty_commit_topology_defer_total.inc();]
     /// Record an empty-topology recovery escalation to forced view change.
-    pub fn inc_consensus_empty_commit_topology_escalation(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .consensus_empty_commit_topology_escalation_total
-            .inc();
-    }
+    [inc_consensus_empty_commit_topology_escalation() =>
+        .consensus_empty_commit_topology_escalation_total.inc();]
     /// Record a transition in the bounded consensus recovery state machine.
-    pub fn inc_consensus_recovery_state_transition(&self, state: &'static str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .consensus_recovery_state_transitions_total
-            .with_label_values(&[state])
-            .inc();
-    }
+    [inc_consensus_recovery_state_transition(state: &'static str) =>
+        .consensus_recovery_state_transitions_total.with_label_values(&[state]).inc();]
     /// Record deterministic hard-cap escalations for height-scoped missing-block recovery.
-    pub fn inc_consensus_missing_block_height_escalation(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .consensus_missing_block_height_escalation_total
-            .inc();
-    }
+    [inc_consensus_missing_block_height_escalation() =>
+        .consensus_missing_block_height_escalation_total.inc();]
     /// Record sidecar mismatch quarantines in fail-closed mode.
-    pub fn inc_consensus_sidecar_quarantine(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.consensus_sidecar_quarantine_total.inc();
-    }
+    [inc_consensus_sidecar_quarantine() => .consensus_sidecar_quarantine_total.inc();]
     /// Record sidecar mismatch final drops after retry/TTL bounds.
-    pub fn inc_consensus_sidecar_final_drop(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.consensus_sidecar_final_drop_total.inc();
-    }
+    [inc_consensus_sidecar_final_drop() => .consensus_sidecar_final_drop_total.inc();]
     /// Record range-pull escalation attempts.
-    pub fn inc_blocksync_range_pull_escalation(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.blocksync_range_pull_escalation_total.inc();
-    }
+    [inc_blocksync_range_pull_escalation() => .blocksync_range_pull_escalation_total.inc();]
     /// Record range-pull recovery success.
-    pub fn inc_blocksync_range_pull_success(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.blocksync_range_pull_success_total.inc();
-    }
+    [inc_blocksync_range_pull_success() => .blocksync_range_pull_success_total.inc();]
     /// Record range-pull recovery expiry/failure.
-    pub fn inc_blocksync_range_pull_failure(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics.blocksync_range_pull_failure_total.inc();
-    }
+    [inc_blocksync_range_pull_failure() => .blocksync_range_pull_failure_total.inc();]
     /// Observe how long a recovery round stayed stuck before making progress/escalating.
     #[allow(clippy::cast_precision_loss)]
-    pub fn observe_consensus_recovery_stuck_round(&self, age: Duration) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .consensus_recovery_stuck_round_seconds
-            .observe(age.as_secs_f64());
+    [observe_consensus_recovery_stuck_round(age: Duration) =>
+        .consensus_recovery_stuck_round_seconds.observe(age.as_secs_f64());]
     }
     #[inline]
     fn da_gate_reason_label(reason: GateReason) -> (&'static str, u64) {
@@ -5432,59 +5253,26 @@ impl Telemetry {
             .inc();
         self.metrics.sumeragi_da_gate_last_satisfied.set(code);
     }
+    telemetry_atomic_enabled_metric_methods_early_return! {
     /// Record the outcome of the DA manifest guard for a block payload.
-    pub fn note_da_manifest_guard(&self, result: ManifestGuardResult, reason: ManifestGuardReason) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_da_manifest_guard_total
-            .with_label_values(&[result.label(), reason.label()])
-            .inc();
-    }
+    [note_da_manifest_guard(result: ManifestGuardResult, reason: ManifestGuardReason) =>
+                    .sumeragi_da_manifest_guard_total
+                    .with_label_values(&[result.label(), reason.label()])
+                    .inc();]
     /// Record the outcome of the DA manifest cache lookup.
-    pub fn note_da_manifest_cache(&self, result: CacheResult) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_da_manifest_cache_total
-            .with_label_values(&[result.label()])
-            .inc();
-    }
+    [note_da_manifest_cache(result: CacheResult) =>
+        .sumeragi_da_manifest_cache_total.with_label_values(&[result.label()]).inc();]
     /// Record the outcome of the DA spool cache lookup.
-    pub fn note_da_spool_cache(&self, kind: DaSpoolCacheKind, result: CacheResult) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_da_spool_cache_total
-            .with_label_values(&[kind.label(), result.label()])
-            .inc();
-    }
+    [note_da_spool_cache(kind: DaSpoolCacheKind, result: CacheResult) =>
+        .sumeragi_da_spool_cache_total.with_label_values(&[kind.label(), result.label()]).inc();]
     /// Record how a DA pin intent from the spool was handled.
-    pub fn note_da_pin_intent_spool(
-        &self,
-        result: PinIntentSpoolResult,
-        reason: PinIntentSpoolReason,
-    ) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_da_pin_intent_spool_total
-            .with_label_values(&[result.label(), reason.label()])
-            .inc();
-    }
+    [note_da_pin_intent_spool(result: PinIntentSpoolResult, reason: PinIntentSpoolReason) =>
+                    .sumeragi_da_pin_intent_spool_total
+                    .with_label_values(&[result.label(), reason.label()])
+                    .inc();]
     /// Record a QC validation error grouped by reason.
-    pub fn note_qc_validation_error(&self, reason: &'static str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_qc_validation_errors_total
-            .with_label_values(&[reason])
-            .inc();
+    [note_qc_validation_error(reason: &'static str) =>
+        .sumeragi_qc_validation_errors_total.with_label_values(&[reason]).inc();]
     }
     /// Record a validation-gate reject grouped by reason before voting.
     pub fn note_validation_reject(&self, reason: &'static str, height: u64, view: u64) {
@@ -5519,34 +5307,16 @@ impl Telemetry {
             _ => 0,
         }
     }
+    telemetry_atomic_enabled_metric_methods_early_return! {
     /// Record which roster source was used for a block-sync update.
-    pub fn note_block_sync_roster_source(&self, source: &str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_block_sync_roster_source_total
-            .with_label_values(&[source])
-            .inc();
-    }
+    [note_block_sync_roster_source(source: &str) =>
+        .sumeragi_block_sync_roster_source_total.with_label_values(&[source]).inc();]
     /// Record why a block-sync update was dropped due to roster validation.
-    pub fn note_block_sync_roster_drop(&self, reason: &str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_block_sync_roster_drop_total
-            .with_label_values(&[reason])
-            .inc();
-    }
+    [note_block_sync_roster_drop(reason: &str) =>
+        .sumeragi_block_sync_roster_drop_total.with_label_values(&[reason]).inc();]
     /// Record that a block-sync `ShareBlocks` batch was dropped as unsolicited.
-    pub fn note_block_sync_unsolicited_share_blocks_drop(&self) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_block_sync_share_blocks_unsolicited_total
-            .inc();
+    [note_block_sync_unsolicited_share_blocks_drop() =>
+        .sumeragi_block_sync_share_blocks_unsolicited_total.inc();]
     }
     /// Record a view-change trigger grouped by cause.
     pub fn note_view_change_cause(&self, cause: &'static str) {
@@ -5581,15 +5351,10 @@ impl Telemetry {
             .with_label_values(&[phase, "counted"])
             .observe(counted as f64);
     }
+    telemetry_atomic_enabled_metric_methods_early_return! {
     /// Record an invalid-signature drop grouped by message kind and whether it was logged or throttled.
-    pub fn inc_invalid_signature(&self, kind: &'static str, outcome: &'static str) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_invalid_signature_total
-            .with_label_values(&[kind, outcome])
-            .inc();
+    [inc_invalid_signature(kind: &'static str, outcome: &'static str) =>
+        .sumeragi_invalid_signature_total.with_label_values(&[kind, outcome]).inc();]
     }
     /// Record an AXT policy rejection grouped by lane id and reason.
     pub fn note_axt_policy_reject(
@@ -5609,27 +5374,17 @@ impl Telemetry {
             .with_label_values(&[lane_label.as_str(), reason])
             .inc();
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record whether AXT policy hydration pulled from cache or required a rebuild.
     ///
     /// Canonical `event` labels: `cache_hit` and `cache_miss`.
-    pub fn note_axt_policy_snapshot_cache_event(&self, event: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .axt_policy_snapshot_cache_events_total
-                .with_label_values(&[event])
-                .inc();
-        }
-    }
+    [note_axt_policy_snapshot_cache_event(event: &'static str) =>
+        .axt_policy_snapshot_cache_events_total.with_label_values(&[event]).inc();]
     /// Record an AXT proof cache event grouped by label.
     ///
     /// Canonical `event` labels: `hit`, `miss`, `expired`, `cleared`, `pruned`.
-    pub fn note_axt_proof_cache_event(&self, event: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .axt_proof_cache_events_total
-                .with_label_values(&[event])
-                .inc();
-        }
+    [note_axt_proof_cache_event(event: &'static str) =>
+        .axt_proof_cache_events_total.with_label_values(&[event]).inc();]
     }
     /// Publish the current AXT proof cache state for a dataspace.
     ///
@@ -5740,13 +5495,10 @@ impl Telemetry {
             _ => {}
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Update gauges tracking missing-block retry posture.
-    pub fn set_missing_block_retry_window_ms(&self, retry_window_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_missing_block_retry_window_ms
-                .set(retry_window_ms);
-        }
+    [set_missing_block_retry_window_ms(retry_window_ms: u64) =>
+        .sumeragi_missing_block_retry_window_ms.set(retry_window_ms);]
     }
     /// Update gauges tracking inflight missing-block requests.
     pub fn set_missing_block_inflight(&self, active: usize, oldest_ms: u64) {
@@ -5764,20 +5516,12 @@ impl Telemetry {
             self.metrics.sumeragi_missing_block_dwell_ms.observe(ms);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment when a Witness-availability QC is assembled (placeholder counter).
-    pub fn inc_wa_qc_assembled(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_wa_qc_assembled_total.inc();
-        }
-    }
+    [inc_wa_qc_assembled() => .sumeragi_wa_qc_assembled_total.inc();]
     /// Increment VRF commit/reveal reject counter labeled by reason.
-    pub fn inc_vrf_reject_by_reason(&self, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_vrf_rejects_total_by_reason
-                .with_label_values(&[reason])
-                .inc();
-        }
+    [inc_vrf_reject_by_reason(reason: &'static str) =>
+        .sumeragi_vrf_rejects_total_by_reason.with_label_values(&[reason]).inc();]
     }
     /// Record a consensus membership mismatch against a peer for the given height/view.
     pub fn note_membership_mismatch(
@@ -5826,29 +5570,15 @@ impl Telemetry {
             self.metrics.sumeragi_membership_epoch.set(epoch);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set highest QC height. Placeholder uses existing gauge for visibility.
-    pub fn set_highest_qc_height(&self, h: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_highest_qc_height.set(h);
-        }
-    }
+    [set_highest_qc_height(h: u64) => .sumeragi_highest_qc_height.set(h);]
     /// Set current leader index. Placeholder; currently unused.
-    pub fn set_leader_index(&self, idx: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_leader_index.set(idx);
-        }
-    }
+    [set_leader_index(idx: u64) => .sumeragi_leader_index.set(idx);]
     /// Set locked QC height.
-    pub fn set_locked_qc_height(&self, h: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_locked_qc_height.set(h);
-        }
-    }
+    [set_locked_qc_height(h: u64) => .sumeragi_locked_qc_height.set(h);]
     /// Set locked QC view.
-    pub fn set_locked_qc_view(&self, v: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_locked_qc_view.set(v);
-        }
+    [set_locked_qc_view(v: u64) => .sumeragi_locked_qc_view.set(v);]
     }
     /// Update gauges that track transaction queue load and saturation as observed by consensus.
     pub fn record_tx_queue_backpressure(
@@ -5917,31 +5647,14 @@ impl Telemetry {
                 .inc();
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment Torii pre-auth rejection counter for the provided reason label.
-    pub fn inc_torii_pre_auth_reject(&self, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_pre_auth_reject_total
-                .with_label_values(&[reason])
-                .inc();
-        }
-    }
+    [inc_torii_pre_auth_reject(reason: &'static str) =>
+        .torii_pre_auth_reject_total.with_label_values(&[reason]).inc();]
     /// Increment Torii operator auth event counters.
-    pub fn inc_torii_operator_auth(
-        &self,
-        action: &'static str,
-        result: &'static str,
-        reason: &'static str,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_operator_auth(action, result, reason);
-        }
-    }
+    [inc_torii_operator_auth(action: &'static str, result: &'static str, reason: &'static str);]
     /// Increment Torii operator auth lockout counters.
-    pub fn inc_torii_operator_auth_lockout(&self, action: &'static str, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_operator_auth_lockout(action, reason);
-        }
+    [inc_torii_operator_auth_lockout(action: &'static str, reason: &'static str);]
     }
     /// Record a signature-limit rejection with the observed count and configured cap.
     pub fn inc_torii_signature_limit_reject(
@@ -5960,154 +5673,54 @@ impl Telemetry {
             self.metrics.torii_signature_limit_max.set(limit);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record a rejection when NTS is unhealthy for time-sensitive admission.
-    pub fn inc_torii_nts_unhealthy_reject(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_nts_unhealthy_reject_total.inc();
-        }
-    }
+    [inc_torii_nts_unhealthy_reject() => .torii_nts_unhealthy_reject_total.inc();]
     /// Record a rejection of a transaction directly signed by a multisig account.
-    pub fn inc_torii_multisig_direct_sign_reject(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_multisig_direct_sign_reject_total.inc();
-        }
-    }
+    [inc_torii_multisig_direct_sign_reject() => .torii_multisig_direct_sign_reject_total.inc();]
     /// Increment Torii `SoraFS` admission counter for the given result/reason pair.
-    pub fn inc_torii_sorafs_admission(&self, result: &'static str, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_sorafs_admission_total
-                .with_label_values(&[result, reason])
-                .inc();
-        }
+    [inc_torii_sorafs_admission(result: &'static str, reason: &'static str) =>
+        .torii_sorafs_admission_total.with_label_values(&[result, reason]).inc();]
     }
     /// Record an SNS registrar outcome grouped by result and suffix.
     pub fn inc_sns_registrar_status(&self, result: &'static str, suffix: &str) {
         self.metrics.inc_sns_registrar_status(result, suffix);
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record an invalid Torii address observation labeled by endpoint + reason.
-    pub fn inc_torii_address_invalid(&self, endpoint: &'static str, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_address_invalid(endpoint, reason);
-        }
-    }
+    [inc_torii_address_invalid(endpoint: &'static str, reason: &'static str);]
     /// Record the domain kind observed for a successfully parsed address.
-    pub fn inc_torii_address_domain(&self, endpoint: &'static str, domain_kind: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_address_domain(endpoint, domain_kind);
-        }
-    }
+    [inc_torii_address_domain(endpoint: &'static str, domain_kind: &str);]
     /// Record the `account literal` selection emitted by a Torii endpoint.
-    pub fn inc_torii_account_literal(&self, endpoint: &'static str, format: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_account_literal(endpoint, format);
-        }
-    }
+    [inc_torii_account_literal(endpoint: &'static str, format: &'static str);]
     /// Record a Norito-RPC gate observation grouped by rollout stage and outcome.
-    pub fn inc_torii_norito_rpc_gate(&self, stage: &'static str, outcome: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_norito_rpc_gate(stage, outcome);
-        }
-    }
+    [inc_torii_norito_rpc_gate(stage: &'static str, outcome: &'static str);]
     /// Record a Torii Local-12 selector collision categorized by endpoint + kind.
-    pub fn inc_torii_address_collision(&self, endpoint: &'static str, kind: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_address_collision(endpoint, kind);
-        }
-    }
+    [inc_torii_address_collision(endpoint: &'static str, kind: &'static str);]
     /// Record a Torii Local-12 selector collision grouped by endpoint + domain.
-    pub fn inc_torii_address_collision_domain(&self, endpoint: &'static str, domain: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .inc_torii_address_collision_domain(endpoint, domain);
-        }
-    }
+    [inc_torii_address_collision_domain(endpoint: &'static str, domain: &str);]
     /// Record a DA rent quote projection for observability.
-    pub fn record_da_rent_quote(
-        &self,
-        cluster_label: &str,
-        storage_label: &str,
-        gib_months: u64,
-        rent_quote: &DaRentQuote,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_da_rent_quote(cluster_label, storage_label, gib_months, rent_quote);
-        }
-    }
+    [record_da_rent_quote(
+        cluster_label: &str, storage_label: &str, gib_months: u64, rent_quote: &DaRentQuote
+    );]
     /// Observe the latency of DA chunking performed by Torii.
-    pub fn observe_da_chunking_seconds(&self, seconds: f64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.observe_da_chunking_seconds(seconds);
-        }
-    }
+    [observe_da_chunking_seconds(seconds: f64);]
     /// Record a Torii DA spool batch write outcome.
-    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_torii_da_spool_batch(outcome, write_ms);
-        }
-    }
+    [record_torii_da_spool_batch(outcome: &'static str, write_ms: f64);]
     /// Record Torii DA spool artifact outcomes.
-    pub fn record_torii_da_spool_artifact(
-        &self,
-        kind: &'static str,
-        outcome: &'static str,
-        count: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_torii_da_spool_artifact(kind, outcome, count);
-        }
-    }
+    [record_torii_da_spool_artifact(kind: &'static str, outcome: &'static str, count: u64);]
     /// Set the current Torii DA spool queue depth.
-    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_torii_da_spool_queue_depth(depth);
-        }
-    }
+    [set_torii_da_spool_queue_depth(depth: u64);]
     /// Record the result of a DA receipt ingestion attempt.
-    pub fn record_da_receipt_outcome(
-        &self,
-        lane_id: u32,
-        epoch: u64,
-        sequence: u64,
-        outcome: &str,
-        cursor_advanced: bool,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_da_receipt_outcome(
-                lane_id,
-                epoch,
-                sequence,
-                outcome,
-                cursor_advanced,
-            );
-        }
-    }
+    [record_da_receipt_outcome(
+        lane_id: u32, epoch: u64, sequence: u64, outcome: &str, cursor_advanced: bool,
+    );]
     /// Update the highest-seen DA receipt cursor for a lane/epoch.
-    pub fn set_da_receipt_cursor(&self, lane_id: u32, epoch: u64, sequence: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_da_receipt_cursor(lane_id, epoch, sequence);
-        }
-    }
+    [set_da_receipt_cursor(lane_id: u32, epoch: u64, sequence: u64);]
     /// Remove DA receipt metric state owned by retired lanes.
-    pub fn prune_da_receipt_lanes(&self, lane_ids: impl IntoIterator<Item = u32>) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.prune_da_receipt_lanes(lane_ids);
-        }
-    }
+    [prune_da_receipt_lanes(lane_ids: impl IntoIterator<Item = u32>);]
     /// Record a DA shard cursor event with lane/shard labels.
-    pub fn record_da_shard_cursor_event(
-        &self,
-        event: &str,
-        lane_id: u32,
-        shard_id: u32,
-        block_height: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_da_shard_cursor_event(event, lane_id, shard_id, block_height);
-        }
+    [record_da_shard_cursor_event(event: &str, lane_id: u32, shard_id: u32, block_height: u64);]
     }
     /// Record a DA shard cursor violation derived from the supplied error.
     pub fn record_da_shard_cursor_violation(
@@ -6125,198 +5738,62 @@ impl Telemetry {
         };
         self.record_da_shard_cursor_event(reason, lane_id, shard_id, block_height);
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record the shard cursor lag measured in blocks.
-    pub fn record_da_shard_cursor_lag(&self, lane_id: u32, shard_id: u32, lag_blocks: i64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .set_da_shard_cursor_lag(lane_id, shard_id, lag_blocks);
-        }
-    }
+    [record_da_shard_cursor_lag(lane_id: u32, shard_id: u32, lag_blocks: i64) =>
+        .set_da_shard_cursor_lag(lane_id, shard_id, lag_blocks);]
     /// Record the projected `SoraFS` fee for `provider`.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_fee_projection(provider, fee);
-        }
-    }
+    [record_sorafs_fee_projection(provider: &str, fee: &Quantity);]
     /// Record `SoraFS` egress counters and observer drift for `provider`.
-    pub fn record_sorafs_egress_reconciliation(
-        &self,
-        provider: &str,
-        billing_bytes: u64,
-        gateway_bytes: Option<u64>,
+    [record_sorafs_egress_reconciliation(
+        provider: &str, billing_bytes: u64, gateway_bytes: Option<u64>,
         orchestrator_bytes: Option<u64>,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_egress_reconciliation(
-                provider,
-                billing_bytes,
-                gateway_bytes,
-                orchestrator_bytes,
-            );
-        }
-    }
+    );]
     /// Record the latest accepted `SoraFS` reputation snapshot metrics.
-    pub fn record_sorafs_reputation_snapshot(
-        &self,
-        generated_at_unix: u64,
-        observed_at_unix: u64,
-        provider_scores: &[(&str, u16, bool)],
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_reputation_snapshot(
-                generated_at_unix,
-                observed_at_unix,
-                provider_scores,
-            );
-        }
-    }
+    [record_sorafs_reputation_snapshot(
+        generated_at_unix: u64, observed_at_unix: u64, provider_scores: &[(&str, u16, bool)],
+    );]
     /// Record one `SoraFS` orderbook API response for a routed endpoint.
-    pub fn record_sorafs_orderbook_api_request(&self, route: &str, is_error: bool) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_orderbook_api_request(route, is_error);
-        }
-    }
+    [record_sorafs_orderbook_api_request(route: &str, is_error: bool);]
     /// Mark the finalized `SoraFS` orderbook projection unready while
     /// retaining the last complete metric values for diagnosis.
-    pub fn mark_sorafs_orderbook_finalized_projection_unready(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .mark_sorafs_orderbook_finalized_projection_unready();
-        }
-    }
+    [mark_sorafs_orderbook_finalized_projection_unready();]
     /// Record one fail-closed finalized `SoraFS` orderbook projection failure.
-    pub fn record_sorafs_orderbook_finalized_projection_failure(&self, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_orderbook_finalized_projection_failure(reason);
-        }
-    }
+    [record_sorafs_orderbook_finalized_projection_failure(reason: &str);]
     /// Publish one complete finalized `SoraFS` orderbook metric projection.
     #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_orderbook_finalized_projection(
-        &self,
-        finalized_height: u64,
-        finalized_timestamp_seconds: u64,
-        event_count_deltas: [u64; 8],
-        open_depth_gib: [[u64; 2]; 3],
-        matcher_lag_seconds: u64,
-        settlement_backlog: u64,
-        oldest_settlement_age_seconds: u64,
-        escrow_runway_seconds: u64,
-        book_revision: u64,
+    [record_sorafs_orderbook_finalized_projection(
+        finalized_height: u64, finalized_timestamp_seconds: u64, event_count_deltas: [u64; 8],
+        open_depth_gib: [[u64; 2]; 3], matcher_lag_seconds: u64, settlement_backlog: u64,
+        oldest_settlement_age_seconds: u64, escrow_runway_seconds: u64, book_revision: u64,
         matcher_scan_book_revision: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_orderbook_finalized_projection(
-                finalized_height,
-                finalized_timestamp_seconds,
-                event_count_deltas,
-                open_depth_gib,
-                matcher_lag_seconds,
-                settlement_backlog,
-                oldest_settlement_age_seconds,
-                escrow_runway_seconds,
-                book_revision,
-                matcher_scan_book_revision,
-            );
-        }
-    }
+    );]
     /// Record one authenticated `SoraFS` gateway-compliance control response.
-    pub fn record_sorafs_gateway_compliance_request(&self, operation: &str, outcome: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_gateway_compliance_request(operation, outcome);
-        }
-    }
+    [record_sorafs_gateway_compliance_request(operation: &str, outcome: &str);]
     /// Record one `SoraFS` gateway-compliance failure.
-    pub fn record_sorafs_gateway_compliance_failure(&self, surface: &str, class: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_gateway_compliance_failure(surface, class);
-        }
-    }
+    [record_sorafs_gateway_compliance_failure(surface: &str, class: &str);]
     /// Record one `SoraFS` gateway-compliance serving decision.
-    pub fn record_sorafs_gateway_compliance_serving_decision(
-        &self,
-        subject_kind: &str,
-        disposition: &str,
-        source: &str,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_gateway_compliance_serving_decision(
-                    subject_kind,
-                    disposition,
-                    source,
-                );
-        }
-    }
+    [record_sorafs_gateway_compliance_serving_decision(
+        subject_kind: &str, disposition: &str, source: &str,
+    );]
     /// Publish one complete `SoraFS` gateway-compliance serving-catalog snapshot.
-    pub fn record_sorafs_gateway_compliance_serving_catalog(
-        &self,
-        sequence: Option<u64>,
-        valid_until_unix: Option<u64>,
-        ready: bool,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_gateway_compliance_serving_catalog(
-                    sequence,
-                    valid_until_unix,
-                    ready,
-                );
-        }
-    }
+    [record_sorafs_gateway_compliance_serving_catalog(
+        sequence: Option<u64>, valid_until_unix: Option<u64>, ready: bool,
+    );]
     /// Mark the `SoraFS` gateway-compliance serving policy unavailable.
-    pub fn mark_sorafs_gateway_compliance_unready(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.mark_sorafs_gateway_compliance_unready();
-        }
-    }
+    [mark_sorafs_gateway_compliance_unready();]
     /// Publish one complete, reconciled `SoraFS` reserve projection.
-    pub fn record_sorafs_reserve_finalized_projection(
-        &self,
-        projection: &SorafsReserveFinalizedProjection,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_reserve_finalized_projection(projection);
-        }
-    }
+    [record_sorafs_reserve_finalized_projection(projection: &SorafsReserveFinalizedProjection);]
     /// Mark the finalized `SoraFS` reserve projection unavailable.
-    pub fn mark_sorafs_reserve_finalized_projection_unready(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .mark_sorafs_reserve_finalized_projection_unready();
-        }
-    }
+    [mark_sorafs_reserve_finalized_projection_unready();]
     /// Record one failed finalized `SoraFS` reserve projection attempt.
-    pub fn record_sorafs_reserve_finalized_projection_failure(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_reserve_finalized_projection_failure();
-        }
-    }
+    [record_sorafs_reserve_finalized_projection_failure();]
     /// Record one `SoraFS` reserve service request outcome.
-    pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_reserve_service_request(route, result);
-        }
-    }
+    [record_sorafs_reserve_service_request(route: &str, result: &str);]
     /// Increment one `SoraFS` reserve service rate-limit counter.
-    pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .inc_sorafs_reserve_service_rate_limit(route, reason);
-        }
-    }
+    [inc_sorafs_reserve_service_rate_limit(route: &str, reason: &str);]
     /// Increment the `SoraFS` dispute counter for the provided result label.
-    pub fn inc_sorafs_disputes(&self, result: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_sorafs_disputes(result);
-        }
+    [inc_sorafs_disputes(result: &'static str);]
     }
     /// Record a `SoraFS` micropayment usage sample for the given provider.
     #[cfg(feature = "telemetry")]
@@ -6414,27 +5891,13 @@ impl Telemetry {
     pub fn sorafs_micropayment_samples(&self) -> Vec<MicropaymentSampleStatus> {
         Vec::new()
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record a proof stream outcome and optional latency.
     #[cfg(feature = "telemetry")]
-    pub fn record_sorafs_proof_stream_event(
-        &self,
-        kind: &str,
-        result: &str,
-        reason: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        latency_ms: Option<f64>,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_proof_stream_event(
-                kind,
-                result,
-                reason,
-                provider_id,
-                tier,
-                latency_ms,
-            );
-        }
+    [record_sorafs_proof_stream_event(
+        kind: &str, result: &str, reason: Option<&str>, provider_id: Option<&str>,
+        tier: Option<&str>, latency_ms: Option<f64>,
+    );]
     }
     /// Record proof-health alert telemetry for a provider.
     #[cfg(feature = "telemetry")]
@@ -6450,180 +5913,60 @@ impl Telemetry {
     pub fn record_sorafs_proof_health_alert(&self, alert: &SorafsProofHealthAlert) {
         let _ = alert;
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment canonical active-request accounting for a SoraFS gateway route.
-    pub fn start_sorafs_gateway_request(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.start_sorafs_gateway_request(labels);
-        }
-    }
+    [start_sorafs_gateway_request(labels: SorafsGatewayRequestMetricLabels<'_>);]
     /// Complete canonical request accounting and record the response/TTFB metrics.
-    pub fn finish_sorafs_gateway_request(
-        &self,
-        labels: SorafsGatewayResponseMetricLabels<'_>,
-        ttfb: Duration,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .finish_sorafs_gateway_request(labels, ttfb.as_secs_f64() * 1000.0);
-        }
-    }
+    [finish_sorafs_gateway_request(labels: SorafsGatewayResponseMetricLabels<'_>, ttfb: Duration) =>
+        .finish_sorafs_gateway_request(labels, ttfb.as_secs_f64() * 1000.0);]
     /// Record one canonical SoraFS gateway proof-verification outcome.
-    pub fn record_sorafs_gateway_proof_verification(
-        &self,
-        profile_version: &str,
-        result: &str,
-        error_code: &str,
-        duration: Duration,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_gateway_proof_verification(
-                profile_version,
-                result,
-                error_code,
-                duration.as_secs_f64() * 1000.0,
-            );
-        }
-    }
+    [record_sorafs_gateway_proof_verification(
+        profile_version: &str, result: &str, error_code: &str, duration: Duration,
+    ) =>
+        .record_sorafs_gateway_proof_verification(
+                        profile_version,
+                        result,
+                        error_code,
+                        duration.as_secs_f64() * 1000.0,
+                    );]
     /// Record `SoraFS` chunk-range fetch telemetry exposed by Torii.
     #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_chunk_range(
-        &self,
-        endpoint: &str,
-        status: u16,
-        bytes: u64,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        latency_ms: Option<f64>,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_chunk_range(
-                endpoint,
-                status,
-                bytes,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-                latency_ms,
-            );
-        }
-    }
+    [record_sorafs_chunk_range(
+        endpoint: &str, status: u16, bytes: u64, chunker: Option<&str>, profile: Option<&str>,
+        provider_id: Option<&str>, tier: Option<&str>, latency_ms: Option<f64>,
+    );]
     /// Update the provider range capability gauge.
-    pub fn set_sorafs_provider_range_capability(&self, feature: &str, count: i64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .set_sorafs_provider_range_capability(feature, count);
-        }
-    }
+    [set_sorafs_provider_range_capability(feature: &str, count: i64);]
     /// Increment the committed routing-authority cache outcome counter.
-    pub fn inc_sorafs_routing_authority_cache(&self, outcome: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_sorafs_routing_authority_cache(outcome);
-        }
-    }
+    [inc_sorafs_routing_authority_cache(outcome: &str);]
     /// Increment the range fetch throttle counter for `reason`.
-    pub fn inc_sorafs_range_fetch_throttle(&self, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_sorafs_range_fetch_throttle(reason);
-        }
-    }
+    [inc_sorafs_range_fetch_throttle(reason: &str);]
     /// Increment the active range fetch concurrency gauge.
-    pub fn inc_sorafs_range_fetch_concurrency(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_sorafs_range_fetch_concurrency();
-        }
-    }
+    [inc_sorafs_range_fetch_concurrency();]
     /// Decrement the active range fetch concurrency gauge.
-    pub fn dec_sorafs_range_fetch_concurrency(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.dec_sorafs_range_fetch_concurrency();
-        }
-    }
+    [dec_sorafs_range_fetch_concurrency();]
     /// Record a GAR policy violation observed by the gateway.
-    pub fn record_sorafs_gar_violation(&self, reason: &str, detail: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_gar_violation(reason, detail);
-        }
-    }
+    [record_sorafs_gar_violation(reason: &str, detail: &str);]
     /// Record a deterministic gateway refusal emitted by Torii.
-    pub fn record_sorafs_gateway_refusal(
-        &self,
-        status: u16,
-        reason: &str,
-        profile: &str,
-        provider_id: &str,
-        scope: &str,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_gateway_refusal(status, reason, profile, provider_id, scope);
-        }
-    }
+    [record_sorafs_gateway_refusal(
+        status: u16, reason: &str, profile: &str, provider_id: &str, scope: &str
+    );]
     /// Publish metadata about the canonical `SoraFS` gateway fixture bundle.
-    pub fn set_sorafs_gateway_fixture_metadata(
-        &self,
-        version: &str,
-        profile: &str,
-        digest_hex: &str,
-        released_at_unix: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_sorafs_gateway_fixture_metadata(
-                version,
-                profile,
-                digest_hex,
-                released_at_unix,
-            );
-        }
-    }
+    [set_sorafs_gateway_fixture_metadata(
+        version: &str, profile: &str, digest_hex: &str, released_at_unix: u64,
+    );]
     /// Observe encoder-to-ingest latency for an incoming Taikai segment.
-    pub fn observe_taikai_ingest_latency(&self, cluster: &str, stream: &str, latency_ms: u32) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .observe_taikai_ingest_latency(cluster, stream, latency_ms);
-        }
-    }
+    [observe_taikai_ingest_latency(cluster: &str, stream: &str, latency_ms: u32);]
     /// Observe live-edge drift for an incoming Taikai segment (signed gauge + absolute histogram).
-    pub fn observe_taikai_live_edge_drift(&self, cluster: &str, stream: &str, drift_ms: i32) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .observe_taikai_live_edge_drift(cluster, stream, drift_ms);
-        }
-    }
+    [observe_taikai_live_edge_drift(cluster: &str, stream: &str, drift_ms: i32);]
     /// Increment Taikai ingest error counters grouped by cluster/stream/reason.
-    pub fn inc_taikai_ingest_error(&self, cluster: &str, stream: &str, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .inc_taikai_ingest_error(cluster, stream, reason);
-        }
-    }
+    [inc_taikai_ingest_error(cluster: &str, stream: &str, reason: &str);]
     /// Record a Taikai alias rotation accepted via `/v1/da/ingest`.
     #[allow(clippy::too_many_arguments)]
-    pub fn record_taikai_alias_rotation(
-        &self,
-        cluster: &str,
-        event: &str,
-        stream: &str,
-        alias_namespace: &str,
-        alias_name: &str,
-        window_start_sequence: u64,
-        window_end_sequence: u64,
-        manifest_digest_hex: &str,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_taikai_alias_rotation(
-                cluster,
-                event,
-                stream,
-                alias_namespace,
-                alias_name,
-                window_start_sequence,
-                window_end_sequence,
-                manifest_digest_hex,
-            );
-        }
+    [record_taikai_alias_rotation(
+        cluster: &str, event: &str, stream: &str, alias_namespace: &str, alias_name: &str,
+        window_start_sequence: u64, window_end_sequence: u64, manifest_digest_hex: &str,
+    );]
     }
     /// Observe proof verification metrics (latency/size) for the given backend/status.
     pub fn observe_zk_verify(
@@ -6647,23 +5990,13 @@ impl Telemetry {
                 .observe(proof_bytes_value);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment Torii active connection gauge for the provided scheme label.
-    pub fn inc_torii_active_conn(&self, scheme: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_active_connections_total
-                .with_label_values(&[scheme])
-                .inc();
-        }
-    }
+    [inc_torii_active_conn(scheme: &'static str) =>
+        .torii_active_connections_total.with_label_values(&[scheme]).inc();]
     /// Decrement Torii active connection gauge for the provided scheme label.
-    pub fn dec_torii_active_conn(&self, scheme: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_active_connections_total
-                .with_label_values(&[scheme])
-                .dec();
-        }
+    [dec_torii_active_conn(scheme: &'static str) =>
+        .torii_active_connections_total.with_label_values(&[scheme]).dec();]
     }
     /// Increment background-post enqueued counter labeled by kind {Post,Broadcast}
     pub fn inc_bg_post_enqueued(&self, kind: &'static str) {
@@ -6679,23 +6012,13 @@ impl Telemetry {
                 .set(cur.saturating_add(1));
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment background-post overflow counter labeled by kind {Post,Broadcast}
-    pub fn inc_bg_post_overflow(&self, kind: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_bg_post_overflow_total
-                .with_label_values(&[kind])
-                .inc();
-        }
-    }
+    [inc_bg_post_overflow(kind: &'static str) =>
+        .sumeragi_bg_post_overflow_total.with_label_values(&[kind]).inc();]
     /// Increment background-post drop counter labeled by kind {Post,Broadcast}
-    pub fn inc_bg_post_drop(&self, kind: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_bg_post_drop_total
-                .with_label_values(&[kind])
-                .inc();
-        }
+    [inc_bg_post_drop(kind: &'static str) =>
+        .sumeragi_bg_post_drop_total.with_label_values(&[kind]).inc();]
     }
     /// Increment per-peer background-post queue depth for Post tasks.
     pub fn inc_bg_post_queue_depth_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
@@ -6730,14 +6053,10 @@ impl Telemetry {
             g.set(cur.saturating_sub(1));
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Observe background-post age in milliseconds for a given kind {Post,Broadcast}.
-    pub fn observe_bg_post_age_ms(&self, kind: &'static str, ms: f64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_bg_post_age_ms
-                .with_label_values(&[kind])
-                .observe(ms.max(0.0));
-        }
+    [observe_bg_post_age_ms(kind: &'static str, ms: f64) =>
+        .sumeragi_bg_post_age_ms.with_label_values(&[kind]).observe(ms.max(0.0));]
     }
     /// Set `NEW_VIEW` receipts count for a specific (height, view)
     pub fn set_new_view_receipts(&self, height: u64, view: u64, count: u64) {
@@ -6750,11 +6069,9 @@ impl Telemetry {
                 .set(count);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set current RBC sessions active gauge.
-    pub fn set_rbc_sessions_active(&self, active: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_sessions_active.set(active);
-        }
+    [set_rbc_sessions_active(active: u64) => .sumeragi_rbc_sessions_active.set(active);]
     }
     /// Increment RBC sessions pruned counter by `delta`.
     pub fn inc_rbc_sessions_pruned(&self, delta: u64) {
@@ -6764,25 +6081,13 @@ impl Telemetry {
             }
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment RBC targeted INIT repair requests counter.
-    pub fn inc_rbc_init_requests(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_init_requests_total.inc();
-        }
-    }
+    [inc_rbc_init_requests() => .sumeragi_rbc_init_requests_total.inc();]
     /// Increment RBC targeted chunk repair requests counter.
-    pub fn inc_rbc_chunk_requests(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_chunk_requests_total.inc();
-        }
-    }
+    [inc_rbc_chunk_requests() => .sumeragi_rbc_chunk_requests_total.inc();]
     /// Add to the total number of encoded chunk indices requested via targeted repair.
-    pub fn add_rbc_requested_chunks(&self, count: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_requested_chunks_total
-                .inc_by(count);
-        }
+    [add_rbc_requested_chunks(count: u64) => .sumeragi_rbc_requested_chunks_total.inc_by(count);]
     }
     /// Add initial RBC chunk target counters grouped by encoding/fanout policy.
     pub fn add_rbc_initial_chunk_targets(
@@ -6815,35 +6120,17 @@ impl Telemetry {
                 .inc_by(skipped);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment RBC targeted-repair fallback counter labeled by kind.
-    pub fn inc_rbc_repair_fallback(&self, kind: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_repair_fallback_total
-                .with_label_values(&[kind])
-                .inc();
-        }
-    }
+    [inc_rbc_repair_fallback(kind: &'static str) =>
+        .sumeragi_rbc_repair_fallback_total.with_label_values(&[kind]).inc();]
     /// Increment RBC READY broadcasts counter.
-    pub fn inc_rbc_ready_broadcasts(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_ready_broadcasts_total.inc();
-        }
-    }
+    [inc_rbc_ready_broadcasts() => .sumeragi_rbc_ready_broadcasts_total.inc();]
     /// Increment RBC rebroadcast skip counter labeled by kind (payload|ready).
-    pub fn inc_rbc_rebroadcast_skipped(&self, kind: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_rebroadcast_skipped_total
-                .with_label_values(&[kind])
-                .inc();
-        }
-    }
+    [inc_rbc_rebroadcast_skipped(kind: &'static str) =>
+        .sumeragi_rbc_rebroadcast_skipped_total.with_label_values(&[kind]).inc();]
     /// Increment RBC DELIVER broadcasts counter.
-    pub fn inc_rbc_deliver_broadcasts(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_deliver_broadcasts_total.inc();
-        }
+    [inc_rbc_deliver_broadcasts() => .sumeragi_rbc_deliver_broadcasts_total.inc();]
     }
     /// Add to RBC payload bytes delivered (cumulative gauge).
     pub fn add_rbc_payload_bytes_delivered(&self, bytes: u64) {
@@ -6857,33 +6144,17 @@ impl Telemetry {
                 .set(cur.saturating_add(bytes));
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Add to the cumulative RS16 stripes reconstructed from parity.
-    pub fn add_rbc_reconstructed_stripes(&self, count: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_reconstructed_stripes_total
-                .inc_by(count);
-        }
-    }
+    [add_rbc_reconstructed_stripes(count: u64) =>
+        .sumeragi_rbc_reconstructed_stripes_total.inc_by(count);]
     /// Observe RBC seed/preprocessing latency in milliseconds.
-    pub fn observe_rbc_seed_latency(&self, duration: Duration) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_seed_latency_ms
-                .observe(duration.as_secs_f64() * 1_000.0);
-        }
-    }
+    [observe_rbc_seed_latency(duration: Duration) =>
+        .sumeragi_rbc_seed_latency_ms.observe(duration.as_secs_f64() * 1_000.0);]
     /// Increment counter for RBC DELIVER deferrals waiting on READY quorum.
-    pub fn inc_rbc_deliver_defer_ready(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_deliver_defer_ready_total.inc();
-        }
-    }
+    [inc_rbc_deliver_defer_ready() => .sumeragi_rbc_deliver_defer_ready_total.inc();]
     /// Increment counter for RBC DELIVER deferrals waiting on missing chunks.
-    pub fn inc_rbc_deliver_defer_chunks(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_deliver_defer_chunks_total.inc();
-        }
+    [inc_rbc_deliver_defer_chunks() => .sumeragi_rbc_deliver_defer_chunks_total.inc();]
     }
     /// Increment RBC mismatch counter for the given peer and mismatch kind.
     pub fn inc_rbc_mismatch(
@@ -6955,11 +6226,9 @@ impl Telemetry {
                 .inc();
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment availability vote ingestion counter.
-    pub fn inc_da_vote_ingested(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_da_votes_ingested_total.inc();
-        }
+    [inc_da_vote_ingested() => .sumeragi_da_votes_ingested_total.inc();]
     }
     /// Observe QC assembly latency in milliseconds for the provided kind (e.g., `availability`).
     pub fn observe_qc_latency_ms(&self, kind: &'static str, ms: u64) {
@@ -6975,14 +6244,10 @@ impl Telemetry {
                 .set(ms);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment kura persistence failure counter labeled by outcome.
-    pub fn inc_kura_store_failure(&self, outcome: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_kura_store_failures_total
-                .with_label_values(&[outcome])
-                .inc();
-        }
+    [inc_kura_store_failure(outcome: &'static str) =>
+        .sumeragi_kura_store_failures_total.with_label_values(&[outcome]).inc();]
     }
     /// Record the most recent kura persistence retry attempt/backoff.
     pub fn set_kura_store_retry(&self, attempt: u64, backoff_ms: u64) {
@@ -6995,22 +6260,15 @@ impl Telemetry {
                 .set(backoff_ms);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment proposal deferral counter when the pacemaker stops due to queue backpressure.
-    pub fn inc_pacemaker_backpressure_deferrals(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_backpressure_deferrals_total
-                .inc();
-        }
-    }
+    [inc_pacemaker_backpressure_deferrals() =>
+        .sumeragi_pacemaker_backpressure_deferrals_total.inc();]
     /// Increment pacemaker backpressure deferral counter for the supplied reason label.
-    pub fn inc_pacemaker_backpressure_deferral_reason(&self, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_backpressure_deferrals_by_reason_total
-                .with_label_values(&[reason])
-                .inc();
-        }
+    [inc_pacemaker_backpressure_deferral_reason(reason: &'static str) =>
+                        .sumeragi_pacemaker_backpressure_deferrals_by_reason_total
+                        .with_label_values(&[reason])
+                        .inc();]
     }
     /// Observe the duration (ms) of a pacemaker backpressure deferral window.
     pub fn observe_pacemaker_backpressure_deferral_duration(
@@ -7026,23 +6284,15 @@ impl Telemetry {
                 .observe(ms.max(0.0));
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set whether a pacemaker backpressure deferral is currently active.
-    pub fn set_pacemaker_backpressure_deferral_active(&self, reason: &'static str, active: bool) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_backpressure_deferral_active
-                .with_label_values(&[reason])
-                .set(u64::from(active));
-        }
-    }
+    [set_pacemaker_backpressure_deferral_active(reason: &'static str, active: bool) =>
+                        .sumeragi_pacemaker_backpressure_deferral_active
+                        .with_label_values(&[reason])
+                        .set(u64::from(active));]
     /// Record the age (ms) of the current pacemaker backpressure deferral window.
-    pub fn set_pacemaker_backpressure_deferral_age_ms(&self, reason: &'static str, age_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_backpressure_deferral_age_ms
-                .with_label_values(&[reason])
-                .set(age_ms);
-        }
+    [set_pacemaker_backpressure_deferral_age_ms(reason: &'static str, age_ms: u64) =>
+        .sumeragi_pacemaker_backpressure_deferral_age_ms.with_label_values(&[reason]).set(age_ms);]
     }
     /// Observe pacemaker evaluation duration (ms).
     pub fn observe_pacemaker_eval_ms(&self, duration: Duration) {
@@ -7171,69 +6421,23 @@ impl Telemetry {
                 .set(entry.rbc_bytes_total);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record the latest `SoraFS` metering snapshot for `provider`.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_metering(
-        &self,
-        provider: &str,
-        declared_gib: u64,
-        effective_gib: u64,
-        utilised_gib: u64,
-        outstanding_gib: u64,
-        outstanding_orders: u64,
-        gib_hours: f64,
-        orders_issued: u64,
-        orders_completed: u64,
-        orders_failed: u64,
-        uptime_bps: u32,
-        por_bps: u32,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_metering(
-                provider,
-                declared_gib,
-                effective_gib,
-                utilised_gib,
-                outstanding_gib,
-                outstanding_orders,
-                gib_hours,
-                orders_issued,
-                orders_completed,
-                orders_failed,
-                uptime_bps,
-                por_bps,
-            );
-        }
-    }
+    [record_sorafs_metering(
+        provider: &str, declared_gib: u64, effective_gib: u64, utilised_gib: u64,
+        outstanding_gib: u64, outstanding_orders: u64, gib_hours: f64, orders_issued: u64,
+        orders_completed: u64, orders_failed: u64, uptime_bps: u32, por_bps: u32,
+    );]
     /// Record the latest `SoraFS` storage scheduler snapshot for `provider`.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_storage(
-        &self,
-        provider: &str,
-        bytes_used: u64,
-        bytes_capacity: u64,
-        provider_ingest_inflight: u64,
-        fetch_inflight: u64,
-        fetch_bytes_per_sec: u64,
-        por_inflight: u64,
-        por_samples_success: u64,
-        por_samples_failed: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_storage(
-                provider,
-                bytes_used,
-                bytes_capacity,
-                provider_ingest_inflight,
-                fetch_inflight,
-                fetch_bytes_per_sec,
-                por_inflight,
-                por_samples_success,
-                por_samples_failed,
-            );
-        }
+    [record_sorafs_storage(
+        provider: &str, bytes_used: u64, bytes_capacity: u64, provider_ingest_inflight: u64,
+        fetch_inflight: u64, fetch_bytes_per_sec: u64, por_inflight: u64,
+        por_samples_success: u64, por_samples_failed: u64,
+    );]
     }
     /// Record the `PoR` ingestion backlog for a manifest/provider pair.
     #[cfg(feature = "telemetry")]
@@ -7268,25 +6472,13 @@ impl Telemetry {
     pub fn record_sorafs_por_scheduler_failure(&self) {
         self.metrics.record_sorafs_por_scheduler_failure();
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record the consensus-maintained global `SoraFS` pin resource summary.
     #[cfg(feature = "telemetry")]
-    pub fn record_sorafs_pin_resource_usage(
-        &self,
-        retained_manifests: u64,
-        live_content_bytes: u64,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_pin_resource_usage(retained_manifests, live_content_bytes);
-        }
-    }
+    [record_sorafs_pin_resource_usage(retained_manifests: u64, live_content_bytes: u64);]
     /// Record `SoraFS` alias cache observations exposed by Torii.
     #[cfg(feature = "telemetry")]
-    pub fn record_sorafs_alias_cache(&self, result: &str, reason: &str, age_secs: f64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_alias_cache(result, reason, age_secs);
-        }
+    [record_sorafs_alias_cache(result: &str, reason: &str, age_secs: f64);]
     }
     /// Record cardinality-safe HTTP request metrics for Torii.
     #[allow(clippy::too_many_arguments)]
@@ -7380,20 +6572,14 @@ impl Telemetry {
                 .observe(elapsed_seconds);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record Torii route-stage latency without synchronizing the telemetry actor.
-    pub fn observe_torii_route_stage_latency(
-        &self,
-        route_kind: &str,
-        stage: &str,
-        outcome: &str,
-        duration: Duration,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_route_stage_latency_seconds
-                .with_label_values(&[route_kind, stage, outcome])
-                .observe(duration.as_secs_f64());
-        }
+    [observe_torii_route_stage_latency(
+        route_kind: &str, stage: &str, outcome: &str, duration: Duration,
+    ) =>
+                        .torii_route_stage_latency_seconds
+                        .with_label_values(&[route_kind, stage, outcome])
+                        .observe(duration.as_secs_f64());]
     }
     /// Record Torii snapshot query metrics without synchronizing the telemetry actor.
     pub fn observe_torii_query_snapshot(
@@ -7421,11 +6607,9 @@ impl Telemetry {
             }
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record an API-token-gated Torii endpoint hit without exposing token material.
-    pub fn inc_torii_api_token_hit(&self, endpoint: &str, token_state: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_api_token_hit(endpoint, token_state);
-        }
+    [inc_torii_api_token_hit(endpoint: &str, token_state: &str);]
     }
     /// Record metrics for the content gateway path.
     pub fn observe_torii_content_request(&self, outcome: &str, bytes: u64, duration: Duration) {
@@ -7444,31 +6628,14 @@ impl Telemetry {
                 .inc_by(bytes);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record proof endpoint request metrics.
-    pub fn observe_torii_proof_request(
-        &self,
-        endpoint: &str,
-        outcome: &str,
-        bytes: u64,
-        duration: Duration,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_torii_proof_request(endpoint, outcome, bytes, duration);
-        }
-    }
+    [observe_torii_proof_request(endpoint: &str, outcome: &str, bytes: u64, duration: Duration) =>
+        .record_torii_proof_request(endpoint, outcome, bytes, duration);]
     /// Record explorer endpoint request metrics.
-    pub fn record_torii_explorer_request(&self, endpoint: &str, outcome: &str, duration: Duration) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_torii_explorer_request(endpoint, outcome, duration);
-        }
-    }
+    [record_torii_explorer_request(endpoint: &str, outcome: &str, duration: Duration);]
     /// Increment proof cache hit counter for the provided endpoint.
-    pub fn inc_torii_proof_cache_hit(&self, endpoint: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_proof_cache_hit(endpoint);
-        }
+    [inc_torii_proof_cache_hit(endpoint: &str);]
     }
     /// Record scheme-level Torii request latency and failure counters.
     pub fn observe_torii_request_by_scheme(
@@ -7491,17 +6658,11 @@ impl Telemetry {
             }
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Record a rejected attachment during Torii sanitization.
-    pub fn inc_torii_attachment_reject(&self, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_attachment_reject(reason);
-        }
-    }
+    [inc_torii_attachment_reject(reason: &str);]
     /// Record attachment sanitization latency in milliseconds.
-    pub fn observe_torii_attachment_sanitize_ms(&self, millis: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.observe_torii_attachment_sanitize_ms(millis);
-        }
+    [observe_torii_attachment_sanitize_ms(millis: u64);]
     }
     /// Observe attachment size/latency for the background prover.
     pub fn observe_torii_zk_prover(
@@ -7522,35 +6683,17 @@ impl Telemetry {
                 .observe(u64_to_f64(latency_ms));
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment the TTL GC counter for the background prover by `deleted` entries.
-    pub fn inc_torii_zk_prover_gc(&self, deleted: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_zk_prover_gc_total.inc_by(deleted);
-        }
-    }
+    [inc_torii_zk_prover_gc(deleted: u64) => .torii_zk_prover_gc_total.inc_by(deleted);]
     /// Set the number of background prover attachments currently in flight.
-    pub fn set_torii_zk_prover_inflight(&self, inflight: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_zk_prover_inflight.set(inflight);
-        }
-    }
+    [set_torii_zk_prover_inflight(inflight: u64) => .torii_zk_prover_inflight.set(inflight);]
     /// Set the number of background prover attachments pending processing.
-    pub fn set_torii_zk_prover_pending(&self, pending: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_zk_prover_pending.set(pending);
-        }
-    }
+    [set_torii_zk_prover_pending(pending: u64) => .torii_zk_prover_pending.set(pending);]
     /// Set the number of IVM prove helper jobs currently proving.
-    pub fn set_torii_zk_ivm_prove_inflight(&self, inflight: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_zk_ivm_prove_inflight.set(inflight);
-        }
-    }
+    [set_torii_zk_ivm_prove_inflight(inflight: u64) => .torii_zk_ivm_prove_inflight.set(inflight);]
     /// Set the number of IVM prove helper jobs queued (waiting for an inflight slot).
-    pub fn set_torii_zk_ivm_prove_queued(&self, queued: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.torii_zk_ivm_prove_queued.set(queued);
-        }
+    [set_torii_zk_ivm_prove_queued(queued: u64) => .torii_zk_ivm_prove_queued.set(queued);]
     }
     /// Record bytes processed and duration for the last background prover scan.
     pub fn record_torii_zk_prover_scan(&self, bytes: u64, millis: u64) {
@@ -7559,73 +6702,31 @@ impl Telemetry {
             self.metrics.torii_zk_prover_last_scan_ms.set(millis);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment the background prover budget exhaustion counter.
-    pub fn inc_torii_zk_prover_budget_exhausted(&self, reason: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_zk_prover_budget_exhausted_total
-                .with_label_values(&[reason])
-                .inc();
-        }
-    }
+    [inc_torii_zk_prover_budget_exhausted(reason: &'static str) =>
+        .torii_zk_prover_budget_exhausted_total.with_label_values(&[reason]).inc();]
     /// Increment the in-flight proof stream gauge for `kind`.
     #[cfg(feature = "telemetry")]
-    pub fn inc_sorafs_proof_stream_inflight(&self, kind: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_sorafs_proof_stream_inflight(kind);
-        }
-    }
+    [inc_sorafs_proof_stream_inflight(kind: &str);]
     /// Decrement the in-flight proof stream gauge for `kind`.
     #[cfg(feature = "telemetry")]
-    pub fn dec_sorafs_proof_stream_inflight(&self, kind: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.dec_sorafs_proof_stream_inflight(kind);
-        }
-    }
+    [dec_sorafs_proof_stream_inflight(kind: &str);]
     /// Update TLS state gauges exposed by Torii.
-    pub fn set_sorafs_tls_state(&self, ech_enabled: bool, expiry: Option<Duration>) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_sorafs_tls_state(ech_enabled, expiry);
-        }
-    }
+    [set_sorafs_tls_state(ech_enabled: bool, expiry: Option<Duration>);]
     /// Record the outcome of a TLS renewal attempt.
-    pub fn record_sorafs_tls_renewal(&self, result: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_tls_renewal(result);
-        }
-    }
+    [record_sorafs_tls_renewal(result: &str);]
     /// Update the gauge tracking the active `SoraFS` gateway fixture version.
-    pub fn set_sorafs_gateway_fixture_version(&self, version: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_sorafs_gateway_fixture_version(version);
-        }
-    }
+    [set_sorafs_gateway_fixture_version(version: &str);]
     /// Increment Torii contract error counter for the provided endpoint label.
-    pub fn inc_torii_contract_error(&self, endpoint: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_contract_errors_total
-                .with_label_values(&[endpoint])
-                .inc();
-        }
-    }
+    [inc_torii_contract_error(endpoint: &'static str) =>
+        .torii_contract_errors_total.with_label_values(&[endpoint]).inc();]
     /// Increment Torii contract throttle counter for the provided endpoint label.
-    pub fn inc_torii_contract_throttle(&self, endpoint: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_contract_throttled_total
-                .with_label_values(&[endpoint])
-                .inc();
-        }
-    }
+    [inc_torii_contract_throttle(endpoint: &'static str) =>
+        .torii_contract_throttled_total.with_label_values(&[endpoint]).inc();]
     /// Increment Torii proof throttle counter for the provided endpoint label.
-    pub fn inc_torii_proof_throttle(&self, endpoint: &'static str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_proof_throttled_total
-                .with_label_values(&[endpoint])
-                .inc();
-        }
+    [inc_torii_proof_throttle(endpoint: &'static str) =>
+        .torii_proof_throttled_total.with_label_values(&[endpoint]).inc();]
     }
     #[cfg(not(feature = "telemetry"))]
     /// No-op when telemetry is disabled.
@@ -7798,17 +6899,11 @@ impl Telemetry {
                 .set(0);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set pacemaker current backoff window (ms)
-    pub fn set_pacemaker_backoff_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_pacemaker_backoff_ms.set(ms);
-        }
-    }
+    [set_pacemaker_backoff_ms(ms: u64) => .sumeragi_pacemaker_backoff_ms.set(ms);]
     /// Set pacemaker RTT floor (ms)
-    pub fn set_pacemaker_rtt_floor_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_pacemaker_rtt_floor_ms.set(ms);
-        }
+    [set_pacemaker_rtt_floor_ms(ms: u64) => .sumeragi_pacemaker_rtt_floor_ms.set(ms);]
     }
     /// Set static pacemaker config gauges: multipliers and max backoff
     pub fn set_pacemaker_config(&self, backoff_mul: u64, rtt_floor_mul: u64, max_backoff_ms: u64) {
@@ -7824,28 +6919,15 @@ impl Telemetry {
                 .set(max_backoff_ms);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set pacemaker jitter band config (permille)
-    pub fn set_pacemaker_jitter_permille(&self, permille: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_jitter_frac_permille
-                .set(permille);
-        }
-    }
+    [set_pacemaker_jitter_permille(permille: u64) =>
+        .sumeragi_pacemaker_jitter_frac_permille.set(permille);]
     /// Set pacemaker jitter magnitude (ms)
-    pub fn set_pacemaker_jitter_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_pacemaker_jitter_ms.set(ms);
-        }
-    }
+    [set_pacemaker_jitter_ms(ms: u64) => .sumeragi_pacemaker_jitter_ms.set(ms);]
     /// Observe per-phase latency in milliseconds (labeled by `phase`).
-    pub fn observe_phase_latency_ms(&self, phase: &'static str, ms: f64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_phase_latency_ms
-                .with_label_values(&[phase])
-                .observe(ms.max(0.0));
-        }
+    [observe_phase_latency_ms(phase: &'static str, ms: f64) =>
+        .sumeragi_phase_latency_ms.with_label_values(&[phase]).observe(ms.max(0.0));]
     }
     /// Record the per-phase EMA latency (milliseconds) for the given `phase`.
     pub fn set_phase_latency_ema_ms(&self, phase: &'static str, ms: f64) {
@@ -7868,33 +6950,17 @@ impl Telemetry {
             self.metrics.sumeragi_phase_total_ema_ms.set(quantized);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set elapsed time in current consensus round (ms)
-    pub fn set_pacemaker_round_elapsed_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_pacemaker_round_elapsed_ms.set(ms);
-        }
-    }
+    [set_pacemaker_round_elapsed_ms(ms: u64) => .sumeragi_pacemaker_round_elapsed_ms.set(ms);]
     /// Set current view-timeout target window (ms)
-    pub fn set_pacemaker_view_timeout_target_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_view_timeout_target_ms
-                .set(ms);
-        }
-    }
+    [set_pacemaker_view_timeout_target_ms(ms: u64) =>
+        .sumeragi_pacemaker_view_timeout_target_ms.set(ms);]
     /// Set remaining time until current view-timeout elapses (ms)
-    pub fn set_pacemaker_view_timeout_remaining_ms(&self, ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_pacemaker_view_timeout_remaining_ms
-                .set(ms);
-        }
-    }
+    [set_pacemaker_view_timeout_remaining_ms(ms: u64) =>
+        .sumeragi_pacemaker_view_timeout_remaining_ms.set(ms);]
     /// Increase dropped messages metric
-    pub fn inc_dropped_messages(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.dropped_messages.inc();
-        }
+    [inc_dropped_messages() => .dropped_messages.inc();]
     }
     /// Increase dropped block messages metric (consensus path)
     pub fn inc_dropped_block_message(&self) {
@@ -7912,41 +6978,19 @@ impl Telemetry {
             self.metrics.dropped_messages.inc();
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Set view changes metrics
-    pub fn set_view_changes(&self, value: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.view_changes.set(value);
-        }
-    }
+    [set_view_changes(value: u64) => .view_changes.set(value);]
     /// Increment counter: votes accepted at proxy tail
-    pub fn inc_tail_vote(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_tail_votes_total.inc();
-        }
-    }
+    [inc_tail_vote() => .sumeragi_tail_votes_total.inc();]
     /// Increment counter: widen-before-rotate events
-    pub fn inc_widen_before_rotate(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_widen_before_rotate_total.inc();
-        }
-    }
+    [inc_widen_before_rotate() => .sumeragi_widen_before_rotate_total.inc();]
     /// Increment counter: view-change suggestions
-    pub fn inc_view_change_suggest(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_view_change_suggest_total.inc();
-        }
-    }
+    [inc_view_change_suggest() => .sumeragi_view_change_suggest_total.inc();]
     /// Increment counter: view-change installs
-    pub fn inc_view_change_install(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_view_change_install_total.inc();
-        }
-    }
+    [inc_view_change_install() => .sumeragi_view_change_install_total.inc();]
     /// Increment counter: view-change rotations after proposal gaps.
-    pub fn inc_proposal_gap(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_proposal_gap_total.inc();
-        }
+    [inc_proposal_gap() => .sumeragi_proposal_gap_total.inc();]
     }
     fn inc_view_change_proof_gauge(&self, outcome: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8004,29 +7048,15 @@ impl Telemetry {
             }
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment counter when this node emits a VRF commit.
-    pub fn inc_vrf_commit_emitted(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_vrf_commits_emitted_total.inc();
-        }
-    }
+    [inc_vrf_commit_emitted() => .sumeragi_vrf_commits_emitted_total.inc();]
     /// Increment counter when this node emits a VRF reveal.
-    pub fn inc_vrf_reveal_emitted(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_vrf_reveals_emitted_total.inc();
-        }
-    }
+    [inc_vrf_reveal_emitted() => .sumeragi_vrf_reveals_emitted_total.inc();]
     /// Increment counter when this node accepts a late VRF reveal.
-    pub fn inc_vrf_reveal_late(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_vrf_reveals_late_total.inc();
-        }
-    }
+    [inc_vrf_reveal_late() => .sumeragi_vrf_reveals_late_total.inc();]
     /// Increment gossip fallback counter when redundant plan exhausts collectors.
-    pub fn inc_gossip_fallback(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_gossip_fallback_total.inc();
-        }
+    [inc_gossip_fallback() => .sumeragi_gossip_fallback_total.inc();]
     }
     /// Set gossip fallback counter (best-effort, used for status snapshot alignment).
     pub fn set_gossip_fallback_total(&self, total: u64) {
@@ -8039,38 +7069,19 @@ impl Telemetry {
             }
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Increment counter when `BlockCreated` violates the locked QC gate.
-    pub fn inc_block_created_dropped_by_lock(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_block_created_dropped_by_lock_total
-                .inc();
-        }
-    }
+    [inc_block_created_dropped_by_lock() => .sumeragi_block_created_dropped_by_lock_total.inc();]
     /// Increment counter when `BlockCreated` fails hint validation.
-    pub fn inc_block_created_hint_mismatch(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_block_created_hint_mismatch_total
-                .inc();
-        }
-    }
+    [inc_block_created_hint_mismatch() => .sumeragi_block_created_hint_mismatch_total.inc();]
     /// Increment counter when `BlockCreated` fails proposal validation.
-    pub fn inc_block_created_proposal_mismatch(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_block_created_proposal_mismatch_total
-                .inc();
-        }
-    }
+    [inc_block_created_proposal_mismatch() =>
+        .sumeragi_block_created_proposal_mismatch_total.inc();]
     /// Increment counter for consensus message drops/deferrals labeled by kind/outcome/reason.
-    pub fn note_consensus_message_handling(&self, kind: &str, outcome: &str, reason: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_consensus_message_handling_total
-                .with_label_values(&[kind, outcome, reason])
-                .inc();
-        }
+    [note_consensus_message_handling(kind: &str, outcome: &str, reason: &str) =>
+                        .sumeragi_consensus_message_handling_total
+                        .with_label_values(&[kind, outcome, reason])
+                        .inc();]
     }
     /// Record the active epoch scheduling parameters (length and commit/reveal offsets).
     pub fn set_epoch_parameters(&self, length_blocks: u64, commit_offset: u64, reveal_offset: u64) {
@@ -8099,11 +7110,9 @@ impl Telemetry {
             self.metrics.sumeragi_prf_view.set(view);
         }
     }
+    telemetry_atomic_enabled_metric_methods! {
     /// Observe certificate size distribution (number of signatures)
-    pub fn observe_cert_size(&self, size: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_cert_size.observe(u64_to_f64(size));
-        }
+    [observe_cert_size(size: u64) => .sumeragi_cert_size.observe(u64_to_f64(size));]
     }
     /// Record the latest commit-signature counts (present vs counted vs set-B vs required).
     pub fn set_commit_signature_totals(

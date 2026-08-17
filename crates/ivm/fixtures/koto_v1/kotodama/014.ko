@@ -1,0 +1,6 @@
+
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            view fn f() { for (k, v) in (values) { let seen = v; } }
+        }
+    

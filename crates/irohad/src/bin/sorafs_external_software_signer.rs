@@ -492,6 +492,7 @@ mod unix_main {
                     issuer_id: args.pop_issuer_id.clone().ok_or(CliError::Input)?,
                 })
             }
+            SoftwareSignerRoleV1::TairaAuthority => Err(CliError::Input),
             _ => Err(CliError::Input),
         }
     }

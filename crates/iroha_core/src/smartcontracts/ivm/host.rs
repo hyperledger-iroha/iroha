@@ -4122,9 +4122,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if !Self::verifying_key_record_metadata_is_portable(&rec) {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
                 || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
@@ -4157,72 +4154,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.verifying_keys = records;
         self.prepared_verifying_keys = prepared_by_commitment;
         Ok(())
-    }
-    fn verifying_key_record_metadata_is_portable(rec: &VerifyingKeyRecord) -> bool {
-        if !iroha_data_model::proof::verifying_key_id_field_is_portable(&rec.namespace) {
-            return false;
-        }
-        if rec.owner_manifest_id.as_ref().is_some_and(|owner| {
-            !iroha_data_model::proof::verifying_key_id_field_is_portable(owner)
-        }) {
-            return false;
-        }
-        let Some(gas_schedule_id) = rec.gas_schedule_id.as_deref() else {
-            return false;
-        };
-        if !iroha_data_model::proof::verifying_key_id_field_is_portable(gas_schedule_id) {
-            return false;
-        }
-        if rec
-            .metadata_uri_cid
-            .as_ref()
-            .is_some_and(|uri| !Self::verifying_key_content_uri_is_portable(uri))
-        {
-            return false;
-        }
-        if rec
-            .vk_bytes_cid
-            .as_ref()
-            .is_some_and(|uri| !Self::verifying_key_content_uri_is_portable(uri))
-        {
-            return false;
-        }
-        !matches!(
-            (rec.activation_height, rec.withdraw_height),
-            (Some(activation), Some(withdraw)) if withdraw <= activation
-        )
-    }
-    fn verifying_key_content_uri_is_portable(uri: &str) -> bool {
-        const MAX_URI_BYTES: usize = 512;
-        if uri.is_empty()
-            || uri.len() > MAX_URI_BYTES
-            || uri.trim() != uri
-            || uri
-                .as_bytes()
-                .iter()
-                .any(|byte| !byte.is_ascii_graphic() || matches!(*byte, b'\\' | b'?' | b'#' | b'@'))
-        {
-            return false;
-        }
-        let body = uri
-            .strip_prefix("ipfs://")
-            .or_else(|| uri.strip_prefix("cid:"))
-            .unwrap_or(uri);
-        if body.is_empty()
-            || body.starts_with('/')
-            || body.ends_with('/')
-            || body.contains("..")
-            || body.contains("//")
-        {
-            return false;
-        }
-        body.split('/').all(|segment| {
-            !segment.is_empty()
-                && segment
-                    .as_bytes()
-                    .iter()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
-        })
     }
     fn backend_label_for_record(id: &VerifyingKeyId, rec: &VerifyingKeyRecord) -> String {
         if let Some(ref vk) = rec.key {
@@ -24642,7 +24573,7 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

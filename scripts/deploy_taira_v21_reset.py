@@ -53,14 +53,18 @@ from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
+    from scripts import deploy_taira_v21_reset_authority as deploy_authority
     from scripts.operator_http_headers import load_operator_context_from_file
+    from scripts import taira_authority_client
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
+    import deploy_taira_v21_reset_authority as deploy_authority
     from operator_http_headers import load_operator_context_from_file
+    import taira_authority_client
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
@@ -126,6 +130,47 @@ EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
 MAX_RESTART_LOG_DELTA_BYTES = 8 * 1024 * 1024
 RESTART_LOG_PREFIX_GUARD_BYTES = 4 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
+KAGEMUSHA_CONFIG_PROJECTION_SCHEMA = "iroha.taira.kagemusha-config-projection.v1"
+KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA = (
+    "iroha.taira.kagemusha-manifest-directory-inventory.v1"
+)
+KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH = Path("policy/release-policy-v1.norito")
+KAGEMUSHA_ARTIFACT_RELATIVE_PATH = Path("catalog")
+KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH = Path(
+    "seals/catalog-qualification-v1.norito"
+)
+KAGEMUSHA_MAX_DECODED_BYTES = 256 * 1024 * 1024
+MAX_KAGEMUSHA_RELEASE_POLICY_BYTES = 64 * 1024
+MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES = 8 * 1024 * 1024
+MAX_KAGEMUSHA_MANIFEST_BYTES = 1024 * 1024
+MAX_KAGEMUSHA_CATALOG_RELEASES = 16
+MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES = 65
+KAGEMUSHA_CONFIG_PROJECTION_KEYS = frozenset(
+    {
+        "schema",
+        "release_root",
+        "release_policy_path",
+        "artifact_dir",
+        "catalog_qualification_seal_path",
+        "max_decoded_bytes",
+    }
+)
+KAGEMUSHA_RESET_MANIFEST_FIELDS = frozenset(
+    {
+        "kagemusha_release_root",
+        "kagemusha_release_policy_sha256",
+        "kagemusha_activation_authority",
+        "kagemusha_config_projection",
+        "kagemusha_config_projection_sha256",
+    }
+)
+KAGEMUSHA_OFFLINE_TABLE = ("settlement", "offline")
+KAGEMUSHA_MANAGED_OFFLINE_FIELDS: dict[str, str] = {
+    "kagemusha_release_policy_path": "string",
+    "kagemusha_artifact_dir": "string",
+    "kagemusha_catalog_qualification_seal_path": "string",
+    "kagemusha_max_decoded_bytes": "integer",
+}
 SNAPSHOT_LOAD_SUCCESS_MARKER = b"Successfully loaded the state from a snapshot"
 SNAPSHOT_LOAD_FALLBACK_MARKERS = (
     b"Snapshot restore is disabled by configuration",
@@ -170,6 +215,11 @@ MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES = 64 * 1024
 DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT = (
     "iroha.taira.deploy-authenticated-run-nonce.v1"
 )
+DEPLOY_AUTHORIZATION_LEASE_CONTRACT = (
+    "iroha.taira.deploy-authorization-lease.v1"
+)
+DEPLOY_RESULT_BINDING_CONTRACT = "iroha.taira.deploy-result-binding.v1"
+DEPLOYMENT_OUTCOME_ATTRIBUTE = "_taira_authority_deployment_outcome"
 COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
     "iroha.taira.complete-source-identity-attestation.v1"
 )
@@ -189,16 +239,52 @@ class DeploymentError(RuntimeError):
     """Raised when an identity, safety, rollout, or rollback gate fails."""
 
 
+def _mark_deployment_outcome(
+    error: BaseException, outcome: str
+) -> BaseException:
+    """Carry the authority's terminal rollback classification to the caller."""
+
+    setattr(error, DEPLOYMENT_OUTCOME_ATTRIBUTE, outcome)
+    return error
+
+
 def fail(message: str) -> NoReturn:
     """Raise one redaction-safe deployment refusal."""
 
     raise DeploymentError(message)
 
 
-def require_deploy_issuance_contracts() -> NoReturn:
-    """Refuse deployment until run and complete-source authority are installed."""
+def require_deploy_issuance_contracts() -> None:
+    """Authenticate the fixed deploy-issuance binding and live service."""
 
-    fail(DEPLOY_ISSUANCE_BARRIER)
+    try:
+        taira_authority_client.preflight("deploy-issuance")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(f"{DEPLOY_ISSUANCE_BARRIER}: {error}") from error
+
+
+_DEPLOY_AUTHORITY = deploy_authority.DeploymentAuthorityProjection(
+    artifact_factory=taira_authority_client.Artifact,
+    canonical_json_bytes=taira_authority_client.canonical_json_bytes,
+    bounds=deploy_authority.ArtifactBounds(
+        binary=MAX_BINARY_BYTES,
+        config=MAX_CONFIG_BYTES,
+        manifest=MAX_MANIFEST_BYTES,
+        supervisor=4 * 1024 * 1024,
+        kagemusha_policy=MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
+        kagemusha_qualification_seal=MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
+        kagemusha_manifest=MAX_KAGEMUSHA_MANIFEST_BYTES,
+        kagemusha_manifest_sidecar=MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES,
+    ),
+    contracts=deploy_authority.AuthorityContracts(
+        complete_source=COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+        run_assignment=DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
+        lease_authorization=DEPLOY_AUTHORIZATION_LEASE_CONTRACT,
+        result_binding=DEPLOY_RESULT_BINDING_CONTRACT,
+    ),
+    qualified_handoff_manifest=boi_handoff.QUALIFIED_HANDOFF_MANIFEST,
+    qualified_handoff_maximum=boi_handoff.MAX_HANDOFF_MANIFEST_BYTES,
+)
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -549,6 +635,9 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "expected_hash": "string",
     },
 }
+OPTIONAL_CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
+    KAGEMUSHA_OFFLINE_TABLE: KAGEMUSHA_MANAGED_OFFLINE_FIELDS,
+}
 TOML_TABLE_RE = re.compile(r"^\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]$")
 TOML_ARRAY_TABLE_RE = re.compile(r"^\[\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]\]$")
 TOML_ASSIGNMENT_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$")
@@ -660,7 +749,7 @@ def _decode_projection_value(
 
 
 def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
-    """Extract exactly the fail-closed validator fields consumed by preflight."""
+    """Extract required and managed fail-closed validator fields."""
 
     projected: dict[str, Any] = {}
     current_table: tuple[str, ...] = ()
@@ -681,41 +770,77 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
                 else table_match.group(1)
             )
             current_table = tuple(table_text.split("."))
-            if current_table in CONFIG_PROJECTION_FIELDS:
+            projected_table = (
+                current_table in CONFIG_PROJECTION_FIELDS
+                or current_table in OPTIONAL_CONFIG_PROJECTION_FIELDS
+            )
+            if projected_table:
+                table_kind = (
+                    "required"
+                    if current_table in CONFIG_PROJECTION_FIELDS
+                    else "managed"
+                )
                 if array_match is not None:
                     fail(
-                        f"{label} declares required table {table_text} as an array "
+                        f"{label} declares {table_kind} table {table_text} as an array "
                         f"at line {line_number}"
                     )
                 if current_table in seen_tables:
                     fail(
-                        f"{label} duplicates required table {table_text} "
+                        f"{label} duplicates {table_kind} table {table_text} "
                         f"at line {line_number}"
                     )
                 seen_tables.add(current_table)
             continue
         assignment = TOML_ASSIGNMENT_RE.fullmatch(line)
         required = CONFIG_PROJECTION_FIELDS.get(current_table)
+        optional = OPTIONAL_CONFIG_PROJECTION_FIELDS.get(current_table)
+        projected_fields = required if required is not None else optional
+        contains_managed_assignment = any(
+            re.search(
+                rf"(?<![A-Za-z0-9_-])[\"']?{re.escape(key)}[\"']?\s*=",
+                line,
+            )
+            is not None
+            for key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS
+        )
         if assignment is None:
-            if required is not None and any(
-                re.match(rf"^{re.escape(key)}(?:\s|=|$)", line) for key in required
+            if projected_fields is not None and any(
+                re.match(rf"^{re.escape(key)}(?:\s|=|$)", line)
+                for key in projected_fields
             ):
                 fail(
-                    f"{label} has a malformed required assignment "
+                    f"{label} has a malformed projected assignment "
+                    f"at line {line_number}"
+                )
+            if contains_managed_assignment:
+                fail(
+                    f"{label} has a noncanonical managed Kagemusha assignment "
                     f"at line {line_number}"
                 )
             continue
         key, raw_value = assignment.groups()
-        if required is None or key not in required:
+        if key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS and (
+            current_table != KAGEMUSHA_OFFLINE_TABLE
+        ):
+            fail(
+                f"{label} places managed Kagemusha field {key} outside "
+                "settlement.offline"
+            )
+        if projected_fields is None or key not in projected_fields:
             continue
         identity = (current_table, key)
         if identity in seen_fields:
             dotted = ".".join((*current_table, key))
-            fail(f"{label} duplicates required field {dotted} at line {line_number}")
+            field_kind = "required" if required is not None else "managed"
+            fail(
+                f"{label} duplicates {field_kind} field {dotted} "
+                f"at line {line_number}"
+            )
         seen_fields.add(identity)
         value = _decode_projection_value(
             raw_value,
-            required[key],
+            projected_fields[key],
             label,
             line_number,
         )
@@ -803,6 +928,24 @@ class PeerPlan:
 
 
 @dataclasses.dataclass(frozen=True)
+class KagemushaExternalReleasePlan:
+    """Bounded external Kagemusha inputs observed without reading proving keys."""
+
+    release_root: Path
+    policy_path: Path
+    artifact_dir: Path
+    qualification_seal_path: Path
+    expected_policy_sha256: str
+    policy_sha256: Optional[str]
+    qualification_seal_sha256: Optional[str]
+    manifest_directory_digests: tuple[str, ...]
+    manifest_directory_inventory_sha256: Optional[str]
+    manifest_files: tuple[Path, ...]
+    manifest_digest_sidecars: tuple[Path, ...]
+    verified: bool
+
+
+@dataclasses.dataclass(frozen=True)
 class BundlePlan:
     """Complete authenticated dry-run result used by apply."""
 
@@ -820,6 +963,287 @@ class BundlePlan:
     free_bytes: int
     free_bytes_by_device: tuple[tuple[int, int], ...]
     fsync_latency_ms: float
+    kagemusha_config_projection_sha256: Optional[str] = None
+    kagemusha_external_release: Optional[KagemushaExternalReleasePlan] = None
+
+
+def _canonical_unresolved_absolute_path(value: object, label: str) -> Path:
+    """Require one canonical absolute path without requiring it to exist yet."""
+
+    if not isinstance(value, str):
+        fail(f"{label} must be one canonical absolute path")
+    path = Path(value)
+    if (
+        not path.is_absolute()
+        or path == Path("/")
+        or value.startswith("//")
+        or os.path.normpath(value) != value
+        or any(ord(character) < 0x20 for character in value)
+    ):
+        fail(f"{label} must be one canonical non-root absolute path")
+    return path
+
+
+def _validate_kagemusha_manifest_projection(
+    manifest: dict[str, Any], bundle: Path
+) -> tuple[Optional[dict[str, object]], Optional[str], Optional[str]]:
+    """Authenticate the optional reset-manifest Kagemusha config projection."""
+
+    named_fields = {
+        key for key in manifest if isinstance(key, str) and key.startswith("kagemusha_")
+    }
+    present = named_fields & KAGEMUSHA_RESET_MANIFEST_FIELDS
+    unexpected = named_fields - KAGEMUSHA_RESET_MANIFEST_FIELDS
+    if unexpected:
+        fail(
+            "reset manifest contains unsupported Kagemusha fields: "
+            + ", ".join(sorted(unexpected))
+        )
+    if not present:
+        return None, None, None
+    if present != KAGEMUSHA_RESET_MANIFEST_FIELDS:
+        missing = sorted(KAGEMUSHA_RESET_MANIFEST_FIELDS - present)
+        fail(
+            "reset manifest contains a partial Kagemusha projection; missing: "
+            + ", ".join(missing)
+        )
+
+    release_root = _canonical_unresolved_absolute_path(
+        manifest["kagemusha_release_root"],
+        "reset manifest Kagemusha release root",
+    )
+    if (
+        release_root == bundle
+        or release_root.is_relative_to(bundle)
+        or bundle.is_relative_to(release_root)
+    ):
+        fail("Kagemusha release root and validator reset bundle must be disjoint")
+    expected_policy_sha256 = require_sha256(
+        manifest["kagemusha_release_policy_sha256"],
+        "reset manifest Kagemusha release policy SHA-256",
+    )
+    authority = manifest["kagemusha_activation_authority"]
+    if (
+        not isinstance(authority, str)
+        or not authority
+        or authority.strip() != authority
+        or len(authority.encode("utf-8")) > 1024
+        or any(ord(character) < 0x20 for character in authority)
+    ):
+        fail("reset manifest Kagemusha activation authority is noncanonical")
+
+    projection = manifest["kagemusha_config_projection"]
+    if not isinstance(projection, dict) or set(projection) != set(
+        KAGEMUSHA_CONFIG_PROJECTION_KEYS
+    ):
+        fail("reset manifest Kagemusha config projection keys are not exact")
+    expected_projection: dict[str, object] = {
+        "schema": KAGEMUSHA_CONFIG_PROJECTION_SCHEMA,
+        "release_root": str(release_root),
+        "release_policy_path": str(
+            release_root / KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+        ),
+        "artifact_dir": str(release_root / KAGEMUSHA_ARTIFACT_RELATIVE_PATH),
+        "catalog_qualification_seal_path": str(
+            release_root / KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+        ),
+        "max_decoded_bytes": KAGEMUSHA_MAX_DECODED_BYTES,
+    }
+    if projection != expected_projection:
+        fail("reset manifest Kagemusha config projection is not canonical")
+    projection_sha256 = require_sha256(
+        manifest["kagemusha_config_projection_sha256"],
+        "reset manifest Kagemusha config projection SHA-256",
+    )
+    canonical_projection_sha256 = hashlib.sha256(
+        taira_authority_client.canonical_json_bytes(expected_projection)
+    ).hexdigest()
+    if projection_sha256 != canonical_projection_sha256:
+        fail("reset manifest Kagemusha config projection SHA-256 is not canonical")
+    return expected_projection, projection_sha256, expected_policy_sha256
+
+
+def _managed_kagemusha_offline_projection(
+    projection: Optional[dict[str, object]],
+) -> dict[str, object]:
+    """Project reset-manifest field names onto settlement.offline names."""
+
+    if projection is None:
+        return {}
+    return {
+        "kagemusha_release_policy_path": projection["release_policy_path"],
+        "kagemusha_artifact_dir": projection["artifact_dir"],
+        "kagemusha_catalog_qualification_seal_path": projection[
+            "catalog_qualification_seal_path"
+        ],
+        "kagemusha_max_decoded_bytes": projection["max_decoded_bytes"],
+    }
+
+
+def _optional_external_lstat(path: Path) -> Optional[os.stat_result]:
+    """Return metadata, or ``None`` when an external staging path is unavailable."""
+
+    try:
+        return path.lstat()
+    except (FileNotFoundError, PermissionError):
+        return None
+
+
+def _optional_bounded_external_digest(
+    path: Path, maximum_bytes: int, label: str
+) -> Optional[str]:
+    """Hash one available canonical nonempty external regular file."""
+
+    info = _optional_external_lstat(path)
+    if info is None:
+        return None
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_size <= 0
+        or info.st_size > maximum_bytes
+    ):
+        fail(f"{label} is not one bounded nonempty regular file")
+    canonical_path(path, label)
+    digest, after = sha256_regular(path, maximum_bytes)
+    if metadata_identity(after) != metadata_identity(info):
+        fail(f"{label} changed during external release validation")
+    return digest
+
+
+def _inspect_kagemusha_manifest_directories(
+    artifact_dir: Path,
+) -> tuple[tuple[str, ...], Optional[str], tuple[Path, ...], tuple[Path, ...]]:
+    """Bind only bounded manifests and sidecars, never recursive artifact payloads."""
+
+    info = _optional_external_lstat(artifact_dir)
+    if info is None:
+        return (), None, (), ()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail("Kagemusha artifact root is not one real directory")
+    canonical_path(artifact_dir, "Kagemusha artifact root")
+    names: list[str] = []
+    try:
+        with os.scandir(artifact_dir) as entries:
+            for entry in entries:
+                names.append(entry.name)
+                if len(names) > MAX_KAGEMUSHA_CATALOG_RELEASES:
+                    fail("Kagemusha artifact root exceeds the 16-release bound")
+    except PermissionError:
+        return (), None, (), ()
+    names.sort()
+    if not names:
+        fail("available Kagemusha artifact root contains no release directories")
+
+    manifest_files: list[Path] = []
+    digest_sidecars: list[Path] = []
+    for name in names:
+        if SHA256_RE.fullmatch(name) is None:
+            fail("Kagemusha artifact root contains a noncanonical release directory")
+        release_dir = artifact_dir / name
+        release_info = release_dir.lstat()
+        if stat.S_ISLNK(release_info.st_mode) or not stat.S_ISDIR(
+            release_info.st_mode
+        ):
+            fail("Kagemusha catalog release entry is not one real directory")
+        canonical_path(release_dir, "Kagemusha catalog release directory")
+        manifest_path = release_dir / "manifest.norito"
+        manifest_sha256 = _optional_bounded_external_digest(
+            manifest_path,
+            MAX_KAGEMUSHA_MANIFEST_BYTES,
+            "Kagemusha canonical release manifest",
+        )
+        if manifest_sha256 is None:
+            fail("available Kagemusha release directory lacks manifest.norito")
+        if manifest_sha256 != name:
+            fail("Kagemusha release directory does not equal manifest.norito SHA-256")
+        sidecar_path = release_dir / "manifest.norito.sha256"
+        try:
+            sidecar, _ = read_regular(
+                sidecar_path, MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES
+            )
+        except (FileNotFoundError, PermissionError) as error:
+            raise DeploymentError(
+                "available Kagemusha release directory lacks a readable digest sidecar"
+            ) from error
+        if sidecar != f"{name}\n".encode("ascii"):
+            fail("Kagemusha manifest digest sidecar is not canonical")
+        manifest_files.append(manifest_path)
+        digest_sidecars.append(sidecar_path)
+
+    inventory = {
+        "schema": KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA,
+        "manifest_sha256": names,
+    }
+    inventory_sha256 = hashlib.sha256(
+        taira_authority_client.canonical_json_bytes(inventory)
+    ).hexdigest()
+    return (
+        tuple(names),
+        inventory_sha256,
+        tuple(manifest_files),
+        tuple(digest_sidecars),
+    )
+
+
+def _inspect_kagemusha_external_release(
+    projection: Optional[dict[str, object]],
+    expected_policy_sha256: Optional[str],
+) -> Optional[KagemushaExternalReleasePlan]:
+    """Hash bounded external inputs when present; preserve unavailable as blocked."""
+
+    if projection is None:
+        return None
+    assert expected_policy_sha256 is not None
+    release_root = Path(str(projection["release_root"]))
+    policy_path = Path(str(projection["release_policy_path"]))
+    artifact_dir = Path(str(projection["artifact_dir"]))
+    qualification_seal_path = Path(
+        str(projection["catalog_qualification_seal_path"])
+    )
+    root_info = _optional_external_lstat(release_root)
+    if root_info is not None:
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            fail("Kagemusha release root is not one real directory")
+        canonical_path(release_root, "Kagemusha release root")
+    policy_sha256 = _optional_bounded_external_digest(
+        policy_path,
+        MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
+        "Kagemusha release policy",
+    )
+    if policy_sha256 is not None and policy_sha256 != expected_policy_sha256:
+        fail("Kagemusha release policy differs from the reset-manifest digest")
+    qualification_seal_sha256 = _optional_bounded_external_digest(
+        qualification_seal_path,
+        MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
+        "Kagemusha catalog qualification seal",
+    )
+    (
+        manifest_digests,
+        manifest_inventory_sha256,
+        manifest_files,
+        manifest_digest_sidecars,
+    ) = _inspect_kagemusha_manifest_directories(artifact_dir)
+    verified = (
+        policy_sha256 is not None
+        and qualification_seal_sha256 is not None
+        and manifest_inventory_sha256 is not None
+    )
+    return KagemushaExternalReleasePlan(
+        release_root=release_root,
+        policy_path=policy_path,
+        artifact_dir=artifact_dir,
+        qualification_seal_path=qualification_seal_path,
+        expected_policy_sha256=expected_policy_sha256,
+        policy_sha256=policy_sha256,
+        qualification_seal_sha256=qualification_seal_sha256,
+        manifest_directory_digests=manifest_digests,
+        manifest_directory_inventory_sha256=manifest_inventory_sha256,
+        manifest_files=manifest_files,
+        manifest_digest_sidecars=manifest_digest_sidecars,
+        verified=verified,
+    )
 
 
 def validate_config_projection(
@@ -830,6 +1254,7 @@ def validate_config_projection(
     p2p_port: int,
     genesis_public_key: str,
     genesis_expected_hash: str,
+    kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
 
@@ -868,6 +1293,19 @@ def validate_config_projection(
         fail(
             "validator config does not bind the reset bundle signed genesis, "
             "public key, and exact expected hash"
+        )
+    settlement = config.get("settlement")
+    offline = settlement.get("offline") if isinstance(settlement, dict) else None
+    actual_kagemusha = {
+        key: offline[key]
+        for key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS
+        if isinstance(offline, dict) and key in offline
+    }
+    expected_kagemusha = kagemusha_offline_projection or {}
+    if actual_kagemusha != expected_kagemusha:
+        fail(
+            "validator config managed Kagemusha projection differs from the "
+            "reset manifest"
         )
 
 
@@ -979,6 +1417,14 @@ def validate_bundle(
         fail("reset manifest DPN release commit does not match verified admission")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
         fail("reset manifest binary does not match the verified admission receipt")
+    (
+        kagemusha_projection,
+        kagemusha_projection_sha256,
+        kagemusha_policy_sha256,
+    ) = _validate_kagemusha_manifest_projection(manifest, bundle)
+    kagemusha_offline_projection = _managed_kagemusha_offline_projection(
+        kagemusha_projection
+    )
     genesis_public_key = manifest.get("genesis_public_key")
     if (
         not isinstance(genesis_public_key, str)
@@ -1055,6 +1501,7 @@ def validate_bundle(
             p2p_port=p2p_port,
             genesis_public_key=genesis_public_key,
             genesis_expected_hash=genesis_expected_hash,
+            kagemusha_offline_projection=kagemusha_offline_projection,
         )
         peers.append(
             PeerPlan(
@@ -1077,6 +1524,10 @@ def validate_bundle(
             )
         )
 
+    kagemusha_external_release = _inspect_kagemusha_external_release(
+        kagemusha_projection,
+        kagemusha_policy_sha256,
+    )
     free_by_device = require_filesystem_headroom(
         [
             bundle,
@@ -1105,6 +1556,8 @@ def validate_bundle(
         free_bytes=free_bytes,
         free_bytes_by_device=free_by_device,
         fsync_latency_ms=max(latencies),
+        kagemusha_config_projection_sha256=kagemusha_projection_sha256,
+        kagemusha_external_release=kagemusha_external_release,
     )
 
 
@@ -2585,6 +3038,7 @@ def consume_admission_receipt(
                 combined = DeploymentError(
                     "deployment did not begin and admission receipt rollback failed"
                 )
+                _mark_deployment_outcome(combined, "rollback-failed")
                 if hasattr(combined, "add_note"):
                     combined.add_note(
                         "deployment failure: "
@@ -4106,11 +4560,13 @@ def apply_reset(
                 combined = DeploymentError(
                     "Taira reset failed and the exact four-validator cohort rollback did not complete"
                 )
+                _mark_deployment_outcome(combined, "rollback-failed")
                 if hasattr(combined, "add_note"):
                     combined.add_note(
                         f"rollout failure: {type(rollout_error).__name__}: {rollout_error}"
                     )
                 raise combined from rollback_error
+        _mark_deployment_outcome(rollout_error, "rolled-back")
         raise
     finally:
         for signum, handler in previous_handlers.items():
@@ -4306,6 +4762,59 @@ def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     return None if os.geteuid() != 0 else (uid, gid)
 
 
+_kagemusha_authority_subject = _DEPLOY_AUTHORITY.kagemusha_subject
+_kagemusha_authority_artifacts = _DEPLOY_AUTHORITY.kagemusha_artifacts
+_kagemusha_report_fields = _DEPLOY_AUTHORITY.report_fields
+_deploy_authority_subject = _DEPLOY_AUTHORITY.subject
+_deploy_authority_artifacts = _DEPLOY_AUTHORITY.artifacts
+_deploy_result_sha256 = _DEPLOY_AUTHORITY.result_sha256
+
+
+def _authorize_deploy_lease(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    *,
+    apply: bool,
+) -> taira_authority_client.AuthorityResult:
+    try:
+        return taira_authority_client.authorize(
+            "deploy-issuance",
+            _deploy_authority_subject(admission, bundle, sources),
+            artifacts=_deploy_authority_artifacts(admission, bundle, sources),
+            disposition="apply" if apply else "dry-run",
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(
+            f"deploy-issuance authority refused the exact deployment: {error}"
+        ) from error
+
+
+def _finalize_deploy_lease(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    lease: taira_authority_client.AuthorityResult,
+    *,
+    outcome: str,
+    result: dict[str, object],
+) -> taira_authority_client.AuthorityResult:
+    """Bind a consumed lease to success or the completed rollback outcome."""
+
+    try:
+        return taira_authority_client.finalize_deployment(
+            _deploy_authority_subject(admission, bundle, sources),
+            lease=lease,
+            outcome=outcome,
+            result_sha256=_deploy_result_sha256(outcome, result),
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(
+            "deploy-issuance authority could not persist the terminal result: "
+            f"{error}"
+        ) from error
+
+
 def _execute_after_provisioned_authority_contracts(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
@@ -4339,6 +4848,7 @@ def _execute_after_provisioned_authority_contracts(
     if not args.apply:
         old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_archive_unchanged(admission)
+        lease = _authorize_deploy_lease(admission, bundle, sources, apply=False)
         return {
             "admission_archive_sha256": admission.archive_sha256,
             "admission_receipt_consumed": False,
@@ -4364,6 +4874,8 @@ def _execute_after_provisioned_authority_contracts(
             "free_bytes": bundle.free_bytes,
             "fsync_latency_ms": round(bundle.fsync_latency_ms, 3),
             "mode": "verified-read-only-dry-run",
+            "deploy_authority_operation_id": lease.operation_id,
+            "deploy_authority_status": lease.status,
             "peer_count": PEER_COUNT,
             "restart_generation": args.restart_generation,
             "source_commit": args.expected_source_commit,
@@ -4385,16 +4897,57 @@ def _execute_after_provisioned_authority_contracts(
         )
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         require_admission_archive_unchanged(locked_admission)
-        with consume_admission_receipt(locked_admission) as consumption:
-            report = apply_reset(
-                args,
-                bundle,
-                sources,
-                old_cohort,
-                rollout_starter=consumption.mark_rollout_started,
-                ops=system_ops,
-                getter=operator_getter,
+        lease = _authorize_deploy_lease(
+            locked_admission, bundle, sources, apply=True
+        )
+        try:
+            with consume_admission_receipt(locked_admission) as consumption:
+                report = apply_reset(
+                    args,
+                    bundle,
+                    sources,
+                    old_cohort,
+                    rollout_starter=consumption.mark_rollout_started,
+                    ops=system_ops,
+                    getter=operator_getter,
+                )
+        except BaseException as deployment_error:
+            outcome = getattr(
+                deployment_error,
+                DEPLOYMENT_OUTCOME_ATTRIBUTE,
+                "rolled-back",
             )
+            if outcome not in {"rolled-back", "rollback-failed"}:
+                outcome = "rollback-failed"
+            failure_result = {
+                "error": str(deployment_error),
+                "error_type": type(deployment_error).__name__,
+            }
+            try:
+                _finalize_deploy_lease(
+                    locked_admission,
+                    bundle,
+                    sources,
+                    lease,
+                    outcome=outcome,
+                    result=failure_result,
+                )
+            except DeploymentError as finalization_error:
+                if hasattr(finalization_error, "add_note"):
+                    finalization_error.add_note(
+                        "deployment result before authority finalization: "
+                        f"{type(deployment_error).__name__}: {deployment_error}"
+                    )
+                raise finalization_error from deployment_error
+            raise
+        finalization = _finalize_deploy_lease(
+            locked_admission,
+            bundle,
+            sources,
+            lease,
+            outcome="success",
+            result=report,
+        )
         report.update(
             {
                 "admission_archive_sha256": locked_admission.archive_sha256,
@@ -4409,6 +4962,12 @@ def _execute_after_provisioned_authority_contracts(
                 "boi_qualification_receipt_id": (
                     locked_admission.boi_qualification_receipt_id
                 ),
+                "deploy_authority_operation_id": lease.operation_id,
+                "deploy_authority_status": lease.status,
+                "deploy_authority_final_status": finalization.status,
+                "deploy_authority_result_receipt_sha256": hashlib.sha256(
+                    finalization.durable_receipt_bytes
+                ).hexdigest(),
             }
         )
         return report
@@ -4417,10 +4976,10 @@ def _execute_after_provisioned_authority_contracts(
 def execute(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
-    """Refuse dry-run and apply before any identity, path, or admission read."""
+    """Authenticate issuance before any identity, path, or admission read."""
 
-    del args, ops
     require_deploy_issuance_contracts()
+    return _execute_after_provisioned_authority_contracts(args, ops=ops)
 
 
 def main(argv: Optional[list[str]] = None) -> int:

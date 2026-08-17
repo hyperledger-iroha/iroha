@@ -1190,6 +1190,33 @@ fn parse_private_key_with_algorithm(
 fn parse_algorithm_code(code: u8) -> BridgeResult<Algorithm> {
     Algorithm::try_from(code).map_err(|_| BridgeError::UnsupportedAlgorithm)
 }
+macro_rules! define_ed25519_signed_transaction_wrapper {
+    (
+        $default:ident => $with_algorithm:ident (
+            $($argument:ident: $argument_type:ty,)*
+        )
+    ) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $default(
+            $($argument: $argument_type,)*
+            out_signed_ptr: *mut *mut c_uchar,
+            out_signed_len: *mut c_ulong,
+            out_hash_ptr: *mut c_uchar,
+            out_hash_len: c_ulong,
+        ) -> c_int {
+            unsafe {
+                $with_algorithm(
+                    $($argument,)*
+                    Algorithm::Ed25519 as u8,
+                    out_signed_ptr,
+                    out_signed_len,
+                    out_hash_ptr,
+                    out_hash_len,
+                )
+            }
+        }
+    };
+}
 fn checked_public_key_payload(public_key: &PublicKey) -> BridgeResult<&[u8]> {
     public_key
         .try_to_bytes()
@@ -23534,89 +23561,29 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_err(
         0
     }
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_asset_tx_inputs(AssetInputPointers {
-                network_id_ptr,
-                network_id_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                quantity_ptr,
-                quantity_len,
-                destination_ptr,
-                destination_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-        let AssetTxInputs {
-            network_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let asset_id =
-            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                network_id,
-                authority,
-                creation_time_ms,
-                ttl,
-                nonce,
-                fee_payment,
-                Metadata::default(),
-                private_key,
-                || {
-                    let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
-                    Executable::from([InstructionBox::from(transfer)])
-                },
-            )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_transfer_signed_transaction =>
+        connect_norito_encode_transfer_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            nonce: u32,
+            nonce_present: c_uchar,
+            asset_definition_ptr: *const c_char,
+            asset_definition_len: c_ulong,
+            quantity_ptr: *const c_char,
+            quantity_len: c_ulong,
+            destination_ptr: *const c_char,
+            destination_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
@@ -23746,77 +23713,29 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    vk_unshield_ptr: *const c_char,
-    vk_unshield_len: c_ulong,
-    vk_unshield_present: c_uchar,
-    vk_shield_ptr: *const c_char,
-    vk_shield_len: c_ulong,
-    vk_shield_present: c_uchar,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let asset_definition_str =
-            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let asset_definition = parse_asset_definition(asset_definition_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let vk_unshield = unsafe {
-            parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
-        }?;
-        let vk_shield = unsafe {
-            parse_optional_verifying_key_id(vk_shield_ptr, vk_shield_len, vk_shield_present)
-        }?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
-        register
-            .validate_verifier_roles()
-            .map_err(|_| BridgeError::ZkAssetPolicy)?;
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            {
-                let register = register.clone();
-                move || Executable::from([InstructionBox::from(register.clone())])
-            },
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_register_zk_asset_signed_transaction =>
+        connect_norito_encode_register_zk_asset_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            asset_definition_ptr: *const c_char,
+            asset_definition_len: c_ulong,
+            vk_unshield_ptr: *const c_char,
+            vk_unshield_len: c_ulong,
+            vk_unshield_present: c_uchar,
+            vk_shield_ptr: *const c_char,
+            vk_shield_len: c_ulong,
+            vk_shield_present: c_uchar,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction_alg(
@@ -23892,67 +23811,28 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    target_kind: u8,
-    object_ptr: *const c_char,
-    object_len: c_ulong,
-    key_ptr: *const c_char,
-    key_len: c_ulong,
-    value_ptr: *const c_uchar,
-    value_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || value_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
-        let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
-        let value_slice = unsafe { slice::from_raw_parts(value_ptr, value_len as usize) };
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let target = parse_metadata_target(target_kind, object_str)?;
-        let key = parse_name(key_str)?;
-        let value = parse_json_value(value_slice)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let instruction = build_set_metadata_instruction(target, key, value);
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            instruction,
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_set_key_value_signed_transaction =>
+        connect_norito_encode_set_key_value_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            target_kind: u8,
+            object_ptr: *const c_char,
+            object_len: c_ulong,
+            key_ptr: *const c_char,
+            key_len: c_ulong,
+            value_ptr: *const c_uchar,
+            value_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_alg(
@@ -24018,63 +23898,26 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    target_kind: u8,
-    object_ptr: *const c_char,
-    object_len: c_ulong,
-    key_ptr: *const c_char,
-    key_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
-        let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let target = parse_metadata_target(target_kind, object_str)?;
-        let key = parse_name(key_str)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let instruction = build_remove_metadata_instruction(target, key);
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            instruction,
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_remove_key_value_signed_transaction =>
+        connect_norito_encode_remove_key_value_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            target_kind: u8,
+            object_ptr: *const c_char,
+            object_len: c_ulong,
+            key_ptr: *const c_char,
+            key_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transaction_alg(
@@ -24136,117 +23979,34 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    contract_address_ptr: *const c_char,
-    contract_address_len: c_ulong,
-    code_hash_ptr: *const c_char,
-    code_hash_len: c_ulong,
-    abi_hash_ptr: *const c_char,
-    abi_hash_len: c_ulong,
-    abi_version_ptr: *const c_char,
-    abi_version_len: c_ulong,
-    window_lower: u64,
-    window_upper: u64,
-    window_present: c_uchar,
-    mode_code: u8,
-    mode_present: c_uchar,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let contract_address_raw =
-            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
-        let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
-        let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
-        let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let contract_address = contract_address_raw
-            .parse()
-            .map_err(|_| BridgeError::Governance)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let code_hash_arr = parse_hex_32(&code_hash_raw)?;
-        let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
-        let code_hash_hex = hex::encode(code_hash_arr);
-        let abi_hash_hex = hex::encode(abi_hash_arr);
-        let window = if window_present != 0 {
-            Some(AtWindow {
-                lower: window_lower,
-                upper: window_upper,
-            })
-        } else {
-            None
-        };
-        let mode = if mode_present != 0 {
-            Some(parse_voting_mode(mode_code)?)
-        } else {
-            None
-        };
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let key_pair = KeyPair::from(private_key.clone());
-        let manifest = ContractManifest {
-            seiyaku_name: None,
-            code_hash: Some(Hash::prehashed(code_hash_arr)),
-            abi_hash: Some(Hash::prehashed(abi_hash_arr)),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        }
-        .try_signed(&key_pair)
-        .map_err(|_| BridgeError::Governance)?;
-        let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
-        let proposal = ProposeDeployContract {
-            contract_address,
-            code_hash_hex,
-            abi_hash_hex,
-            abi_version,
-            window,
-            mode,
-            manifest_provenance: Some(manifest_provenance),
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(proposal),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_propose_deploy_signed_transaction =>
+        connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            contract_address_ptr: *const c_char,
+            contract_address_len: c_ulong,
+            code_hash_ptr: *const c_char,
+            code_hash_len: c_ulong,
+            abi_hash_ptr: *const c_char,
+            abi_hash_len: c_ulong,
+            abi_version_ptr: *const c_char,
+            abi_version_len: c_ulong,
+            window_lower: u64,
+            window_upper: u64,
+            window_present: c_uchar,
+            mode_code: u8,
+            mode_present: c_uchar,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
@@ -24362,78 +24122,29 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    owner_ptr: *const c_char,
-    owner_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    duration_blocks: u64,
-    direction: u8,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if direction > 2 {
-            return Err(BridgeError::Governance);
-        }
-        let referendum_id =
-            unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
-        let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let owner = parse_account_id(owner_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let amount = parse_public_quantity(amount_str)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ballot = CastPlainBallot {
-            referendum_id,
-            owner,
-            amount,
-            duration_blocks,
-            direction,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(ballot),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_cast_plain_ballot_signed_transaction =>
+        connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            referendum_id_ptr: *const c_char,
+            referendum_id_len: c_ulong,
+            owner_ptr: *const c_char,
+            owner_len: c_ulong,
+            amount_ptr: *const c_char,
+            amount_len: c_ulong,
+            duration_blocks: u64,
+            direction: u8,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
@@ -24510,79 +24221,27 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    election_id_ptr: *const c_char,
-    election_id_len: c_ulong,
-    proof_b64_ptr: *const c_char,
-    proof_b64_len: c_ulong,
-    public_inputs_ptr: *const c_uchar,
-    public_inputs_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || public_inputs_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let election_id =
-            unsafe { read_governance_selector_bridge(election_id_ptr, election_id_len) }?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let proof_raw = unsafe { read_string_bridge(proof_b64_ptr, proof_b64_len) }?;
-        let inputs_slice =
-            unsafe { slice::from_raw_parts(public_inputs_ptr, public_inputs_len as usize) };
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let proof_bytes = b64gp::STANDARD
-            .decode(proof_raw)
-            .map_err(|_| BridgeError::Governance)?;
-        let proof_b64 = b64gp::STANDARD.encode(proof_bytes);
-        let mut public_inputs_value: norito::json::Value =
-            norito::json::from_slice(inputs_slice).map_err(|_| BridgeError::Governance)?;
-        normalize_zk_ballot_public_inputs(&mut public_inputs_value)?;
-        let public_inputs_json =
-            norito::json::to_string(&public_inputs_value).map_err(|_| BridgeError::Governance)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ballot = CastZkBallot {
-            election_id,
-            proof_b64,
-            public_inputs_json,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(ballot),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_cast_zk_ballot_signed_transaction =>
+        connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            election_id_ptr: *const c_char,
+            election_id_len: c_ulong,
+            proof_b64_ptr: *const c_char,
+            proof_b64_len: c_ulong,
+            public_inputs_ptr: *const c_uchar,
+            public_inputs_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
@@ -24660,72 +24319,27 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    preimage_hash_ptr: *const c_char,
-    preimage_hash_len: c_ulong,
-    window_lower: u64,
-    window_upper: u64,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_hex = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let preimage_hex = unsafe { read_string_bridge(preimage_hash_ptr, preimage_hash_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let referendum_id = parse_hex_32(&referendum_hex)?;
-        let preimage_hash = parse_hex_32(&preimage_hex)?;
-        let at_window = AtWindow {
-            lower: window_lower,
-            upper: window_upper,
-        };
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let enact = EnactReferendum {
-            referendum_id,
-            preimage_hash,
-            at_window,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(enact),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_enact_referendum_signed_transaction =>
+        connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            referendum_id_ptr: *const c_char,
+            referendum_id_len: c_ulong,
+            preimage_hash_ptr: *const c_char,
+            preimage_hash_len: c_ulong,
+            window_lower: u64,
+            window_upper: u64,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
@@ -24796,76 +24410,25 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    proposal_id_ptr: *const c_char,
-    proposal_id_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let referendum_id = unsafe {
-            read_exact_lower_hex32_bridge(
-                referendum_id_ptr,
-                referendum_id_len,
-                BridgeError::Governance,
-            )
-        }?;
-        let proposal_hex = unsafe {
-            read_exact_lower_hex32_bridge(proposal_id_ptr, proposal_id_len, BridgeError::Hex)
-        }?;
-        if referendum_id != proposal_hex {
-            return Err(BridgeError::Governance);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let proposal_id = parse_hex_32(&proposal_hex)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let finalize = FinalizeReferendum {
-            referendum_id,
-            proposal_id,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(finalize),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_finalize_referendum_signed_transaction =>
+        connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            referendum_id_ptr: *const c_char,
+            referendum_id_len: c_ulong,
+            proposal_id_ptr: *const c_char,
+            proposal_id_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
@@ -24940,64 +24503,24 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    epoch: u64,
-    members_json_ptr: *const c_uchar,
-    members_json_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || members_json_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let members_slice =
-            unsafe { slice::from_raw_parts(members_json_ptr, members_json_len as usize) };
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let members = parse_account_list(members_slice)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let persist = PersistCouncilForEpoch {
-            epoch,
-            members,
-            alternates: Vec::new(),
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(persist),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_governance_persist_council_signed_transaction =>
+        connect_norito_encode_governance_persist_council_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            epoch: u64,
+            members_json_ptr: *const c_uchar,
+            members_json_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed_transaction_alg(
@@ -25498,6 +25021,59 @@ mod accel_tests {
     fn asset_definition_cstring(domain: &str, name: &str) -> CString {
         cstring(&asset_definition_literal(domain, name))
     }
+    fn compact_c_declaration(header: &str, symbol: &str) -> String {
+        let marker = format!("int32_t {symbol}(");
+        let start = header
+            .find(marker.as_str())
+            .unwrap_or_else(|| panic!("missing C declaration for {symbol}"));
+        let end = start
+            + header[start..]
+                .find(");")
+                .unwrap_or_else(|| panic!("unterminated C declaration for {symbol}"))
+            + 2;
+        header[start..end].split_whitespace().collect()
+    }
+    #[test]
+    fn ed25519_signed_transaction_wrapper_inventory_preserves_the_c_abi() {
+        let compact_source: String = bridge_source().split_whitespace().collect();
+        let header = include_str!("../include/connect_norito_bridge.h");
+        let families = [
+            "transfer",
+            "register_zk_asset",
+            "set_key_value",
+            "remove_key_value",
+            "governance_propose_deploy",
+            "governance_cast_plain_ballot",
+            "governance_cast_zk_ballot",
+            "governance_enact_referendum",
+            "governance_finalize_referendum",
+            "governance_persist_council",
+            "mint",
+            "multisig_register",
+            "burn",
+            "claim_identifier",
+        ];
+        let macro_marker = ["define_ed25519_signed_", "transaction_wrapper!{"].concat();
+        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 14);
+        for family in families {
+            let default = format!("connect_norito_encode_{family}_signed_transaction");
+            let with_algorithm = format!("{default}_alg");
+            let invocation = format!("{default}=>{with_algorithm}(");
+            assert_eq!(
+                compact_source.matches(invocation.as_str()).count(),
+                1,
+                "missing or duplicate Ed25519 wrapper for {family}",
+            );
+            let default_declaration = compact_c_declaration(header, default.as_str());
+            let algorithm_declaration = compact_c_declaration(header, with_algorithm.as_str())
+                .replacen(with_algorithm.as_str(), default.as_str(), 1)
+                .replacen("uint8_talgorithm,", "", 1);
+            assert_eq!(
+                default_declaration, algorithm_declaration,
+                "C ABI pair differs by more than algorithm_code for {family}",
+            );
+        }
+    }
     fn call_plain_ballot_encoder(
         referendum_id: &str,
         amount: &str,
@@ -25574,6 +25150,60 @@ mod accel_tests {
             }
         };
         (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+    fn own_signed_transaction_output(
+        (status, ptr, len, hash): (c_int, *mut u8, c_ulong, [u8; 32]),
+    ) -> (c_int, Vec<u8>, [u8; 32]) {
+        if status != 0 {
+            return (status, Vec::new(), hash);
+        }
+        assert!(!ptr.is_null());
+        let bytes = unsafe { slice::from_raw_parts(ptr, len as usize) }.to_vec();
+        unsafe { free(ptr.cast()) };
+        (status, bytes, hash)
+    }
+    #[test]
+    fn ed25519_default_wrapper_matches_algorithm_path_under_input_mutation() {
+        let _guard = chain_guard();
+        for (case, selector, amount, valid_private_key, expected_status) in [
+            ("valid", "ref-plain", "1", true, 0),
+            (
+                "selector mutation",
+                "bad/selector",
+                "1",
+                false,
+                ERR_GOVERNANCE,
+            ),
+            (
+                "quantity mutation",
+                "ref-plain",
+                "01",
+                true,
+                ERR_QUANTITY_PARSE,
+            ),
+            (
+                "private-key mutation",
+                "ref-plain",
+                "1",
+                false,
+                ERR_PRIVATE_KEY_PARSE,
+            ),
+        ] {
+            let default = own_signed_transaction_output(call_plain_ballot_encoder(
+                selector,
+                amount,
+                None,
+                valid_private_key,
+            ));
+            let with_algorithm = own_signed_transaction_output(call_plain_ballot_encoder(
+                selector,
+                amount,
+                Some(Algorithm::Ed25519),
+                valid_private_key,
+            ));
+            assert_eq!(default.0, expected_status, "{case}");
+            assert_eq!(default, with_algorithm, "{case}");
+        }
     }
     fn call_zk_ballot_encoder(
         election_id: &str,
@@ -27395,89 +27025,29 @@ mod secp256k1_tests {
         assert_eq!(verify_status, 1, "signature did not verify");
     }
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_asset_tx_inputs(AssetInputPointers {
-                network_id_ptr,
-                network_id_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                quantity_ptr,
-                quantity_len,
-                destination_ptr,
-                destination_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-        let AssetTxInputs {
-            network_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let asset_id =
-            AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            network_id,
-            authority,
-            AssetTransactionTiming {
-                creation_time_ms,
-                ttl,
-                nonce,
-            },
-            fee_payment,
-            private_key,
-            || {
-                let mint = Mint::asset_quantity(quantity, asset_id);
-                Executable::from([InstructionBox::from(mint)])
-            },
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_mint_signed_transaction =>
+        connect_norito_encode_mint_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            nonce: u32,
+            nonce_present: c_uchar,
+            asset_definition_ptr: *const c_char,
+            asset_definition_len: c_ulong,
+            quantity_ptr: *const c_char,
+            quantity_len: c_ulong,
+            destination_ptr: *const c_char,
+            destination_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
@@ -27568,71 +27138,25 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    spec_ptr: *const c_char,
-    spec_len: c_ulong,
-    account_ptr: *const c_char,
-    account_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || account_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let spec = parse_multisig_spec_bytes(spec_ptr, spec_len)?;
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            {
-                let spec = spec.clone();
-                let account = account.clone();
-                move || {
-                    let register = MultisigRegister::with_account(
-                        account.clone(),
-                        None::<DomainId>,
-                        spec.clone(),
-                    );
-                    Executable::from([InstructionBox::from(register)])
-                }
-            },
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_multisig_register_signed_transaction =>
+        connect_norito_encode_multisig_register_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            spec_ptr: *const c_char,
+            spec_len: c_ulong,
+            account_ptr: *const c_char,
+            account_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transaction_alg(
@@ -27702,144 +27226,49 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
     })();
     bridge_result_to_code(result)
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_asset_tx_inputs(AssetInputPointers {
-                network_id_ptr,
-                network_id_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                quantity_ptr,
-                quantity_len,
-                destination_ptr,
-                destination_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-        let AssetTxInputs {
-            network_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            network_id,
-            authority,
-            AssetTransactionTiming {
-                creation_time_ms,
-                ttl,
-                nonce,
-            },
-            fee_payment,
-            private_key,
-            || {
-                let burn = Burn::asset_quantity(quantity, asset_id);
-                Executable::from([InstructionBox::from(burn)])
-            },
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_burn_signed_transaction =>
+        connect_norito_encode_burn_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            nonce: u32,
+            nonce_present: c_uchar,
+            asset_definition_ptr: *const c_char,
+            asset_definition_len: c_ulong,
+            quantity_ptr: *const c_char,
+            quantity_len: c_ulong,
+            destination_ptr: *const c_char,
+            destination_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    account_ptr: *const c_char,
-    account_len: c_ulong,
-    receipt_ptr: *const c_char,
-    receipt_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || account_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
-        validate_identifier_claim_account(&account, &receipt)?;
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(ClaimIdentifier { account, receipt }),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_claim_identifier_signed_transaction =>
+        connect_norito_encode_claim_identifier_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            account_ptr: *const c_char,
+            account_len: c_ulong,
+            receipt_ptr: *const c_char,
+            receipt_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction_alg(

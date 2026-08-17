@@ -5,8 +5,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "${repo_root}"
 
+echo "[sorafs-release] build-efficiency provenance check"
+python3 -I -S scripts/check_build_efficiency_provenance.py
+
 echo "[sorafs-release] source-file budget check"
-python3 scripts/check_source_file_budget.py
+python3 scripts/check_source_file_budget.py --require-objective
 
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
 export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"
@@ -75,6 +78,7 @@ python3 scripts/check_workflow_action_pins.py
 python3 -m pytest -q \
   scripts/tests/check_workflow_action_pins_test.py \
   scripts/tests/check_sorafs_release_automation_test.py \
+  scripts/tests/check_build_efficiency_provenance_test.py \
   scripts/tests/check_sorafs_release_version_map_test.py \
   scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py \
   scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py \
@@ -82,11 +86,32 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/build_sorafs_foundational_prerequisite_test.py \
+  scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_gateway_load_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_hedging_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_l1_deployment_qualification_test.py \
+  scripts/tests/check_sorafs_l1_resilience_qualification_test.py \
+  scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_pdp_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_por_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_potr_rollout_evidence_test.py \
   scripts/tests/check_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_negative_archive_test.py \
+  scripts/tests/check_sorafs_production_promotion_bundle_test.py \
+  scripts/tests/check_sorafs_repair_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_reputation_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_transparency_rollout_evidence_test.py \
+  scripts/tests/sorafs_archive_path_components_test.py \
   scripts/tests/sorafs_evidence_json_test.py \
   scripts/tests/sorafs_l1_lane_evidence_inventory_test.py \
+  scripts/tests/sorafs_required_kinds_test.py \
   scripts/tests/sorafs_response_args_test.py \
   scripts/tests/sorafs_topology_qualification_test.py \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \
@@ -127,7 +152,8 @@ cargo test --locked -p irohad --lib "${provider_ingest_test}" -- \
 
 echo "[sorafs-release] external software signer protocol and CLI tests"
 cargo test --locked -p irohad --lib external_software_signer
-cargo test --locked -p irohad --bin sorafs_external_software_signer
+cargo test --locked -p irohad --features external-software-signer-bin \
+  --bin sorafs_external_software_signer
 
 echo "[sorafs-release] clippy sorafs_orchestrator (sorafs_cli)"
 cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings

@@ -45,6 +45,22 @@ fn jalr_alignment_word_aligns_target() {
     assert_eq!(vm.register(3), 8);
 }
 #[test]
+fn jalr_target_addition_wraps_before_alignment() {
+    let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 3, 2, 1);
+    let mut prog = ProgramMetadata::default().encode();
+    prog.extend_from_slice(&jalr.to_le_bytes());
+    prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut vm = IVM::new(100);
+    vm.load_program(&prog).unwrap();
+    vm.set_register(2, i64::MAX as u64);
+    let err = vm
+        .run()
+        .expect_err("wrapped target lies outside executable memory");
+    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert_eq!(vm.pc(), 1_u64 << 63);
+    assert_eq!(vm.register(3), 4);
+}
+#[test]
 fn compressed_forms_are_rejected() {
     let mut prog = ProgramMetadata::default().encode();
     let li16 = encode_li16(CLASSIC_ARITH_IMM, 1, 7);

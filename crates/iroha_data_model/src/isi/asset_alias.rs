@@ -90,7 +90,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
 mod tests {
     use super::*;
     use crate::asset::AssetDefinitionAlias;
-    use norito::core::DecodeFromSlice;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     fn asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -100,35 +100,6 @@ mod tests {
     fn asset_alias() -> AssetDefinitionAlias {
         AssetDefinitionAlias::from_components("rose", Some("wonderland"), "universal")
             .expect("asset alias")
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(
-        registry: &crate::isi::InstructionRegistry,
-        wire_id: &'static str,
-        value: T,
-    ) where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     fn asset_alias_decode_from_slice_roundtrips() {

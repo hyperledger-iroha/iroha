@@ -1,0 +1,33 @@
+
+seiyaku StateRootAcceptance {
+  error enum StateRootError {
+    ScalarLost = 1,
+    StructLost = 2,
+    OptionLost = 3,
+    ResultLost = 4
+  }
+
+  struct Pair { int count, bool ready }
+  state int Counter;
+  state Pair Current;
+  state Option<Pair> Maybe;
+  state Result<Pair, Pair> Outcome;
+
+  hajimari() {
+    Counter = 3;
+    Current = Pair { count: 5, ready: true };
+    Maybe = Option::some(Pair { count: 7, ready: true });
+    Outcome = Result::ok(Pair { count: 11, ready: true });
+  }
+
+  kotoage fn run() -> int authorize("WriteState") {
+    require(Counter == 3, StateRootError::ScalarLost);
+    require(Current.count == 5 && Current.ready, StateRootError::StructLost);
+    let maybe = Maybe.unwrap_or(Pair { count: 0, ready: false });
+    require(maybe.count == 7 && maybe.ready, StateRootError::OptionLost);
+    let outcome = Outcome.unwrap_or(Pair { count: 0, ready: false });
+    require(outcome.count == 11 && outcome.ready, StateRootError::ResultLost);
+    Counter = Counter + 1;
+    return Counter + Current.count + maybe.count + outcome.count;
+  }
+}

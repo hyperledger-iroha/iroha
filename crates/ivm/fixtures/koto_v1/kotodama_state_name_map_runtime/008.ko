@@ -1,0 +1,43 @@
+
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            state StateMap<Name, PolicyState> Policies;
+
+            fn empty_policy_state() -> PolicyState {
+                return PolicyState {
+                    version: 0,
+                    document: b"fallback",
+                    document_hash: b"fallback-hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 0,
+                    change_id: Name::parse("fallback"),
+                };
+            }
+
+            kotoage fn main() -> bool authorize("WriteState") {
+                let key = Name::parse("spend");
+                Policies[key] = PolicyState {
+                    version: 7,
+                    document: b"policy",
+                    document_hash: b"hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 99,
+                    change_id: Name::parse("change-7"),
+                };
+                let policy = Policies.get(key).unwrap_or(empty_policy_state());
+                return policy.version == 7
+                    && policy.document == b"policy"
+                    && policy.document_hash == b"hash"
+                    && policy.approved_by == context::authority()
+                    && policy.applied_at_ms == 99
+                    && policy.change_id == Name::parse("change-7");
+            }
+        }
+    

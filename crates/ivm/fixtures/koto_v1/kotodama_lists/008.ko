@@ -1,0 +1,63 @@
+
+        seiyaku RecursiveContains {
+            struct Envelope {
+                Option<List<int, 3>> labels,
+                List<Option<int>, 3> markers,
+                Result<(int, bool), int> outcome,
+            }
+
+            fn ok(int last, bool ready) -> Envelope {
+                Envelope {
+                    labels: Option::some([1, last]),
+                    markers: [Option::none, Option::some(last)],
+                    outcome: Result::ok((9, ready)),
+                }
+            }
+
+            fn err(int code) -> Envelope {
+                Envelope {
+                    labels: Option::none,
+                    markers: [Option::none, Option::some(7)],
+                    outcome: Result::err(code),
+                }
+            }
+
+            view fn main() -> int {
+                let List<Envelope, 2> values = [ok(7, true), err(5)];
+
+                // Every needle below is freshly allocated. Equality must use
+                // the declared aggregate schema rather than handle identity.
+                if !values.contains(ok(7, true)) { return -1; }
+                if !values.contains(err(5)) { return -2; }
+
+                // Same shape with a different nested Option payload.
+                if values.contains(ok(8, true)) { return -3; }
+
+                // Equal capacity does not make different active lengths equal.
+                let short = Envelope {
+                    labels: Option::some([7]),
+                    markers: [Option::none, Option::some(7)],
+                    outcome: Result::ok((9, true)),
+                };
+                if values.contains(short) { return -4; }
+
+                // Sum tags and only their active payloads participate.
+                let different_option_branch = Envelope {
+                    labels: Option::some([1, 7]),
+                    markers: [Option::some(0), Option::some(7)],
+                    outcome: Result::ok((9, true)),
+                };
+                if values.contains(different_option_branch) { return -5; }
+                let different_outer_option_branch = Envelope {
+                    labels: Option::none,
+                    markers: [Option::none, Option::some(7)],
+                    outcome: Result::ok((9, true)),
+                };
+                if values.contains(different_outer_option_branch) { return -6; }
+                if values.contains(ok(7, false)) { return -7; }
+                if values.contains(err(6)) { return -8; }
+
+                1
+            }
+        }
+        

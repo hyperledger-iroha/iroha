@@ -16,7 +16,7 @@ SPDX-License-Identifier: Apache-2.0
 - Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
 - Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
   - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || network_id)`, where `network_id` is the exact genesis-derived `NetworkId`, independent of note ordering.
+  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || network_id)`, where `network_id` is the exact genesis-derived `NetworkId`, independent of note ordering. The Poseidon byte preimage is terminated with `0x01` and zero-padded to an eight-byte boundary before field-sponge padding.
   - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
 - Specialized confidential protocols transport Norito-encoded proof payloads containing:
   - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.

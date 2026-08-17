@@ -1,4 +1,4 @@
-"""Hostile tests for the unprovisioned Linux native-evidence authority."""
+"""Hostile tests for the authenticated Linux native-evidence authority."""
 
 from __future__ import annotations
 
@@ -151,6 +151,7 @@ def _forged_native_release(
 @pytest.mark.parametrize("hostile_case", HOSTILE_NATIVE_CASES)
 def test_fabricated_native_evidence_can_close_self_hashes_but_not_gain_authority(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     hostile_case: str,
 ) -> None:
     root, archive, args = _forged_native_release(tmp_path, hostile_case)
@@ -176,14 +177,28 @@ def test_fabricated_native_evidence_can_close_self_hashes_but_not_gain_authority
         payload = (root / native_authority.EVIDENCE_PATHS[name]).read_bytes()
         assert evidence[name]["sha256"] == hashlib.sha256(payload).hexdigest()
 
+    monkeypatch.setattr(
+        native_authority.taira_authority_client,
+        "preflight",
+        lambda role: {"role": role, "status": "ready"},
+    )
+
+    def reject_forgery(*_args, **_kwargs):
+        raise native_authority.taira_authority_client.TairaAuthorityClientError(
+            "native semantic validation rejected fabricated evidence"
+        )
+
+    monkeypatch.setattr(
+        native_authority.taira_authority_client, "authorize", reject_forgery
+    )
     with pytest.raises(
         native_authority.TairaReleaseAuthorityError,
-        match=native_authority.INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_SCHEMA,
+        match="semantic validation rejected",
     ):
         native_authority.build_authority(args)
 
 
-def test_provisioning_contract_is_unconditional_and_not_a_signer_or_marker_gate(
+def test_provisioning_contract_uses_only_the_fixed_native_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,7 +240,27 @@ def test_provisioning_contract_is_unconditional_and_not_a_signer_or_marker_gate(
     )
     assert "os.environ" not in barrier_source
     assert "getenv" not in barrier_source
-    with pytest.raises(native_authority.TairaReleaseAuthorityError):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        native_authority.taira_authority_client,
+        "preflight",
+        lambda role: calls.append(role) or {"role": role, "status": "ready"},
+    )
+    native_authority.require_independent_native_evidence_authority_provisioned()
+    assert calls == ["native-evidence"]
+
+    def unavailable(_role: str):
+        raise native_authority.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(
+        native_authority.taira_authority_client, "preflight", unavailable
+    )
+    with pytest.raises(
+        native_authority.TairaReleaseAuthorityError,
+        match=native_authority.INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_SCHEMA,
+    ):
         native_authority.require_independent_native_evidence_authority_provisioned()
 
 
@@ -248,6 +283,15 @@ def test_authority_cli_and_finalizer_stop_before_output_path_or_signer(
             raise AssertionError(f"native authority barrier reached {name}")
 
         return call
+
+    def unavailable(_role: str):
+        raise native_authority.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(
+        native_authority.taira_authority_client, "preflight", unavailable
+    )
 
     monkeypatch.setattr(
         native_authority,
@@ -342,6 +386,15 @@ def test_candidate_and_admission_stop_before_signer_output_archive_or_replay(
 
         return call
 
+    def unavailable(_role: str):
+        raise native_authority.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(
+        native_authority.taira_authority_client, "preflight", unavailable
+    )
+
     # Reach the independent-native barrier behind the separately provisioned
     # macOS controller-origin barrier.
     monkeypatch.setattr(
@@ -419,6 +472,15 @@ def test_all_direct_linux_trust_routes_stop_before_lower_level_io(
 
         return call
 
+    def unavailable(_role: str):
+        raise native_authority.taira_authority_client.TairaAuthorityClientError(
+            "fixed service unavailable"
+        )
+
+    monkeypatch.setattr(
+        native_authority.taira_authority_client, "preflight", unavailable
+    )
+
     monkeypatch.setattr(admission, "scan_inventory_paths", forbidden("authority scan"))
     monkeypatch.setattr(extractor, "_canonical_path", forbidden("extractor path"))
     monkeypatch.setattr(capture, "_canonical_file", forbidden("capture path"))
@@ -483,6 +545,9 @@ def test_untrusted_structural_builder_has_no_unbarriered_production_caller() -> 
             production_uses.append(path.relative_to(ROOT).as_posix())
     assert production_uses == ["scripts/taira_release_authority.py"]
     wrapper = inspect.getsource(native_authority.build_authority)
-    assert wrapper.index(
+    preflight = wrapper.index(
         "require_independent_native_evidence_authority_provisioned()"
-    ) < wrapper.index("return _build_untrusted_authority_structure(args)")
+    )
+    subject = wrapper.index("subject = _build_untrusted_authority_structure(args)")
+    authorization = wrapper.index("taira_authority_client.authorize(")
+    assert preflight < subject < authorization

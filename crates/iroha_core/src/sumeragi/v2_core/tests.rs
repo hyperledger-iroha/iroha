@@ -7097,6 +7097,7 @@ fn tc_interleaving_cannot_retag_an_old_local_completion_as_decided_body() {
     assert!(stale.effects().is_empty());
     assert_eq!(reducer, before);
 }
+include!("tests/delayed_prepare_qc_cache_bounds.rs");
 #[test]
 fn timeout_elapsed_cannot_start_durable_timeout_after_decision() {
     let context = context();

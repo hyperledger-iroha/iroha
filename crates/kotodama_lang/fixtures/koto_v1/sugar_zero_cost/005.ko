@@ -1,0 +1,5 @@
+
+        seiyaku TailExpression {
+            view fn main(int value) -> int { value + 1 }
+        }
+    

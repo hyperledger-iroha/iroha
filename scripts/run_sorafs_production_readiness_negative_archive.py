@@ -1351,6 +1351,7 @@ def validate_receipt(
     if (
         not isinstance(expected, Mapping)
         or set(expected) != EXPECTED_REJECTION_FIELDS
+        or type(expected.get("checker_exit_code")) is not int
         or expected.get("checker_exit_code") != EXPECTED_CHECKER_EXIT_CODE
         or expected.get("aggregate_status") != EXPECTED_AGGREGATE_STATUS
         or expected.get("diagnostic_class") != case.diagnostic_class
@@ -1525,7 +1526,11 @@ def validate_archive_manifest(
         errors.append(
             "negative-promotion archive must remain locally non-promotable"
         )
-    if manifest.get("baseline_input_count") != BASELINE_INPUT_COUNT:
+    baseline_input_count = manifest.get("baseline_input_count")
+    if (
+        type(baseline_input_count) is not int
+        or baseline_input_count != BASELINE_INPUT_COUNT
+    ):
         errors.append(
             "negative-promotion archive baseline input count must match the "
             "topology summary/envelope, resilience, signed inventory, "
@@ -1565,7 +1570,11 @@ def validate_archive_manifest(
             "negative-promotion archive baseline output hashes must be canonical"
         )
     expected_ids = [case.mutation_id for case in MUTATION_CASES]
-    if manifest.get("mutation_count") != len(MUTATION_CASES):
+    mutation_count = manifest.get("mutation_count")
+    if (
+        type(mutation_count) is not int
+        or mutation_count != len(MUTATION_CASES)
+    ):
         errors.append("negative-promotion archive mutation count must be six")
     if manifest.get("mutation_ids") != expected_ids:
         errors.append(

@@ -1,0 +1,10 @@
+
+seiyaku Branches {
+    view fn branch(bool b) -> int {
+        if b {
+            return 1;
+        } else {
+            return 2;
+        }
+    }
+}

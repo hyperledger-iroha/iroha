@@ -1,0 +1,10 @@
+
+        seiyaku ReadHelpers {
+          view fn read() -> bytes {
+            let roots = crypto::zk::roots(b"roots");
+            let tally = ledger::governance::tally(b"tally");
+            let seed = crypto::vrf::epoch_seed(b"seed");
+            return seed;
+          }
+        }
+    

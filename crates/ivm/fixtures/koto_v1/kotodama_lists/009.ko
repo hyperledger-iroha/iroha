@@ -1,0 +1,9 @@
+
+            seiyaku ResourceElements {
+                fn reject(List<Option<StateMap<int, int>>, 2> values) {
+                    let _values = values;
+                }
+
+                view fn main() -> int { 0 }
+            }
+            

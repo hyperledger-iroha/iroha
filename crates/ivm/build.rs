@@ -1,12 +1,16 @@
 use std::{
+    collections::BTreeSet,
     env,
     error::Error,
     ffi::OsStr,
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     process::Command,
 };
 const DEFAULT_CUDA_GENCODE: &str = "arch=compute_86,code=sm_86";
+const ISO20022_SCHEMA_SPEC_PATH: &str = "src/assets/iso20022_schema_v1/schema_v1.tsv";
+const ISO20022_SCHEMA_ASSET: &str = include_str!("src/assets/iso20022_schema_v1/schema_v1.tsv");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CudaPtxMode {
     Bundled,
@@ -37,7 +41,286 @@ fn main() {
     if let Err(err) = generate_syscall_signatures() {
         panic!("ivm syscall signature generation failed: {err}");
     }
+    if let Err(err) = generate_iso20022_schema() {
+        panic!("ivm ISO 20022 schema generation failed: {err}");
+    }
     dump_dep_env();
+}
+struct IsoField {
+    pattern: String,
+    requirement: String,
+    max_occurs: String,
+    kind: String,
+    values: String,
+}
+struct IsoSchema {
+    owner: String,
+    message_type: String,
+    fields: Vec<IsoField>,
+    aliases: Vec<(String, String)>,
+}
+fn decode_table_field(raw: &str, line: usize, column: usize) -> Result<String, Box<dyn Error>> {
+    let mut decoded = String::with_capacity(raw.len());
+    let mut characters = raw.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            if character.is_control() {
+                return Err(format!(
+                    "{ISO20022_SCHEMA_SPEC_PATH}:{line}:{column} contains an unescaped control character"
+                )
+                .into());
+            }
+            decoded.push(character);
+            continue;
+        }
+        let escaped = characters.next().ok_or_else(|| {
+            format!("{ISO20022_SCHEMA_SPEC_PATH}:{line}:{column} ends with an incomplete escape")
+        })?;
+        decoded.push(match escaped {
+            '\\' => '\\',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            _ => {
+                return Err(format!(
+                    "{ISO20022_SCHEMA_SPEC_PATH}:{line}:{column} has unsupported escape `\\{escaped}`"
+                )
+                .into());
+            }
+        });
+    }
+    Ok(decoded)
+}
+fn iso_field_kind(kind: &str, values: &str) -> Result<String, Box<dyn Error>> {
+    let simple = match kind {
+        "text" => Some("FieldKind::Text"),
+        "numeric" => Some("FieldKind::Numeric"),
+        "amount" => Some("FieldKind::Amount"),
+        "instrument" => Some("FieldKind::Instrument"),
+        "date" => Some("FieldKind::Date"),
+        "datetime" => Some("FieldKind::DateTime"),
+        "identifier:isin" => Some("FieldKind::Identifier(IdentifierKind::Isin)"),
+        "identifier:cusip" => Some("FieldKind::Identifier(IdentifierKind::Cusip)"),
+        "identifier:lei" => Some("FieldKind::Identifier(IdentifierKind::Lei)"),
+        "identifier:bic" => Some("FieldKind::Identifier(IdentifierKind::Bic)"),
+        "identifier:mic" => Some("FieldKind::Identifier(IdentifierKind::Mic)"),
+        "identifier:iban" => Some("FieldKind::Identifier(IdentifierKind::Iban)"),
+        "identifier:currency" => Some("FieldKind::Identifier(IdentifierKind::Currency)"),
+        "enum" => None,
+        _ => return Err(format!("unknown ISO 20022 field kind `{kind}`").into()),
+    };
+    if let Some(expression) = simple {
+        if values != "-" {
+            return Err(format!("non-enum ISO 20022 field kind `{kind}` has enum values").into());
+        }
+        return Ok(expression.to_owned());
+    }
+    if values == "-" {
+        return Err("ISO 20022 enum field has no values".into());
+    }
+    let mut seen = BTreeSet::new();
+    let mut expression = String::from("FieldKind::Enum(&[");
+    for (index, value) in values.split('|').enumerate() {
+        if value.is_empty() || value.contains('|') || !seen.insert(value) {
+            return Err(format!("invalid or duplicate ISO 20022 enum value `{value}`").into());
+        }
+        if index > 0 {
+            expression.push_str(", ");
+        }
+        write!(&mut expression, "{value:?}")?;
+    }
+    expression.push_str("])");
+    Ok(expression)
+}
+fn generate_iso20022_schema() -> Result<(), Box<dyn Error>> {
+    println!("cargo:rerun-if-changed={ISO20022_SCHEMA_SPEC_PATH}");
+    if !ISO20022_SCHEMA_ASSET.ends_with('\n') || ISO20022_SCHEMA_ASSET.contains('\r') {
+        return Err("ISO 20022 schema asset must use canonical LF lines with a final LF".into());
+    }
+    let mut lines = ISO20022_SCHEMA_ASSET.split_terminator('\n');
+    if lines.next() != Some("ivm-iso20022-schema-v1\t19\t193\t183") {
+        return Err("unexpected ISO 20022 schema version/count header".into());
+    }
+    if lines.next() != Some("record\towner\tkey\trequirement\tmax_occurs\tkind\tvalues\ttarget") {
+        return Err("unexpected ISO 20022 schema column header".into());
+    }
+    let mut schemas = Vec::<IsoSchema>::with_capacity(19);
+    let mut owners = BTreeSet::new();
+    let mut message_types = BTreeSet::new();
+    let mut field_count = 0;
+    let mut alias_count = 0;
+    for (row_index, record) in lines.enumerate() {
+        let line = row_index + 3;
+        let columns = record
+            .split('\t')
+            .enumerate()
+            .map(|(column_index, raw)| decode_table_field(raw, line, column_index + 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        if columns.len() != 8 || columns.iter().any(String::is_empty) {
+            return Err(format!(
+                "{ISO20022_SCHEMA_SPEC_PATH}:{line} must have eight non-empty fields"
+            )
+            .into());
+        }
+        match columns[0].as_str() {
+            "schema" => {
+                if columns[3..].iter().any(|value| value != "-") {
+                    return Err(
+                        format!("schema record on line {line} has non-sentinel fields").into(),
+                    );
+                }
+                let owner = &columns[1];
+                if !owner
+                    .chars()
+                    .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+                    || !owners.insert(owner.clone())
+                {
+                    return Err(format!("invalid or duplicate schema owner `{owner}`").into());
+                }
+                let message_type = &columns[2];
+                let mut parts = message_type.split('.');
+                if !matches!(parts.next(), Some(prefix) if prefix.chars().all(|c| c.is_ascii_lowercase()))
+                    || !matches!(parts.next(), Some(version) if version.len() == 3 && version.chars().all(|c| c.is_ascii_digit()))
+                    || parts.next().is_some()
+                    || !message_types.insert(message_type.clone())
+                {
+                    return Err(format!(
+                        "invalid or duplicate ISO 20022 message type `{message_type}`"
+                    )
+                    .into());
+                }
+                schemas.push(IsoSchema {
+                    owner: owner.clone(),
+                    message_type: message_type.clone(),
+                    fields: Vec::new(),
+                    aliases: Vec::new(),
+                });
+            }
+            "field" => {
+                let schema = schemas
+                    .last_mut()
+                    .ok_or("ISO 20022 field appears before its schema record")?;
+                if columns[1] != schema.owner || columns[7] != "-" {
+                    return Err(format!("field record on line {line} is outside its owner").into());
+                }
+                if !matches!(columns[3].as_str(), "required" | "optional") {
+                    return Err(
+                        format!("field record on line {line} has invalid requirement").into(),
+                    );
+                }
+                if columns[4] != "none" {
+                    let maximum = columns[4].parse::<usize>()?;
+                    if maximum == 0 {
+                        return Err(
+                            format!("field record on line {line} has a zero maximum").into()
+                        );
+                    }
+                }
+                iso_field_kind(&columns[5], &columns[6])?;
+                if schema
+                    .fields
+                    .iter()
+                    .any(|field| field.pattern == columns[2])
+                {
+                    return Err(format!("duplicate field pattern `{}`", columns[2]).into());
+                }
+                schema.fields.push(IsoField {
+                    pattern: columns[2].clone(),
+                    requirement: columns[3].clone(),
+                    max_occurs: columns[4].clone(),
+                    kind: columns[5].clone(),
+                    values: columns[6].clone(),
+                });
+                field_count += 1;
+            }
+            "alias" => {
+                let schema = schemas
+                    .last_mut()
+                    .ok_or("ISO 20022 alias appears before its schema record")?;
+                if columns[1] != schema.owner || columns[3..7].iter().any(|value| value != "-") {
+                    return Err(format!("alias record on line {line} is outside its owner").into());
+                }
+                if schema.aliases.iter().any(|(alias, _)| alias == &columns[2]) {
+                    return Err(format!("duplicate alias `{}`", columns[2]).into());
+                }
+                schema
+                    .aliases
+                    .push((columns[2].clone(), columns[7].clone()));
+                alias_count += 1;
+            }
+            kind => return Err(format!("unknown ISO 20022 schema record `{kind}`").into()),
+        }
+    }
+    if schemas.len() != 19 || field_count != 193 || alias_count != 183 {
+        return Err(format!(
+            "ISO 20022 schema inventory drifted: schemas={} fields={field_count} aliases={alias_count}",
+            schemas.len()
+        )
+        .into());
+    }
+    if schemas.iter().any(|schema| schema.fields.is_empty()) {
+        return Err("ISO 20022 schema has no fields".into());
+    }
+
+    let mut generated = String::from(
+        "// @generated by crates/ivm/build.rs from the versioned ISO 20022 schema asset.\n\
+         // Do not edit this file directly.\n\n\
+         fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {\n\
+             match canonical_message_type(message_type).as_ref() {\n",
+    );
+    for schema in &schemas {
+        writeln!(
+            &mut generated,
+            "        {:?} => Some(&{}_SCHEMA),",
+            schema.message_type, schema.owner
+        )?;
+    }
+    generated.push_str("        _ => None,\n    }\n}\n");
+    for schema in &schemas {
+        writeln!(
+            &mut generated,
+            "const {}_FIELDS: &[FieldSpec] = &[",
+            schema.owner
+        )?;
+        for field in &schema.fields {
+            let kind = iso_field_kind(&field.kind, &field.values)?;
+            match field.max_occurs.as_str() {
+                "none" => writeln!(
+                    &mut generated,
+                    "    FieldSpec::{}({:?}, {}),",
+                    field.requirement, field.pattern, kind
+                )?,
+                maximum => writeln!(
+                    &mut generated,
+                    "    FieldSpec::limited({:?}, {}, {}, {}),",
+                    field.pattern,
+                    field.requirement == "required",
+                    maximum,
+                    kind
+                )?,
+            }
+        }
+        generated.push_str("];\n");
+        writeln!(
+            &mut generated,
+            "const {}_ALIASES: &[AliasSpec] = &[",
+            schema.owner
+        )?;
+        for (alias, canonical) in &schema.aliases {
+            writeln!(
+                &mut generated,
+                "    AliasSpec {{ alias: {alias:?}, canonical: {canonical:?} }},"
+            )?;
+        }
+        writeln!(
+            &mut generated,
+            "];\nconst {}_SCHEMA: MessageSchema = MessageSchema {{ fields: {}_FIELDS, aliases: {}_ALIASES }};",
+            schema.owner, schema.owner, schema.owner
+        )?;
+    }
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    fs::write(out_dir.join("iso20022_schema_v1.rs"), generated)?;
+    Ok(())
 }
 fn generate_syscall_signatures() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);

@@ -1,0 +1,10 @@
+
+        seiyaku DynamicRange {
+        state StateMap<int, int> values;
+        fn bounded_range_sum(int start, int end) -> int {
+            var acc = 0;
+            for (key, value) in values.range(start, end) { acc = acc + value; }
+            return acc;
+        }
+        }
+    

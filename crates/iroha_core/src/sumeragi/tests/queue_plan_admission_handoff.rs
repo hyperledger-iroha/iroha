@@ -13,7 +13,9 @@ fn queue_plan_admission_notification_retains_dirty_state_before_ingress_ready() 
 
 #[test]
 fn queue_plan_admission_notification_retains_dirty_state_when_wake_is_saturated() {
-    let (handle, _block, _lane_relay) = test_sumeragi_handle(4);
+    let (mut handle, _block, _lane_relay) = test_sumeragi_handle(4);
+    let (wake_tx, _wake_rx) = mpsc::sync_channel(1);
+    handle.wake = wake_tx;
     handle
         .wake
         .try_send(())

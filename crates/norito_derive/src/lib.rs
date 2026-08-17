@@ -24,36 +24,11 @@ use syn::{
 };
 mod json_write_bounded;
 use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
-fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
-    if meta.input.peek(syn::token::Paren) {
-        meta.parse_nested_meta(consume_unknown_meta)?
-    } else if meta.input.peek(Token![=]) {
-        // Parse one value: a free-form TokenStream consumes the remaining comma-separated
-        // `#[norito(...)]` items and can hide later options from another derive, such as
-        // `tag = "kind", schema_name = "stable", deny_unknown_fields`.
-        meta.value()?.parse::<syn::Expr>()?;
-    }
-    Ok(())
-}
-/// Returns true if the container has `#[norito(decode_from_slice)]` attribute.
-fn has_decode_from_slice_attr(attrs: &[Attribute]) -> bool {
-    ContainerAttr::parse(attrs)
-        .expect("container attributes must be validated before code generation")
-        .decode_from_slice
-}
-fn reuse_archived_alias(attrs: &[Attribute]) -> bool {
-    ContainerAttr::parse(attrs)
-        .expect("container attributes must be validated before code generation")
-        .reuse_archived
-}
-fn u8_array_len(ty: &syn::Type) -> Option<&syn::Expr> {
-    let syn::Type::Array(array) = ty else {
-        return None;
-    };
-    matches!(&*array.elem, syn::Type::Path(path) if path.path.is_ident("u8")).then_some(&array.len)
-}
-// Packed-struct fixed-size types have a static serialized size or are special-cased
-// (`[u8; N]`); `Some(byte_len)` signifies fixed-size even where the length is unused.
+include!("attribute_helpers.rs");
+// ---- Type classification helpers for packed-struct hybrid layout ----
+// Fixed-size types either have a statically known serialized size or are
+// special-cased ([u8; N]). Returns Some(byte_len) when known (the value is
+// not used arithmetically in all call sites; Some(..) signifies fixed-size).
 fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
     match ty {
         syn::Type::Path(tp) => {

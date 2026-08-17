@@ -1,5 +1,34 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+import importlib.util
+import subprocess
+import sys
+
+def _load_recursive_reviewed_rust_source_module() -> Any:
+    """Load the shared authenticated recursive Rust include resolver."""
+
+    module_name = "_sumeragi_v2_proof_ledger_reviewed_rust_source"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    path = Path(__file__).with_name(
+        "sumeragi_v2_multilane_reviewed_rust_source.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"cannot load authenticated reviewed Rust source resolver: {path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+_RECURSIVE_REVIEWED_RUST_SOURCE = _load_recursive_reviewed_rust_source_module()
 def _retired_sidecar_gate_ttl_source_errors(
     path: Path,
     source: str,
@@ -578,7 +607,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_worker.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
-        'v2_worker/autonomous_lane_output_retirement.rs',
+        'v2_worker/autonomous_lane_output_reconstruction.rs',
         'v2_worker/kura_replica_advert_refresh.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
         'v2_worker/effect_services_impl.rs',
@@ -618,12 +647,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_apply/error_recovery.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
+        'reducer/prepare_certificate_handling.rs',
         'tests/reducer_timeout_and_projection.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
         'refinement/first_release_witness.rs',
+        'refinement/volatile_summary_well_formed.rs',
         'refinement_constructor_test_helpers.rs',
         'refinement/transition_gate_tail.rs',
     ),
@@ -635,6 +666,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/committee_fallback_and_retransmit.rs',
         'tests/v2_core_view_zero_parent_binding.rs',
         'tests/empty_replay_resume_test.rs',
+        'tests/delayed_prepare_qc_cache_bounds.rs',
         'tests/v2_core_terminal_transactionality.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
@@ -2083,13 +2115,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 857
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 89
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 860
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
+    "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "75702e6c87f81d5e8b20cb353cadb0ab8af9cad216d3281f85825a1bca326611"
+    "afd73a96a4e243923a5a01a97f95dc82da971fdf13486dd73d38479456512537"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2100,10 +2132,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 532
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 533
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431"
+    "5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2135,11 +2167,6 @@ _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
         "required_multilane_data_model_focus_tests",
         "g-unit-iroha-data-model",
         "iroha_data_model",
-    ),
-    (
-        "required_multilane_zkp_halo2_focus_tests",
-        "g-unit-iroha-zkp-halo2",
-        "iroha_zkp_halo2",
     ),
     (
         "required_multilane_torii_focus_tests",
@@ -2178,7 +2205,7 @@ _LATE_LANE_RECOVERY_TEST_SHA256 = (
     "bf99bfac45fd57a5f8b9e875f183164a3ea72600de485a58c79a0873aa5f7185"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 17),
+    ("production-kura-progress-durability", "kura::tests", 18),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
@@ -2215,7 +2242,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -2462,7 +2489,6 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::exact_output_retry_rejects_a_different_message_identity",
     "sumeragi::v2_worker::tests::full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure",
     "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
-    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
     "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
@@ -2787,6 +2813,10 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict",
+    "kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace",
+    "sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag",
+    "sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -3189,6 +3219,35 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::push_merge_sidecar_effect": "08a2b77d14faf80060a2ca76a491df474dbbf548b3f0f4a5f95c13d14102c750",
     "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
+
+_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """
+fn preflight_effect_insertion(
+    &mut self,
+    effect: &V2LaneWorkEffect,
+) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+    let predecessor_ready = match effect {
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => { self.outbound_lane_message_predecessor_is_ready(message) }
+        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => { self.proposal_predecessor_is_ready_for_progress(&certificate.proposal) }
+        _ => true,
+    };
+    if !predecessor_ready { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if !lane_work_effect_reply_routes_have_valid_shape(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    let key = lane_work_effect_key(effect);
+    if self.effect_keys.contains(&key) {
+        return Err(if self.effects.iter_mut()
+            .find(|queued| lane_work_effect_key(queued) == key)
+            .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+        {
+            LaneWorkEffectInsertionOutcome::Duplicate
+        } else {
+            LaneWorkEffectInsertionOutcome::Rejected
+        },);
+    }
+    if !lane_work_effect_reply_routes_are_valid(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if self.effects.len() >= self.limits.effect_capacity.get() { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    Ok(key)
+}
+"""
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",

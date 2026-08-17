@@ -35,10 +35,10 @@ use crate::{
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
-    state::{State as CoreState, WorldReadOnly},
+    state::{State as CoreState, StateReadOnly, WorldReadOnly},
     zk::{
         hash_proof, hash_vk, is_developer_only_backend_label, is_trusted_setup_backend_label,
-        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label, verify_backend,
+        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label,
         verify_backend_with_timing_checked,
     },
 };
@@ -1278,8 +1278,9 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             };
         }
     };
-    let world = state.world_view();
-    let record = match world.verifying_keys().get(vk_id) {
+    let view = state.query_view();
+    let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    let record = match view.world().verifying_keys().get(vk_id) {
         Some(record) => record,
         None => {
             errors.push("verifying key not found in registry".into());
@@ -1293,7 +1294,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             };
         }
     };
-    if !record.is_active() {
+    if !record.is_active_at(verification_height) {
         errors.push("verifying key is not active".into());
     }
     if record.max_proof_bytes > 0 && attachment.proof.bytes.len() > record.max_proof_bytes as usize
@@ -1355,18 +1356,13 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if errors.is_empty() {
         match vk_box.as_deref() {
             Some(vk_box) => {
-                let verified = if let Some(state) = ctx.state.as_ref() {
-                    let zk = state.zk_snapshot();
-                    verify_backend_with_timing_checked(
-                        backend_str,
-                        &attachment.proof,
-                        Some(vk_box),
-                        &zk,
-                    )
-                    .ok
-                } else {
-                    verify_backend(backend_str, &attachment.proof, Some(vk_box))
-                };
+                let verified = verify_backend_with_timing_checked(
+                    backend_str,
+                    &attachment.proof,
+                    Some(vk_box),
+                    &view.zk,
+                )
+                .ok;
                 if !verified {
                     errors.push("verification failed".into());
                 }
@@ -2403,7 +2399,10 @@ mod tests {
             "unexpected oversized-body rejection: {error}"
         );
     }
-    fn fixture_state() -> Arc<CoreState> {
+    fn fixture_state_with_vk_window(
+        activation_height: Option<u64>,
+        withdraw_height: Option<u64>,
+    ) -> Arc<CoreState> {
         let fixture = fixture_envelope();
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
         let vk_id = VerifyingKeyId::new("halo2/ipa", iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID);
@@ -2421,6 +2420,8 @@ mod tests {
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
         record.max_proof_bytes = 1024 * 1024;
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        record.activation_height = activation_height;
+        record.withdraw_height = withdraw_height;
         record.key = Some(vk);
         let mut world = iroha_core::state::World::new();
         world
@@ -2441,6 +2442,23 @@ mod tests {
             .set_zk(zk)
             .expect("empty SCCP outbox accepts prover test configuration");
         Arc::new(state)
+    }
+    fn fixture_state() -> Arc<CoreState> {
+        fixture_state_with_vk_window(None, None)
+    }
+    #[test]
+    fn prover_worker_rejects_verifier_outside_committed_height_window() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state_with_vk_window(Some(1), None)),
+        };
+        let report = process_proof_attachment(&ctx, &fixture_attachment());
+        let error = report
+            .error
+            .expect("future verifier must reject at committed height zero");
+        assert!(error.contains("verifying key is not active"), "{error}");
     }
     #[test]
     fn prover_worker_does_not_classify_profileless_stark_prefix_as_stark() {

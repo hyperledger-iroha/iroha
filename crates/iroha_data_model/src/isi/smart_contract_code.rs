@@ -415,6 +415,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         account::AccountId,
         nexus::DataSpaceId,
@@ -458,33 +461,6 @@ mod tests {
             error_codes: None,
             provenance: None,
         }
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
-    where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let wire_id = std::any::type_name::<T>();
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     fn smart_contract_code_decode_from_slice_roundtrips() {

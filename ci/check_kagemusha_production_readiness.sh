@@ -76,7 +76,7 @@ for argument in "$@"; do
   esac
 done
 
-PYTHON_BIN="python3"
+PYTHON_BIN="${KAGEMUSHA_PRODUCTION_READINESS_PYTHON:-python3}"
 PYTHON_SHA256=""
 PYTHON_PIN_FD="-1"
 PYTHON_PATH_FINGERPRINT=""
@@ -236,6 +236,25 @@ if [[ "${MODE}" == "promotion" ]]; then
   promotion_assert_root_custody "${PYTHON_BIN}" "promotion Python interpreter" || exit 2
 fi
 
+if /usr/bin/git -C "${ROOT_DIR}" diff --quiet --diff-filter=U --; then
+  :
+else
+  INDEX_STATUS=$?
+  if [[ "${INDEX_STATUS}" -eq 1 ]]; then
+    echo "Kagemusha readiness rejects unresolved Git index entries" >&2
+  else
+    echo "Kagemusha readiness could not inspect the Git index" >&2
+  fi
+  exit 2
+fi
+
+# Candidate and promotion use Python 3.10 features. Reject an older ambient
+# interpreter before the embedded gate can fail with a misleading traceback.
+if ! "${PYTHON_BIN}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "Kagemusha production readiness requires Python 3.10 or newer" >&2
+  exit 2
+fi
+
 # Portable Bash still enters Python by pathname.  At this point every path
 # component and the file are root-owned and non-writable by group/other, so no
 # principal outside the documented root trust boundary can win the remaining
@@ -301,6 +320,7 @@ BUNDLE = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
 IOS_EVIDENCE_MODULE = "scripts/kagemusha_candidate_ios_evidence.py"
+PRODUCTION_IOS_EVIDENCE_MODULE = "scripts/kagemusha_production_ios_evidence.py"
 SOURCE_TREE_SEAL = "scripts/kagemusha_source_tree_seal.py"
 SOURCE_GIT = Path("/usr/bin/git")
 SOURCE_ALLOWED_SIGNERS_PATH_ENV = (
@@ -371,7 +391,7 @@ MAX_REVIEWED_SOURCE_CLOSURE_BYTES = 16 * 1024 * 1024
 MAX_REVIEWED_HELPER_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_ALLOWED_SIGNERS_BYTES = 64 * 1024
 MAX_SOURCE_REVOCATION_BYTES = 16 * 1024 * 1024
-MAX_SOURCE_SEAL_PROJECTION_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_SEAL_PROJECTION_BYTES = 16 * 1024
 MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 10 * 1024 * 1024 * 1024
 MAX_CATALOG_AGGREGATE_BYTES = 12 * 1024 * 1024 * 1024
@@ -1177,6 +1197,15 @@ def forbid(text: str, relative: str, errors: list[str], *needles: str) -> None:
             errors.append(f"{relative}: retired corridor remains: {needle!r}")
 
 
+def forbid_merge_conflict_markers(
+    text: str, relative: str, errors: list[str]
+) -> None:
+    """Reject unresolved Git conflict markers in every reviewed source."""
+
+    if re.search(r"(?m)^(?:<<<<<<<(?: .*)?|=======|>>>>>>>(?: .*)?)$", text):
+        errors.append(f"{relative}: unresolved Git merge conflict marker")
+
+
 def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     errors: list[str] = []
     overrides = overrides or {}
@@ -1200,10 +1229,14 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             BUNDLE,
             ROUTES,
             WORKFLOW,
+            IOS_EVIDENCE_MODULE,
+            PRODUCTION_IOS_EVIDENCE_MODULE,
         )
     }
     texts[MODEL] = read_reviewed_model(errors, overrides)
     texts[CATALOG] = read_reviewed_catalog(errors, overrides)
+    for relative, text in texts.items():
+        forbid_merge_conflict_markers(text, relative, errors)
     model = texts[MODEL]
     require(
         model,
@@ -1494,6 +1527,35 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "SOURCE_SEAL_PROJECTION_PATH_ENV",
         "trusted_source_helper_snapshot",
         "trusted_ios_validator_snapshot",
+        "PRODUCTION_IOS_EVIDENCE_MODULE",
+        "validate_production_signed_evidence",
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY",
+        "static candidate corridor passed;",
+        "production promotion was not evaluated.",
+    )
+    require(
+        texts[PRODUCTION_IOS_EVIDENCE_MODULE],
+        PRODUCTION_IOS_EVIDENCE_MODULE,
+        errors,
+        "iroha.kagemusha.ios_device_lab.production_signed_evidence.v1",
+        "iroha.kagemusha.ios.production_device_policy.v1",
+        "def validate_production_signed_evidence(",
+        "PLATFORM_TRUST_BLOCKER",
+        "Apple X.509 chain",
+        "freshness/replay state",
+    )
+    production_ios_validation = texts[PRODUCTION_IOS_EVIDENCE_MODULE].rsplit(
+        "def validate_production_signed_evidence(", 1
+    )[-1]
+    require_pattern(
+        production_ios_validation,
+        PRODUCTION_IOS_EVIDENCE_MODULE,
+        errors,
+        (
+            r"errors\.append\(PLATFORM_TRUST_BLOCKER\)\s*"
+            r"return errors\s*$"
+        ),
+        "unconditional production App Attest trust blocker",
     )
     shell_bootstrap = texts[READINESS].split("<<'PY'", 1)[0]
     require(
@@ -1513,6 +1575,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "promotion Python interpreter changed before execution",
         "rejects missing or symlinked script invocation",
         "from an independently authenticated launcher/controller",
+        'PYTHON_BIN="${KAGEMUSHA_PRODUCTION_READINESS_PYTHON:-python3}"',
+        "sys.version_info >= (3, 10)",
+        "requires Python 3.10 or newer",
+        '/usr/bin/git -C "${ROOT_DIR}" diff --quiet --diff-filter=U --',
+        "readiness rejects unresolved Git index entries",
     )
     forbid(
         shell_bootstrap,
@@ -1567,10 +1634,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         (
             r"validation_errors\s*=\s*validator\(\s*evidence_snapshot_path,"
-            r".*?trusted_public_key_snapshot,\s*\).*?"
+            r".*?trusted_public_key_snapshot,\s*"
+            r"trusted_production_policy_snapshot,\s*\).*?"
             r"evidence\s*=\s*strict_json_bytes\(\s*evidence_bytes,"
         ),
-        "same pinned evidence bytes and trusted key snapshot for validation and digest binding",
+        "same pinned evidence, trusted key, and production policy snapshots for validation and digest binding",
     )
     forbid(
         ios_validator_function,
@@ -1584,7 +1652,31 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     promotion_function = texts[READINESS].rsplit("def promotion_errors(", 1)[-1].split(
         "errors = static_errors()", 1
     )[0]
-    if promotion_function.count("require_production_root_custody(") < 15:
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"ios_configuration\s*=\s*ios_evidence_configuration\(errors\)"
+            r".*?authenticate_reviewed_source_file\(\s*PRODUCTION_IOS_EVIDENCE_MODULE,"
+            r".*?load_ios_evidence_validator\(\s*validator_bytes,"
+        ),
+        "fail-closed production iOS evidence validator path",
+    )
+    ios_loader_function = texts[READINESS].rsplit(
+        "def load_ios_evidence_validator(", 1
+    )[-1].split("def verify_ios_evidence(", 1)[0]
+    require_pattern(
+        ios_loader_function,
+        READINESS,
+        errors,
+        (
+            r"production_validator\s*=\s*production_module\.__dict__\.get\(\s*"
+            r'"validate_production_signed_evidence"\s*\)'
+        ),
+        "production-only iOS evidence validator entrypoint",
+    )
+    if promotion_function.count("require_production_root_custody(") < 17:
         errors.append(
             f"{READINESS}: promotion does not root-custody every production trust class"
         )
@@ -1652,10 +1744,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"authenticate_reviewed_source_file\(\s*IOS_EVIDENCE_MODULE,"
             r".*?snapshot_private_bytes\(\s*validator_bytes,"
+            r".*?authenticate_reviewed_source_file\(\s*PRODUCTION_IOS_EVIDENCE_MODULE,"
+            r".*?snapshot_private_bytes\(\s*production_validator_bytes,"
             r".*?load_ios_evidence_validator\(\s*validator_bytes,"
-            r"\s*trusted_ios_validator_snapshot"
+            r"\s*trusted_ios_validator_snapshot,\s*production_validator_bytes,"
         ),
-        "source-closure-authenticated iOS validator snapshot",
+        "source-closure-authenticated candidate and production iOS validator snapshots",
     )
     snapshot_functions = texts[READINESS].split(
         "def snapshot_private_bytes(", 1
@@ -1741,9 +1835,21 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         "check_kagemusha_production_readiness.sh candidate",
         "check_kagemusha_production_readiness.sh candidate --self-test",
+        "ci/check_kagemusha_recursive_spend_python_sdk.sh --self-test",
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",
         '"crates/iroha_core/src/smartcontracts/isi/offline/**"',
+        '"specs/sdk/swift/readiness/*kagemusha*.md"',
+        "scripts/tests/build_kagemusha_v4_candidate_bundle_test.py",
+        "scripts/tests/check_kagemusha_candidate_ios_evidence_test.py",
+        "scripts/tests/kagemusha_source_tree_seal_test.py",
+        "scripts/tests/kagemusha_staged_resource_guard_test.py",
+        "scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py",
+        "scripts/tests/stage_kagemusha_candidate_android_lab_test.py",
+        "pytests/scripts/run_kagemusha_v4_generation_test.py",
+        "pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py",
         "cargo test -p iroha_core kagemusha_v4 --lib",
+        "cargo test -p iroha_core offline_device_attestation_policy --lib",
+        "cargo test -p iroha_core device_registration_ --lib",
         "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
         "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
         "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
@@ -1757,8 +1863,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p iroha_kagami --bin kagami harden_private_tree",
         "cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash",
         "cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed",
+        "cargo test -p iroha_kagami --bin kagami atomic_activation_policy_",
+        "cargo test -p iroha_kagami --bin kagami atomic_activation_rejects_noncanonical_app_policy_text",
         "cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
+        "cargo test -p iroha_torii offline_commands --lib -- --nocapture",
+        "cargo test -p iroha_config settlement_offline_tests -- --nocapture",
+        "cargo test -p iroha_config torii_kagemusha_commands_tests -- --nocapture",
         "cargo test -p connect_norito_bridge recursive_spend_v4",
         "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
     )
@@ -2103,7 +2214,7 @@ def validate_kagami_verification_report(
 
 def ios_evidence_configuration(
     errors: list[str],
-) -> tuple[Path, str, Path] | None:
+) -> tuple[Path, str, Path, Path] | None:
     """Return the complete opt-in physical-iOS evidence configuration."""
 
     root_text = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", "")
@@ -2111,21 +2222,35 @@ def ios_evidence_configuration(
     public_key_text = os.environ.get(
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY", ""
     )
-    present = tuple(bool(value) for value in (root_text, key_id, public_key_text))
+    production_policy_text = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY", ""
+    )
+    present = tuple(
+        bool(value)
+        for value in (
+            root_text,
+            key_id,
+            public_key_text,
+            production_policy_text,
+        )
+    )
     if not any(present):
         errors.append(
-            "promotion requires signed physical-iOS raw evidence, trusted key id, and public key"
+            "promotion requires signed production physical-iOS raw evidence, trusted key id, "
+            "public key, and production policy"
         )
         return None
     if not all(present):
         errors.append(
             "physical-iOS evidence requires KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT, "
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID, and "
-            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY together"
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY, and "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY together"
         )
         return None
     ios_root = Path(root_text)
     public_key = Path(public_key_text)
+    production_policy = Path(production_policy_text)
     if (
         not ios_root.is_absolute()
         or ios_root.resolve(strict=False) != ios_root
@@ -2142,43 +2267,98 @@ def ios_evidence_configuration(
     ):
         errors.append("physical-iOS trusted public key must be a canonical absolute regular file")
         return None
-    return ios_root, key_id, public_key
+    if (
+        not production_policy.is_absolute()
+        or production_policy.resolve(strict=False) != production_policy
+        or not production_policy.is_file()
+        or production_policy.is_symlink()
+        or production_policy.stat().st_size == 0
+        or production_policy.stat().st_size > 1024 * 1024
+    ):
+        errors.append(
+            "physical-iOS production policy must be a canonical absolute bounded regular file"
+        )
+        return None
+    return ios_root, key_id, public_key, production_policy
 
 
 def load_ios_evidence_validator(
-    module_bytes: bytes, module_path: Path
-) -> Callable[[Path, Path, str, Path], list[str]]:
-    """Load the reviewed validator from already pinned source bytes."""
+    candidate_module_bytes: bytes,
+    candidate_module_path: Path,
+    production_module_bytes: bytes,
+    production_module_path: Path,
+) -> Callable[[Path, Path, str, Path, Path], list[str]]:
+    """Load both reviewed validators from already pinned source bytes."""
 
     module_name = "_iroha_pinned_kagemusha_candidate_ios_evidence"
     module = types.ModuleType(module_name)
-    module.__file__ = str(module_path)
+    module.__file__ = str(candidate_module_path)
     module.__package__ = ""
     sys.modules[module_name] = module
+    production_name = "_iroha_pinned_kagemusha_production_ios_evidence"
+    production_module = types.ModuleType(production_name)
+    production_module.__file__ = str(production_module_path)
+    production_module.__package__ = ""
+    sys.modules[production_name] = production_module
     try:
-        code = compile(module_bytes, str(module_path), "exec", dont_inherit=True)
+        code = compile(
+            candidate_module_bytes,
+            str(candidate_module_path),
+            "exec",
+            dont_inherit=True,
+        )
         exec(code, module.__dict__)
-        validator = module.__dict__.get("validate_signed_evidence")
-        if not callable(validator):
-            raise ValueError("pinned physical-iOS validator has no maintained entrypoint")
-        return validator
+        production_code = compile(
+            production_module_bytes,
+            str(production_module_path),
+            "exec",
+            dont_inherit=True,
+        )
+        exec(production_code, production_module.__dict__)
+        production_validator = production_module.__dict__.get(
+            "validate_production_signed_evidence"
+        )
+        if not callable(production_validator):
+            raise ValueError(
+                "pinned production physical-iOS validator has no maintained entrypoint"
+            )
+
+        def validate(
+            evidence_path: Path,
+            artifact_root: Path,
+            trusted_key_id: str,
+            trusted_public_key_path: Path,
+            production_policy_path: Path,
+        ) -> list[str]:
+            return production_validator(
+                evidence_path,
+                artifact_root,
+                trusted_key_id,
+                trusted_public_key_path,
+                production_policy_path,
+                module,
+            )
+
+        return validate
     except BaseException:
         sys.modules.pop(module_name, None)
+        sys.modules.pop(production_name, None)
         raise
 
 
 def verify_ios_evidence(
     directory: Path,
-    ios_configuration: tuple[Path, str, Path],
-    validator: Callable[[Path, Path, str, Path], list[str]],
+    ios_configuration: tuple[Path, str, Path, Path],
+    validator: Callable[[Path, Path, str, Path, Path], list[str]],
     evidence_bytes: bytes,
     trusted_public_key_snapshot: Path,
+    trusted_production_policy_snapshot: Path,
     directory_pins: list[tuple[Path, int, tuple[int, ...], str]],
     staging_parent: Path,
 ) -> tuple[str | None, str | None]:
     """Verify one signed raw slot from the exact bytes used for its candidate digest."""
 
-    ios_root, key_id, _ = ios_configuration
+    ios_root, key_id, _, _ = ios_configuration
     release_root = ios_root / directory.name
     raw_root = release_root / "raw"
     if (
@@ -2219,6 +2399,7 @@ def verify_ios_evidence(
                 raw_root,
                 key_id,
                 trusted_public_key_snapshot,
+                trusted_production_policy_snapshot,
             )
         finally:
             evidence_snapshot.cleanup()
@@ -2244,6 +2425,10 @@ def verify_ios_evidence(
             or candidate_sha256 == "0" * 64
         ):
             raise ValueError("candidate artifact digest is not canonical")
+        if evidence.get("release_manifest_sha256") != directory.name:
+            raise ValueError(
+                "production iOS evidence release manifest digest does not match catalog"
+            )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         return None, f"{directory.name}: invalid signed physical-iOS evidence: {error}"
     return candidate_sha256, None
@@ -2382,11 +2567,13 @@ def promotion_errors() -> list[str]:
     catalog_directory_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     trusted_file_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     policy_sha256 = ""
-    ios_validator: Callable[[Path, Path, str, Path], list[str]] | None = None
+    ios_validator: Callable[[Path, Path, str, Path, Path], list[str]] | None = None
     ios_validator_path = root / IOS_EVIDENCE_MODULE
+    production_ios_validator_path = root / PRODUCTION_IOS_EVIDENCE_MODULE
     source_helper_path = root / SOURCE_TREE_SEAL
     verifier_snapshot: tempfile.TemporaryDirectory[str] | None = None
     public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    ios_policy_snapshot: tempfile.TemporaryDirectory[str] | None = None
     closure_snapshot: tempfile.TemporaryDirectory[str] | None = None
     source_projection_snapshot: tempfile.TemporaryDirectory[str] | None = None
     allowed_signers_snapshot: tempfile.TemporaryDirectory[str] | None = None
@@ -2394,7 +2581,9 @@ def promotion_errors() -> list[str]:
     source_trust_config_snapshot: tempfile.TemporaryDirectory[str] | None = None
     source_helper_snapshot: tempfile.TemporaryDirectory[str] | None = None
     ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    production_ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
     trusted_public_key_snapshot: Path | None = None
+    trusted_ios_policy_snapshot: Path | None = None
     trusted_closure_snapshot: Path | None = None
     trusted_allowed_signers_snapshot: Path | None = None
     trusted_revocation_snapshot: Path | None = None
@@ -2403,6 +2592,8 @@ def promotion_errors() -> list[str]:
     verifier_exec = verifier
 
     def cleanup_private_snapshots() -> None:
+        if production_ios_validator_snapshot is not None:
+            production_ios_validator_snapshot.cleanup()
         if ios_validator_snapshot is not None:
             ios_validator_snapshot.cleanup()
         if source_helper_snapshot is not None:
@@ -2419,6 +2610,8 @@ def promotion_errors() -> list[str]:
             closure_snapshot.cleanup()
         if public_key_snapshot is not None:
             public_key_snapshot.cleanup()
+        if ios_policy_snapshot is not None:
+            ios_policy_snapshot.cleanup()
         if verifier_snapshot is not None:
             verifier_snapshot.cleanup()
 
@@ -2448,6 +2641,7 @@ def promotion_errors() -> list[str]:
             root,
             source_helper_path.parent,
             ios_validator_path.parent,
+            production_ios_validator_path.parent,
             artifact_root,
             policy.parent,
             verifier.parent,
@@ -2468,6 +2662,7 @@ def promotion_errors() -> list[str]:
                 [
                     ios_configuration[0],
                     ios_configuration[2].parent,
+                    ios_configuration[3].parent,
                 ]
             )
         production_directory_paths = {
@@ -2479,6 +2674,7 @@ def promotion_errors() -> list[str]:
             *production_roots,
             source_helper_path.parent,
             ios_validator_path.parent,
+            production_ios_validator_path.parent,
         ]
         for trusted_root in trusted_roots:
             for path in absolute_directory_chain(trusted_root):
@@ -2867,6 +3063,28 @@ def promotion_errors() -> list[str]:
                 "physical-iOS trusted public key",
                 PROMOTION_STAGING_PARENT,
             )
+            production_ios_policy = ios_configuration[3]
+            label = f"physical-iOS production policy {production_ios_policy}"
+            descriptor, fingerprint = pin_regular_metadata(
+                production_ios_policy, label
+            )
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            production_ios_policy_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, 1024 * 1024, label
+            )
+            trusted_file_pins.append(
+                (production_ios_policy, descriptor, fingerprint, label)
+            )
+            ios_policy_snapshot, trusted_ios_policy_snapshot = snapshot_private_bytes(
+                production_ios_policy_bytes,
+                "production-ios-policy-v1.json",
+                "physical-iOS production policy",
+                PROMOTION_STAGING_PARENT,
+            )
             label = f"reviewed physical-iOS evidence validator {ios_validator_path}"
             descriptor, fingerprint = pin_regular_metadata(ios_validator_path, label)
             try:
@@ -2894,8 +3112,44 @@ def promotion_errors() -> list[str]:
                     PROMOTION_STAGING_PARENT,
                 )
             )
+            label = (
+                "reviewed production physical-iOS evidence validator "
+                f"{production_ios_validator_path}"
+            )
+            descriptor, fingerprint = pin_regular_metadata(
+                production_ios_validator_path, label
+            )
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            production_validator_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, 4 * 1024 * 1024, label
+            )
+            trusted_file_pins.append(
+                (production_ios_validator_path, descriptor, fingerprint, label)
+            )
+            authenticate_reviewed_source_file(
+                PRODUCTION_IOS_EVIDENCE_MODULE,
+                production_validator_bytes,
+                reviewed_source_commit,
+                MAX_REVIEWED_HELPER_BYTES,
+            )
+            (
+                production_ios_validator_snapshot,
+                trusted_production_ios_validator_snapshot,
+            ) = snapshot_private_bytes(
+                production_validator_bytes,
+                "kagemusha_production_ios_evidence.py",
+                "reviewed production physical-iOS evidence validator",
+                PROMOTION_STAGING_PARENT,
+            )
             ios_validator = load_ios_evidence_validator(
-                validator_bytes, trusted_ios_validator_snapshot
+                validator_bytes,
+                trusted_ios_validator_snapshot,
+                production_validator_bytes,
+                trusted_production_ios_validator_snapshot,
             )
     except Exception as error:
         for _, descriptor, _, _ in trusted_file_pins:
@@ -3178,6 +3432,7 @@ def promotion_errors() -> list[str]:
             and ios_validator is not None
             and evidence_bytes is not None
             and trusted_public_key_snapshot is not None
+            and trusted_ios_policy_snapshot is not None
             and len(errors) == directory_error_count
         ):
             ios_candidate_sha256, ios_error = verify_ios_evidence(
@@ -3186,6 +3441,7 @@ def promotion_errors() -> list[str]:
                 ios_validator,
                 evidence_bytes,
                 trusted_public_key_snapshot,
+                trusted_ios_policy_snapshot,
                 catalog_directory_pins,
                 PROMOTION_STAGING_PARENT,
             )
@@ -3458,6 +3714,49 @@ if self_test:
             )
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
         errors.append(f"source trust-projection self-test failed unexpectedly: {error}")
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="kagemusha-source-projection-bound-self-test-"
+        ) as temporary:
+            boundary_root = Path(temporary)
+            exact = boundary_root / "exact-projection"
+            exact.write_bytes(b"x" * MAX_SOURCE_SEAL_PROJECTION_BYTES)
+            descriptor, fingerprint = pin_regular_metadata(
+                exact, "self-test exact source projection"
+            )
+            try:
+                payload = read_pinned_descriptor(
+                    descriptor,
+                    fingerprint,
+                    MAX_SOURCE_SEAL_PROJECTION_BYTES,
+                    "self-test exact source projection",
+                )
+            finally:
+                os.close(descriptor)
+            if len(payload) != MAX_SOURCE_SEAL_PROJECTION_BYTES:
+                errors.append("self-test failed at the exact source-projection byte bound")
+            oversized = boundary_root / "oversized-projection"
+            oversized.write_bytes(b"x" * (MAX_SOURCE_SEAL_PROJECTION_BYTES + 1))
+            descriptor, fingerprint = pin_regular_metadata(
+                oversized, "self-test oversized source projection"
+            )
+            try:
+                try:
+                    read_pinned_descriptor(
+                        descriptor,
+                        fingerprint,
+                        MAX_SOURCE_SEAL_PROJECTION_BYTES,
+                        "self-test oversized source projection",
+                    )
+                except ValueError as error:
+                    if "16384-byte size limit" not in str(error):
+                        raise
+                else:
+                    errors.append("self-test accepted an oversized source projection")
+            finally:
+                os.close(descriptor)
+    except (OSError, ValueError) as error:
+        errors.append(f"source-projection bound self-test failed unexpectedly: {error}")
     if (
         "recursive-step-two-qualification-v4.norito" not in FINAL_METADATA
         or MAX_RELEASE_INVENTORY_ENTRIES != 17
@@ -3820,7 +4119,48 @@ if self_test:
         KAGAMI: read(KAGAMI, []),
         BUNDLE: read(BUNDLE, []),
         WORKFLOW: read(WORKFLOW, []),
+        PRODUCTION_IOS_EVIDENCE_MODULE: read(
+            PRODUCTION_IOS_EVIDENCE_MODULE, []
+        ),
     }
+    conflicted_model = (
+        baseline[MODEL]
+        + "\n<<<<<<< HEAD\nreviewed-side\n=======\nincoming-side\n>>>>>>> origin/reviewed\n"
+    )
+    conflict_errors = static_errors({MODEL: conflicted_model})
+    if not any("unresolved Git merge conflict marker" in error for error in conflict_errors):
+        errors.append("self-test failed to reject a reviewed merge conflict")
+    missing_python_version_check = baseline[READINESS].replace(
+        "sys.version_info >= (3, 10)", "True", 1
+    )
+    python_version_errors = static_errors(
+        {READINESS: missing_python_version_check}
+    )
+    if not any("sys.version_info >= (3, 10)" in error for error in python_version_errors):
+        errors.append("self-test failed to reject a missing Python version preflight")
+    missing_index_check = baseline[READINESS].replace(
+        "--diff-filter=U", "--diff-filter=M", 1
+    )
+    index_check_errors = static_errors({READINESS: missing_index_check})
+    if not any("--diff-filter=U" in error for error in index_check_errors):
+        errors.append("self-test failed to reject a missing unresolved-index preflight")
+    bypassed_production_ios_blocker = baseline[
+        PRODUCTION_IOS_EVIDENCE_MODULE
+    ].replace(
+        "    errors.append(PLATFORM_TRUST_BLOCKER)\n    return errors\n",
+        "    return errors\n",
+        1,
+    )
+    bypassed_production_ios_errors = static_errors(
+        {PRODUCTION_IOS_EVIDENCE_MODULE: bypassed_production_ios_blocker}
+    )
+    if not any(
+        "unconditional production App Attest trust blocker" in error
+        for error in bypassed_production_ios_errors
+    ):
+        errors.append(
+            "self-test failed to reject removal of the production App Attest trust blocker"
+        )
     mutated = baseline[MODEL].replace(
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22",
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
@@ -4047,23 +4387,49 @@ if self_test:
         {READINESS: reopened_ios_evidence}
     )
     if not any(
-        "same pinned evidence bytes and trusted key snapshot" in error
+        "same pinned evidence, trusted key, and production policy snapshots" in error
         for error in reopened_ios_evidence_errors
     ):
         errors.append(
             "self-test failed to reject reopening physical-iOS evidence for validation"
         )
     reopened_ios_key = baseline[READINESS].replace(
-        "                trusted_public_key_snapshot,\n            )",
-        "                ios_configuration[2],\n            )",
+        "                trusted_public_key_snapshot,\n"
+        "                trusted_production_policy_snapshot,\n",
+        "                ios_configuration[2],\n"
+        "                trusted_production_policy_snapshot,\n",
         1,
     )
     reopened_ios_key_errors = static_errors({READINESS: reopened_ios_key})
     if not any(
-        "same pinned evidence bytes and trusted key snapshot" in error
+        "same pinned evidence, trusted key, and production policy snapshots" in error
         for error in reopened_ios_key_errors
     ):
         errors.append("self-test failed to reject reopening the physical-iOS trust key")
+    reopened_ios_policy = baseline[READINESS].replace(
+        "                trusted_production_policy_snapshot,\n",
+        "                ios_configuration[3],\n",
+        1,
+    )
+    reopened_ios_policy_errors = static_errors({READINESS: reopened_ios_policy})
+    if not any(
+        "same pinned evidence, trusted key, and production policy snapshots" in error
+        for error in reopened_ios_policy_errors
+    ):
+        errors.append("self-test failed to reject reopening the physical-iOS production policy")
+    accepted_testnet_ios_evidence = baseline[READINESS].replace(
+        'production_module.__dict__.get(\n            "validate_production_signed_evidence"\n        )',
+        'production_module.__dict__.get("validate_signed_evidence")',
+        1,
+    )
+    accepted_testnet_ios_errors = static_errors({READINESS: accepted_testnet_ios_evidence})
+    if not any(
+        "production-only iOS evidence validator entrypoint" in error
+        for error in accepted_testnet_ios_errors
+    ):
+        errors.append(
+            "self-test failed to reject the testnet-only iOS validator in promotion"
+        )
     missing_root_custody = baseline[READINESS].replace(
         "                        require_production_root_custody(descriptor, label)",
         "                        # production root custody removed",
@@ -4142,15 +4508,17 @@ if self_test:
     ):
         errors.append("self-test failed to reject a path-executed source helper")
     path_loaded_ios_validator = baseline[READINESS].replace(
-        "                validator_bytes, trusted_ios_validator_snapshot",
-        "                validator_bytes, ios_validator_path",
+        "                validator_bytes,\n"
+        "                trusted_ios_validator_snapshot,",
+        "                validator_bytes,\n"
+        "                ios_validator_path,",
         1,
     )
     path_loaded_ios_validator_errors = static_errors(
         {READINESS: path_loaded_ios_validator}
     )
     if not any(
-        "source-closure-authenticated iOS validator snapshot" in error
+        "source-closure-authenticated candidate and production iOS validator snapshots" in error
         for error in path_loaded_ios_validator_errors
     ):
         errors.append("self-test failed to reject a path-loaded iOS validator")
@@ -4231,5 +4599,11 @@ if errors:
     for error in errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
-print(f"Kagemusha ABI-21/V4 (native bridge ABI 22) {mode} corridor passed.")
+if mode == "candidate":
+    print(
+        "Kagemusha ABI-21/V4 (native bridge ABI 22) static candidate corridor passed; "
+        "production promotion was not evaluated."
+    )
+else:
+    print("Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion corridor passed.")
 PY

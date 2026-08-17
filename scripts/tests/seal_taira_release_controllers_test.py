@@ -1173,6 +1173,16 @@ def _publisher_operation_fixture(
     _write_handoff(candidate, {"candidate.tar.zst": b"candidate"}, "candidate")
     _freeze_handoff(candidate)
     attestation = _attestation(handoff, trusted, "macos-publish")
+    authority_root = Path(str(attestation["authority_root"]))
+    rollout_inputs = {
+        "--rollout-plan": authority_root / "rollout-plan.json",
+        "--rollout-result": authority_root / "rollout-result.json",
+        "--rollout-authority-envelope": authority_root / "rollout-envelope.json",
+        "--rollout-durable-receipt": authority_root / "rollout-receipt.json",
+    }
+    for flag, path in rollout_inputs.items():
+        path.write_bytes((flag + "\n").encode("ascii"))
+        path.chmod(0o400)
     attestation["trusted_values"] = [
         {
             "flag": "--expected-oras-version",
@@ -1213,6 +1223,8 @@ def _publisher_operation_fixture(
         "--suffix",
         "testnet",
     ]
+    for flag, path in rollout_inputs.items():
+        args.extend((flag, str(path)))
     return args, attestation, candidate
 
 

@@ -805,6 +805,43 @@ fn verify_rejects_embedded_debug_metadata() {
     assert!(err.to_string().contains("DBG1"));
 }
 #[test]
+fn verify_rejects_undefined_opcodes_before_execution() {
+    let bytes = contract_artifact_with_code(
+        1,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[0xff00_0000, ivm::encoding::wide::encode_halt()],
+    );
+    let error = ivm::verify_contract_artifact(&bytes)
+        .expect_err("undefined opcode must fail shared artifact admission");
+    assert_eq!(
+        error.to_string(),
+        "invalid contract artifact: invalid opcode 0xff at pc 0"
+    );
+}
+#[test]
+fn verify_rejects_noncanonical_poseidon6_encodings_before_execution() {
+    use ivm::instruction::wide;
+
+    for malformed in [
+        ivm::encoding::wide::encode_rr(wide::crypto::POSEIDON6, 9, 10, 1),
+        ivm::encoding::wide::encode_rr(wide::crypto::POSEIDON6, 9, 251, 0),
+    ] {
+        let bytes = contract_artifact_with_code(
+            1,
+            vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+            None,
+            &[malformed, ivm::encoding::wide::encode_halt()],
+        );
+        let error = ivm::verify_contract_artifact(&bytes)
+            .expect_err("noncanonical POSEIDON6 encoding must fail shared artifact admission");
+        assert_eq!(
+            error.to_string(),
+            "invalid contract artifact: noncanonical POSEIDON6 encoding at pc 0"
+        );
+    }
+}
+#[test]
 fn verify_rejects_direct_control_flow_outside_instruction_boundaries() {
     use ivm::instruction::wide;
     let outside = ivm::encoding::wide::encode_branch(wide::control::BEQ, 0, 0, 1);

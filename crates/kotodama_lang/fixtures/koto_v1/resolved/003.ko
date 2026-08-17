@@ -1,0 +1,8 @@
+
+誓約 Sample {
+    struct Pair { int left; int right; }
+    fn helper(int value) -> int { value }
+    言挙げ fn run(int value) -> int authorize("CanRun") {
+        helper(value)
+    }
+}

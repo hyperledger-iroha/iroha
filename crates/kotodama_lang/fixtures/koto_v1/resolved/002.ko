@@ -1,0 +1,9 @@
+
+module Origins {
+    fn mutate(List<int, 4> values, int outer, int inner) {
+        values[outer][inner] = 1;
+        let selected = values[inner];
+        let quantity price = 1.250_0;
+        let copy = [item for item in values if true];
+    }
+}

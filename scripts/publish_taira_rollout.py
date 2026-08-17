@@ -190,6 +190,10 @@ class PublishRequest:
     release_manifest_verifier_path: Path
     trusted_release_manifest_verifier_sha256: str
     terminal_handoff: Path
+    rollout_plan: Path
+    rollout_result: Path
+    rollout_authority_envelope: Path
+    rollout_durable_receipt: Path
 
 
 @dataclass(frozen=True)
@@ -1414,6 +1418,10 @@ def _validate_request(request: PublishRequest) -> PublishRequest:
             "trusted release verifier digest",
         ),
         terminal_handoff=request.terminal_handoff,
+        rollout_plan=request.rollout_plan,
+        rollout_result=request.rollout_result,
+        rollout_authority_envelope=request.rollout_authority_envelope,
+        rollout_durable_receipt=request.rollout_durable_receipt,
     )
 
 
@@ -1859,9 +1867,18 @@ def _publish_after_authenticated_rollout_observation(
 
 
 def publish(request: PublishRequest, *, now_unix: int | None = None) -> dict[str, object]:
-    """Production entry point, closed before request, path, signer, or registry I/O."""
+    """Historically verify the observation, then publish without re-signing it."""
 
     _require_authenticated_rollout_observation_authority()
+    try:
+        rollout_observation.verify_authenticated_result_files(
+            plan_path=request.rollout_plan,
+            result_path=request.rollout_result,
+            authority_envelope_path=request.rollout_authority_envelope,
+            durable_receipt_path=request.rollout_durable_receipt,
+        )
+    except rollout_observation.RolloutContractError as exc:
+        raise TairaPublicationError(str(exc)) from exc
     return _publish_after_authenticated_rollout_observation(
         request, now_unix=now_unix
     )
@@ -1894,6 +1911,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--trusted-release-manifest-verifier-sha256", required=True
     )
     parser.add_argument("--terminal-handoff", type=Path, required=True)
+    parser.add_argument("--rollout-plan", type=Path, required=True)
+    parser.add_argument("--rollout-result", type=Path, required=True)
+    parser.add_argument("--rollout-authority-envelope", type=Path, required=True)
+    parser.add_argument("--rollout-durable-receipt", type=Path, required=True)
     return parser
 
 
@@ -1927,6 +1948,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.trusted_release_manifest_verifier_sha256
         ),
         terminal_handoff=args.terminal_handoff,
+        rollout_plan=args.rollout_plan,
+        rollout_result=args.rollout_result,
+        rollout_authority_envelope=args.rollout_authority_envelope,
+        rollout_durable_receipt=args.rollout_durable_receipt,
     )
     try:
         result = publish(request)

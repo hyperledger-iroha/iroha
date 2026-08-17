@@ -159,6 +159,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     );
     assert!(lane_snapshot.manifest_path.is_none());
     assert!(lane_snapshot.manifest_validators.is_empty());
+    assert!(lane_snapshot.manifest_validator_bindings.is_empty());
     assert!(lane_snapshot.manifest_quorum.is_none());
     assert!(lane_snapshot.manifest_protected_namespaces.is_empty());
     assert!(lane_snapshot.manifest_runtime_upgrade.is_none());
@@ -500,14 +501,16 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
         .into_iter()
         .map(|ns| Name::from_str(ns).expect("namespace"))
         .collect::<BTreeSet<_>>();
-    let validator_bindings = validators
+    let mut validator_bindings = validators
         .iter()
-        .map(|validator| ManifestValidatorBinding {
+        .enumerate()
+        .map(|(index, validator)| ManifestValidatorBinding {
             validator: validator.clone(),
             peer_id: PeerId::from(validator.expect_single_signatory().clone()),
-            torii_url: None,
+            torii_url: Some(format!("https://validator-{}.test", index + 1)),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    validator_bindings.reverse();
     GovernanceRules {
         version: 1,
         validators: validators.to_vec(),
@@ -590,6 +593,30 @@ fn assert_governance_manifest_snapshot(
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
     assert_eq!(lane_snapshot.manifest_validators, expected_validators);
+    let mut expected_bindings = validators
+        .iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            (
+                validator.to_string(),
+                PeerId::from(validator.expect_single_signatory().clone()).to_string(),
+                Some(format!("https://validator-{}.test", index + 1)),
+            )
+        })
+        .collect::<Vec<_>>();
+    expected_bindings.sort();
+    let observed_bindings = lane_snapshot
+        .manifest_validator_bindings
+        .iter()
+        .map(|binding| {
+            (
+                binding.validator.clone(),
+                binding.peer_id.clone(),
+                binding.torii_url.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(observed_bindings, expected_bindings);
     assert_eq!(lane_snapshot.manifest_quorum, Some(2));
     assert_eq!(
         lane_snapshot.manifest_protected_namespaces,

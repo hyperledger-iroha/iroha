@@ -160,35 +160,6 @@ impl Registers {
             });
         }
     }
-    /// Unconditionally set register `idx`, including r0.
-    #[inline]
-    pub fn force_set(&mut self, idx: usize, value: u64) {
-        debug_assert!(idx < 256);
-        self.record_usage(idx);
-        self.gpr[idx] = value;
-        self.leaves[idx] = register_leaf_digest(self.gpr[idx], self.tags[idx]);
-        #[cfg(feature = "merkle_incremental")]
-        {
-            self.tree
-                .lock()
-                .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-            self.dirty.store(false, Ordering::Release);
-        }
-        #[cfg(not(feature = "merkle_incremental"))]
-        {
-            self.mark_pending(idx);
-        }
-        with_reg_logger(|log| {
-            let (root, path) = self.merkle_root_and_path(idx);
-            log.record(RegEvent::Write {
-                index: idx,
-                value,
-                tag: self.tags[idx],
-                path,
-                root,
-            });
-        });
-    }
     /// Get the privacy tag of register `idx`.
     #[inline]
     pub fn tag(&self, idx: usize) -> bool {
@@ -226,35 +197,6 @@ impl Registers {
                 });
             });
         }
-    }
-    /// Unconditionally set the privacy tag of register `idx`.
-    #[inline]
-    pub fn force_set_tag(&mut self, idx: usize, value: bool) {
-        debug_assert!(idx < 256);
-        self.record_usage(idx);
-        self.tags[idx] = value;
-        self.leaves[idx] = register_leaf_digest(self.gpr[idx], self.tags[idx]);
-        #[cfg(feature = "merkle_incremental")]
-        {
-            self.tree
-                .lock()
-                .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-            self.dirty.store(false, Ordering::Release);
-        }
-        #[cfg(not(feature = "merkle_incremental"))]
-        {
-            self.mark_pending(idx);
-        }
-        with_reg_logger(|log| {
-            let (root, path) = self.merkle_root_and_path(idx);
-            log.record(RegEvent::Write {
-                index: idx,
-                value: self.gpr[idx],
-                tag: value,
-                path,
-                root,
-            });
-        });
     }
     /// Mutable access for test‑suites and advanced host tooling.
     #[inline]

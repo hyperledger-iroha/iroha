@@ -321,7 +321,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),
-        Path('v2_worker/autonomous_lane_output_retirement.rs'),
+        Path('v2_worker/autonomous_lane_output_reconstruction.rs'),
         Path('v2_worker/kura_replica_advert_refresh.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
         Path('v2_worker/effect_services_impl.rs'),
@@ -361,12 +361,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_apply/error_recovery.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/reducer.rs'): (
+        Path('reducer/prepare_certificate_handling.rs'),
         Path('tests/reducer_timeout_and_projection.rs'),
         Path('tests/v2_core_reducer_primitive_projection.rs'),
         Path('reducer/counterfeit_boundary_capability_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
         Path('refinement/first_release_witness.rs'),
+        Path('refinement/volatile_summary_well_formed.rs'),
         Path('refinement_constructor_test_helpers.rs'),
         Path('refinement/transition_gate_tail.rs'),
     ),
@@ -378,6 +380,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/committee_fallback_and_retransmit.rs'),
         Path('tests/v2_core_view_zero_parent_binding.rs'),
         Path('tests/empty_replay_resume_test.rs'),
+        Path('tests/delayed_prepare_qc_cache_bounds.rs'),
         Path('tests/v2_core_terminal_transactionality.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (

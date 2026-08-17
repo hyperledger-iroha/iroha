@@ -1,0 +1,4 @@
+
+module ResolvedTypes {
+    fn inspect((int, bool) pair, List<int, 4> values) { return; }
+}

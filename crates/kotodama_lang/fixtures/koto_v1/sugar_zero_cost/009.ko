@@ -1,0 +1,7 @@
+
+        seiyaku IfLetExpression {
+            view fn main(Option<int> value, int fallback) -> int {
+                if let Option::some(payload) = value { payload } else { fallback }
+            }
+        }
+    

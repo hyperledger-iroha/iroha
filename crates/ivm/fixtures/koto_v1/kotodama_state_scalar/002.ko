@@ -1,0 +1,27 @@
+
+        seiyaku StructState {
+            struct Ledger { int counter, bool flag }
+            state Ledger ledger;
+
+            hajimari() {
+                ledger = Ledger { counter: 0, flag: false };
+            }
+
+            fn read_counter(Ledger entry) -> int {
+                return entry.counter;
+            }
+
+            fn score(Ledger entry) -> int {
+                var value = read_counter(entry);
+                if (entry.flag) {
+                    value = value + 1;
+                }
+                return value;
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                ledger = Ledger { counter: 7, flag: true };
+                return score(ledger);
+            }
+        }
+    

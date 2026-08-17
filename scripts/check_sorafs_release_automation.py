@@ -51,7 +51,7 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "exactly the five expected target-triple checksum manifests",
         "The five-target CLI archive implementation is present, but a candidate is not source-complete",
         "build, publish, and clean-install all six",
-        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command",
+        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py --require-objective` before any Cargo command",
         "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
@@ -516,14 +516,79 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
     ),
 }
 SORAFS_CLI_RELEASE_GATE_SCRIPT = "ci/check_sorafs_cli_release.sh"
+SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
+    "python3 -I -S scripts/check_build_efficiency_provenance.py"
+)
+SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST = (
+    "scripts/tests/check_build_efficiency_provenance_test.py"
+)
 SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
-    "python3 scripts/check_source_file_budget.py"
+    "python3 scripts/check_source_file_budget.py --require-objective"
+)
+SORAFS_CLI_L1_QUALIFICATION_TESTS = (
+    "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
+    "scripts/tests/check_sorafs_l1_resilience_qualification_test.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS = (
+    "scripts/check_sorafs_ai_prescreen_rollout_evidence.py",
+    "scripts/check_sorafs_appeal_finance_rollout_evidence.py",
+    "scripts/check_sorafs_gateway_compliance_rollout_evidence.py",
+    "scripts/check_sorafs_gateway_load_rollout_evidence.py",
+    "scripts/check_sorafs_governance_dag_rollout_evidence.py",
+    "scripts/check_sorafs_hedging_rollout_evidence.py",
+    "scripts/check_sorafs_moderation_panel_rollout_evidence.py",
+    "scripts/check_sorafs_orderbook_rollout_evidence.py",
+    "scripts/check_sorafs_pdp_rollout_evidence.py",
+    "scripts/check_sorafs_pop_credentials_rollout_evidence.py",
+    "scripts/check_sorafs_por_rollout_evidence.py",
+    "scripts/check_sorafs_potr_rollout_evidence.py",
+    "scripts/check_sorafs_repair_rollout_evidence.py",
+    "scripts/check_sorafs_reputation_rollout_evidence.py",
+    "scripts/check_sorafs_reserve_rent_rollout_evidence.py",
+    "scripts/check_sorafs_transparency_rollout_evidence.py",
+    "scripts/sorafs_archive_path_components.py",
+    "scripts/sorafs_required_kinds.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS = (
+    "scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_gateway_load_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_hedging_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_pdp_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_por_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_potr_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_repair_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_reputation_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_transparency_rollout_evidence_test.py",
+    "scripts/tests/sorafs_archive_path_components_test.py",
+    "scripts/tests/sorafs_required_kinds_test.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS = frozenset(
+    (
+        *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS,
+        *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS,
+    )
+)
+SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS = frozenset(
+    {
+        "ci/build_efficiency_provenance.json",
+        "scripts/check_build_efficiency_provenance.py",
+        "scripts/tests/check_build_efficiency_provenance_test.py",
+    }
 )
 SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
     {
         ".github/workflows/sorafs-cli-release.yml",
         "ci/check_sorafs_cli_release.sh",
         "scripts/build_sorafs_topology_qualification_envelope.py",
+        "scripts/check_sorafs_l1_deployment_qualification.py",
+        "scripts/check_sorafs_l1_resilience_qualification.py",
         "scripts/check_sorafs_release_automation.py",
         "scripts/check_sorafs_release_version_map.py",
         "scripts/sccp_release_common.py",
@@ -542,14 +607,20 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "scripts/sorafs_topology_qualification.py",
         "scripts/taira_constants.py",
         "scripts/tests/check_sorafs_release_automation_test.py",
+        "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
+        "scripts/tests/check_sorafs_l1_resilience_qualification_test.py",
         "scripts/tests/sorafs_evidence_json_test.py",
         "scripts/tests/sorafs_foundational_receipt_test_support.py",
         "scripts/tests/sorafs_resilience_test_support.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",
         "scripts/requirements.txt",
+        "scripts/examples/sorafs_l1_deployment_qualification.args.example",
+        "scripts/examples/sorafs_l1_deployment_qualification_manifest.json.example",
+        "scripts/examples/sorafs_l1_resilience_qualification.args.example",
         "scripts/examples/sorafs_l1_topology_qualification_envelope.md",
         "specs/sorafs/l1_deployment_qualification.md",
+        "specs/sorafs/l1_resilience_qualification.md",
     }
 )
 SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS = frozenset(
@@ -660,6 +731,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/build_sorafs_foundational_prerequisite.py"',
         '- "scripts/build_sorafs_topology_qualification_envelope.py"',
         '- "scripts/check_sorafs_production_readiness.py"',
+        '- "scripts/check_sorafs_production_promotion_bundle.py"',
         '- "scripts/sorafs_software_signer_receipt.py"',
         '- "scripts/sorafs_reference_sdk_supply_chain.py"',
         '- "scripts/sorafs_topology_qualification.py"',
@@ -669,6 +741,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/check_workflow_action_pins.py",
         *RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
         '- "Dockerfile"',
+        '- "ci/build_efficiency_provenance.json"',
         '- "ci/source_file_budget.json"',
         '- "scripts/build_release_bundle.sh"',
         '- "scripts/build_release_image.sh"',
@@ -678,6 +751,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/capture_release_command.py"',
         '- "scripts/copy_release_file.py"',
         '- "scripts/copy_release_tree.py"',
+        '- "scripts/check_build_efficiency_provenance.py"',
         '- "scripts/check_source_file_budget.py"',
         '- "scripts/generate_release_manifest.py"',
         '- "scripts/generate_sorafs_cli_release_manifest.py"',
@@ -694,6 +768,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
         '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
         '- "scripts/tests/build_sorafs_foundational_prerequisite_test.py"',
+        '- "scripts/tests/check_sorafs_production_promotion_bundle_test.py"',
         '- "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"',
         '- "scripts/tests/sorafs_topology_qualification_test.py"',
         '- "scripts/tests/sorafs_evidence_json_test.py"',
@@ -708,6 +783,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/tests/package_sorafs_cli_candidate_test.py",
         '- "scripts/tests/build_release_bundle_test.py"',
         '- "scripts/tests/build_release_image_test.py"',
+        '- "scripts/tests/check_build_efficiency_provenance_test.py"',
         '- "scripts/tests/capture_release_command_test.py"',
         '- "scripts/tests/release_artifact_contract_test.py"',
         '- "scripts/tests/validate_release_image_bases_test.py"',
@@ -1476,8 +1552,8 @@ def _validate_runtime_provider_deployment_contract(root: Path) -> list[str]:
     return errors
 
 
-def _pull_request_paths(source: str) -> frozenset[str] | None:
-    """Return the exact quoted ``pull_request.paths`` entries, if present."""
+def _pull_request_path_entries(source: str) -> tuple[str, ...] | None:
+    """Return the ordered quoted ``pull_request.paths`` entries, if present."""
 
     pull_request = re.search(
         r"(?ms)^  pull_request:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
@@ -1492,11 +1568,18 @@ def _pull_request_paths(source: str) -> frozenset[str] | None:
     if paths is None:
         return None
     entries = re.findall(r'(?m)^      - "([^"]+)"\s*$', paths.group("body"))
-    return frozenset(entries)
+    return tuple(entries)
+
+
+def _pull_request_paths(source: str) -> frozenset[str] | None:
+    """Return the unique quoted ``pull_request.paths`` entries, if present."""
+
+    entries = _pull_request_path_entries(source)
+    return None if entries is None else frozenset(entries)
 
 
 def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
-    """Require the source-file budget to fail closed before any Cargo work."""
+    """Require lineage and source budgets to fail closed before Cargo work."""
 
     relative = SORAFS_CLI_RELEASE_GATE_SCRIPT
     path = _require_regular_repo_file(root, relative)
@@ -1506,6 +1589,17 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
         raise ValueError(f"{relative}: release gate must be UTF-8") from error
 
     errors: list[str] = []
+    provenance_commands = tuple(
+        re.finditer(
+            rf"(?m)^{re.escape(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND)}$",
+            source,
+        )
+    )
+    if len(provenance_commands) != 1:
+        errors.append(
+            f"{relative}: build-efficiency provenance command must appear "
+            "exactly once as a standalone fail-closed command"
+        )
     budget_commands = tuple(
         re.finditer(
             rf"(?m)^{re.escape(SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND)}$",
@@ -1517,14 +1611,24 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
             f"{relative}: source-file budget command must appear exactly once "
             "as a standalone fail-closed command"
         )
+    if len(provenance_commands) != 1 or len(budget_commands) != 1:
         return errors
 
+    provenance_command = provenance_commands[0]
     budget_command = budget_commands[0]
     strict_mode = re.search(r"(?m)^set -euo pipefail$", source)
-    if strict_mode is None or strict_mode.start() > budget_command.start():
+    if strict_mode is None or strict_mode.start() > provenance_command.start():
         errors.append(
-            f"{relative}: strict shell mode must precede the source-file budget "
-            "command"
+            f"{relative}: strict shell mode must precede the build-efficiency "
+            "provenance command"
+        )
+    if re.search(
+        r"(?m)^\s*set (?:\+e|\+o errexit)\s*$",
+        source[: provenance_command.start()],
+    ):
+        errors.append(
+            f"{relative}: build-efficiency provenance command must not run with "
+            "errexit disabled"
         )
     if re.search(
         r"(?m)^\s*set (?:\+e|\+o errexit)\s*$",
@@ -1534,6 +1638,28 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
             f"{relative}: source-file budget command must not run with errexit "
             "disabled"
         )
+    if provenance_command.start() > budget_command.start():
+        errors.append(
+            f"{relative}: build-efficiency provenance command must run before "
+            "the source-file budget command"
+        )
+    if source.count(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST) != 1:
+        errors.append(
+            f"{relative}: release helper tests must execute the build-efficiency "
+            "provenance regression suite exactly once"
+        )
+    for qualification_test in SORAFS_CLI_L1_QUALIFICATION_TESTS:
+        if source.count(qualification_test) != 1:
+            errors.append(
+                f"{relative}: release helper tests must execute L1 qualification "
+                f"regression suite {qualification_test!r} exactly once"
+            )
+    for promotion_import_test in SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS:
+        if source.count(promotion_import_test) != 1:
+            errors.append(
+                f"{relative}: release helper tests must execute production-promotion "
+                f"import regression suite {promotion_import_test!r} exactly once"
+            )
 
     first_cargo_command = re.search(r"(?m)^\s*cargo(?:\s|$)", source)
     if first_cargo_command is None:
@@ -1541,11 +1667,17 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
             f"{relative}: release gate must contain a Cargo command after the "
             "source-file budget command"
         )
-    elif first_cargo_command.start() < budget_command.start():
-        errors.append(
-            f"{relative}: source-file budget command must run before every Cargo "
-            "command"
-        )
+    else:
+        if first_cargo_command.start() < provenance_command.start():
+            errors.append(
+                f"{relative}: build-efficiency provenance command must run "
+                "before every Cargo command"
+            )
+        if first_cargo_command.start() < budget_command.start():
+            errors.append(
+                f"{relative}: source-file budget command must run before every "
+                "Cargo command"
+            )
     return errors
 
 
@@ -1569,7 +1701,22 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(f"{relative}: missing contract marker `{marker}`")
 
     if relative == ".github/workflows/sorafs-cli-release.yml":
+        pull_request_path_entries = _pull_request_path_entries(source)
         pull_request_paths = _pull_request_paths(source)
+        invalid_promotion_trigger_counts = sorted(
+            (trigger, (pull_request_path_entries or ()).count(trigger))
+            for trigger in SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS
+            if (pull_request_path_entries or ()).count(trigger) != 1
+        )
+        if invalid_promotion_trigger_counts:
+            rendered = ", ".join(
+                f"{trigger}={count}"
+                for trigger, count in invalid_promotion_trigger_counts
+            )
+            errors.append(
+                f"{relative}: pull_request.paths must list each production-promotion "
+                f"import trigger exactly once: {rendered}"
+            )
         missing_triggers = sorted(
             SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS - (pull_request_paths or frozenset())
         )
@@ -1577,6 +1724,16 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(
                 f"{relative}: pull_request.paths omits topology-envelope "
                 f"dependency trigger(s): {', '.join(missing_triggers)}"
+            )
+        missing_provenance_triggers = sorted(
+            SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_provenance_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits build-efficiency "
+                "provenance contract trigger(s): "
+                f"{', '.join(missing_provenance_triggers)}"
             )
         missing_source_budget_triggers = sorted(
             SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS
@@ -1776,6 +1933,20 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         if release_gate_job is None:
             errors.append(f"{relative}: missing release gate job")
         else:
+            full_history_checkout = (
+                "uses: actions/checkout@"
+                "df4cb1c069e1874edd31b4311f1884172cec0e10 # v6\n"
+                "        with:\n"
+                "          fetch-depth: 0"
+            )
+            if (
+                release_gate_job.count(full_history_checkout) != 1
+                or source.count("fetch-depth: 0") != 1
+            ):
+                errors.append(
+                    f"{relative}: only the release-gate checkout must fetch the "
+                    "complete provenance history"
+                )
             if release_gate_job.count(
                 f"run: bash {SORAFS_CLI_RELEASE_GATE_SCRIPT}"
             ) != 1:

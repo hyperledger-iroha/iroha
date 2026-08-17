@@ -4602,7 +4602,7 @@ pub mod isi {
                     "verifying key not found".into(),
                 ));
             };
-            if vk_rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+            if !vk_rec.is_active_at(state_transaction.block_height()) {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -13339,7 +13339,7 @@ pub mod isi {
             )
             .into());
         };
-        if rec.status != ConfidentialStatus::Active {
+        if !rec.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not active".into(),
             ));
@@ -14188,7 +14188,7 @@ pub mod isi {
                     )))
                     .into());
                 };
-                if rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+                if !rec.is_active_at(state_transaction.block_height()) {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key is not active".into(),
                     ));
@@ -14498,7 +14498,7 @@ pub mod isi {
                     format!("{label} verifying key not found").into(),
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key is not Active").into(),
             ));
@@ -14552,7 +14552,7 @@ pub mod isi {
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation("verifying key not found".into())
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not Active".into(),
             ));
@@ -14636,7 +14636,7 @@ pub mod isi {
                     "verifying key for tally not found".into(),
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not Active".into(),
             ));
@@ -14766,7 +14766,7 @@ pub mod isi {
                         "tally verifying key not found".into(),
                     )
                 })?;
-            if tally_rec.status != ConfidentialStatus::Active {
+            if !tally_rec.is_active_at(state_transaction.block_height()) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "tally verifying key is not Active".into(),
                 ));
@@ -31385,6 +31385,43 @@ seiyaku GovernanceLifecycle {
                 .expect_err("missing gas_schedule_id must fail");
             let msg = smart_contract_error_message(err);
             assert!(msg.contains("gas_schedule_id"), "unexpected msg: {msg}");
+        }
+        #[test]
+        fn register_vk_rejects_empty_lifecycle_window_without_mutating_state() {
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
+            stx.apply();
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                TEST_HALO2_CIRCUIT_ID,
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x61; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+            rec.activation_height = Some(10);
+            rec.withdraw_height = Some(10);
+            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: rec,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("an empty verifier-key lifecycle must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("greater"), "unexpected msg: {msg}");
+            assert!(stx.world.verifying_keys.get(&id).is_none());
         }
         #[test]
         fn register_vk_rejects_inline_key_length_mismatch() {

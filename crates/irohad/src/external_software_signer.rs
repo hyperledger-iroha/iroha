@@ -14,7 +14,7 @@ mod adapter;
 mod envelope;
 #[cfg(unix)]
 mod journal;
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "taira-authority-bin"), allow(dead_code))]
 mod privacy_governance;
 mod protocol;
 #[cfg(unix)]
@@ -23,6 +23,9 @@ mod runtime_adapters;
 mod runtime_backends;
 #[cfg(unix)]
 mod service;
+/// Authenticated eight-role Taira release-authority service and native client.
+#[cfg(all(unix, feature = "taira-authority-bin"))]
+pub mod taira_authority;
 #[cfg(unix)]
 mod typed_payload;
 #[cfg(unix)]

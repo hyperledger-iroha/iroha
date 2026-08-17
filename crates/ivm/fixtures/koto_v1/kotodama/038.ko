@@ -1,0 +1,6 @@
+
+        module InvalidStructTupleIndex {
+        struct A { int x }
+        fn f() { let s = A { x: 1 }; let v = s.0; }
+        }
+    

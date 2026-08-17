@@ -1,0 +1,9 @@
+
+seiyaku Same {
+    struct Packet { Missing left; Missing right; }
+    fn repeated(Missing first, int first) {
+        absent();
+        absent();
+    }
+    fn repeated() {}
+}

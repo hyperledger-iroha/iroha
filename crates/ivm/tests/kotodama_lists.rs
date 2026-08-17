@@ -162,38 +162,16 @@ fn run_multiword_mutation_failure_case(
 }
 #[test]
 fn safe_mutations_execute_with_transactional_failures() {
-    let vm = run(r#"
-        seiyaku ListMutations {
-            view fn main() -> int {
-                var List<int, 3> values = [1, 2];
-                if values.try_set(index: 8, value: 99) { return -1; }
-                if !values.try_push(3) { return -2; }
-                if values.try_push(4) { return -3; }
-                let popped = values.pop().unwrap_or(0);
-                let first = values.get(0).unwrap_or(0);
-                if !values.contains(2) { return -4; }
-                popped * 100 + first * 10 + values.len()
-            }
-        }
-        "#);
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 312);
 }
 #[test]
 fn comprehension_and_take_execute_as_bounded_copies() {
-    let vm = run(r#"
-        seiyaku ListComprehension {
-            fn build() -> List<int, 4> {
-                let List<int, 4> source = [1, 2, 3];
-                [value * 2 for value in source if value > 1]
-            }
-
-            view fn main() -> int {
-                let doubled = build();
-                let List<int, 2> head = doubled.take(2);
-                head.get(1).unwrap_or(0)
-            }
-        }
-        "#);
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 6);
 }
 #[test]
@@ -234,25 +212,16 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
 fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
     let program = KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku ListGetGas {
-                view fn main(int index) -> int {
-                    let List<int, 8> values = [10, 20, 30, 40];
-                    return values.get(index).unwrap_or(99);
-                }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/003.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile parameterized List get contract");
     let control = KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku ListGetGasControl {
-                view fn main(int index) -> int {
-                    return 0;
-                }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/004.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile matched argument-decoding control");
     let mut samples = Vec::new();
@@ -420,59 +389,9 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
 fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_preflight() {
     let program = KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku MultiwordMutationFailures {
-                struct Pair { int first, int second }
-
-                view fn main(int operation, int index) -> List<Pair, 2> {
-                    if operation < 2 {
-                        var List<Pair, 2> values = [
-                            Pair { first: 10, second: 20 },
-                        ];
-                        let Pair replacement = Pair { first: 90, second: 91 };
-                        let Pair control_poison = Pair { first: -1, second: -1 };
-                        let Pair failure_poison = Pair { first: -2, second: -2 };
-                        if operation == 0 {
-                            // Match the exact bounds-proof allocation performed by
-                            // try_set before comparing its failure branch to control.
-                            let int length = values.len();
-                            let bool non_negative = index >= 0;
-                            let bool below_length = index < length;
-                            let bool present = non_negative && below_length;
-                            if present {
-                                values.try_set(
-                                    index: 0,
-                                    value: control_poison,
-                                );
-                            }
-                        } else if values.try_set(
-                            index: index,
-                            value: replacement,
-                        ) {
-                            values.try_set(
-                                index: 0,
-                                value: failure_poison,
-                            );
-                        }
-                        return values;
-                    }
-
-                    var List<Pair, 2> values = [
-                        Pair { first: 10, second: 20 },
-                        Pair { first: 30, second: 40 },
-                    ];
-                    let Pair replacement = Pair { first: 90, second: 91 };
-                    let Pair failure_poison = Pair { first: -3, second: -3 };
-                    if operation == 3 && values.try_push(replacement) {
-                        values.try_set(
-                            index: 0,
-                            value: failure_poison,
-                        );
-                    }
-                    return values;
-                }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/005.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("compile multiword mutation failure fixture");
     for index in ["-1", "1", "8", "18446744073709551616"] {
@@ -634,27 +553,16 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
 }
 #[test]
 fn enumerate_materializes_bounded_structured_elements() {
-    let vm = run(r#"
-        seiyaku ListEnumerate {
-            view fn main() -> int {
-                let List<int, 4> values = [7, 8];
-                let indexed = values.enumerate();
-                let pair = indexed.get(1).unwrap_or((0, 0));
-                pair.0 * 10 + pair.1
-            }
-        }
-        "#);
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/006.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 18);
 }
 #[test]
 fn list_of_options_uses_one_word_per_element() {
-    let vm = run(r#"
-        seiyaku ListOfOptions {
-            view fn main() -> List<Option<int>, 4> {
-                [Option::some(7), Option::none]
-            }
-        }
-        "#);
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/007.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     let list = vm.register(10);
     assert_eq!(vm.load_u64(list), Ok(2), "returned List length header");
     assert_eq!(
@@ -682,84 +590,18 @@ fn list_of_options_uses_one_word_per_element() {
 }
 #[test]
 fn contains_compares_nested_lists_sums_and_structs_by_value() {
-    let vm = run(r#"
-        seiyaku RecursiveContains {
-            struct Envelope {
-                Option<List<int, 3>> labels,
-                List<Option<int>, 3> markers,
-                Result<(int, bool), int> outcome,
-            }
-
-            fn ok(int last, bool ready) -> Envelope {
-                Envelope {
-                    labels: Option::some([1, last]),
-                    markers: [Option::none, Option::some(last)],
-                    outcome: Result::ok((9, ready)),
-                }
-            }
-
-            fn err(int code) -> Envelope {
-                Envelope {
-                    labels: Option::none,
-                    markers: [Option::none, Option::some(7)],
-                    outcome: Result::err(code),
-                }
-            }
-
-            view fn main() -> int {
-                let List<Envelope, 2> values = [ok(7, true), err(5)];
-
-                // Every needle below is freshly allocated. Equality must use
-                // the declared aggregate schema rather than handle identity.
-                if !values.contains(ok(7, true)) { return -1; }
-                if !values.contains(err(5)) { return -2; }
-
-                // Same shape with a different nested Option payload.
-                if values.contains(ok(8, true)) { return -3; }
-
-                // Equal capacity does not make different active lengths equal.
-                let short = Envelope {
-                    labels: Option::some([7]),
-                    markers: [Option::none, Option::some(7)],
-                    outcome: Result::ok((9, true)),
-                };
-                if values.contains(short) { return -4; }
-
-                // Sum tags and only their active payloads participate.
-                let different_option_branch = Envelope {
-                    labels: Option::some([1, 7]),
-                    markers: [Option::some(0), Option::some(7)],
-                    outcome: Result::ok((9, true)),
-                };
-                if values.contains(different_option_branch) { return -5; }
-                let different_outer_option_branch = Envelope {
-                    labels: Option::none,
-                    markers: [Option::none, Option::some(7)],
-                    outcome: Result::ok((9, true)),
-                };
-                if values.contains(different_outer_option_branch) { return -6; }
-                if values.contains(ok(7, false)) { return -7; }
-                if values.contains(err(6)) { return -8; }
-
-                1
-            }
-        }
-        "#);
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/008.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 #[test]
 fn recursive_contains_support_does_not_admit_resource_elements() {
     let error = KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku ResourceElements {
-                fn reject(List<Option<StateMap<int, int>>, 2> values) {
-                    let _values = values;
-                }
-
-                view fn main() -> int { 0 }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/009.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect_err("resource-bearing List elements must remain rejected");
     assert!(
@@ -771,16 +613,9 @@ fn recursive_contains_support_does_not_admit_resource_elements() {
 fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
     let error = KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku ZeroSizedElements {
-                struct Empty {}
-
-                view fn main() -> int {
-                    let List<Empty, 1> values = [Empty {}];
-                    values.len()
-                }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/010.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect_err("zero-sized List elements must fail semantic analysis");
     assert!(
@@ -793,14 +628,9 @@ fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
     );
     KotodamaCompiler::new()
         .compile_source(
-            r#"
-            seiyaku ContextualEmptyList {
-                view fn main() -> int {
-                    let List<int, 4> values = [];
-                    values.len()
-                }
-            }
-            "#,
+            include_str!("../fixtures/koto_v1/kotodama_lists/011.ko")
+                .strip_suffix('\n')
+                .expect("fixture sentinel newline"),
         )
         .expect("ordinary contextual empty Lists remain valid");
 }

@@ -1,0 +1,10 @@
+
+        seiyaku HashFunctions {
+        view fn f(bytes payload) -> Json {
+            let b = crypto::blake2b256(payload);
+            let k = crypto::keccak256(payload);
+            let i = crypto::iroha_hash(payload);
+            return json { blake2b: b, keccak: k, iroha: i };
+        }
+        }
+    

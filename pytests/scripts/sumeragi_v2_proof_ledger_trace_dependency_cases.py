@@ -134,6 +134,13 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
 
     by_id["post-gst-starvation-freedom"]["status"] = original_starvation_status
     by_id["protected-service-rank"]["status"] = original_rank_status
+    handoff_prerequisite_ids = (
+        "rotating-leader-liveness",
+        "application-liveness",
+        "successor-activation-starvation-freedom",
+    )
+    for prerequisite_id in handoff_prerequisite_ids:
+        by_id[prerequisite_id]["status"] = "specified_unproved"
     for dependent_id in (
         "genesis-height-successor-handoff",
         "height-liveness",

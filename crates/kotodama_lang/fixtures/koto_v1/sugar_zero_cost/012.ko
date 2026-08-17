@@ -1,0 +1,10 @@
+
+        seiyaku ResultIfLetExpression {
+            view fn main(Result<int, bool> value, int fallback) -> int {
+                match value {
+                    Result::ok(payload) => payload,
+                    Result::err(_) => fallback,
+                }
+            }
+        }
+    

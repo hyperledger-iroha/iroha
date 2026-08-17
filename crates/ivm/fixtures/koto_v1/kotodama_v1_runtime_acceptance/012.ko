@@ -1,0 +1,12 @@
+
+seiyaku PointerStateAcceptance {
+  error enum PointerStateError { LiteralLost = 1 }
+  state string Message;
+
+  hajimari() { Message = "言霊"; }
+
+  view fn run() -> int {
+    require(Message == "言霊", PointerStateError::LiteralLost);
+    return 1;
+  }
+}

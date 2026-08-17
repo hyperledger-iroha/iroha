@@ -70,14 +70,13 @@ def _fail(message: str) -> NoReturn:
     raise VeRangeQualificationPlanError(message)
 
 
-def _require_authenticated_verange_governance_authority_v1() -> NoReturn:
-    """Keep case planning closed until an independent authority is provisioned."""
+def _require_authenticated_verange_governance_authority_v1() -> None:
+    """Delegate to the fixed shared privacy-governance authority preflight."""
 
     try:
         governance_authority._require_provisioned_privacy_governance_authority_v1()
     except governance_authority.PrivacyGovernanceAuthorityError as exc:
         raise VeRangeQualificationPlanError(str(exc)) from exc
-    raise AssertionError("provisioning barrier unexpectedly returned")
 
 
 def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:

@@ -1,0 +1,44 @@
+
+        seiyaku MixedAggregate {
+            struct Value {
+                Name label,
+                bool enabled,
+                int code,
+                bytes payload,
+                decimal ratio,
+                quantity amount,
+                bool terminal,
+            }
+
+            state StateMap<Name, Value> Values;
+
+            kotoage fn main() -> bool authorize("WriteState") {
+                let Name key = Name::parse("mixed");
+                Values[key] = Value {
+                    label: Name::parse("literal-label"),
+                    enabled: true,
+                    code: 7,
+                    payload: b"payload",
+                    ratio: 1.25,
+                    amount: 9,
+                    terminal: false,
+                };
+                let Value value = Values.get(key).unwrap_or(Value {
+                    label: Name::parse("fallback"),
+                    enabled: false,
+                    code: 0,
+                    payload: b"",
+                    ratio: 0,
+                    amount: 0,
+                    terminal: true,
+                });
+                return value.label == Name::parse("literal-label")
+                    && value.enabled
+                    && value.code == 7
+                    && value.payload == b"payload"
+                    && value.ratio == 1.25
+                    && value.amount == 9
+                    && !value.terminal;
+            }
+        }
+    

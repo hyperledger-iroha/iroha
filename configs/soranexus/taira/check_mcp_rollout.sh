@@ -74,6 +74,18 @@ VALIDATOR_ROOT_COUNT=0
 CURL_RESOLVE_RULES=()
 CURL_URL_RESOLVE_ARGS=()
 
+make_temp_file() {
+  if [[ -n "${TMPDIR:-}" ]]; then
+    [[ -d "$TMPDIR" ]] || {
+      echo "TMPDIR is not an existing directory: ${TMPDIR}" >&2
+      return 1
+    }
+    mktemp "${TMPDIR%/}/taira-mcp-rollout.XXXXXX"
+    return
+  fi
+  mktemp
+}
+
 usage() {
   cat <<'EOF'
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
@@ -108,9 +120,11 @@ The check fails unless:
   - GET /v1/nexus/lifecycle binds all seven lanes to those five canonical
     dataspace IDs and publishes one catalog identity
   - every physical dataspace publishes a non-empty, quorum-capable validator
-    roster through /status lane telemetry; lanes in one dataspace agree on the
-    roster, and no two physical dataspaces reuse the same roster. Universal's
-    projected roster must also match the frozen global consensus count/quorum.
+    roster and schema-closed validator/PeerId/Torii binding projection through
+    /status lane telemetry; roster-bearing lanes in one dataspace agree on the
+    complete projection, and physical dataspaces do not reuse any declared
+    account, PeerId, or canonical HTTPS Torii origin. Universal's projected
+    roster must also match the frozen global consensus count/quorum.
   - POST /v1/mcp initialize returns HTTP 200
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
@@ -1154,9 +1168,9 @@ http_request() {
   # The first-release /v1 API has no version-negotiation request header.
   local curl_cmd=()
 
-  body_file="$(mktemp)"
-  header_file="$(mktemp)"
-  error_file="$(mktemp)"
+  body_file="$(make_temp_file)"
+  header_file="$(make_temp_file)"
+  error_file="$(make_temp_file)"
   cleanup
   last_body="$body_file"
   last_headers="$header_file"
@@ -2322,6 +2336,8 @@ check_taira_physical_dataspace_rosters() {
   python3 - "$label" "$status_path" "$sumeragi_path" "$dataspace_summary" <<'PY'
 import json
 import sys
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 label, status_path, sumeragi_path, topology_raw = sys.argv[1:]
 
@@ -2361,10 +2377,106 @@ def canonical_roster(value, field):
     for position, member in enumerate(value):
         if not isinstance(member, str) or not member.strip():
             fail(f"{field}[{position}] is not a non-empty validator identity")
-        members.append(member.strip())
+        if member != member.strip():
+            fail(f"{field}[{position}] is not a canonical validator identity")
+        members.append(member)
     if len(members) != len(set(members)):
         fail(f"{field} contains duplicate validator identities")
     return tuple(sorted(members))
+
+
+def canonical_torii_origin(value, field):
+    if not isinstance(value, str) or not value:
+        fail(f"{field} is not a non-empty Torii URL")
+    if value != value.strip():
+        fail(f"{field} is not a canonical Torii URL")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        fail(f"{field} is not a valid absolute HTTPS origin: {error}")
+    if parsed.scheme != "https" or not parsed.netloc or hostname is None:
+        fail(f"{field} must be an absolute HTTPS origin")
+    if parsed.username is not None or parsed.password is not None:
+        fail(f"{field} must not contain credentials")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        fail(f"{field} must not contain a path, query, or fragment")
+    canonical_hostname = hostname.lower().rstrip(".")
+    if not canonical_hostname:
+        fail(f"{field} must contain a hostname")
+    try:
+        canonical_hostname = str(ip_address(canonical_hostname))
+    except ValueError:
+        labels = canonical_hostname.split(".")
+        if (
+            len(canonical_hostname) > 253
+            or (len(labels) == 4 and all(label.isdecimal() for label in labels))
+            or any(
+                not label
+                or len(label) > 63
+                or not all(character.isascii() and (character.isalnum() or character == "-") for character in label)
+                or not label[0].isalnum()
+                or not label[-1].isalnum()
+                for label in labels
+            )
+        ):
+            fail(f"{field} contains a non-canonical hostname")
+    canonical_host = (
+        f"[{canonical_hostname}]" if ":" in canonical_hostname else canonical_hostname
+    )
+    effective_port = 443 if port is None else port
+    if effective_port <= 0:
+        fail(f"{field} contains an invalid port")
+    if effective_port != 443:
+        canonical_host = f"{canonical_host}:{effective_port}"
+    canonical = f"https://{canonical_host}"
+    if value != canonical:
+        fail(f"{field} is not canonical; expected {canonical!r}")
+    return canonical
+
+
+def canonical_bindings(value, field):
+    if not isinstance(value, list):
+        fail(f"{field} is not an array")
+    expected_fields = {"validator", "peer_id", "torii_url"}
+    bindings = []
+    seen_validators = set()
+    seen_peers = set()
+    seen_torii_origins = set()
+    for position, binding in enumerate(value):
+        row_field = f"{field}[{position}]"
+        if not isinstance(binding, dict):
+            fail(f"{row_field} is not an object")
+        if set(binding) != expected_fields:
+            fail(
+                f"{row_field} fields must be exactly "
+                "['peer_id', 'torii_url', 'validator']"
+            )
+        validator = binding["validator"]
+        peer_id = binding["peer_id"]
+        if not isinstance(validator, str) or not validator:
+            fail(f"{row_field}.validator is not a non-empty identity")
+        if validator != validator.strip():
+            fail(f"{row_field}.validator is not canonical")
+        if not isinstance(peer_id, str) or not peer_id:
+            fail(f"{row_field}.peer_id is not a non-empty PeerId")
+        if peer_id != peer_id.strip():
+            fail(f"{row_field}.peer_id is not canonical")
+        torii_origin = canonical_torii_origin(
+            binding["torii_url"], f"{row_field}.torii_url"
+        )
+        if validator in seen_validators:
+            fail(f"{field} contains duplicate validator identities")
+        if peer_id in seen_peers:
+            fail(f"{field} contains duplicate PeerIds")
+        if torii_origin in seen_torii_origins:
+            fail(f"{field} contains duplicate Torii origins")
+        seen_validators.add(validator)
+        seen_peers.add(peer_id)
+        seen_torii_origins.add(torii_origin)
+        bindings.append((validator, peer_id, torii_origin))
+    return tuple(sorted(bindings))
 
 
 node_status = load_json(status_path, "/status")
@@ -2511,6 +2623,16 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
         lane.get("manifest_validators"),
         f"/status.teu_lane_commit lane {lane_id} manifest_validators",
     )
+    bindings = canonical_bindings(
+        lane.get("manifest_validator_bindings"),
+        f"/status.teu_lane_commit lane {lane_id} manifest_validator_bindings",
+    )
+    binding_validators = tuple(sorted(binding[0] for binding in bindings))
+    if roster != binding_validators:
+        fail(
+            f"lane {lane_alias!r} manifest validator roster does not exactly match "
+            "its validator-binding account set"
+        )
     quorum = lane.get("manifest_quorum")
     if roster:
         quorum = require_nonnegative_int(
@@ -2540,6 +2662,7 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
             "lane_id": lane_id,
             "lane_alias": lane_alias,
             "members": roster,
+            "bindings": bindings,
             "quorum": quorum,
         }
     )
@@ -2599,15 +2722,17 @@ for dataspace_alias in physical_dataspace_order:
         )
     else:
         baseline_members = nonempty[0]["members"]
+        baseline_bindings = nonempty[0]["bindings"]
         baseline_quorum = nonempty[0]["quorum"]
         for projection in nonempty[1:]:
             if (
                 projection["members"] != baseline_members
+                or projection["bindings"] != baseline_bindings
                 or projection["quorum"] != baseline_quorum
             ):
                 fail(
                     f"lanes in physical dataspace {dataspace_alias!r} project "
-                    "different validator rosters or quorums"
+                    "different validator rosters, bindings, or quorums"
                 )
         if dataspace_alias == "universal" and (
             len(baseline_members) != global_validator_count
@@ -2620,6 +2745,14 @@ for dataspace_alias in physical_dataspace_order:
         rosters[dataspace_alias] = {
             "source": "lane_manifest",
             "members": list(baseline_members),
+            "bindings": [
+                {
+                    "validator": validator,
+                    "peer_id": peer_id,
+                    "torii_url": torii_url,
+                }
+                for validator, peer_id, torii_url in baseline_bindings
+            ],
             "quorum": baseline_quorum,
             "projected_lanes": sorted(
                 projection["lane_alias"] for projection in lane_projections
@@ -2643,6 +2776,24 @@ for dataspace_alias in physical_dataspace_order:
         )
     seen_manifest_rosters[fingerprint] = dataspace_alias
 
+seen_accounts = {}
+seen_peers = {}
+seen_torii_origins = {}
+for dataspace_alias in physical_dataspace_order:
+    for binding in rosters[dataspace_alias]["bindings"]:
+        for identity_kind, identity, owners in (
+            ("validator account", binding["validator"], seen_accounts),
+            ("PeerId", binding["peer_id"], seen_peers),
+            ("Torii origin", binding["torii_url"], seen_torii_origins),
+        ):
+            previous = owners.get(identity)
+            if previous is not None and previous != dataspace_alias:
+                fail(
+                    f"physical dataspaces {previous!r} and {dataspace_alias!r} reuse "
+                    f"the same manifest {identity_kind} {identity!r}"
+                )
+            owners[identity] = dataspace_alias
+
 print(json.dumps(rosters, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
 PY
 }
@@ -2650,7 +2801,7 @@ PY
 capture_validator_fleet_sample() {
   local records_file status_copy dataspace_summary roster_summary
   local idx label root
-  records_file="$(mktemp)"
+  records_file="$(make_temp_file)"
 
   for idx in "${!VALIDATOR_ROOTS[@]}"; do
     label="${VALIDATOR_LABELS[$idx]}"
@@ -2674,7 +2825,7 @@ capture_validator_fleet_sample() {
       rm -f "$records_file"
       return 1
     fi
-    status_copy="$(mktemp)"
+    status_copy="$(make_temp_file)"
     cp "$last_body" "$status_copy"
 
     if ! check_effective_routing_policy "validator ${label}" "$status_copy"; then
@@ -3389,7 +3540,7 @@ PY
   local public_key="${values[0]}"
   local chain_discriminant="${values[1]}"
   local output_file
-  output_file="$(mktemp)"
+  output_file="$(make_temp_file)"
   "${IROHA_RUNNER[@]}" tools address convert --network-prefix "$chain_discriminant" --format json "$public_key" \
     >"$output_file" 2>&1 || {
     sed -n '1,80p' "$output_file" >&2 || true
@@ -3470,8 +3621,8 @@ run_write_canary() {
   [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   ensure_write_canary_config "$target_url"
 
-  temp_config="$(mktemp)"
-  output_file="$(mktemp)"
+  temp_config="$(make_temp_file)"
+  output_file="$(make_temp_file)"
   trap 'rm -f "${temp_config:-}" "${output_file:-}"; cleanup' EXIT
   status_timeout_ms="$(
     clamp_status_timeout_ms_to_rollout_deadline "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"

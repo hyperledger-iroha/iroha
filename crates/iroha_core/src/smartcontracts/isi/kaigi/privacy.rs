@@ -10,15 +10,14 @@ use crate::state::StateTransaction;
 use crate::zk;
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-use iroha_data_model::{
-    confidential::ConfidentialStatus,
-    proof::{ProofBox, VerifyingKeyId},
-    zk::{BackendTag, OpenVerifyEnvelope},
-};
 use iroha_data_model::{
     kaigi::{KaigiParticipantCommitment, KaigiParticipantNullifier},
     prelude::AccountId,
+};
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+use iroha_data_model::{
+    proof::{ProofBox, VerifyingKeyId},
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_schema::Ident;
@@ -369,7 +368,7 @@ fn verify_with_config(
     let Some(record) = state_transaction.world.verifying_keys.get(&vk_id) else {
         return Err(privacy_error(format!("{purpose} verifier not registered")));
     };
-    if record.status != ConfidentialStatus::Active {
+    if !record.is_active_at(state_transaction.block_height()) {
         return Err(privacy_error(format!("{purpose} verifier is not active")));
     }
     if record.gas_schedule_id.is_none() {

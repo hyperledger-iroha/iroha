@@ -11,17 +11,20 @@ The first-release target is therefore conditional:
 > the decision and activates its successor height.
 
 This remains the conditional revision-4 protocol target and paper argument.
-The true completion flag belongs to the legacy/revision-3-rooted deductive
-ledger and does not replace the separate revision-4 TLC/mutation corridor or
-fresh same-source release evidence.
+The checked-in `machine_checked_completion: true` flag belongs to the
+legacy/revision-3-rooted deductive ledger. That status declaration is not proof
+evidence and does not replace the separate revision-4 exact-cardinality
+TLAPS/TLC/mutation corridor; the claim remains open until fresh same-source
+formal, cross-tool, trace, and release-receipt evidence validates one immutable
+candidate.
 
 The runtime premise is per validator. Each non-crashing responsive validator
 in the active-height or exact historical-recovery corridor must have an
 advancing local monotonic clock, regain its serialized height-runner turn after
 each finite wait within the declared service bound, and finish admitted local
 work within its declared bound. The formal service-deadline vector is ghost
-bookkeeping for that trusted premise, not shared production state. Source
-fidelity seals the narrower implementation facts: the height loop is
+bookkeeping for that trusted premise, not shared production state. Current
+structural source checks bind the narrower implementation facts: the height loop is
 serialized, completion/ingress/runtime/sidecar work is serviced in finite
 batches, the watchdog is polled on every loop edge, and idle/continue paths use
 the finite 10 ms `IDLE_POLL`. Those checks do not prove host scheduling or I/O
@@ -1155,6 +1158,11 @@ height.
 
 The following focused checks were recorded through 2026-07-18:
 
+All pass and count statements in this section are historical mutable-tree
+checkpoints unless they explicitly name the final immutable candidate. A later
+reference to the "current" tree means the tree at that checkpoint, not the
+present mutable checkout.
+
 - all 248 `iroha_p2p` library tests, including bounded plaintext retention,
   cancellation-safe flush, read/write arbitration, and direct-post exhaustion;
 - all 19 fair outer-ingress tests;
@@ -1309,8 +1317,10 @@ Three Kura recovery regressions and the governance-unlock audit bring the 861-
 test, 41-module checkpoint. The production-adapter activation guard and two
 deferred-canonical-carrier completion regressions produced the historical
 864-test, 41-module checkpoint. Retiring the duplicate inline network-simulation
-rows brings the current
-source-bound inventory to 857 exact tests across 40 modules and 89 pre-network
+rows brings the historical 856-test, 40-module checkpoint. The exact retired-
+attempt accessor, mixed-carrier successor, two-link cold-restart hydration, and
+noncanonical autonomous-output retirement regressions bring the current
+source-bound inventory to 860 exact tests across 40 modules and 88 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1319,10 +1329,10 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433`.
-Ten of those legs execute the separate 532-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 533 TSV lines and has SHA-256
-`f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431`.
+`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
+Nine of those legs execute the separate 527-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 528 TSV lines and has SHA-256
+`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
 The 321-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
@@ -1566,10 +1576,10 @@ authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-89 legs, including the governance-unlock audit module, the autonomous
+88 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
-contracts, ten G-UNIT execution-receipt legs, the source-attested Native AMX
+contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, plus source-sealed workspace
 formatting, the legacy-codec guard, workspace
@@ -1579,7 +1589,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 857-test inventory is a mechanically checked
+The current 860-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1628,10 +1638,13 @@ terminating local work, fail-closed completion classification, certified-store
 waiting, retry, and delivery. Its 15,472 generated / 5,910 distinct-state TLC
 search is green to depth 15. Paired mutations expose reload-per-view,
 no-retry-after-store, and future-completion bugs; these are bounded regression
-witnesses, not deductive proof. The model and production-refinement targets are
-promoted in the checked-in legacy ledger, but release still requires their
-fresh exact-source TLAPS, Verus, and derived cross-tool evidence. Two
-production regressions additionally reject an
+witnesses, not deductive proof. The ledger now precommits
+`effective-lock-body-acquisition-model` as `tlaps_proved` and
+`effective-lock-body-acquisition-production-refinement` as
+`cross_tool_proved`. Those declarations are not current proof evidence; the
+release wave must still validate strict TLAPS, pinned Verus, and derived
+cross-tool evidence against one immutable candidate. Two production
+regressions additionally reject an
 unissued future completion without replacing its owner and preserve the latest
 consumer while a missing body waits for durable recovery and retries.
 
@@ -1775,9 +1788,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 857 exact production
+Before those longer scenarios, the PR gate inventories 860 exact production
 liveness tests and executes all 40 owning Rust modules serially. The release
-profile additionally records ten G-UNIT legs executing a separate 532-test
+profile additionally records nine G-UNIT legs executing a separate 527-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1941,8 +1954,12 @@ legs. Three Kura recovery regressions and the governance-unlock audit bring the
 861-test checkpoint across 41 modules and 89 legs. The production-adapter
 activation guard and two deferred-canonical-carrier completion regressions
 produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
-of the duplicate inline network-simulation rows, the current inventory contains
-857 tests across 40 modules and 89 legs.
+of the duplicate inline network-simulation rows, the historical inventory
+contained 856 tests across 40 modules and 89 legs. The four exact retired-
+attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
+regressions bring the current inventory to 860 tests across those 40 modules.
+Removing the obsolete MKHE lifecycle G-UNIT leg leaves the current corridor at
+88 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1970,11 +1987,11 @@ geometry. Request gates form the second bounded responder table. Crash recovery
 restores exactly those bounds from the marker-selected V3 snapshot.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
-unbounded broadcast admission. The integration filter remains a five-test
+unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 89-leg, 857-production-test corridor plus 532 G-UNIT tests; execution
+audited 88-leg, 860-production-test corridor plus 527 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2249,6 +2266,8 @@ invocation passes those protected paths and digests explicitly, for example:
   --expected-receipt-validator-support-sha256 <sha256> \
   --runtime-helper /protected/copy_sumeragi_v2_release_cargo_cache.py \
   --expected-runtime-helper-sha256 <sha256> \
+  --runtime-helper-cli /protected/copy_sumeragi_v2_release_cargo_cache_cli.py \
+  --expected-runtime-helper-cli-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
@@ -2306,8 +2325,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 89 pre-network corridor legs and
-their exact 857-test production inventory, the separate 532-test G-UNIT
+receipt binds the 88 pre-network corridor legs and
+their exact 860-test production inventory, the separate 527-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,
@@ -2366,8 +2385,9 @@ checks. Durability also assumes the host filesystem and storage honor POSIX
 `fsync`. These limitations are recorded in the bootstrap marker rather than
 being hidden behind a cooperative-receipt claim.
 
-The release command is intentionally fail-closed while
-`formal/sumeragi_v2/proof_coverage.json` contains any
-`specified_unproved` obligation or reports
-`machine_checked_completion: false`. Bounded TLC searches and convincing paper
-arguments do not upgrade that ledger state.
+The release command remains fail-closed until the required same-candidate
+evidence supports every precommitted status and the aggregate proof checker
+accepts it. It also rejects a ledger containing any `specified_unproved`
+obligation or reporting `machine_checked_completion: false`. Bounded TLC
+searches, source binding, and convincing paper arguments do not substitute for
+that evidence.

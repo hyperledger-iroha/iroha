@@ -1,0 +1,7 @@
+
+        seiyaku StateAllocation {
+            state StateMap<int, int> values;
+            fn id(int x) -> int { return x; }
+            view fn main() -> int { return id(42); }
+        }
+    

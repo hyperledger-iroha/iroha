@@ -324,7 +324,16 @@ fn ed25519_verify_instruction() {
         result_reg: 0,
     };
     vm.execute_instruction(instr).unwrap();
-    assert_eq!(vm.register(0), 1);
+    assert_eq!(vm.register(0), 0, "r0 must remain hardwired to zero");
+    let instr = ivm::simple_instruction::Instruction::Ed25519Verify {
+        pubkey_addr: base,
+        sig_addr: base + 32,
+        msg_addr: base + 96,
+        msg_len: msg.len() as u64,
+        result_reg: 2,
+    };
+    vm.execute_instruction(instr).unwrap();
+    assert_eq!(vm.register(2), 1);
     // tamper message
     vm.memory.store_u8(base + 96, 0xFF).unwrap();
     let instr2 = ivm::simple_instruction::Instruction::Ed25519Verify {
@@ -336,6 +345,44 @@ fn ed25519_verify_instruction() {
     };
     vm.execute_instruction(instr2).unwrap();
     assert_eq!(vm.register(1), 0);
+}
+#[test]
+fn ed25519_r0_result_matches_sequential_and_parallel_execution() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use ivm::simple_instruction::Instruction;
+    let keypair = SigningKey::from_bytes(&[0x24; 32]);
+    let msg = b"parallel-r0";
+    let sig = keypair.sign(msg);
+    let pubkey = keypair.verifying_key();
+    let base = Memory::HEAP_START;
+    let make_vm = || {
+        let mut vm = IVM::new(u64::MAX);
+        vm.memory.store_bytes(base, pubkey.as_bytes()).unwrap();
+        vm.memory
+            .store_bytes(base + 32, sig.to_bytes().as_slice())
+            .unwrap();
+        vm.memory.store_bytes(base + 96, msg).unwrap();
+        vm.set_register(50, 2);
+        vm.set_register(51, 3);
+        vm
+    };
+    let verify = Instruction::Ed25519Verify {
+        pubkey_addr: base,
+        sig_addr: base + 32,
+        msg_addr: base + 96,
+        msg_len: msg.len() as u64,
+        result_reg: 0,
+    };
+    let mut sequential = make_vm();
+    sequential.execute_instruction(verify).unwrap();
+    let mut parallel = make_vm();
+    let mut block = vec![verify];
+    for rd in 100_u16..115 {
+        block.push(Instruction::Add { rd, rs: 50, rt: 51 });
+    }
+    parallel.execute_block_parallel(&block).unwrap();
+    assert_eq!(sequential.register(0), 0);
+    assert_eq!(parallel.register(0), sequential.register(0));
 }
 #[test]
 fn dilithium_verify_instruction() {
@@ -360,7 +407,17 @@ fn dilithium_verify_instruction() {
         result_reg: 0,
     };
     vm.execute_instruction(instr).unwrap();
-    assert_eq!(vm.register(0), 1);
+    assert_eq!(vm.register(0), 0, "r0 must remain hardwired to zero");
+    let instr = ivm::simple_instruction::Instruction::DilithiumVerify {
+        level: 2,
+        pubkey_addr: base,
+        sig_addr: base + dilithium2::public_key_bytes() as u64,
+        msg_addr: base + 4096,
+        msg_len: msg.len() as u64,
+        result_reg: 2,
+    };
+    vm.execute_instruction(instr).unwrap();
+    assert_eq!(vm.register(2), 1);
     // tamper message
     vm.memory.store_u8(base + 4096, 0xFF).unwrap();
     let instr2 = ivm::simple_instruction::Instruction::DilithiumVerify {

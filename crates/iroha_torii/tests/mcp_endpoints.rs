@@ -302,6 +302,149 @@ fn assert_tool_error(response: &Value, context: &str) {
         "{context}: expected MCP tool error, got {response:?}"
     );
 }
+
+#[derive(Clone, Copy)]
+enum McpAliasDispatchArguments {
+    InvalidAccountId,
+    InvalidHash,
+    InvalidTransactionHash,
+    InvalidAssetId,
+    InvalidNftId,
+    InvalidRwaId,
+    InvalidDomainId,
+    InvalidSubscriptionId,
+    InvalidDefinitionId,
+    LimitTwo,
+    PageOne,
+}
+impl McpAliasDispatchArguments {
+    fn into_json(self) -> Value {
+        match self {
+            Self::InvalidAccountId => norito::json!({"account_id": "not-an-account-id"}),
+            Self::InvalidHash => norito::json!({"hash": "not-a-hash"}),
+            Self::InvalidTransactionHash => {
+                norito::json!({"transaction_hash": "not-a-hash"})
+            }
+            Self::InvalidAssetId => norito::json!({"asset_id": "not-an-asset-id"}),
+            Self::InvalidNftId => norito::json!({"nft_id": "not-an-nft-id"}),
+            Self::InvalidRwaId => norito::json!({"rwa_id": "not-a-rwa-id"}),
+            Self::InvalidDomainId => norito::json!({"domain_id": "not-a-domain-id"}),
+            Self::InvalidSubscriptionId => {
+                norito::json!({"subscription_id": "not-a-subscription-id"})
+            }
+            Self::InvalidDefinitionId => {
+                norito::json!({"definition_id": "not-a-definition-id"})
+            }
+            Self::LimitTwo => norito::json!({"limit": 2}),
+            Self::PageOne => norito::json!({"page": 1}),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum McpAliasDispatchExpectation {
+    ToolError {
+        context: &'static str,
+        status_context: &'static str,
+    },
+    Success {
+        context: &'static str,
+    },
+}
+#[derive(Clone, Copy)]
+struct McpAliasDispatchCase {
+    request_id: u64,
+    tool_name: &'static str,
+    arguments: McpAliasDispatchArguments,
+    expectation: McpAliasDispatchExpectation,
+}
+async fn assert_mcp_alias_dispatch(case: McpAliasDispatchCase) {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let app = build_router(cfg);
+    let arguments = case.arguments.into_json();
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": case.request_id,
+            "method": "tools/call",
+            "params": {
+                "name": case.tool_name,
+                "arguments": arguments
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    match case.expectation {
+        McpAliasDispatchExpectation::ToolError {
+            context,
+            status_context,
+        } => {
+            assert!(tool_is_error(&call), "{context}");
+            let structured = structured_content(&call);
+            assert!(
+                structured
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|status| status >= 400),
+                "{status_context}"
+            );
+        }
+        McpAliasDispatchExpectation::Success { context } => {
+            assert!(!tool_is_error(&call), "{context}");
+            let structured = structured_content(&call);
+            assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+        }
+    }
+}
+macro_rules! mcp_alias_dispatch_test {
+    (
+        $(#[$attribute:meta])*
+        async fn $name:ident => error(
+            $request_id:literal,
+            $tool_name:literal,
+            $arguments:ident,
+            $context:literal,
+            $status_context:literal $(,)?
+        )
+    ) => {
+        $(#[$attribute])*
+        async fn $name() {
+            assert_mcp_alias_dispatch(McpAliasDispatchCase {
+                request_id: $request_id,
+                tool_name: $tool_name,
+                arguments: McpAliasDispatchArguments::$arguments,
+                expectation: McpAliasDispatchExpectation::ToolError {
+                    context: $context,
+                    status_context: $status_context,
+                },
+            })
+            .await;
+        }
+    };
+    (
+        $(#[$attribute:meta])*
+        async fn $name:ident => success(
+            $request_id:literal,
+            $tool_name:literal,
+            $arguments:ident,
+            $context:literal $(,)?
+        )
+    ) => {
+        $(#[$attribute])*
+        async fn $name() {
+            assert_mcp_alias_dispatch(McpAliasDispatchCase {
+                request_id: $request_id,
+                tool_name: $tool_name,
+                arguments: McpAliasDispatchArguments::$arguments,
+                expectation: McpAliasDispatchExpectation::Success { context: $context },
+            })
+            .await;
+        }
+    };
+}
 fn enable_writer_mcp(cfg: &mut iroha_config::parameters::actual::Root) {
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
@@ -2866,75 +3009,25 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1051,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.get",
-                "arguments": {
-                    "account_id": "not-an-account-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id => error(
+        1051,
+        "iroha.accounts.get",
+        InvalidAccountId,
+        "invalid account id should be marked as MCP tool error for account detail alias",
+        "expected invalid account id to be rejected by explorer account detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid account id should be marked as MCP tool error for account detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid account id to be rejected by explorer account detail alias"
-    );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1052,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.qr",
-                "arguments": {
-                    "account_id": "not-an-account-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id => error(
+        1052,
+        "iroha.accounts.qr",
+        InvalidAccountId,
+        "invalid account id should be marked as MCP tool error for account QR alias",
+        "expected invalid account id to be rejected by explorer account QR alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid account id should be marked as MCP tool error for account QR alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid account id to be rejected by explorer account QR alias"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query() {
@@ -2973,75 +3066,25 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query()
         "expected invalid transaction hash query to be rejected"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1061,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.status",
-                "arguments": {
-                    "hash": "not-a-hash"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash => error(
+        1061,
+        "iroha.transactions.status",
+        InvalidHash,
+        "invalid flat hash should be marked as MCP tool error",
+        "expected invalid flat hash to be rejected",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid flat hash should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid flat hash to be rejected"
-    );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10616,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.status",
-                "arguments": {
-                    "transaction_hash": "not-a-hash"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias => error(
+        10616,
+        "iroha.transactions.status",
+        InvalidTransactionHash,
+        "invalid transaction_hash alias should be marked as MCP tool error",
+        "expected invalid transaction_hash alias to be rejected",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid transaction_hash alias should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid transaction_hash alias to be rejected"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash() {
@@ -3120,69 +3163,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_trans
         "expected invalid query.transaction_hash alias to be rejected by transaction wait alias"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10611,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query_fields => success(
+        10611,
+        "iroha.transactions.list",
+        LimitTwo,
+        "transactions list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "transactions list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10612,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.get",
-                "arguments": {
-                    "hash": "not-a-hash"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash => error(
+        10612,
+        "iroha.transactions.get",
+        InvalidHash,
+        "invalid hash should be marked as MCP tool error for transaction detail alias",
+        "expected invalid transaction hash to be rejected by explorer detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid hash should be marked as MCP tool error for transaction detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid transaction hash to be rejected by explorer detail alias"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transaction_hash_alias() {
@@ -3221,34 +3219,14 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transa
         "expected invalid nested transaction_hash alias to be rejected by explorer detail alias"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10613,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.instructions.list",
-                "arguments": {
-                    "page": 1
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields => success(
+        10613,
+        "iroha.instructions.list",
+        PageOne,
+        "instructions list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "instructions list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_and_index() {
@@ -3360,69 +3338,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transa
         "expected invalid nested transaction_hash alias to be rejected by instruction detail alias"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106151,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.list",
-                "arguments": {
-                    "page": 1
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_fields => success(
+        106151,
+        "iroha.assets.list",
+        PageOne,
+        "assets list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "assets list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106152,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.get",
-                "arguments": {
-                    "asset_id": "not-an-asset-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id => error(
+        106152,
+        "iroha.assets.get",
+        InvalidAssetId,
+        "invalid asset id should be marked as MCP tool error for asset detail alias",
+        "expected invalid asset id to be rejected by explorer asset detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid asset id should be marked as MCP tool error for asset detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid asset id to be rejected by explorer asset detail alias"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
@@ -3463,98 +3396,33 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
         );
     }
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106153,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.list",
-                "arguments": {
-                    "page": 1
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields => success(
+        106153,
+        "iroha.nfts.list",
+        PageOne,
+        "nfts list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "nfts list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106154,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.get",
-                "arguments": {
-                    "nft_id": "not-an-nft-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id => error(
+        106154,
+        "iroha.nfts.get",
+        InvalidNftId,
+        "invalid nft id should be marked as MCP tool error for nft detail alias",
+        "expected invalid nft id to be rejected by explorer nft detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid nft id should be marked as MCP tool error for nft detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid nft id to be rejected by explorer nft detail alias"
-    );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106155,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.query",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fields => success(
+        106155,
+        "iroha.nfts.query",
+        LimitTwo,
+        "nfts query alias with flat envelope fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "nfts query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
@@ -3595,127 +3463,42 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
         );
     }
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106157,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.list",
-                "arguments": {
-                    "page": 1
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields => success(
+        106157,
+        "iroha.rwas.list",
+        PageOne,
+        "rwas list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "rwas list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106158,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.get",
-                "arguments": {
-                    "rwa_id": "not-a-rwa-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id => error(
+        106158,
+        "iroha.rwas.get",
+        InvalidRwaId,
+        "invalid rwa id should be marked as MCP tool error for rwa detail alias",
+        "expected invalid rwa id to be rejected by explorer rwa detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid rwa id should be marked as MCP tool error for rwa detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid rwa id to be rejected by explorer rwa detail alias"
-    );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106159,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.query",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields => success(
+        106159,
+        "iroha.rwas.query",
+        LimitTwo,
+        "rwas query alias with flat envelope fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "rwas query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10616,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.blocks.list",
-                "arguments": {
-                    "page": 1
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields => success(
+        10616,
+        "iroha.blocks.list",
+        PageOne,
+        "blocks list alias with flat query fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "blocks list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
@@ -4080,69 +3863,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
         "expected invalid flat domain-list limit to be rejected"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062221,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.domains.get",
-                "arguments": {
-                    "domain_id": "not-a-domain-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id => error(
+        1062221,
+        "iroha.domains.get",
+        InvalidDomainId,
+        "invalid domain id should be marked as MCP tool error for domain detail alias",
+        "expected invalid domain id to be rejected by explorer domain detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid domain id should be marked as MCP tool error for domain detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid domain id to be rejected by explorer domain detail alias"
-    );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106223,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.domains.query",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_fields => success(
+        106223,
+        "iroha.domains.query",
+        LimitTwo,
+        "domains query alias with flat envelope fields should dispatch successfully",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "domains query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {

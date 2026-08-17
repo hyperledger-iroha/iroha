@@ -4087,5 +4087,8 @@ pub mod prelude {
     };
 }
 #[cfg(test)]
+#[path = "shared_test_helpers.rs"]
+mod test_support;
+#[cfg(test)]
 #[path = "instruction_enum_tests.rs"]
 mod tests;

@@ -50,81 +50,57 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
-As of 2026-08-16, the current mutable-tree source-budget checker inspects 8,061
-paths with 195 exceptions and counts 5,013,832 Rust lines with zero findings.
-That leaves 771 lines of ratchet headroom, 453,296 lines to the objective, and
-221 lines of reserve beyond the required 550; it is not an immutable-candidate
-receipt.
+## 2026-08-17 mutable-development closure snapshot
 
-## 2026-08-15 historical merge-audit snapshot
-
-- This dated snapshot is retained as historical evidence; it is not the current
-  workspace identity or budget receipt. The checkout was an uncommitted merge
-  with `HEAD`
-  `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
-  `51deea83409635f99ce2fcbb6a983b7cca18b99b`, not a signed immutable
-  candidate. Historical snapshots below are not current receipts.
-- The immutable source-budget baseline, active ratchet, and objective remain
-  5,067,263, 5,014,603, and 4,560,536 Rust lines, with at least 550 lines of
-  required headroom. That historical snapshot's exact check inspected 8,031 paths
-  with 197 exceptions and counted 5,014,041 Rust lines with zero findings,
-  leaving 562 lines of headroom and 453,505 lines to the objective. The log is
-  `/private/tmp/iroha-source-budget-final-after-fmt.log`, SHA-256
-  `46c4d7306136e3d5898fd1fb23eee79cf1e17e916b9be5c391c61c3db4277955`.
-- Focused, authoritative formal, and workspace-wide validation remain pending.
-  The proof ledger remains at 35 `tlaps_proved`, 12 `specified_unproved`, 6
-  `trusted_contract`, and 1 `out_of_scope`, with
-  `machine_checked_completion: false`; this static budget receipt does not
-  promote any formal or release gate.
-
-## 2026-08-14 mutable-development closure snapshot
-
-- The bound inventory contains exactly 857 production tests across 40 modules,
-  including 438 source-sealed ownership/regression names, plus 532 G-UNIT
-  tests and 56 grouped Native negative controls. Its source-sealed pre-network
-  corridor contains 89 legs. These are source counts, not claims that any suite
-  was executed for this reconciliation.
+- The active unsigned merge is `HEAD`
+  `80b8ba29f9f2e00d9427836a83dd2cd195d9df28` plus `MERGE_HEAD`
+  `51ae280e84766425ceed48c0e96974f5cf79dd29`. It has zero unmerged entries,
+  but 784 status entries remain: 767 staged, 34 unstaged, nine untracked, and
+  26 both staged and unstaged. The branch is ahead one and behind three. This
+  is not an immutable candidate.
+- The bound static inventory passes with exactly 88 corridor legs, 860/860
+  production tests across 40 modules, 527/527 G-UNIT rows, and four mandatory
+  G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
+  enumerates 1,399 grouped and 1,401 diagnostics paths at the exact hashes in
+  the owning corpus and `G-SDK` rows below. These are source inventories, not
+  execution receipts.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
-  former lifecycle-cursor and SafetyWal filesystem-identity markers are gone:
-  the production runner now consumes a move-only authority minted from Kura's
-  retained opened store-root handle, with descriptor-relative no-follow
-  traversal and exact live-Kura identity rechecks. Signed lifecycle bootstrap,
-  generation takeover, Queue snapshot recovery, local Kura rehydration, drain
-  queue installation, and one-shot activation revalidation are present in the
-  production startup path. The crate-internal `LifecycleCoordinator` and
-  `LifecycleLedgerV1` now own ordinary and recovered production heights,
-  including durable selection, launch, completion, finalization, cleanup,
-  restart, and exact successor handoff.
-- The schema-5 formal registry names all 27 production actions, and the
-  structural production-trace extraction reports no open action name. This is
-  a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
-  mutation, or cross-tool certificate is claimed.
-- That historical checker snapshot inspected 8,029 paths with 198 exceptions
-  and counted 5,022,733 Rust lines. It exceeded the active 5,014,603-line
-  ratchet by 8,130 lines, so it was not a source-budget pass or a current
-  receipt; the current exact result is recorded above. The reduction objective
-  and immutable-candidate evidence remain Open.
-  The reviewed Rust include topology contains 48 parents and 296 direct entries;
-  its canonical payload SHA-256 is
-  `df2fe00c80e0b300bee7e044451f4d7a8f0f893cb4a130e582a19ba8547a6402`.
-  The SDK closure resolver and complete transitive manifests are mutable
-  development inputs, not release evidence.
-- Typed status/diagnostics SDK surfaces, including the browser JavaScript
-  distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. The SoraFS orderbook JavaScript declaration,
-  implementation, and standalone Python module are tracked. The recursive
-  resolver currently enumerates exactly 1,399 grouped and 1,401 diagnostics
-  records. The canonical suite-source hashes are recorded with the owning
-  corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
-  Diagnostics suite counts are Rust 14, Python 129, JavaScript 88, Swift 34,
-  Kotlin 43, and Java 42. Rust's source-separated client controls reject both
-  complete endpoint-payload swaps without changing its 14-test count; the
-  Swift/Kotlin/Java wire suites are diagnostics-runner/receipt-bound. Those are
-  source-inventory facts, not SDK execution. The five checked-in OpenAPI
-  artifacts are dirty and unsigned. Exact-five replay is source- and
-  receipt-bound to the protected schema-v3 OpenAPI Node closure, but
-  immutable-candidate execution evidence remains Open, so SDK and wire closure
-  is not claimed.
+  crate-internal lifecycle owner covers durable selection, launch, completion,
+  finalization, cleanup, restart, and exact successor handoff. Both reproduced
+  clean-`d24` failures are closed in current source: QueuePlan admission is
+  atomically global and merge-ledger epoch remains independent of membership
+  epoch. Three focused regressions pass, and the distinct bounded Kura-backed
+  tag-21 leader handoff is independently audited. A fresh exact four-peer run
+  against this merge is still absent.
+- The macOS framework-Python archive path now authenticates and bounds its
+  Mach-O inputs and Apple tools, rewrites exactly two framework dependencies,
+  ad-hoc signs and verifies the derived binaries, and carries exact source,
+  derived, mode, dependency, tool, and inventory evidence through bootstrap,
+  validation, receipts, and the outer runner. The 17 relocation cases, seven
+  validator cases, two receipt cases, exact bootstrap launch, and general
+  runtime populate/verify path pass on frozen bytes; an independent audit is
+  clear. These focused local results are not a signed release archive.
+- The schema-5 formal registry still names all 27 production actions, and the
+  structural production-trace extraction reports no open action name. The
+  checked-in legacy/revision-3-rooted proof ledger declares 44 `tlaps_proved`,
+  3 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+  `out_of_scope`, with `machine_checked_completion: true`. Those declarations
+  are release-proof inputs, not deductive revision-4 evidence. No current full
+  Cargo, TLC, Apalache, TLAPS, Verus, network, trace-replay, cross-tool
+  certificate, or immutable-candidate result is claimed.
+- The source-file gate checks 7,940 paths with 193 exact exceptions and
+  4,825,646 Rust lines, with zero findings. The configuration retains the
+  5,067,263-line baseline, 5,014,603-line ratchet, 4,540,000 hard ceiling, and
+  4,500,000 working target. Ratchet headroom is 188,957 lines, but the hard
+  objective remains open by 285,646 lines. Worktree and combined-`HEAD` diff
+  checks pass; cached-only checking is blocked solely by the stale staged blank
+  EOF in `scripts/check_kagemusha_production_ios_evidence.py`.
+- Nine required companion sources remain untracked: two offline-ISI fragments,
+  the telemetry macro and data-model constants fragments, the framework-Python
+  CLI and focused test, and three deploy-reset authority test/support modules.
+  They must be included by the authorized staging actor. The five checked-in
+  OpenAPI artifacts remain dirty and unsigned, and immutable-candidate SDK and
+  wire evidence remains Open.
 
 Every Evidence field and every `G-*` execution or release gate therefore
 remains Open. These source-consistency documentation updates do not promote the
@@ -834,7 +810,7 @@ Historical same-day isolated Rust 1.93.1 locked/offline slices passed the 18
 exact Kura replica tests and four exact configuration tests. The mutable
 focused inventory still names those tests, but this reconciliation makes no
 immutable-candidate execution claim for them or for a multi-peer body-pruning
-corridor. Those focused runs and source anchors are not the complete 532-test `G-UNIT` receipt,
+corridor. Those focused runs and source anchors are not the complete 527-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -1281,7 +1257,7 @@ historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. The mutable
 focused inventory still names those 12 tests, but this reconciliation makes no
-immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 532-test `G-UNIT` receipt,
+immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 527-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 The source-bound focused inventory binds the runner startup order directly and
@@ -1753,9 +1729,9 @@ The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 contains exactly 1,399 grouped and 1,401 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-`679a616a60b840b8cec95abad5b1232a948970d140547b3c43c50e7cce0c3843`
+`c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
 and
-`e50abe9808aeee1a7de6e3431b32f1237e3c265c0deb4857cf222fac17cfd176`.
+`e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`.
 The checked-in grouped fixture has SHA-256
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1825,9 +1801,10 @@ The receipt-required
 `merge_share_transport_rejects_omission_nonleader_body_and_legacy_version`
 regression rejects a legacy merge-share version while leaving the signing guard
 unauthorized. It replaced one required release-corridor selector without changing
-the then-current count; the autonomous-retirement regression added here raises
-the current production inventory to 857 tests while the G-UNIT inventory remains
-532 tests. Source binding is not an execution receipt.
+the then-current count; the autonomous-retirement regression added here raised
+that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
+cold-restart rows bring the current production inventory to 860 tests while
+the G-UNIT inventory contains 527 tests. Source binding is not an execution receipt.
 `KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
 configures and validates TTL, refresh cadence, evictable window, replica floor,
 and checked registry geometry. The direct authenticated ingress and the exact
@@ -1893,7 +1870,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 857 tests across 40 modules, including 438
+inventory contains exactly 860 tests across 40 modules, including 441
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1901,22 +1878,22 @@ The seven additional Native AMX regressions bind finality-aware merge
 projection across canonical ordering, multi-height and same-height identity
 conflicts, coordinator-only receipts, route conflicts, duplicate sources, and
 decoded replay. The focused source inventory is now internally consistent. The
-ten arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 532 unique required
-tests: 321 core, 143 queue-journal, 13 configuration, eight data-model, five
-iroha_zkp_halo2, 39 Torii, one Torii-shared, and two integration. The runner and
+nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 527 unique required
+tests: 321 core, 143 queue-journal, 13 configuration, eight data-model,
+39 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-532-row shape, including grouped Native prevote-budget rejection before
+527-row shape, including grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
 checked snapshot replay file/owner sealing, exact QueuePlan obligation
 authentication, ApplyCarrier authorization, and canonical historical
-autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `532/532` source consistency and also source-
-bind the synchronized 55-control grouped corpus. The planned-
+autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `527/527` source consistency and also source-
+bind the synchronized 56-control grouped corpus. The planned-
 association Rust coverage described under `ML-NAT-06` is present in the focused
 source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
 diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
-source tests outside the 532 G-UNIT count.
+source tests outside the 527 G-UNIT count.
 
 On 2026-07-31, pinned Rust 1.93.1 locked/offline execution from isolated source
 `/tmp/iroha-kura-final3.dvOYAN` and isolated target
@@ -1927,9 +1904,9 @@ repair, Native post-WSV retention, and authenticated geometry refresh. That
 checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
-execution of all 532 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 857 production, 532 G-UNIT,
-and 55-control counts are mutable-development source inventory only. `G-UNIT`
+execution of all 527 required tests. This reconciliation claims no immutable-
+candidate Cargo run or full matrix execution: the 860 production, 527 G-UNIT,
+and 56-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
 
@@ -2053,9 +2030,9 @@ grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
 mutable-tree closure contains exactly 1,399 grouped and 1,401 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-`679a616a60b840b8cec95abad5b1232a948970d140547b3c43c50e7cce0c3843`
+`c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
 and
-`e50abe9808aeee1a7de6e3431b32f1237e3c265c0deb4857cf222fac17cfd176`.
+`e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`.
 The current grouped JSON and wire TSV SHA-256 values are
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`
 and
@@ -2153,12 +2130,12 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 857-production-test,
-  532-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 860-production-test,
+  527-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
   substitute for a complete SDK harness, formal-engine result, or network
-  receipt; no complete 532-test execution from an immutable candidate is
+  receipt; no complete 527-test execution from an immutable candidate is
   claimed by this reconciliation.
 
 ### Explicitly out of scope
@@ -2227,6 +2204,17 @@ marker must be classified here before release.
   remains for that mapping. Its fresh strict TLAPS, Verus, and derived
   cross-tool evidence are generic release gates, not multilane identities or
   substitutes for lane-specific safety/evidence rows.
+- **Generic causal-scheduler projection and liveness:** production now contains
+  `ProductionEffectToCandidateTraceProjection`,
+  `check_production_effect_to_candidate_transition`,
+  `production_effect_to_candidate_trace_refines_async_ownership`, and the
+  `production_fresh_causal_successors` sequence lemmas. The source-only
+  causal-FIFO seam check passes. This establishes source binding only: it is not
+  pinned Verus, TLAPS, or derived cross-tool evidence and does not discharge
+  Completion-capacity temporal liveness. The generic scheduler refinement does
+  not model lane reservations, autonomous merge carriers, Native participant
+  evidence, autoscale, drain, or retirement and remains outside this multilane
+  ledger.
 - **Unrelated source markers:** the TODOs in
   `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
   implementation, and `crates/ivm/build.rs` concern privacy-engine activation,

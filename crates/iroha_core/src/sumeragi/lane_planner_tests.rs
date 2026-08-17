@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32};
+    use super::*;
     use iroha_config::parameters::actual::{
         LaneConfig as ActualLaneConfig, LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -12,7 +12,7 @@ mod tests {
             LaneCatalog, LaneConfig, LaneId,
         },
     };
-    use super::*;
+    use std::{collections::BTreeMap, num::NonZeroU32};
     fn routing_for_lanes(lanes: &[u32]) -> Vec<RoutingDecision> {
         lanes
             .iter()
@@ -2091,6 +2091,37 @@ mod tests {
                 ..
             } if lane_id == LaneId::new(1) && actual == actual_proposal
         ));
+    }
+    #[test]
+    fn lane_block_vote_plan_rejects_incarnation_drift() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(3),
+        );
+        let signer = proposal.block_descriptor.validator_set[0].clone();
+
+        let mut descriptor_drift = proposal.clone();
+        descriptor_drift.block_descriptor.lane_incarnation =
+            Hash::new(b"forged descriptor lane incarnation");
+        refresh_lane_block_proposal_hashes(&mut descriptor_drift);
+        assert_eq!(
+            plan_lane_block_vote(&descriptor_drift, CertPhase::Prepare, &signer),
+            Err(LaneBlockVotePlanError::InconsistentProposal {
+                lane_id: LaneId::new(1),
+            }),
+            "a rehashed descriptor must not escape its subject incarnation namespace"
+        );
+
+        let mut ownership_drift = proposal;
+        ownership_drift.ownership.lane_incarnation =
+            Hash::new(b"forged ownership lane incarnation");
+        assert_eq!(
+            plan_lane_block_vote(&ownership_drift, CertPhase::Prepare, &signer),
+            Err(LaneBlockVotePlanError::InconsistentProposal {
+                lane_id: LaneId::new(1),
+            }),
+            "vote planning must bind ownership to the subject incarnation"
+        );
     }
     #[test]
     fn lane_block_vote_plan_rejects_tampered_public_artifact() {

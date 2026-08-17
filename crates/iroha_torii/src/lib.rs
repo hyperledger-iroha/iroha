@@ -10997,204 +10997,77 @@ async fn handler_contracts_rollups_trader_account_get(
     .await
     .map(IntoResponse::into_response)
 }
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_intents_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-intents");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_intents_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
+macro_rules! contracts_rollup_event_get_handlers {
+    ($(($handler:ident, $routing_handler:ident, $key_hint:literal)),+ $(,)?) => {
+        $(
+            #[cfg(feature = "app_api")]
+            async fn $handler(
+                State(app): State<SharedAppState>,
+                headers: axum::http::HeaderMap,
+                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+            ) -> Result<Response, Error> {
+                let remote_ip = remote.ip();
+                let rate_limit_bypassed =
+                    limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+                let limits = crate::routing::app_query_limits();
+                let mut params = params;
+                let page_limit = limits.clamp_page_limit(params.limit)?;
+                params.limit = Some(page_limit);
+                if !rate_limit_bypassed {
+                    let enforce =
+                        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+                    let cost = limits.rate_limit_cost(page_limit);
+                    let key_hint = params
+                        .authority
+                        .as_deref()
+                        .unwrap_or($key_hint);
+                    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+                        .await?;
+                }
+                routing::$routing_handler(
+                    app.state.clone(),
+                    crate::NoritoQuery(params),
+                    app.telemetry.clone(),
+                )
+                .await
+                .map(IntoResponse::into_response)
+            }
+        )+
+    };
 }
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_vault_positions_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-vaults");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_vault_positions_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_operators_status_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-operators");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_operators_status_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_margin_health_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-margin");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_margin_health_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_rwa_lots_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-rwa");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_rwa_lots_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-#[cfg(feature = "app_api")]
-async fn handler_contracts_rollups_dlmm_hooks_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .authority
-            .as_deref()
-            .unwrap_or("contracts-rollups-dlmm-hooks");
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-            .await?;
-    }
-    routing::handle_v1_contracts_rollups_dlmm_hooks_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        app.telemetry.clone(),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
+contracts_rollup_event_get_handlers!(
+    (
+        handler_contracts_rollups_intents_get,
+        handle_v1_contracts_rollups_intents_get,
+        "contracts-rollups-intents"
+    ),
+    (
+        handler_contracts_rollups_vault_positions_get,
+        handle_v1_contracts_rollups_vault_positions_get,
+        "contracts-rollups-vaults"
+    ),
+    (
+        handler_contracts_rollups_operators_status_get,
+        handle_v1_contracts_rollups_operators_status_get,
+        "contracts-rollups-operators"
+    ),
+    (
+        handler_contracts_rollups_margin_health_get,
+        handle_v1_contracts_rollups_margin_health_get,
+        "contracts-rollups-margin"
+    ),
+    (
+        handler_contracts_rollups_rwa_lots_get,
+        handle_v1_contracts_rollups_rwa_lots_get,
+        "contracts-rollups-rwa"
+    ),
+    (
+        handler_contracts_rollups_dlmm_hooks_get,
+        handle_v1_contracts_rollups_dlmm_hooks_get,
+        "contracts-rollups-dlmm-hooks"
+    ),
+);
 #[cfg(feature = "app_api")]
 include!("proof_query_bounded.rs");
 #[cfg(feature = "app_api")]
@@ -14501,162 +14374,73 @@ async fn handler_subscription_get(
     .await?;
     routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await
 }
-#[cfg(feature = "app_api")]
-async fn handler_subscription_pause(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(subscription_raw): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionActionDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
-    let remote_ip = remote.ip();
-    let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_post_v1_subscription_pause(
-            app.state.clone(),
-            subscription_id,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/{subscription_id}/pause",
-        enforce,
-    )
-    .await?;
-    routing::handle_post_v1_subscription_pause(
-        app.state.clone(),
-        subscription_id,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
+macro_rules! subscription_action_handlers {
+    ($(($handler:ident, $routing_handler:ident, $access_context:literal)),+ $(,)?) => {
+        $(
+            #[cfg(feature = "app_api")]
+            async fn $handler(
+                State(app): State<SharedAppState>,
+                Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+                headers: axum::http::HeaderMap,
+                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                AxPath(subscription_raw): AxPath<String>,
+                crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+                    crate::routing::SubscriptionActionDto,
+                >,
+            ) -> Result<impl IntoResponse, Error> {
+                require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
+                let remote_ip = remote.ip();
+                let subscription_id = parse_nft_id(&subscription_raw)?;
+                if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+                    return routing::$routing_handler(
+                        app.state.clone(),
+                        subscription_id,
+                        crate::utils::extractors::NoritoJson(req),
+                    )
+                    .await;
+                }
+                let enforce =
+                    app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+                check_access_enforced(
+                    &app,
+                    &headers,
+                    Some(remote_ip),
+                    $access_context,
+                    enforce,
+                )
+                .await?;
+                routing::$routing_handler(
+                    app.state.clone(),
+                    subscription_id,
+                    crate::utils::extractors::NoritoJson(req),
+                )
+                .await
+            }
+        )+
+    };
 }
-#[cfg(feature = "app_api")]
-async fn handler_subscription_resume(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(subscription_raw): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionActionDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
-    let remote_ip = remote.ip();
-    let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_post_v1_subscription_resume(
-            app.state.clone(),
-            subscription_id,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/{subscription_id}/resume",
-        enforce,
-    )
-    .await?;
-    routing::handle_post_v1_subscription_resume(
-        app.state.clone(),
-        subscription_id,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn handler_subscription_cancel(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(subscription_raw): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionActionDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
-    let remote_ip = remote.ip();
-    let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_post_v1_subscription_cancel(
-            app.state.clone(),
-            subscription_id,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/{subscription_id}/cancel",
-        enforce,
-    )
-    .await?;
-    routing::handle_post_v1_subscription_cancel(
-        app.state.clone(),
-        subscription_id,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn handler_subscription_keep(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(subscription_raw): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionActionDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
-    let remote_ip = remote.ip();
-    let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_post_v1_subscription_keep(
-            app.state.clone(),
-            subscription_id,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/{subscription_id}/keep",
-        enforce,
-    )
-    .await?;
-    routing::handle_post_v1_subscription_keep(
-        app.state.clone(),
-        subscription_id,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
+subscription_action_handlers!(
+    (
+        handler_subscription_pause,
+        handle_post_v1_subscription_pause,
+        "v1/subscriptions/{subscription_id}/pause"
+    ),
+    (
+        handler_subscription_resume,
+        handle_post_v1_subscription_resume,
+        "v1/subscriptions/{subscription_id}/resume"
+    ),
+    (
+        handler_subscription_cancel,
+        handle_post_v1_subscription_cancel,
+        "v1/subscriptions/{subscription_id}/cancel"
+    ),
+    (
+        handler_subscription_keep,
+        handle_post_v1_subscription_keep,
+        "v1/subscriptions/{subscription_id}/keep"
+    ),
+);
 #[cfg(feature = "app_api")]
 async fn handler_subscription_usage(
     State(app): State<SharedAppState>,
@@ -14698,45 +14482,11 @@ async fn handler_subscription_usage(
     )
     .await
 }
-#[cfg(feature = "app_api")]
-async fn handler_subscription_charge_now(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(subscription_raw): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionActionDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
-    let remote_ip = remote.ip();
-    let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_post_v1_subscription_charge_now(
-            app.state.clone(),
-            subscription_id,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/{subscription_id}/charge-now",
-        enforce,
-    )
-    .await?;
-    routing::handle_post_v1_subscription_charge_now(
-        app.state.clone(),
-        subscription_id,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
+subscription_action_handlers!((
+    handler_subscription_charge_now,
+    handle_post_v1_subscription_charge_now,
+    "v1/subscriptions/{subscription_id}/charge-now"
+));
 #[cfg(feature = "app_api")]
 async fn handler_parameters(
     State(app): State<SharedAppState>,
@@ -15802,6 +15552,13 @@ const ZK_IVM_MAX_PROVED_JSON_BYTES: usize = 16 * 1024 * 1024;
 const ZK_IVM_MAX_JOB_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const ZK_IVM_PROVE_JOB_MIN_PENDING_RESERVATION_BYTES: usize = 1024;
 const ZK_IVM_PROVE_JOB_MAX_ERROR_BYTES: usize = 1024;
+#[cfg(feature = "app_api")]
+fn zk_ivm_next_execution_height(committed_height: usize) -> Result<u64, String> {
+    u64::try_from(committed_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| "execution height overflow while resolving verifier-key policy".to_owned())
+}
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ZkIvmProofBoxJsonDto {
     backend: String,
@@ -16794,66 +16551,15 @@ async fn handler_zk_ivm_derive(
             endpoint: "v1/zk/ivm/derive",
             retry_after_secs,
         })?;
-    // Derivation needs only these lightweight policy fields. Borrow the
-    // registry record under admitted compute capacity and never clone its
-    // optional inline verifying-key bytes on the async runtime thread.
-    let (vk_circuit_id, vk_version, vk_gas_schedule_id) = {
-        let world = app.state.world_view();
-        let vk_record = world.verifying_keys().get(&req.vk_ref).ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key not found: {}::{}",
-                    req.vk_ref.backend, req.vk_ref.name
-                )),
-            ))
-        })?;
-        if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key is not Active".to_owned(),
-                ),
-            )));
-        }
-        if !circuit_id_matches(
-            backend,
-            &vk_record.circuit_id,
-            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-        ) {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
-                    vk_record.circuit_id,
-                )),
-            )));
-        }
-        let expected_schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
-        if vk_record.public_inputs_schema_hash != expected_schema_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key schema hash is not compatible with `ivm-execution-v1`"
-                        .to_owned(),
-                ),
-            )));
-        }
-        let gas_schedule_id = vk_record.gas_schedule_id.clone().ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key missing gas_schedule_id".to_owned(),
-                ),
-            ))
-        })?;
-        (
-            vk_record.circuit_id.clone(),
-            vk_record.version,
-            gas_schedule_id,
-        )
-    };
     let network_id = *app.state.network_id_ref();
     let state = Arc::clone(&app.state);
-    let authority = req.authority;
-    let fee_payment = req.fee_payment;
-    let metadata = req.metadata;
-    let bytecode = req.bytecode;
+    let ZkIvmDeriveRequestDto {
+        vk_ref,
+        authority,
+        fee_payment,
+        metadata,
+        bytecode,
+    } = req;
     let derive_task = tokio::task::spawn_blocking(move || -> Result<Bytes, String> {
         // The owned permit lives inside the physical blocking task, so
         // request cancellation/timeout cannot detach unaccounted VM work.
@@ -16870,13 +16576,45 @@ async fn handler_zk_ivm_derive(
         .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
         // Proof derivation needs a stable authority, but signature validity is not required here.
         .with_authority(authority);
+        // Resolve lifecycle and policy from the same snapshot used to execute the IVM.
         let view = state.query_view();
+        let execution_height = zk_ivm_next_execution_height(view.height())?;
+        let vk_record = view.world().verifying_keys().get(&vk_ref).ok_or_else(|| {
+            format!(
+                "verifying key not found: {}::{}",
+                vk_ref.backend, vk_ref.name
+            )
+        })?;
+        if !vk_record.is_active_at(execution_height) {
+            return Err("verifying key is not active at the execution height".to_owned());
+        }
+        if !circuit_id_matches(
+            vk_ref.backend.as_str(),
+            &vk_record.circuit_id,
+            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+        ) {
+            return Err(format!(
+                "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{}` (got `{}`)",
+                vk_ref.backend, vk_record.circuit_id,
+            ));
+        }
+        if vk_record.public_inputs_schema_hash
+            != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
+        {
+            return Err(
+                "verifying key schema hash is not compatible with `ivm-execution-v1`".to_owned(),
+            );
+        }
+        let gas_schedule_id = vk_record
+            .gas_schedule_id
+            .as_deref()
+            .ok_or_else(|| "verifying key missing gas_schedule_id".to_owned())?;
         let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                 &view,
                 &tx,
-                &vk_circuit_id,
-                vk_version,
-                Some(&vk_gas_schedule_id),
+                &vk_record.circuit_id,
+                vk_record.version,
+                Some(gas_schedule_id),
                 ZK_IVM_MAX_PROVED_JSON_BYTES,
             )
             .map_err(|err| err.to_string())?;
@@ -17010,19 +16748,28 @@ async fn handler_zk_ivm_prove(
             retry_after_secs,
         })?;
     {
-        let world = app.state.world_view();
-        let vk_record = world.verifying_keys().get(&req.vk_ref).ok_or_else(|| {
+        let view = app.state.query_view();
+        let execution_height = zk_ivm_next_execution_height(view.height()).map_err(|message| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key not found: {}::{}",
-                    req.vk_ref.backend, req.vk_ref.name
-                )),
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
             ))
         })?;
-        if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+        let vk_record = view
+            .world()
+            .verifying_keys()
+            .get(&req.vk_ref)
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                        "verifying key not found: {}::{}",
+                        req.vk_ref.backend, req.vk_ref.name
+                    )),
+                ))
+            })?;
+        if !vk_record.is_active_at(execution_height) {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key is not Active".to_owned(),
+                    "verifying key is not active at the execution height".to_owned(),
                 ),
             )));
         }
@@ -17178,21 +16925,22 @@ async fn handler_zk_ivm_prove(
             // loading, execution, proving, and terminal serialization.
             let _inflight_permit = inflight_permit;
             let outcome = (|| -> ZkIvmProveOutcome {
-                let vk_record = {
-                    let world = state.world_view();
-                    world
-                        .verifying_keys()
-                        .get(&vk_ref)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
-                                "verifying key not found: {}::{}",
-                                vk_ref.backend, vk_ref.name
-                            )
-                        })?
-                };
-                if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
-                    return Err("verifying key is not Active".to_owned());
+                // Bind verifier admission and derived execution to one committed snapshot.
+                let view = state.query_view();
+                let execution_height = zk_ivm_next_execution_height(view.height())?;
+                let vk_record = view
+                    .world()
+                    .verifying_keys()
+                    .get(&vk_ref)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "verifying key not found: {}::{}",
+                            vk_ref.backend, vk_ref.name
+                        )
+                    })?;
+                if !vk_record.is_active_at(execution_height) {
+                    return Err("verifying key is not active at the execution height".to_owned());
                 }
                 if !circuit_id_matches(
                     backend.as_str(),
@@ -17282,7 +17030,6 @@ async fn handler_zk_ivm_prove(
                 .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
-                let view = state.query_view();
                 let derived_proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                     &view,
                     &tx,
@@ -34220,134 +33967,74 @@ async fn check_account_recovery_route_admission(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
-async fn handler_post_account_recovery_policy_set(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::AccountRecoveryPolicySetDto>,
-) -> Result<AxResponse, Error> {
-    const METRIC: &str = "account_recovery_policy_set";
-    check_account_recovery_route_admission(
-        &app,
-        &headers,
-        remote.ip(),
+macro_rules! account_recovery_command_handlers {
+    ($(($handler:ident, $dto:ty, $metric:literal, $route:literal, $routing_handler:ident)),+ $(,)?) => {
+        $(
+            #[cfg(feature = "app_api")]
+            async fn $handler(
+                State(app): State<SharedAppState>,
+                headers: axum::http::HeaderMap,
+                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                request: NoritoJson<$dto>,
+            ) -> Result<AxResponse, Error> {
+                const METRIC: &str = $metric;
+                check_account_recovery_route_admission(
+                    &app,
+                    &headers,
+                    remote.ip(),
+                    $route,
+                    METRIC,
+                )
+                .await?;
+                match crate::routing::$routing_handler(
+                    app.queue.clone(),
+                    app.state.clone(),
+                    app.telemetry.clone(),
+                    request,
+                )
+                .await
+                {
+                    Ok(response) => Ok(response.into_response()),
+                    Err(error) => {
+                        app.telemetry
+                            .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+                        Err(error)
+                    }
+                }
+            }
+        )+
+    };
+}
+account_recovery_command_handlers!(
+    (
+        handler_post_account_recovery_policy_set,
+        crate::routing::AccountRecoveryPolicySetDto,
+        "account_recovery_policy_set",
         "v1/accounts/recovery/policy/set",
-        METRIC,
-    )
-    .await?;
-    match crate::routing::handle_post_account_recovery_policy_set(
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(response) => Ok(response.into_response()),
-        Err(error) => {
-            app.telemetry
-                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
-            Err(error)
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_account_recovery_propose(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::AccountRecoveryProposeDto>,
-) -> Result<AxResponse, Error> {
-    const METRIC: &str = "account_recovery_propose";
-    check_account_recovery_route_admission(
-        &app,
-        &headers,
-        remote.ip(),
+        handle_post_account_recovery_policy_set
+    ),
+    (
+        handler_post_account_recovery_propose,
+        crate::routing::AccountRecoveryProposeDto,
+        "account_recovery_propose",
         "v1/accounts/recovery/propose",
-        METRIC,
-    )
-    .await?;
-    match crate::routing::handle_post_account_recovery_propose(
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(response) => Ok(response.into_response()),
-        Err(error) => {
-            app.telemetry
-                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
-            Err(error)
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_account_recovery_approve(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::AccountRecoveryApproveDto>,
-) -> Result<AxResponse, Error> {
-    const METRIC: &str = "account_recovery_approve";
-    check_account_recovery_route_admission(
-        &app,
-        &headers,
-        remote.ip(),
+        handle_post_account_recovery_propose
+    ),
+    (
+        handler_post_account_recovery_approve,
+        crate::routing::AccountRecoveryApproveDto,
+        "account_recovery_approve",
         "v1/accounts/recovery/approve",
-        METRIC,
-    )
-    .await?;
-    match crate::routing::handle_post_account_recovery_approve(
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(response) => Ok(response.into_response()),
-        Err(error) => {
-            app.telemetry
-                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
-            Err(error)
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_account_recovery_finalize(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::AccountRecoveryFinalizeDto>,
-) -> Result<AxResponse, Error> {
-    const METRIC: &str = "account_recovery_finalize";
-    check_account_recovery_route_admission(
-        &app,
-        &headers,
-        remote.ip(),
+        handle_post_account_recovery_approve
+    ),
+    (
+        handler_post_account_recovery_finalize,
+        crate::routing::AccountRecoveryFinalizeDto,
+        "account_recovery_finalize",
         "v1/accounts/recovery/finalize",
-        METRIC,
-    )
-    .await?;
-    match crate::routing::handle_post_account_recovery_finalize(
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(response) => Ok(response.into_response()),
-        Err(error) => {
-            app.telemetry
-                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
-            Err(error)
-        }
-    }
-}
+        handle_post_account_recovery_finalize
+    ),
+);
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_status(
     State(app): State<SharedAppState>,
@@ -34963,350 +34650,206 @@ async fn handler_get_sorafs_por_report(
     );
     Ok(resp)
 }
-async fn handler_iso_pacs008(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/pacs008").await?;
-    let runtime = match &app.iso_bridge {
-        Some(rt) => rt.clone(),
-        None => {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
-            ));
-        }
-    };
-    if body.is_empty() {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
-        ));
-    }
-    let parsed =
-        parse_message("pacs.008", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
-    let profile = iso_profile_from_request(&runtime, &headers, &query)?;
-    let metadata = runtime
-        .validate_profile_submission(profile, "pacs.008", &parsed, &body)
-        .map_err(|err| Error::Query(map_iso_error(err)))?;
-    let msg_id = parsed
-        .field_text("MsgId")
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                "missing MsgId field".into(),
-            ))
-        })?
-        .to_owned();
-    if !runtime.check_and_record_inbound(&msg_id, metadata) {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
-        ));
-    }
-    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
-    let (mut transaction_payload, context) = {
-        let world = app.state.world_view();
-        match runtime.build_pacs008_payload(
-            &parsed,
-            &world,
-            now_ms,
-            Arc::as_ref(&app.chain_id),
-            app.state.network_id_ref(),
-            &app.telemetry,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-                return Err(Error::Query(map_iso_error(err)));
+macro_rules! iso_payment_submission_handlers {
+    (
+        $(($handler:ident, $message_type:literal, $access_context:literal,
+            $message_id_field:literal, $missing_message_id:literal,
+            $payload_builder:ident)),+ $(,)?
+    ) => {
+        $(
+            async fn $handler(
+                State(app): State<SharedAppState>,
+                headers: axum::http::HeaderMap,
+                Query(query): Query<HashMap<String, String>>,
+                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                body: axum::body::Bytes,
+            ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+                let remote_ip = remote.ip();
+                check_access(&app, &headers, Some(remote_ip), $access_context).await?;
+                let runtime = match &app.iso_bridge {
+                    Some(rt) => rt.clone(),
+                    None => {
+                        return Err(Error::Query(
+                            iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
+                        ));
+                    }
+                };
+                if body.is_empty() {
+                    return Err(Error::Query(
+                        iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
+                    ));
+                }
+                let parsed =
+                    parse_message($message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+                let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+                let metadata = runtime
+                    .validate_profile_submission(profile, $message_type, &parsed, &body)
+                    .map_err(|err| Error::Query(map_iso_error(err)))?;
+                let msg_id = parsed
+                    .field_text($message_id_field)
+                    .ok_or_else(|| {
+                        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                            $missing_message_id.into(),
+                        ))
+                    })?
+                    .to_owned();
+                if !runtime.check_and_record_inbound(&msg_id, metadata) {
+                    return Err(Error::Query(
+                        iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
+                    ));
+                }
+                let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
+                let (mut transaction_payload, context) = {
+                    let world = app.state.world_view();
+                    match runtime.$payload_builder(
+                        &parsed,
+                        &world,
+                        now_ms,
+                        Arc::as_ref(&app.chain_id),
+                        app.state.network_id_ref(),
+                        &app.telemetry,
+                    ) {
+                        Ok(result) => result,
+                        Err(err) => {
+                            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                            return Err(Error::Query(map_iso_error(err)));
+                        }
+                    }
+                };
+                transaction_payload.fee_payment = match quote_internal_fee_payment(&app, &transaction_payload) {
+                    Ok(intent) => intent,
+                    Err(err) => {
+                        runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                        return Err(err);
+                    }
+                };
+                let transaction = match runtime.sign_transaction_payload(transaction_payload) {
+                    Ok(transaction) => transaction,
+                    Err(err) => {
+                        runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                        return Err(Error::Query(map_iso_error(err)));
+                    }
+                };
+                runtime.update_message_context(&msg_id, context.clone());
+                let tx_hash = transaction.hash();
+                let tx_hash_str = format!("{}", tx_hash);
+                if let Err(err) =
+                    routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
+                {
+                    let (detail, reason_code) = match &err {
+                        Error::PushIntoQueue { source, .. } => {
+                            let (code, detail) = queue_rejection_metadata(source.as_ref());
+                            (detail, Some(code))
+                        }
+                        _ => (err.to_string(), None),
+                    };
+                    runtime.mark_rejected(&msg_id, Some(detail), reason_code);
+                    return Err(err);
+                }
+                runtime.mark_queued(&msg_id);
+                let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
+                let mut payload = norito::json::native::Map::new();
+                payload.insert(
+                    "message_id".into(),
+                    norito::json::native::Value::from(msg_id),
+                );
+                payload.insert(
+                    "transaction_hash".into(),
+                    norito::json::native::Value::from(tx_hash_str),
+                );
+                payload.insert(
+                    "status".into(),
+                    norito::json::native::Value::from(status_snapshot.status_label().to_string()),
+                );
+                payload.insert(
+                    "pacs002_code".into(),
+                    norito::json::native::Value::from(status_snapshot.pacs002_code().to_string()),
+                );
+                payload.insert(
+                    "hold_reason_code".into(),
+                    json_string_or_null(status_snapshot.hold_reason_code().map(ToString::to_string)),
+                );
+                let change_codes = status_snapshot
+                    .change_reason_codes()
+                    .iter()
+                    .cloned()
+                    .map(norito::json::native::Value::from)
+                    .collect::<Vec<_>>();
+                payload.insert(
+                    "change_reason_codes".into(),
+                    norito::json::native::Value::Array(change_codes),
+                );
+                payload.insert(
+                    "rejection_reason_code".into(),
+                    json_string_or_null(
+                        status_snapshot
+                            .rejection_reason_code()
+                            .map(ToString::to_string),
+                    ),
+                );
+                payload.insert(
+                    "ledger_id".into(),
+                    json_string_or_null(context.ledger_id().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "source_account_id".into(),
+                    json_string_or_null(context.source_account_id().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "source_account_address".into(),
+                    json_string_or_null(context.source_account_address().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "target_account_id".into(),
+                    json_string_or_null(context.target_account_id().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "target_account_address".into(),
+                    json_string_or_null(context.target_account_address().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "asset_definition_id".into(),
+                    json_string_or_null(context.asset_definition_id().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "asset_id".into(),
+                    json_string_or_null(context.asset_id().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "settlement_amount".into(),
+                    json_string_or_null(context.settlement_amount().map(ToString::to_string)),
+                );
+                payload.insert(
+                    "settlement_currency".into(),
+                    json_string_or_null(context.settlement_currency().map(ToString::to_string)),
+                );
+                insert_iso_metadata_fields(&mut payload, &status_snapshot);
+                Ok((
+                    StatusCode::ACCEPTED,
+                    JsonBody(norito::json::native::Value::Object(payload)),
+                ))
             }
-        }
+        )+
     };
-    transaction_payload.fee_payment = match quote_internal_fee_payment(&app, &transaction_payload) {
-        Ok(intent) => intent,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(err);
-        }
-    };
-    let transaction = match runtime.sign_transaction_payload(transaction_payload) {
-        Ok(transaction) => transaction,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
-        }
-    };
-    runtime.update_message_context(&msg_id, context.clone());
-    let tx_hash = transaction.hash();
-    let tx_hash_str = format!("{}", tx_hash);
-    if let Err(err) =
-        routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
-    {
-        let (detail, reason_code) = match &err {
-            Error::PushIntoQueue { source, .. } => {
-                let (code, detail) = queue_rejection_metadata(source.as_ref());
-                (detail, Some(code))
-            }
-            _ => (err.to_string(), None),
-        };
-        runtime.mark_rejected(&msg_id, Some(detail), reason_code);
-        return Err(err);
-    }
-    runtime.mark_queued(&msg_id);
-    let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
-    let mut payload = norito::json::native::Map::new();
-    payload.insert(
-        "message_id".into(),
-        norito::json::native::Value::from(msg_id),
-    );
-    payload.insert(
-        "transaction_hash".into(),
-        norito::json::native::Value::from(tx_hash_str),
-    );
-    payload.insert(
-        "status".into(),
-        norito::json::native::Value::from(status_snapshot.status_label().to_string()),
-    );
-    payload.insert(
-        "pacs002_code".into(),
-        norito::json::native::Value::from(status_snapshot.pacs002_code().to_string()),
-    );
-    payload.insert(
-        "hold_reason_code".into(),
-        json_string_or_null(status_snapshot.hold_reason_code().map(ToString::to_string)),
-    );
-    let change_codes = status_snapshot
-        .change_reason_codes()
-        .iter()
-        .cloned()
-        .map(norito::json::native::Value::from)
-        .collect::<Vec<_>>();
-    payload.insert(
-        "change_reason_codes".into(),
-        norito::json::native::Value::Array(change_codes),
-    );
-    payload.insert(
-        "rejection_reason_code".into(),
-        json_string_or_null(
-            status_snapshot
-                .rejection_reason_code()
-                .map(ToString::to_string),
-        ),
-    );
-    payload.insert(
-        "ledger_id".into(),
-        json_string_or_null(context.ledger_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "source_account_id".into(),
-        json_string_or_null(context.source_account_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "source_account_address".into(),
-        json_string_or_null(context.source_account_address().map(ToString::to_string)),
-    );
-    payload.insert(
-        "target_account_id".into(),
-        json_string_or_null(context.target_account_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "target_account_address".into(),
-        json_string_or_null(context.target_account_address().map(ToString::to_string)),
-    );
-    payload.insert(
-        "asset_definition_id".into(),
-        json_string_or_null(context.asset_definition_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "asset_id".into(),
-        json_string_or_null(context.asset_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "settlement_amount".into(),
-        json_string_or_null(context.settlement_amount().map(ToString::to_string)),
-    );
-    payload.insert(
-        "settlement_currency".into(),
-        json_string_or_null(context.settlement_currency().map(ToString::to_string)),
-    );
-    insert_iso_metadata_fields(&mut payload, &status_snapshot);
-    Ok((
-        StatusCode::ACCEPTED,
-        JsonBody(norito::json::native::Value::Object(payload)),
-    ))
 }
-async fn handler_iso_pacs009(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/pacs009").await?;
-    let runtime = match &app.iso_bridge {
-        Some(rt) => rt.clone(),
-        None => {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
-            ));
-        }
-    };
-    if body.is_empty() {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
-        ));
-    }
-    let parsed =
-        parse_message("pacs.009", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
-    let profile = iso_profile_from_request(&runtime, &headers, &query)?;
-    let metadata = runtime
-        .validate_profile_submission(profile, "pacs.009", &parsed, &body)
-        .map_err(|err| Error::Query(map_iso_error(err)))?;
-    let msg_id = parsed
-        .field_text("BizMsgIdr")
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                "missing BizMsgIdr field".into(),
-            ))
-        })?
-        .to_owned();
-    if !runtime.check_and_record_inbound(&msg_id, metadata) {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
-        ));
-    }
-    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
-    let (mut transaction_payload, context) = {
-        let world = app.state.world_view();
-        match runtime.build_pacs009_payload(
-            &parsed,
-            &world,
-            now_ms,
-            Arc::as_ref(&app.chain_id),
-            app.state.network_id_ref(),
-            &app.telemetry,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-                return Err(Error::Query(map_iso_error(err)));
-            }
-        }
-    };
-    transaction_payload.fee_payment = match quote_internal_fee_payment(&app, &transaction_payload) {
-        Ok(intent) => intent,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(err);
-        }
-    };
-    let transaction = match runtime.sign_transaction_payload(transaction_payload) {
-        Ok(transaction) => transaction,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
-        }
-    };
-    runtime.update_message_context(&msg_id, context.clone());
-    let tx_hash = transaction.hash();
-    let tx_hash_str = format!("{}", tx_hash);
-    if let Err(err) =
-        routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
-    {
-        let (detail, reason_code) = match &err {
-            Error::PushIntoQueue { source, .. } => {
-                let (code, detail) = queue_rejection_metadata(source.as_ref());
-                (detail, Some(code))
-            }
-            _ => (err.to_string(), None),
-        };
-        runtime.mark_rejected(&msg_id, Some(detail), reason_code);
-        return Err(err);
-    }
-    runtime.mark_queued(&msg_id);
-    let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
-    let mut payload = norito::json::native::Map::new();
-    payload.insert(
-        "message_id".into(),
-        norito::json::native::Value::from(msg_id),
-    );
-    payload.insert(
-        "transaction_hash".into(),
-        norito::json::native::Value::from(tx_hash_str),
-    );
-    payload.insert(
-        "status".into(),
-        norito::json::native::Value::from(status_snapshot.status_label().to_string()),
-    );
-    payload.insert(
-        "pacs002_code".into(),
-        norito::json::native::Value::from(status_snapshot.pacs002_code().to_string()),
-    );
-    payload.insert(
-        "hold_reason_code".into(),
-        json_string_or_null(status_snapshot.hold_reason_code().map(ToString::to_string)),
-    );
-    let change_codes = status_snapshot
-        .change_reason_codes()
-        .iter()
-        .cloned()
-        .map(norito::json::native::Value::from)
-        .collect::<Vec<_>>();
-    payload.insert(
-        "change_reason_codes".into(),
-        norito::json::native::Value::Array(change_codes),
-    );
-    payload.insert(
-        "rejection_reason_code".into(),
-        json_string_or_null(
-            status_snapshot
-                .rejection_reason_code()
-                .map(ToString::to_string),
-        ),
-    );
-    payload.insert(
-        "ledger_id".into(),
-        json_string_or_null(context.ledger_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "source_account_id".into(),
-        json_string_or_null(context.source_account_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "source_account_address".into(),
-        json_string_or_null(context.source_account_address().map(ToString::to_string)),
-    );
-    payload.insert(
-        "target_account_id".into(),
-        json_string_or_null(context.target_account_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "target_account_address".into(),
-        json_string_or_null(context.target_account_address().map(ToString::to_string)),
-    );
-    payload.insert(
-        "asset_definition_id".into(),
-        json_string_or_null(context.asset_definition_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "asset_id".into(),
-        json_string_or_null(context.asset_id().map(ToString::to_string)),
-    );
-    payload.insert(
-        "settlement_amount".into(),
-        json_string_or_null(context.settlement_amount().map(ToString::to_string)),
-    );
-    payload.insert(
-        "settlement_currency".into(),
-        json_string_or_null(context.settlement_currency().map(ToString::to_string)),
-    );
-    insert_iso_metadata_fields(&mut payload, &status_snapshot);
-    Ok((
-        StatusCode::ACCEPTED,
-        JsonBody(norito::json::native::Value::Object(payload)),
-    ))
-}
+iso_payment_submission_handlers!(
+    (
+        handler_iso_pacs008,
+        "pacs.008",
+        "v1/iso20022/pacs008",
+        "MsgId",
+        "missing MsgId field",
+        build_pacs008_payload
+    ),
+    (
+        handler_iso_pacs009,
+        "pacs.009",
+        "v1/iso20022/pacs009",
+        "BizMsgIdr",
+        "missing BizMsgIdr field",
+        build_pacs009_payload
+    ),
+);
 async fn handler_iso_lifecycle_submit(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -35401,132 +34944,39 @@ async fn handler_iso_lifecycle_submit(
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
 }
-async fn handler_iso_pacs002_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "pacs.002",
-        "v1/iso20022/pacs002",
-    )
-    .await
+macro_rules! iso_lifecycle_submission_handlers {
+    ($(($handler:ident, $message_type:literal, $access_context:literal)),+ $(,)?) => {
+        $(
+            async fn $handler(
+                State(app): State<SharedAppState>,
+                headers: axum::http::HeaderMap,
+                Query(query): Query<HashMap<String, String>>,
+                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                body: axum::body::Bytes,
+            ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+                handler_iso_lifecycle_submit(
+                    app,
+                    headers,
+                    query,
+                    remote,
+                    body,
+                    $message_type,
+                    $access_context,
+                )
+                .await
+            }
+        )+
+    };
 }
-async fn handler_iso_pacs004_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "pacs.004",
-        "v1/iso20022/pacs004",
-    )
-    .await
-}
-async fn handler_iso_camt056_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "camt.056",
-        "v1/iso20022/camt056",
-    )
-    .await
-}
-async fn handler_iso_sese023_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "sese.023",
-        "v1/iso20022/sese023",
-    )
-    .await
-}
-async fn handler_iso_sese024_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "sese.024",
-        "v1/iso20022/sese024",
-    )
-    .await
-}
-async fn handler_iso_sese025_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "sese.025",
-        "v1/iso20022/sese025",
-    )
-    .await
-}
-async fn handler_iso_colr012_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "colr.012",
-        "v1/iso20022/colr012",
-    )
-    .await
-}
+iso_lifecycle_submission_handlers!(
+    (handler_iso_pacs002_submit, "pacs.002", "v1/iso20022/pacs002"),
+    (handler_iso_pacs004_submit, "pacs.004", "v1/iso20022/pacs004"),
+    (handler_iso_camt056_submit, "camt.056", "v1/iso20022/camt056"),
+    (handler_iso_sese023_submit, "sese.023", "v1/iso20022/sese023"),
+    (handler_iso_sese024_submit, "sese.024", "v1/iso20022/sese024"),
+    (handler_iso_sese025_submit, "sese.025", "v1/iso20022/sese025"),
+    (handler_iso_colr012_submit, "colr.012", "v1/iso20022/colr012"),
+);
 async fn handler_iso_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,

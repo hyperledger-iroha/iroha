@@ -2,7 +2,6 @@
 use crate::{errors::Error, field::PrimeField64};
 use core::fmt;
 use halo2curves::{
-    ff::Field,
     group::{Group, GroupEncoding},
     pasta::{Fp, Vesta, VestaAffine},
 };
@@ -59,12 +58,4 @@ impl GroupElem {
     pub fn inner(&self) -> Vesta {
         self.0
     }
-}
-/// Derive a group element deterministically from a scalar.
-pub fn from_scalar(scalar: PrimeField64) -> GroupElem {
-    let mut inner: Fp = scalar.into();
-    if inner.is_zero().into() {
-        inner = Fp::ONE;
-    }
-    GroupElem(Vesta::generator() * inner)
 }
