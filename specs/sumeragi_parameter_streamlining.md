@@ -21,7 +21,9 @@ collector, RBC, DA, or pacemaker overrides.
 
 The view-zero deadline is ten signed cadence intervals, retransmission is one
 fifth of that deadline, and later certified views use deterministic linear
-backoff. These values are derived, not configured.
+backoff capped at ten base deadlines. These values are derived, not configured.
+The cap keeps an idle chain's monotone view number from imposing an unbounded
+delay when work later arrives; it does not authorize empty blocks.
 
 ## Node-local configuration
 

@@ -278,6 +278,22 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         with self.assertRaisesRegex(seal.SourceSealError, "traverses a symlink"):
             seal._read_descriptor_payload(str(alias / descriptor.name))
 
+    def test_reviewed_descriptor_tolerates_unrelated_ancestor_entry_churn(self) -> None:
+        descriptor = self.review_root / "reviewed.json"
+        descriptor.write_bytes(b"{}\n")
+        real_read = seal.os.read
+        churned = False
+
+        def read_with_sibling_churn(file_descriptor: int, size: int) -> bytes:
+            nonlocal churned
+            if not churned:
+                churned = True
+                (self.review_root / "unrelated-sibling").write_bytes(b"churn\n")
+            return real_read(file_descriptor, size)
+
+        with mock.patch.object(seal.os, "read", side_effect=read_with_sibling_churn):
+            self.assertEqual(seal._read_descriptor_payload(str(descriptor)), b"{}\n")
+
     def test_staged_and_untracked_bytes_are_rejected(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()

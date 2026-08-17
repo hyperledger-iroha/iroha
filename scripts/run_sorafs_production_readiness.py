@@ -334,6 +334,24 @@ def input_set_sha256(snapshot: InputDigestSnapshot) -> str:
     return digest.hexdigest()
 
 
+def exact_json_equal(actual: object, expected: object) -> bool:
+    """Compare JSON values recursively without Python's bool/int coercion."""
+
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            exact_json_equal(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            exact_json_equal(actual_value, expected_value)
+            for actual_value, expected_value in zip(actual, expected)
+        )
+    return actual == expected
+
+
 def validate_promotion_aggregate(payload: dict[str, Any]) -> list[str]:
     """Require the exact ready/17/17/all-valid promotion aggregate contract."""
 
@@ -348,9 +366,17 @@ def validate_promotion_aggregate(payload: dict[str, Any]) -> list[str]:
             "replayed aggregate required_gates must match the exact canonical "
             "ordered 17-gate inventory"
         )
-    if payload.get("summary_file_count") != len(DEFAULT_REQUIRED_GATES):
+    summary_file_count = payload.get("summary_file_count")
+    if (
+        type(summary_file_count) is not int
+        or summary_file_count != len(DEFAULT_REQUIRED_GATES)
+    ):
         errors.append("replayed aggregate summary_file_count must be 17")
-    if payload.get("recognized_summary_count") != len(DEFAULT_REQUIRED_GATES):
+    recognized_summary_count = payload.get("recognized_summary_count")
+    if (
+        type(recognized_summary_count) is not int
+        or recognized_summary_count != len(DEFAULT_REQUIRED_GATES)
+    ):
         errors.append("replayed aggregate recognized_summary_count must be 17")
     if payload.get("errors") != []:
         errors.append("replayed aggregate errors must be empty")
@@ -535,7 +561,7 @@ def validate_replay_manifest(
             "deterministic replay manifest aggregate digests must be identical"
         )
     expected = build_replay_manifest(snapshot, replay)
-    if manifest != expected:
+    if not exact_json_equal(manifest, expected):
         errors.append(
             "deterministic replay manifest must match the verified immutable "
             "inputs and aggregate outputs"

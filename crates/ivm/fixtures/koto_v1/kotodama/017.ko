@@ -1,0 +1,6 @@
+
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (k, v) in values.take(1) { let z = k; } }
+        }
+    

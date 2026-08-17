@@ -167,12 +167,12 @@ impl IvmCache {
             // through `CacheLimitsGuard`.
             let max_ops = configured_max_decoded_ops();
             while (pc as usize) < code.len() {
-                let (inst, len) = decoder::decode_slice(code, pc)?;
-                out.push(DecodedOp { pc, inst, len });
-                pc += len as u64;
                 if out.len() >= max_ops {
                     return Err(crate::VMError::DecodeError);
                 }
+                let (inst, len) = decoder::decode_slice(code, pc)?;
+                out.push(DecodedOp { pc, inst, len });
+                pc += len as u64;
             }
             Ok(out)
         })();

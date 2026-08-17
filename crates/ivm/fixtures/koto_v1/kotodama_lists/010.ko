@@ -1,0 +1,10 @@
+
+            seiyaku ZeroSizedElements {
+                struct Empty {}
+
+                view fn main() -> int {
+                    let List<Empty, 1> values = [Empty {}];
+                    values.len()
+                }
+            }
+            

@@ -178,3 +178,7 @@ path = "tests/grouped/group_02.rs"
 [[test]]
 name = "query_serialization_allocations"
 path = "tests/query_serialization_allocations.rs"
+
+[[test]]
+name = "block_signature_serialization_allocations"
+path = "tests/block_signature_serialization_allocations.rs"

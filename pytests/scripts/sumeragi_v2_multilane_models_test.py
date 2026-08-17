@@ -42,7 +42,6 @@ def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:
     """Copy and track one parent's exact recursive reviewed include closure."""
-
     parent_relative = Path(relative)
     errors: list[str] = []
     expanded = module._expanded_source_manifest_paths(
@@ -60,25 +59,19 @@ def copy_reviewed_rust_source_fixture(
     return tmp_path / parent_relative
 
 
-def initialize_git_fixture(
-    root: Path, tracked: tuple[str, ...] | None = None
-) -> None:
+def initialize_git_fixture(root: Path, tracked: tuple[str, ...] | None = None) -> None:
     environment = os.environ.copy()
     environment.pop("GIT_INDEX_FILE", None)
     subprocess.run(
         ["git", "init", "-q"],
-        cwd=root,
-        check=True,
-        env=environment,
+        cwd=root, check=True, env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     paths = tracked if tracked is not None else (".",)
     subprocess.run(
         ["git", "add", "--", *paths],
-        cwd=root,
-        check=True,
-        env=environment,
+        cwd=root, check=True, env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -204,7 +197,6 @@ def canonical_kura_retention_contract() -> dict:
 
 def copy_kura_retention_fixture(tmp_path: Path, module) -> dict:
     """Copy every file consumed by the isolated Kura retention validator."""
-
     contract = canonical_kura_retention_contract()
     relatives = {
         module.FORMAL_RELATIVE / f"{contract['module']}.tla",
@@ -476,7 +468,6 @@ def test_kura_replica_retention_contract_rejects_unbound_start_drift(
 
 def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
     """Copy every file consumed by the isolated layout-contract validator."""
-
     relatives = {
         module.FORMAL_RELATIVE / f"{contract['module']}.tla",
         module.FORMAL_RELATIVE / contract["positive_config"],
@@ -521,7 +512,6 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 def replace_once_after(path: Path, anchor: str, old: str, new: str) -> None:
     """Replace one token after an exact enclosing-item anchor."""
-
     source = path.read_text(encoding="utf-8")
     anchor_offset = source.find(anchor)
     assert anchor_offset >= 0, f"fixture cannot find {anchor!r} in {path}"
@@ -535,7 +525,6 @@ def replace_once_after(path: Path, anchor: str, old: str, new: str) -> None:
 
 def swap_ordered_once(path: Path, earlier: str, later: str) -> None:
     """Swap one ordered token pair while retaining both source anchors."""
-
     source = path.read_text(encoding="utf-8")
     earlier_offset = source.find(earlier)
     assert earlier_offset >= 0, f"fixture cannot find {earlier!r} in {path}"
@@ -883,6 +872,23 @@ def test_queue_plan_pending_membership_contract_rejects_visible_native_prefix(
     assert any(
         "queue_plan_pending_route_member_v1_" in error
         and "opaque system contract-state namespace" in error
+        for error in errors
+    ), errors
+
+
+def assert_inflight_order_drift_rejected(
+    tmp_path: Path, earlier: str, later: str,
+    rejected_token: str, required_scope: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        required_scope in error
+        and f"missing or reorders token {rejected_token!r}" in error
         for error in errors
     ), errors
 
@@ -1553,6 +1559,13 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     assert validate_fixture(tmp_path, module, contract) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    constructor = "Some(CheckedProductionTransition::unwitnessed(projection))"
+    symbol = "check_production_in_flight_reservation_transition"
+    replace_once_after(path, f"pub(crate) fn {symbol}(", constructor,
+                       "Some(CheckedProductionTransition { projection })")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and constructor in error for error in errors), errors
 
 
 def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
@@ -1849,19 +1862,23 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     start = source.index("    fn execute_exact_apply(")
     end = source.index("\n    fn finish_durable_apply_completion_against(", start)
     method = source[start:end]
-    promote = "promote_kagemusha_topup_finality_sidecar"
-    finalize = "finalize_committed_block_merge_reservations"
-    assert method.count(promote) == 1
-    assert method.count(finalize) == 1
+    promote, finalize = "promote_kagemusha_topup_finality_sidecar", "finalize_committed_block_merge_reservations"
+    assert method.count(promote) == 1 and method.count(finalize) == 1
     marker = "__SWAP_POST_CARRIER_REPAIR_ORDER__"
-    method = method.replace(promote, marker, 1)
-    method = method.replace(finalize, promote, 1)
-    method = method.replace(marker, finalize, 1)
-    path.write_text(source[:start] + method + source[end:], encoding="utf-8")
+    method = method.replace(promote, marker, 1).replace(finalize, promote, 1).replace(marker, finalize, 1)
+    source = source[:start] + method + source[end:]
+    delegate = source.index("self.execute_exact_apply(", source.index("    pub(crate) fn execute("), start)
+    path.write_text(source[:delegate] + source[delegate:].replace(
+        "self.execute_exact_apply(", "self.execute_exact_application(", 1), encoding="utf-8")
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "ordered in-flight item V2ApplyService::execute_exact_apply" in error
         and "missing or reorders token" in error
+        for error in errors
+    ), errors
+    assert any(
+        "in-flight production item V2ApplyService::execute" in error
+        and "self.execute_exact_apply(" in error
         for error in errors
     ), errors
 
@@ -2555,17 +2572,10 @@ def test_inflight_layout_contract_rejects_revalidate_consume_apply_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "IndexedReservationReplayState::apply_checked_transition" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "IndexedReservationReplayState::apply_checked_transition",
+    )
 
 
 @pytest.mark.parametrize(
@@ -2788,17 +2798,10 @@ def test_inflight_layout_contract_rejects_append_publication_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "LaneQueueReservationJournal::append_durable" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "LaneQueueReservationJournal::append_durable",
+    )
 
 
 @pytest.mark.parametrize(
@@ -2826,17 +2829,10 @@ def test_inflight_layout_contract_rejects_compaction_publication_order_drift(
     later: str,
     rejected_token: str,
 ) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    swap_ordered_once(path, earlier, later)
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "LaneQueueReservationJournal::compact_if_needed" in error
-        and f"missing or reorders token {rejected_token!r}" in error
-        for error in errors
-    ), errors
+    assert_inflight_order_drift_rejected(
+        tmp_path, earlier, later, rejected_token,
+        "LaneQueueReservationJournal::compact_if_needed",
+    )
 
 
 def test_inflight_layout_contract_rejects_capability_restart_test_name_drift(

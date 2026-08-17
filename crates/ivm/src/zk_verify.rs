@@ -1,6 +1,4 @@
 //! Norito payloads and helpers for ZK verify syscalls using Halo2 (transparent IPA).
-#[cfg(feature = "goldilocks_backend")]
-use iroha_zkp_halo2::backend::goldilocks;
 use iroha_zkp_halo2::{
     OpenVerifyEnvelope, Transcript,
     backend::{bn254, pallas},
@@ -45,21 +43,11 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
             metadata,
         ),
         #[cfg(feature = "goldilocks_backend")]
-        DecodedEnvelope::Goldilocks {
-            params,
-            proof,
-            z,
-            t,
-            p_g,
-        } => goldilocks::Polynomial::verify_open_with_metadata(
-            params.as_ref(),
-            &mut tr,
-            z,
-            p_g,
-            t,
-            proof.as_ref(),
-            metadata,
-        ),
+        DecodedEnvelope::Goldilocks { .. } => {
+            return Err(iroha_zkp_halo2::Error::UnsupportedBackend {
+                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks,
+            });
+        }
         #[cfg(not(feature = "goldilocks_backend"))]
         DecodedEnvelope::Goldilocks => {
             return Err(iroha_zkp_halo2::Error::UnsupportedBackend {

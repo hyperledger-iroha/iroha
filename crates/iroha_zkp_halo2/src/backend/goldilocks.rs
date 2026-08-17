@@ -1,7 +1,8 @@
 //! Goldilocks (64-bit) backend with a deterministic multiplicative group.
 use crate::{
-    backend::{IpaBackend, IpaGroup, IpaScalar},
+    backend::{IpaBackend, IpaGroup, IpaScalar, traits::generator_derivation_message},
     errors::Error,
+    hash::sha3_512,
     norito_types::ZkCurveId,
 };
 use core::{convert::TryInto, fmt};
@@ -196,8 +197,11 @@ impl IpaBackend for GoldilocksBackend {
     type Scalar = Scalar;
     type Group = Group;
     const CURVE_ID: ZkCurveId = ZkCurveId::Goldilocks;
-    fn group_from_scalar(scalar: Self::Scalar) -> Self::Group {
-        let mut v = scalar;
+    fn derive_group_elem(kind: &[u8], n: u64, i: u64) -> Self::Group {
+        // This optional additive-field backend is a compatibility test double, not a
+        // cryptographic commitment group. Production curve backends use hash-to-curve.
+        let message = generator_derivation_message(kind, n, i);
+        let mut v = Scalar::from_uniform(&sha3_512(&message));
         if v.inner() == 0 {
             v = Scalar::one();
         }

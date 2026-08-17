@@ -12,9 +12,9 @@ lane proof binding.
 ## Executive Summary
 
 Normal ledger-grade ZK admission is designed to fail closed. A
-registry-dispatched proof must bind an active registered verifying key, backend
-label, circuit id, schema/public-input commitment, verifying-key hash, and
-proof bytes. A typed privacy proof instead binds an exact compiled protocol
+registry-dispatched proof must bind a registered verifying key that is active at
+the execution block height, backend label, circuit id, schema/public-input
+commitment, verifying-key hash, and proof bytes. A typed privacy proof instead binds an exact compiled protocol
 activation, statement schema, verifier and engine digests, signed transaction
 intent, and proof bytes. Both surfaces reject unsupported or substituted
 artifacts before verifier dispatch.
@@ -26,10 +26,12 @@ ZK-ACE uses the separate typed `PrivacyProofEnvelopeV1` path and adds compiled
 profile, governed policy, signed transaction intent, trusted genesis, transfer,
 and replay-nullifier binding.
 
-The Iroha-owned IPA/Halo2 stack is a transparent IPA verifier wrapper. This audit
-does not source-audit vendored Halo2 or curve crates; it audits Iroha's generator
-derivation, transcript labels, public-input shape checks, metadata binding, registry
-limits, batch dispatch, and runtime guardrails.
+The Iroha-owned IPA/Halo2 stack is a transparent IPA verifier wrapper. Production
+IPA bases are independently mapped with domain-separated hash-to-curve; the
+additive Goldilocks compatibility backend is rejected by runtime verification.
+This audit does not source-audit vendored Halo2 or curve crates; it audits Iroha's
+generator derivation, transcript labels, public-input shape checks, metadata
+binding, registry limits, batch dispatch, and runtime guardrails.
 
 FASTPQ lane admission binds the proof to the lane envelope and AXT claim metadata:
 dataspace, manifest root, source transaction commitment, effect type, claim digest,
@@ -201,7 +203,8 @@ and runtime dispatch.
 ## Dependency Assumptions
 
 - SHA-256 and Blake2 are collision resistant and implemented correctly.
-- Poseidon2 use is domain-separated as claimed by Iroha-owned call sites.
+- Poseidon2 use is domain-separated as claimed by Iroha-owned call sites, and its
+  byte API applies delimiter framing before field-sponge padding.
 - Vendored Halo2 and curve crates implement advertised group, scalar-field, and
   transcript APIs correctly.
 - Norito encoding is deterministic and rejects malformed payloads according to its

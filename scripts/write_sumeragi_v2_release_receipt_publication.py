@@ -1,6 +1,202 @@
 # Executed lexically in write_sumeragi_v2_release_receipt.py after exact digest authentication.
 
 
+def _validate_framework_python_input_records(
+    records: Any, declared_count: Any, declared_bytes: Any,
+) -> list[dict[str, Any]]:
+    """Validate one bounded, canonical private source inventory."""
+
+    if not isinstance(records, list) or len(records) > _MAX_FRAMEWORK_RUNTIME_MEMBERS:
+        raise ReceiptError("framework Python source inventory is not bounded")
+    schemas = {
+        "directory": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+        },
+        "file": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+            "size", "sha256",
+        },
+        "symlink": {
+            "path", "kind", "source_mode", "destination_mode", "target",
+        },
+    }
+    paths: list[str] = []
+    file_bytes = 0
+    for record in records:
+        kind = record.get("kind") if isinstance(record, dict) else None
+        if kind not in schemas or set(record) != schemas[kind]:
+            raise ReceiptError("framework Python source record is not exact")
+        path = record["path"]
+        if (
+            not isinstance(path, str) or not path or path.startswith("/")
+            or PurePosixPath(path).as_posix() != path
+            or ".." in PurePosixPath(path).parts
+        ):
+            raise ReceiptError("framework Python source path is unsafe")
+        paths.append(path)
+        for key in set(record) & {
+            "source_device", "source_inode", "destination_device",
+            "destination_inode", "size",
+        }:
+            if type(record[key]) is not int or record[key] < 0:
+                raise ReceiptError("framework Python source integer is invalid")
+        for key in set(record) & {"source_mode", "destination_mode"}:
+            if not isinstance(record[key], str) or re.fullmatch(
+                r"[0-7]{4}", record[key]
+            ) is None:
+                raise ReceiptError("framework Python source mode is invalid")
+            if kind != "symlink" and int(record[key], 8) & 0o022:
+                raise ReceiptError("framework Python source mode is unsafe")
+        if kind == "file":
+            if not isinstance(record["sha256"], str) or _DIGEST_RE.fullmatch(
+                record["sha256"]
+            ) is None:
+                raise ReceiptError("framework Python source digest is invalid")
+            file_bytes += record["size"]
+        elif kind == "symlink" and (
+            not isinstance(record["target"], str) or not record["target"]
+        ):
+            raise ReceiptError("framework Python source symlink is invalid")
+    if (
+        paths != sorted(paths) or len(set(paths)) != len(paths)
+        or type(declared_count) is not int or declared_count != len(records)
+        or type(declared_bytes) is not int or declared_bytes != file_bytes
+        or file_bytes > _MAX_FRAMEWORK_RUNTIME_BYTES
+    ):
+        raise ReceiptError("framework Python source inventory is not exact")
+    return records
+
+
+def _validate_framework_python_relocation_evidence(
+    public: Any,
+    private: Any,
+    input_records: Any,
+    runtime_records: list[dict[str, Any]],
+    input_record_count: Any,
+    input_file_bytes: Any,
+) -> None:
+    """Bind authenticated Mach-O sources/tools to the two derived members."""
+
+    if public != private or not isinstance(public, dict) or set(public) != {
+        "format", "schema_version", "framework", "tools", "artifacts"
+    }:
+        raise ReceiptError("framework Python relocation evidence is malformed")
+    framework = public["framework"]
+    if (
+        public["format"] != "iroha-sumeragi-v2-framework-python-relocation"
+        or type(public["schema_version"]) is not int
+        or public["schema_version"] != 1
+        or not isinstance(framework, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", framework) is None
+        or not isinstance(public["tools"], dict)
+        or set(public["tools"])
+        != {"codesign", "install_name_tool", "otool"}
+        or not isinstance(public["artifacts"], dict)
+        or set(public["artifacts"]) != {"launcher", "trampoline"}
+    ):
+        raise ReceiptError("framework Python relocation evidence is not exact")
+    input_records = _validate_framework_python_input_records(
+        input_records, input_record_count, input_file_bytes,
+    )
+    for name in ("codesign", "install_name_tool", "otool"):
+        tool = public["tools"][name]
+        if (
+            not isinstance(tool, dict)
+            or set(tool) != {"path", "mode", "sha256", "size_bytes"}
+            or tool["path"] != f"/usr/bin/{name}"
+            or not isinstance(tool["mode"], str)
+            or re.fullmatch(r"[0-7]{4}", tool["mode"]) is None
+            or int(tool["mode"], 8) & 0o022
+            or not int(tool["mode"], 8) & 0o111
+            or not isinstance(tool["sha256"], str)
+            or _DIGEST_RE.fullmatch(tool["sha256"]) is None
+            or type(tool["size_bytes"]) is not int
+            or not 0 < tool["size_bytes"] <= 64 * 1024 * 1024
+        ):
+            raise ReceiptError("framework Python relocation tool binding is wrong")
+    source_by_path = {
+        record.get("path"): record
+        for record in input_records
+        if isinstance(record, dict)
+    }
+    derived_by_path = {record["path"]: record for record in runtime_records}
+    rewrites = {
+        "launcher": ("python3", "bin/python3", "@executable_path/../Python"),
+        "trampoline": (
+            "Resources/Python.app/Contents/MacOS/Python",
+            "Resources/Python.app/Contents/MacOS/Python",
+            "@executable_path/../../../../Python",
+        ),
+    }
+    for name, (source_path, derived_path, dependency) in rewrites.items():
+        artifact = public["artifacts"][name]
+        source = artifact.get("source") if isinstance(artifact, dict) else None
+        derived = artifact.get("derived") if isinstance(artifact, dict) else None
+        source_record = source_by_path.get(source_path)
+        derived_record = derived_by_path.get(derived_path)
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != {"path", "source", "derived"}
+            or artifact["path"] != derived_path
+            or not isinstance(source, dict)
+            or set(source) != {
+                "mode", "sha256", "size_bytes",
+                "framework_dependency_sha256", "dependency_vector_sha256",
+            }
+            or not isinstance(derived, dict)
+            or set(derived) != {
+                "mode", "sha256", "size_bytes", "framework_dependency",
+                "dependency_vector_sha256", "codesign",
+            }
+            or not isinstance(source["mode"], str)
+            or re.fullmatch(r"[0-7]{4}", source["mode"]) is None
+            or int(source["mode"], 8) & 0o022
+            or not int(source["mode"], 8) & 0o111
+            or type(source["size_bytes"]) is not int
+            or not 0 < source["size_bytes"] <= 256 * 1024 * 1024
+            or type(derived["size_bytes"]) is not int
+            or not 0 < derived["size_bytes"] <= 256 * 1024 * 1024
+            or derived["mode"] != "0500"
+            or derived["framework_dependency"] != dependency
+            or derived["codesign"] != "adhoc"
+            or not isinstance(source_record, dict)
+            or source_record.get("kind") != "file"
+            or (
+                source_record.get("source_mode"), source_record.get("sha256"),
+                source_record.get("size"),
+            )
+            != (source["mode"], source["sha256"], source["size_bytes"])
+            or not isinstance(derived_record, dict)
+            or derived_record.get("kind") != "file"
+            or (
+                derived_record.get("mode"), derived_record.get("sha256"),
+                derived_record.get("size"),
+            )
+            != (derived["mode"], derived["sha256"], derived["size_bytes"])
+        ):
+            raise ReceiptError(
+                "framework Python relocation artifact binding is wrong"
+            )
+        digests = (
+            source["sha256"], source["framework_dependency_sha256"],
+            source["dependency_vector_sha256"], derived["sha256"],
+            derived["dependency_vector_sha256"],
+        )
+        if any(
+            not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None
+            for digest in digests
+        ) or (
+            source["sha256"] == derived["sha256"]
+            or source["dependency_vector_sha256"]
+            == derived["dependency_vector_sha256"]
+        ):
+            raise ReceiptError("framework Python relocation digest binding is wrong")
+    if derived_by_path.get(framework, {}).get("kind") != "file":
+        raise ReceiptError("framework Python relocation framework is absent")
+
+
 def _require_pruned_build_roots(release_root: Path) -> None:
     """Require every bootstrap-private disposable build root to be absent."""
 

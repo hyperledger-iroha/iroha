@@ -439,6 +439,10 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
             tools["verifier"].read_bytes()
         ),
         terminal_handoff=output,
+        rollout_plan=tmp_path / "rollout-plan.json",
+        rollout_result=tmp_path / "rollout-result.json",
+        rollout_authority_envelope=tmp_path / "rollout-envelope.json",
+        rollout_durable_receipt=tmp_path / "rollout-receipt.json",
     )
     fake_oras = FakeOras()
     monkeypatch.setattr(publisher, "_run_child", fake_oras)
@@ -799,6 +803,10 @@ def test_publication_receipt_semantic_mutations_are_rejected(field: str) -> None
         Path("/verifier"),
         "a" * 64,
         Path("/output"),
+        Path("/rollout-plan"),
+        Path("/rollout-result"),
+        Path("/rollout-envelope"),
+        Path("/rollout-receipt"),
     )
     expected = publisher._receipt_value(
         request=request,

@@ -1,5 +1,8 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+import subprocess
+
+
 def _retired_sidecar_gate_ttl_source_errors(
     path: Path,
     source: str,
@@ -299,6 +302,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/merge_ledger_latest_execution_index.rs",
     "kura/replica_advert_and_body_status.rs",
     "kura/retained_finality_replica_authority.rs",
+    "kura/queue_plan_admission_batch.rs",
     "kura/wsv_checkpoint_read_helpers.rs",
     "kura/durable_block_and_atomic_sidecar_io.rs",
     "kura/prune_intent_publication.rs",
@@ -482,6 +486,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/irohad/src/main.rs': (
         'main/shared_sorafs_provider_cache_tests.rs',
         'main/runtime_deps.rs',
+        'sumeragi_lane_relay_item.rs',
         'main/online_peers_provider.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
@@ -493,6 +498,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/mod.rs': (
         'fair_v2_ingress_selector.rs',
+        'tests/queue_plan_admission_handoff.rs',
         'tests/mod_authoritative_runtime_gate_01_support.rs',
         'tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs',
         'tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs',
@@ -578,7 +584,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_worker.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
-        'v2_worker/autonomous_lane_output_retirement.rs',
+        'v2_worker/queue_plan_admission_handoff.rs',
+        'v2_worker/exact_output_pending_state.rs',
+        'v2_worker/autonomous_lane_output_reconstruction.rs',
         'v2_worker/kura_replica_advert_refresh.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
         'v2_worker/effect_services_impl.rs',
@@ -587,6 +595,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_lifecycle_capacity_cases.rs',
         'tests/v2_worker_equivocation_and_selected_serve_fixture.rs',
         'v2_worker/applied_height_handoff_tests.rs',
+        'v2_worker/queue_plan_admission_handoff_tests.rs',
         'v2_worker/upstream_reply_route_test.rs',
         'tests/v2_worker_main_02.rs',
         'tests/v2_worker_main_03.rs',
@@ -618,12 +627,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_apply/error_recovery.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
+        'reducer/prepare_certificate_handling.rs',
         'tests/reducer_timeout_and_projection.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
         'refinement/first_release_witness.rs',
+        'refinement/volatile_summary_well_formed.rs',
         'refinement_constructor_test_helpers.rs',
         'refinement/transition_gate_tail.rs',
     ),
@@ -635,6 +646,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/committee_fallback_and_retransmit.rs',
         'tests/v2_core_view_zero_parent_binding.rs',
         'tests/empty_replay_resume_test.rs',
+        'tests/delayed_prepare_qc_cache_bounds.rs',
         'tests/v2_core_terminal_transactionality.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
@@ -649,6 +661,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
         'v2_lane_work/canonical_executed_block_application_repair.rs',
+        'v2_lane_work/queue_plan_admission_handoff.rs',
         'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
         'v2_lane_work/typed_finality_handoff_tests.rs',
         'tests/v2_lane_work_native_signing_guard.rs',
@@ -659,6 +672,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
         'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
+        'v2_lane_work/queue_plan_admission_handoff_tests.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
         'v2_lane_work_effect_queue.rs',
@@ -2083,13 +2097,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 857
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 89
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 860
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
+    "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "75702e6c87f81d5e8b20cb353cadb0ab8af9cad216d3281f85825a1bca326611"
+    "846d646b6ca8da66fadc5f8919934c8cecf50810410add1f34108e437d34a402"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2100,10 +2114,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 532
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 533
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431"
+    "5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2135,11 +2149,6 @@ _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
         "required_multilane_data_model_focus_tests",
         "g-unit-iroha-data-model",
         "iroha_data_model",
-    ),
-    (
-        "required_multilane_zkp_halo2_focus_tests",
-        "g-unit-iroha-zkp-halo2",
-        "iroha_zkp_halo2",
     ),
     (
         "required_multilane_torii_focus_tests",
@@ -2178,7 +2187,7 @@ _LATE_LANE_RECOVERY_TEST_SHA256 = (
     "bf99bfac45fd57a5f8b9e875f183164a3ea72600de485a58c79a0873aa5f7185"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 17),
+    ("production-kura-progress-durability", "kura::tests", 18),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
@@ -2215,7 +2224,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -2462,7 +2471,6 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::exact_output_retry_rejects_a_different_message_identity",
     "sumeragi::v2_worker::tests::full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure",
     "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
-    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
     "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
@@ -2787,6 +2795,10 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict",
+    "kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace",
+    "sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag",
+    "sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -3239,6 +3251,35 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
 
+_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """
+fn preflight_effect_insertion(
+    &mut self,
+    effect: &V2LaneWorkEffect,
+) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+    let predecessor_ready = match effect {
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => { self.outbound_lane_message_predecessor_is_ready(message) }
+        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => { self.proposal_predecessor_is_ready_for_progress(&certificate.proposal) }
+        _ => true,
+    };
+    if !predecessor_ready { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if !lane_work_effect_reply_routes_have_valid_shape(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    let key = lane_work_effect_key(effect);
+    if self.effect_keys.contains(&key) {
+        return Err(if self.effects.iter_mut()
+            .find(|queued| lane_work_effect_key(queued) == key)
+            .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+        {
+            LaneWorkEffectInsertionOutcome::Duplicate
+        } else {
+            LaneWorkEffectInsertionOutcome::Rejected
+        },);
+    }
+    if !lane_work_effect_reply_routes_are_valid(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if self.effects.len() >= self.limits.effect_capacity.get() { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    Ok(key)
+}
+"""
+
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
     # Approved together with the exact-output alias after the focused
@@ -3264,7 +3305,7 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect": "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "8a988b7b53dc952839db9407a32bfc675a54407606f57736db408cc694a8e92e", "pending_loop": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "e8f3f96412246ef16424373e71d01d4d80615655e6aaf591ecabba2ed22c6ef5", "pending_loop": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
@@ -3355,7 +3396,7 @@ _DIRECT_SERVE_RUNNER_ITEM_SHA256 = {
     "advance_executor_once_before_exact_serve": "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26",
     "ordinary_serve": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
     "pending_serve": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
-    "ordinary_active": "c61eee6e569f7b9537d1138a28d84fe2f59f4509c9492bfbd45fd7b6f5754f35",
+    "ordinary_active": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
     "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276",
 }
 
@@ -3449,7 +3490,7 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     "runner::drain_lane_relay_ingress": "665e0ea1c01501d80a547ec3d4ddd72117d32f7ea748de4ee2d0803519afbfb6",
     "ordinary::service_retained_certified_response": "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960",
     "ordinary::service_certified_serve_barrier": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
-    "ordinary::run_lifecycle_active_height": "c61eee6e569f7b9537d1138a28d84fe2f59f4509c9492bfbd45fd7b6f5754f35",
+    "ordinary::run_lifecycle_active_height": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
     "pending::service_pending_certified_serve_barrier": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
     "pending::run_pending_active_height": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276",
     "pending::run_pending_kura_lifecycle_height": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2",

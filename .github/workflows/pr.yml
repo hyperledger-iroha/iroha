@@ -188,6 +188,7 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Verify exhaustive Rust lane ownership
         run: |
+          python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
           python3 -m pytest -q \
@@ -197,6 +198,8 @@ jobs:
             scripts/tests/profile_cargo_build_test.py \
             scripts/tests/check_musubi_fixture_owner_test.py \
             scripts/tests/check_compile_time_table_assets_test.py \
+            scripts/tests/check_build_efficiency_provenance_test.py \
+            scripts/tests/check_jni_sdk_android_pairs_test.py \
             scripts/tests/check_dependency_budget_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
@@ -207,8 +210,9 @@ jobs:
           python3 scripts/check_cargo_feature_hygiene.py
           python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_compile_time_table_assets.py
+          python3 -I -S scripts/check_jni_sdk_android_pairs.py
           python3 scripts/check_dependency_budget.py
-          python3 scripts/check_source_file_budget.py
+          python3 scripts/check_source_file_budget.py --require-objective
           python3 scripts/check_generated_artifacts.py
           python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure

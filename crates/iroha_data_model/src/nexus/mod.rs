@@ -965,8 +965,15 @@ impl norito::json::JsonDeserialize for LaneConfig {
         let mut lane = LaneConfig::default();
         let mut saw_id = false;
         let mut saw_alias = false;
+        let mut seen_fields = BTreeSet::new();
         while let Some(key) = visitor.next_key()? {
-            match key.as_str() {
+            let key_name = key.as_str();
+            if !seen_fields.insert(key_name.to_owned()) {
+                return Err(norito::json::Error::Message(format!(
+                    "duplicate field `{key_name}` in lane metadata"
+                )));
+            }
+            match key_name {
                 "id" => {
                     lane.id = visitor.parse_value()?;
                     saw_id = true;
@@ -2368,6 +2375,62 @@ mod tests {
         let err = norito::json::from_str::<LaneLifecyclePlan>(duplicate)
             .expect_err("duplicate lifecycle plan field must fail closed");
         assert!(err.to_string().contains("duplicate field `retire`"));
+    }
+    #[test]
+    fn lane_config_json_rejects_duplicate_fields() {
+        let duplicate_values = [
+            (
+                "id",
+                norito::json::to_string(&LaneId::new(1)).expect("serialize lane id"),
+            ),
+            (
+                "alias",
+                norito::json::to_string("shadow").expect("serialize lane alias"),
+            ),
+            ("metadata", "{}".to_owned()),
+        ];
+        for (field, value) in duplicate_values {
+            let mut encoded =
+                norito::json::to_string(&LaneConfig::default()).expect("serialize lane metadata");
+            assert_eq!(encoded.pop(), Some('}'));
+            encoded.push_str(&format!(",\"{field}\":{value}}}"));
+            let err = norito::json::from_str::<LaneConfig>(&encoded)
+                .expect_err("duplicate lane metadata fields must fail closed");
+            assert!(
+                err.to_string()
+                    .contains(&format!("duplicate field `{field}`")),
+                "unexpected duplicate-field error: {err}"
+            );
+        }
+    }
+    #[test]
+    fn lane_lifecycle_json_rejects_nested_duplicate_lane_field() {
+        let catalog = LaneCatalog::default();
+        let entries = lifecycle_status(&catalog).incarnations;
+        let parameter = LaneLifecycleParameterV1::new(
+            &catalog,
+            &entries,
+            LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "manual-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            },
+        )
+        .expect("valid lifecycle parameter");
+        let encoded = norito::json::to_string(&parameter)
+            .expect("serialize lifecycle payload")
+            .replacen(
+                "\"alias\":\"manual-lane\"",
+                "\"alias\":\"manual-lane\",\"alias\":\"forged-lane\"",
+                1,
+            );
+        assert!(encoded.contains("\"alias\":\"forged-lane\""));
+        let err = norito::json::from_str::<LaneLifecycleParameterV1>(&encoded)
+            .expect_err("nested duplicate lane fields must fail closed");
+        assert!(err.to_string().contains("duplicate field `alias`"));
     }
     #[test]
     fn lane_lifecycle_rejects_unknown_retire_or_empty() {

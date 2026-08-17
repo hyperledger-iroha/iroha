@@ -111,6 +111,7 @@ MACOS_CONTROLLER_FILES = (
     "scripts/release_manifest_signing.py",
     "scripts/render_taira_validator_bundle.py",
     "scripts/seal_taira_release_controllers.py",
+    "scripts/taira_authority_client.py",
     "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
     "scripts/taira_privacy_action_driver_ipc.py",

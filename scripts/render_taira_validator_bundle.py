@@ -11,8 +11,10 @@ import re
 import stat
 import subprocess
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 try:
     from scripts import taira_constants
@@ -637,6 +639,53 @@ def _canonical_socket_address(value: str, context: str) -> str:
     return canonical
 
 
+def _canonical_torii_origin(value: str, context: str) -> str:
+    """Return one canonical public Taira HTTPS origin."""
+
+    if value != value.strip():
+        raise ValueError(f"{context} must not contain leading or trailing whitespace")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{context} is not a valid absolute HTTPS origin: {error}") from error
+    if parsed.scheme != "https" or not parsed.netloc or hostname is None:
+        raise ValueError(f"{context} must be an absolute HTTPS origin")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{context} must not contain credentials")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError(f"{context} must not contain a path, query, or fragment")
+    canonical_hostname = hostname.lower().rstrip(".")
+    if not canonical_hostname:
+        raise ValueError(f"{context} must contain a hostname")
+    try:
+        canonical_hostname = str(ip_address(canonical_hostname))
+    except ValueError:
+        labels = canonical_hostname.split(".")
+        if (
+            len(canonical_hostname) > 253
+            or (len(labels) == 4 and all(label.isdecimal() for label in labels))
+            or any(
+                not label
+                or len(label) > 63
+                or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+                is None
+                for label in labels
+            )
+        ):
+            raise ValueError(f"{context} contains a non-canonical hostname") from None
+    canonical_host = (
+        f"[{canonical_hostname}]" if ":" in canonical_hostname else canonical_hostname
+    )
+    effective_port = 443 if port is None else port
+    if effective_port <= 0:
+        raise ValueError(f"{context} contains an invalid port")
+    if effective_port != 443:
+        canonical_host = f"{canonical_host}:{effective_port}"
+    return f"https://{canonical_host}"
+
+
 def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
     """Return the canonical digest stored in account-onboarding config."""
 
@@ -1068,7 +1117,10 @@ def _load_defaults(payload: dict[str, Any]) -> RosterDefaults:
             raise ValueError(
                 "roster default `torii_public_address` must be a non-empty string"
             )
-        torii_public_address = torii_public_address.strip()
+        torii_public_address = _canonical_torii_origin(
+            torii_public_address,
+            "roster default `torii_public_address`",
+        )
     return RosterDefaults(
         network_address=_canonical_socket_address(
             values["network_address"], "roster default `network_address`"
@@ -1545,6 +1597,7 @@ def _render_governance_manifest(validators: list[ValidatorEntry]) -> str:
             {
                 "validator": validator.account_id,
                 "peer_id": validator.public_key,
+                "torii_url": validator.torii_public_address,
             }
             for validator in validators
         ],
@@ -1844,6 +1897,10 @@ def load_roster(
                 f"validator `{slug}` must set `torii_public_address` explicitly; "
                 "public Taira deploys use direct per-node Torii hostnames"
             )
+        torii_public_address = _canonical_torii_origin(
+            torii_public_address,
+            f"validator `{slug}` field `torii_public_address`",
+        )
         if slug in seen_slugs:
             raise ValueError(f"validator slug `{slug}` is duplicated")
         account_id = _require_string(raw, "account_id", f"validator `{slug}`")
@@ -1873,9 +1930,9 @@ def load_roster(
             raise ValueError(
                 f"validator public_address `{public_address}` is duplicated"
             )
-        if torii_public_address.strip() in seen_torii_public_addresses:
+        if torii_public_address in seen_torii_public_addresses:
             raise ValueError(
-                f"validator torii_public_address `{torii_public_address.strip()}` is duplicated; "
+                f"validator torii_public_address `{torii_public_address}` is duplicated; "
                 "each public validator must expose its own direct Torii hostname"
             )
         seen_slugs.add(slug)
@@ -1887,7 +1944,7 @@ def load_roster(
         if receipt_node_id is not None:
             seen_receipt_node_ids.add(receipt_node_id)
         seen_public_addresses.add(public_address)
-        seen_torii_public_addresses.add(torii_public_address.strip())
+        seen_torii_public_addresses.add(torii_public_address)
         validators.append(
             ValidatorEntry(
                 slug=slug,
@@ -1909,7 +1966,7 @@ def load_roster(
                     torii_address,
                     f"validator `{slug}` field `torii_address`",
                 ),
-                torii_public_address=torii_public_address.strip(),
+                torii_public_address=torii_public_address,
             )
         )
 

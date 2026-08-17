@@ -1,0 +1,34 @@
+
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            state StateMap<Name, PolicyState> Policies;
+            state StateMap<int, int> FallbackCalls;
+
+            fn observed_fallback() -> PolicyState {
+                let count = FallbackCalls.get(1).unwrap_or(0);
+                FallbackCalls[1] = count + 1;
+                return PolicyState {
+                    version: 11,
+                    document: b"fallback",
+                    document_hash: b"fallback-hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 77,
+                    change_id: Name::parse("fallback"),
+                };
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let policy = Policies.get(Name::parse("missing")).unwrap_or(
+                    observed_fallback(),
+                );
+                return policy.version;
+            }
+        }
+    

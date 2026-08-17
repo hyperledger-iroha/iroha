@@ -1,0 +1,8 @@
+
+        seiyaku VrfVerification {
+            view fn main(bytes input, bytes public_key, bytes proof, bytes batch) {
+                let _out = crypto::vrf::verify(request: input);
+                let _batch = crypto::vrf::verify_batch(batch);
+            }
+        }
+    

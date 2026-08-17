@@ -322,7 +322,7 @@ impl Memory {
             code_length: code_size,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
-            tree: ByteMerkleTree::new((total_size as usize / 32).max(1), 32),
+            tree: ByteMerkleTree::new((total_size as usize).div_ceil(32).max(1), 32),
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),

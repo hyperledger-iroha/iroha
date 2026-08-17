@@ -499,12 +499,15 @@ BY SMT DEF AsyncCandidateServiceTrackedKinds,
            AsyncCandidateServiceStageClasses,
            NoAsyncCandidateServiceStage
 
-\* Production uses a linearly growing timeout.  The arithmetic is saturated
-\* only where the implementation's duration representation saturates; the
-\* liveness configuration below requires the complete post-GST service budget
-\* to remain strictly below that representational ceiling.
+\* Production uses a linearly growing timeout with a ten-base protocol ceiling.
+\* The model keeps AsyncMaximumRoundTimeout symbolic because its service budget
+\* counts abstract actions rather than milliseconds. Production instantiation
+\* binds it to ten bases and must separately discharge the service-bound premise.
 AsyncLinearViewTimeout(roundView) ==
   AsyncRoundTimeout * (roundView + 1)
+
+AsyncProductionTimingInstantiation ==
+  AsyncMaximumRoundTimeout = 10 * AsyncRoundTimeout
 
 AsyncViewTimeout(roundView) ==
   IF AsyncLinearViewTimeout(roundView) <= AsyncMaximumRoundTimeout

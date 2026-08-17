@@ -837,11 +837,10 @@ impl LaneRelayEnvelope {
                 .try_add(&receipt.xor_variance)
                 .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
         }
-        if !settlement.receipts.is_empty()
-            && (total_local_amount != settlement.total_local_amount
-                || total_xor_due != settlement.total_xor_due
-                || total_xor_after_haircut != settlement.total_xor_after_haircut
-                || total_xor_variance != settlement.total_xor_variance)
+        if total_local_amount != settlement.total_local_amount
+            || total_xor_due != settlement.total_xor_due
+            || total_xor_after_haircut != settlement.total_xor_after_haircut
+            || total_xor_variance != settlement.total_xor_variance
         {
             return Err(LaneRelayError::SettlementTotalsMismatch);
         }
@@ -1649,6 +1648,30 @@ mod tests {
             .verify()
             .expect_err("mismatched receipt totals must fail verification");
         assert_eq!(err, LaneRelayError::SettlementTotalsMismatch);
+    }
+    #[test]
+    fn verify_requires_zero_totals_when_settlement_receipts_are_empty() {
+        let mut envelope = build_envelope(6);
+        envelope.settlement_commitment.receipts.clear();
+        envelope.settlement_commitment.tx_count = 0;
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("empty-receipt settlement hashes");
+        assert_eq!(
+            envelope
+                .verify()
+                .expect_err("empty receipts cannot authenticate nonzero aggregate totals"),
+            LaneRelayError::SettlementTotalsMismatch
+        );
+
+        envelope.settlement_commitment.total_local_amount = Quantity::zero();
+        envelope.settlement_commitment.total_xor_due = Quantity::zero();
+        envelope.settlement_commitment.total_xor_after_haircut = Quantity::zero();
+        envelope.settlement_commitment.total_xor_variance = Quantity::zero();
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("zero-valued empty settlement hashes");
+        envelope
+            .verify()
+            .expect("empty receipts with zero aggregate totals remain valid");
     }
     #[test]
     fn settlement_tx_count_covers_union_of_receipt_sources() {

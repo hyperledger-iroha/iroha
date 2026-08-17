@@ -157,16 +157,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1d874760e2f6ea41e512e4e98ec544e2c575a1d0825be0a62a8ba54356ca0645"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -174,7 +174,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+        "783d0eec35169a98663b14be54ba5ada430f8d385ee4142fc7772fe85934e53a"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -2158,136 +2158,6 @@ del _bootstrap_component_name, _bootstrap_component_snapshot
 
 
 
-def _framework_python_marker_record(
-    inventory_snapshot: FileSnapshot,
-) -> dict[str, Any]:
-    """Project the private helper inventory into a path-free marker record."""
-
-    inventory = _parse_canonical_json(
-        inventory_snapshot, "framework Python runtime inventory",
-    )
-    required = {
-        "format",
-        "schema_version",
-        "runtime_root",
-        "record_count",
-        "file_bytes",
-        "records",
-        "source_disclosure",
-        "input_record_count",
-        "input_file_bytes",
-        "input_records",
-    }
-    if (
-        set(inventory) != required
-        or inventory["format"]
-        != "iroha-sumeragi-v2-private-framework-python-runtime"
-        or type(inventory["schema_version"]) is not int
-        or inventory["schema_version"] != 1
-        or inventory["source_disclosure"] != "withheld"
-        or not isinstance(inventory["records"], list)
-        or not isinstance(inventory["input_records"], list)
-    ):
-        raise BootstrapError(
-            "framework Python runtime helper returned the wrong inventory"
-        )
-    sanitized: list[dict[str, Any]] = []
-    for record in inventory["records"]:
-        if not isinstance(record, dict):
-            raise BootstrapError(
-                "framework Python runtime inventory member is malformed"
-            )
-        kind = record.get("kind")
-        keys = {
-            "directory": {"path", "kind", "device", "inode", "mode"},
-            "file": {
-                "path",
-                "kind",
-                "device",
-                "inode",
-                "mode",
-                "size",
-                "sha256",
-            },
-            "symlink": {"path", "kind", "mode", "target"},
-        }.get(kind)
-        path = record.get("path")
-        if (
-            keys is None
-            or set(record) != keys
-            or not isinstance(path, str)
-            or not path
-            or path.startswith("/")
-            or ".." in Path(path).parts
-            or Path(path).as_posix() != path
-            or not isinstance(record.get("mode"), str)
-            or re.fullmatch(r"[0-7]{4}", record["mode"]) is None
-        ):
-            raise BootstrapError(
-                "framework Python runtime inventory member is not exact"
-            )
-        projected = {
-            key: record[key]
-            for key in (
-                ("path", "kind", "mode")
-                if kind == "directory"
-                else ("path", "kind", "mode", "size", "sha256")
-                if kind == "file"
-                else ("path", "kind", "mode", "target")
-            )
-        }
-        if (
-            kind == "file"
-            and (
-                type(projected["size"]) is not int
-                or projected["size"] < 0
-                or not isinstance(projected["sha256"], str)
-                or _DIGEST_RE.fullmatch(projected["sha256"]) is None
-            )
-        ) or (
-            kind == "symlink"
-            and (
-                not isinstance(projected["target"], str)
-                or not projected["target"]
-            )
-        ):
-            raise BootstrapError(
-                "framework Python runtime inventory member metadata is invalid"
-            )
-        sanitized.append(projected)
-    sanitized.sort(key=lambda record: record["path"])
-    file_bytes = sum(
-        record["size"] for record in sanitized if record["kind"] == "file"
-    )
-    if (
-        type(inventory["record_count"]) is not int
-        or inventory["record_count"] != len(sanitized)
-        or type(inventory["file_bytes"]) is not int
-        or inventory["file_bytes"] != file_bytes
-        or sanitized
-        != sorted(sanitized, key=lambda record: str(record["path"]))
-    ):
-        raise BootstrapError(
-            "framework Python runtime inventory accounting is not exact"
-        )
-    return {
-        "format": "iroha-sumeragi-v2-framework-python-runtime",
-        "schema_version": 1,
-        "archive_root": "python-runtime",
-        "root_mode": "0500",
-        "executable": "bin/python3",
-        "inventory": {
-            "archive_name": "python-runtime-input.json",
-            "mode": f"{inventory_snapshot.mode:04o}",
-            "sha256": inventory_snapshot.sha256,
-            "size_bytes": inventory_snapshot.size,
-        },
-        "record_count": len(sanitized),
-        "file_bytes": file_bytes,
-        "records": sanitized,
-    }
-
-
 def _copy_framework_python_archive(
     *,
     evidence: Path,
@@ -2333,15 +2203,31 @@ def _copy_framework_python_archive(
         "framework Python runtime inventory",
         maximum_bytes=_MAX_EVIDENCE_BYTES,
     )
+    marker_record = _framework_python_marker_record(inventory)
+    launcher = marker_record["relocation"]["artifacts"]["launcher"]
     if (
-        archive.data != protected_python.data
-        or archive.mode != _TOOL_MODE
+        archive.mode != _TOOL_MODE
         or inventory.mode != _DATA_MODE
+        or (
+            launcher["source"]["mode"],
+            launcher["source"]["sha256"],
+            launcher["source"]["size_bytes"],
+        )
+        != (
+            f"{protected_python.mode:04o}",
+            protected_python.sha256,
+            protected_python.size,
+        )
+        or (
+            launcher["derived"]["mode"],
+            launcher["derived"]["sha256"],
+            launcher["derived"]["size_bytes"],
+        )
+        != (f"{archive.mode:04o}", archive.sha256, archive.size)
     ):
         raise BootstrapError(
-            "archived framework Python does not match its protected executable"
+            "archived framework Python relocation binding is not exact"
         )
-    marker_record = _framework_python_marker_record(inventory)
     if (
         _parse_canonical_json(
             inventory, "framework Python runtime inventory",
@@ -3091,6 +2977,13 @@ def bootstrap(args: argparse.Namespace) -> int:
             False,
         ),
         (
+            "runtime_helper_cli",
+            args.runtime_helper_cli,
+            args.expected_runtime_helper_cli_sha256,
+            _MAX_HELPER_BYTES,
+            False,
+        ),
+        (
             "tool_probe_helper",
             args.tool_probe_helper,
             args.expected_tool_probe_helper_sha256,
@@ -3249,6 +3142,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             "receipt_validator": "validate-receipt.py",
             "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
             "runtime_helper": "copy-release-runtime.py",
+            "runtime_helper_cli": "copy_sumeragi_v2_release_cargo_cache_cli.py",
             "tool_probe_helper": "probe-release-tools.py",
             "approval_contract": "release-approval-contract.py",
             "sdk_dependency_bundle_manifest": (
@@ -4746,6 +4640,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--runtime-helper", type=Path, required=True)
     parser.add_argument("--expected-runtime-helper-sha256", required=True)
+    parser.add_argument("--runtime-helper-cli", type=Path, required=True)
+    parser.add_argument("--expected-runtime-helper-cli-sha256", required=True)
     parser.add_argument("--tool-probe-helper", type=Path, required=True)
     parser.add_argument("--expected-tool-probe-helper-sha256", required=True)
     parser.add_argument("--approval-contract", type=Path, required=True)

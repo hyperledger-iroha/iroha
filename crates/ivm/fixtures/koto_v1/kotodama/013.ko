@@ -1,0 +1,7 @@
+
+        seiyaku Demo {
+            state Map<string, int> detail;
+
+            view fn main() {}
+        }
+    

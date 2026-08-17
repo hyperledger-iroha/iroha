@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         metadata::Metadata,
         nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
-    use super::*;
     #[test]
     fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
         let lanes = sora_lane_catalog();
@@ -1180,6 +1180,30 @@ mod tests {
             <[u8; 32]>::from(hash),
             iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             "data-model genesis defaults must track the canonical config projection",
+        );
+    }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
+        let universal = DataSpaceMetadata::default();
+        let settlement = DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "settlement".to_owned(),
+            description: Some("settlement dataspace".to_owned()),
+            fault_tolerance: 2,
+        };
+        let left = Nexus {
+            dataspace_catalog: DataSpaceCatalog::new(vec![universal.clone(), settlement.clone()])
+                .expect("valid dataspace catalog"),
+            ..Nexus::default()
+        };
+        let mut right = left.clone();
+        right.dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
+            .expect("valid reordered dataspace catalog");
+
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
         );
     }
     fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {

@@ -1,0 +1,10 @@
+
+            seiyaku Demo {
+              fn increment(int x) -> int { return x + 1; }
+
+              #[test]
+              fn inline() {
+                test::assert_eq(actual: increment(1), expected: 2);
+              }
+            }
+            

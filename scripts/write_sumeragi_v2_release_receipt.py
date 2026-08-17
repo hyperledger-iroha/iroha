@@ -62,13 +62,13 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1848bd131e3dca9bb3ebab62974e6c7a79216f9ad125e450fd9e969cd98cfe41"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
     ),
 }
 
@@ -194,7 +194,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "ccd5b7b63d1586ee8c6da77d916345f027ef6dc34a1499700f7c03661a9a37b9"
+    "8758257a6c511949758ca34ef1dd76d83246b889ba947af9313376d0e6269dc9"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -211,6 +211,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
         _SIGNATURE_DATA_MODE,
     ),
     "runtime_helper": ("copy-release-runtime.py", _SIGNATURE_DATA_MODE),
+    "runtime_helper_cli": (
+        "copy_sumeragi_v2_release_cargo_cache_cli.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "tool_probe_helper": ("probe-release-tools.py", _SIGNATURE_DATA_MODE),
     "approval_contract": ("release-approval-contract.py", _SIGNATURE_DATA_MODE),
     "approval_offline_toolchain_sdk": (
@@ -239,21 +243,21 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1d874760e2f6ea41e512e4e98ec544e2c575a1d0825be0a62a8ba54356ca0645"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+        "783d0eec35169a98663b14be54ba5ada430f8d385ee4142fc7772fe85934e53a"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -504,8 +508,8 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 857
-_G_UNIT_TEST_COUNT = 532
+_PRODUCTION_TEST_COUNT = 860
+_G_UNIT_TEST_COUNT = 527
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
@@ -550,13 +554,6 @@ _G_UNIT_GROUPS = (
         "lib",
     ),
     (
-        "required_multilane_zkp_halo2_focus_tests",
-        "g-unit-iroha-zkp-halo2",
-        "iroha_zkp_halo2",
-        5,
-        "lib",
-    ),
-    (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
@@ -579,7 +576,7 @@ _G_UNIT_GROUPS = (
     ),
 )
 _PRODUCTION_MODULES = (
-    ("production-kura-progress-durability", "kura::tests", 17),
+    ("production-kura-progress-durability", "kura::tests", 18),
     (
         "production-kura-lane-geometry",
         "kura::lane_geometry::tests",
@@ -624,7 +621,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -3141,6 +3138,7 @@ def _framework_runtime_projection(
             or ".." in PurePosixPath(relative).parts
             or not isinstance(mode, str)
             or re.fullmatch(r"[0-7]{4}", mode) is None
+            or (kind != "symlink" and int(mode, 8) & 0o022)
         ):
             raise ReceiptError(f"{name} member path or mode is unsafe")
         if kind == "file":
@@ -3181,13 +3179,14 @@ def _validate_framework_python_runtime(
             "record_count",
             "file_bytes",
             "records",
+            "relocation",
         },
         "framework Python runtime",
     )
     if (
         runtime["format"] != "iroha-sumeragi-v2-framework-python-runtime"
         or type(runtime["schema_version"]) is not int
-        or runtime["schema_version"] != 1
+        or runtime["schema_version"] != 2
         or runtime["archive_root"] != "python-runtime"
         or runtime["root_mode"] != "0500"
         or runtime["executable"] != "bin/python3"
@@ -3239,6 +3238,7 @@ def _validate_framework_python_runtime(
         "input_record_count",
         "input_file_bytes",
         "input_records",
+        "relocation",
     }
     runtime_root = directory / "python-runtime"
     if (
@@ -3246,7 +3246,7 @@ def _validate_framework_python_runtime(
         or private_inventory["format"]
         != "iroha-sumeragi-v2-private-framework-python-runtime"
         or type(private_inventory["schema_version"]) is not int
-        or private_inventory["schema_version"] != 1
+        or private_inventory["schema_version"] != 2
         or private_inventory["runtime_root"] != str(runtime_root)
         or private_inventory["source_disclosure"] != "withheld"
         or not isinstance(private_inventory["input_records"], list)
@@ -3268,6 +3268,12 @@ def _validate_framework_python_runtime(
         raise ReceiptError(
             "framework Python marker does not bind the private member inventory"
         )
+    _validate_framework_python_relocation_evidence(
+        runtime["relocation"], private_inventory["relocation"],
+        private_inventory["input_records"], expected,
+        private_inventory["input_record_count"],
+        private_inventory["input_file_bytes"],
+    )
     expected_count = runtime["record_count"]
     expected_bytes = runtime["file_bytes"]
     if (

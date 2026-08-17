@@ -540,7 +540,7 @@ jobs:
           for name in CARGO_HOME RUSTUP_HOME; do if [[ -n "${!name:-}" ]]; then clean+=("$name=${!name}"); fi; done
           "${clean[@]}" cargo build --locked --release -p irohad \
             --bin iroha3d --bin sorafs_external_software_signer \
-            --features embedded-soracloud-runtime,zk-stark
+            --features embedded-soracloud-runtime,external-software-signer-bin,zk-stark
           network_messages="$RUNNER_TEMP/taira-network-driver.jsonl"
           jindo_messages="$RUNNER_TEMP/taira-jindo-driver.jsonl"
           action_messages="$RUNNER_TEMP/taira-action-driver.jsonl"

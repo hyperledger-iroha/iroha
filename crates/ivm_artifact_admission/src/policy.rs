@@ -427,6 +427,20 @@ fn validate_bytecode_security(
     let instruction_boundaries = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     for op in decoded {
         let opcode = wide::opcode(op.inst);
+        if !wide::is_valid_opcode(opcode) {
+            return Err(ContractArtifactError::invalid(format!(
+                "invalid opcode 0x{opcode:02x} at pc {}",
+                op.pc
+            )));
+        }
+        if opcode == wide::crypto::POSEIDON6
+            && ivm_abi::encoding::wide::decode_poseidon6(op.inst).is_none()
+        {
+            return Err(ContractArtifactError::invalid(format!(
+                "noncanonical POSEIDON6 encoding at pc {}",
+                op.pc
+            )));
+        }
         if opcode == wide::control::JR {
             return Err(ContractArtifactError::invalid(format!(
                 "unverifiable indirect control flow at pc {}",

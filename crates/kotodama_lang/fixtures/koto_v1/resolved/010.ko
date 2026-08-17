@@ -1,0 +1,8 @@
+
+module BadLocals {
+    fn broken(int value) {
+        let int value = 1;
+        let int first = missing_one;
+        let int second = missing_two;
+    }
+}

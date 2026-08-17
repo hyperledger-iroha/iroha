@@ -1,0 +1,12 @@
+
+        seiyaku C {
+            state StateMap<Name, AccountId> Foo;
+
+            kotoage fn main() -> bool authorize("WriteState") {
+                let key = Name::parse("alice");
+                Foo[key] = context::authority();
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
+            }
+        }
+    

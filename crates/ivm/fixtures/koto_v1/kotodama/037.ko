@@ -1,0 +1,5 @@
+
+        module InvalidTupleIndex {
+        fn f() { let t = (1,2); let v = t.3; }
+        }
+    

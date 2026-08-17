@@ -65,6 +65,7 @@ _TRUSTED_INPUT_KEYS = {
     "receipt_validator",
     "receipt_validator_support",
     "runtime_helper",
+    "runtime_helper_cli",
     "tool_probe_helper",
     "approval_contract",
     "approval_offline_toolchain_sdk",
@@ -95,6 +96,7 @@ _TRUSTED_ARCHIVE_NAMES = {
     "receipt_validator": "validate-receipt.py",
     "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
     "runtime_helper": "copy-release-runtime.py",
+    "runtime_helper_cli": "copy_sumeragi_v2_release_cargo_cache_cli.py",
     "tool_probe_helper": "probe-release-tools.py",
     "approval_contract": "release-approval-contract.py",
     "approval_offline_toolchain_sdk": (
@@ -112,21 +114,21 @@ _TRUSTED_ARCHIVE_NAMES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1d874760e2f6ea41e512e4e98ec544e2c575a1d0825be0a62a8ba54356ca0645"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+        "783d0eec35169a98663b14be54ba5ada430f8d385ee4142fc7772fe85934e53a"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -702,6 +704,7 @@ def _framework_runtime_projection(
             or ".." in PurePosixPath(path).parts
             or not isinstance(value.get("mode"), str)
             or _MODE_RE.fullmatch(value["mode"]) is None
+            or (kind != "symlink" and int(value["mode"], 8) & 0o022)
         ):
             raise ValidationError(f"{label} member path or mode is unsafe")
         if kind == "file":
@@ -727,6 +730,223 @@ def _framework_runtime_projection(
     return projected
 
 
+def _framework_source_records(
+    records: Any, declared_count: Any, declared_bytes: Any,
+) -> list[dict[str, Any]]:
+    """Validate the exact canonical private source-record inventory."""
+
+    if not isinstance(records, list) or len(records) > _MAX_FRAMEWORK_RUNTIME_MEMBERS:
+        raise ValidationError("framework Python source inventory is not bounded")
+    paths: list[str] = []
+    file_bytes = 0
+    schemas = {
+        "directory": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+        },
+        "file": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+            "size", "sha256",
+        },
+        "symlink": {
+            "path", "kind", "source_mode", "destination_mode", "target",
+        },
+    }
+    for record in records:
+        kind = record.get("kind") if isinstance(record, dict) else None
+        if kind not in schemas or set(record) != schemas[kind]:
+            raise ValidationError("framework Python source record is not exact")
+        path = record["path"]
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or PurePosixPath(path).as_posix() != path
+            or ".." in PurePosixPath(path).parts
+        ):
+            raise ValidationError("framework Python source path is unsafe")
+        paths.append(path)
+        for key in set(record) & {
+            "source_device", "source_inode", "destination_device",
+            "destination_inode", "size",
+        }:
+            _strict_int(record[key], f"framework Python source {key}")
+        for key in set(record) & {"source_mode", "destination_mode"}:
+            mode = _mode(record[key], f"framework Python source {key}")
+            if kind != "symlink" and mode & 0o022:
+                raise ValidationError("framework Python source mode is unsafe")
+        if kind == "file":
+            _digest(record["sha256"], "framework Python source digest")
+            file_bytes += record["size"]
+        elif kind == "symlink":
+            _string(record["target"], "framework Python source symlink target")
+    if (
+        paths != sorted(paths)
+        or len(set(paths)) != len(paths)
+        or _strict_int(declared_count, "framework Python source record count")
+        != len(records)
+        or _strict_int(declared_bytes, "framework Python source file bytes")
+        != file_bytes
+        or file_bytes > _MAX_FRAMEWORK_RUNTIME_BYTES
+    ):
+        raise ValidationError("framework Python source inventory is not exact")
+    return records
+
+
+def _validate_framework_python_relocation(
+    public: Any,
+    private: Any,
+    input_records: Any,
+    runtime_records: list[dict[str, Any]],
+) -> None:
+    """Independently bind two relocated Mach-O files to sources and tools."""
+
+    relocation = _exact_dict(
+        public,
+        {"format", "schema_version", "framework", "tools", "artifacts"},
+        "framework Python relocation",
+    )
+    if private != relocation or (
+        relocation["format"]
+        != "iroha-sumeragi-v2-framework-python-relocation"
+        or _strict_int(
+            relocation["schema_version"], "framework Python relocation schema"
+        )
+        != 1
+        or not isinstance(relocation["framework"], str)
+        or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._+-]*", relocation["framework"]
+        )
+        is None
+        or not isinstance(relocation["tools"], dict)
+        or set(relocation["tools"])
+        != {"codesign", "install_name_tool", "otool"}
+        or not isinstance(relocation["artifacts"], dict)
+        or set(relocation["artifacts"]) != {"launcher", "trampoline"}
+        or not isinstance(input_records, list)
+    ):
+        raise ValidationError("framework Python relocation is not exact")
+    for name in ("codesign", "install_name_tool", "otool"):
+        tool = _exact_dict(
+            relocation["tools"][name],
+            {"path", "mode", "sha256", "size_bytes"},
+            f"framework Python relocation tool {name}",
+        )
+        mode = _mode(tool["mode"], f"framework Python relocation tool {name}")
+        if (
+            tool["path"] != f"/usr/bin/{name}"
+            or mode & 0o022
+            or not mode & 0o111
+            or _DIGEST_RE.fullmatch(
+                _string(tool["sha256"], f"framework Python {name} digest")
+            )
+            is None
+            or not 0
+            < _strict_int(
+                tool["size_bytes"], f"framework Python {name} size"
+            )
+            <= 64 * 1024 * 1024
+        ):
+            raise ValidationError(
+                "framework Python relocation tool binding is wrong"
+            )
+    source_by_path = {
+        record.get("path"): record
+        for record in input_records
+        if isinstance(record, dict)
+    }
+    derived_by_path = {record["path"]: record for record in runtime_records}
+    rewrites = {
+        "launcher": ("python3", "bin/python3", "@executable_path/../Python"),
+        "trampoline": (
+            "Resources/Python.app/Contents/MacOS/Python",
+            "Resources/Python.app/Contents/MacOS/Python",
+            "@executable_path/../../../../Python",
+        ),
+    }
+    for name, (source_path, derived_path, dependency) in rewrites.items():
+        artifact = _exact_dict(
+            relocation["artifacts"][name],
+            {"path", "source", "derived"},
+            f"framework Python relocation artifact {name}",
+        )
+        source = _exact_dict(
+            artifact["source"],
+            {
+                "mode", "sha256", "size_bytes",
+                "framework_dependency_sha256", "dependency_vector_sha256",
+            },
+            f"framework Python relocation source {name}",
+        )
+        derived = _exact_dict(
+            artifact["derived"],
+            {
+                "mode", "sha256", "size_bytes", "framework_dependency",
+                "dependency_vector_sha256", "codesign",
+            },
+            f"framework Python relocation derived {name}",
+        )
+        source_record = source_by_path.get(source_path)
+        derived_record = derived_by_path.get(derived_path)
+        if (
+            artifact["path"] != derived_path
+            or _mode(source["mode"], "framework Python relocation source mode")
+            & 0o022
+            or not int(source["mode"], 8) & 0o111
+            or not 0
+            < _strict_int(
+                source["size_bytes"], "framework Python relocation source size"
+            )
+            <= 256 * 1024 * 1024
+            or not 0
+            < _strict_int(
+                derived["size_bytes"], "framework Python relocation derived size"
+            )
+            <= 256 * 1024 * 1024
+            or derived["mode"] != "0500"
+            or derived["framework_dependency"] != dependency
+            or derived["codesign"] != "adhoc"
+            or not isinstance(source_record, dict)
+            or source_record.get("kind") != "file"
+            or (
+                source_record.get("source_mode"), source_record.get("sha256"),
+                source_record.get("size"),
+            )
+            != (source["mode"], source["sha256"], source["size_bytes"])
+            or not isinstance(derived_record, dict)
+            or derived_record.get("kind") != "file"
+            or (
+                derived_record.get("mode"), derived_record.get("sha256"),
+                derived_record.get("size"),
+            )
+            != (derived["mode"], derived["sha256"], derived["size_bytes"])
+        ):
+            raise ValidationError(
+                "framework Python relocation artifact binding is wrong"
+            )
+        digests = (
+            source["sha256"], source["framework_dependency_sha256"],
+            source["dependency_vector_sha256"], derived["sha256"],
+            derived["dependency_vector_sha256"],
+        )
+        if any(
+            not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None
+            for digest in digests
+        ) or (
+            source["sha256"] == derived["sha256"]
+            or source["dependency_vector_sha256"]
+            == derived["dependency_vector_sha256"]
+        ):
+            raise ValidationError(
+                "framework Python relocation digest binding is wrong"
+            )
+    if derived_by_path.get(relocation["framework"], {}).get("kind") != "file":
+        raise ValidationError(
+            "framework Python relocation names the wrong framework"
+        )
+
+
 def _validate_framework_python_runtime(
     value: Any, evidence: DirectorySnapshot,
 ) -> tuple[Snapshot, DirectorySnapshot]:
@@ -744,6 +964,7 @@ def _validate_framework_python_runtime(
             "record_count",
             "file_bytes",
             "records",
+            "relocation",
         },
         "framework Python runtime",
     )
@@ -753,7 +974,7 @@ def _validate_framework_python_runtime(
         or _strict_int(
             runtime["schema_version"], "framework Python runtime schema"
         )
-        != 1
+        != 2
         or runtime["archive_root"] != "python-runtime"
         or runtime["root_mode"] != "0500"
         or runtime["executable"] != "bin/python3"
@@ -809,6 +1030,7 @@ def _validate_framework_python_runtime(
         "input_record_count",
         "input_file_bytes",
         "input_records",
+        "relocation",
     }
     runtime_path = evidence.path / "python-runtime"
     if (
@@ -819,7 +1041,7 @@ def _validate_framework_python_runtime(
             private_inventory["schema_version"],
             "private framework Python runtime schema",
         )
-        != 1
+        != 2
         or private_inventory["runtime_root"] != str(runtime_path)
         or private_inventory["source_disclosure"] != "withheld"
         or not isinstance(private_inventory["input_records"], list)
@@ -837,6 +1059,17 @@ def _validate_framework_python_runtime(
         raise ValidationError(
             "framework Python marker does not bind the private member inventory"
         )
+    input_records = _framework_source_records(
+        private_inventory["input_records"],
+        private_inventory["input_record_count"],
+        private_inventory["input_file_bytes"],
+    )
+    _validate_framework_python_relocation(
+        runtime["relocation"],
+        private_inventory["relocation"],
+        input_records,
+        expected_records,
+    )
     expected_count = _strict_int(
         runtime["record_count"], "framework Python runtime record count",
     )

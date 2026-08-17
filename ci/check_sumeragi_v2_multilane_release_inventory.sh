@@ -15,6 +15,7 @@ readonly release_runner_support="scripts/run_sumeragi_v2_release_gates_support.s
 readonly release_bootstrap="scripts/bootstrap_sumeragi_v2_release.py"
 readonly release_bootstrap_test="pytests/scripts/sumeragi_v2_release_bootstrap_test.py"
 readonly cargo_cache_copier="scripts/copy_sumeragi_v2_release_cargo_cache.py"
+readonly cargo_cache_cli_component="scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"
 readonly cargo_cache_ack_component="scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
@@ -57,7 +58,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=857
+readonly canonical_production_test_count=860
 
 for release_support_component in \
   "$release_runner_support" \
@@ -219,7 +220,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=532"
+  "readonly expected_multilane_focus_test_count=527"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -231,7 +232,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=89"
+  "  readonly expected_corridor_leg_count=88"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -266,7 +267,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 532"
+  "_G_UNIT_TEST_COUNT = 527"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -352,7 +353,8 @@ python3 -I -S - \
   "$cargo_cache_ack_component" \
   "$release_receipt_gate_component" \
   "$release_receipt_publication_component" \
-  "$release_bootstrap_component" <<'PY'
+  "$release_bootstrap_component" \
+  "$cargo_cache_cli_component" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -397,8 +399,13 @@ release_bootstrap_component = Path(sys.argv[14])
 release_bootstrap_component_source = release_bootstrap_component.read_text(
     encoding="utf-8"
 )
+cargo_cache_cli_component = Path(sys.argv[15])
+cargo_cache_cli_component_source = cargo_cache_cli_component.read_text(
+    encoding="utf-8"
+)
 cargo_cache_closure_source = (
-    cargo_cache_source + "\n" + cargo_cache_ack_component_source
+    cargo_cache_source + "\n" + cargo_cache_cli_component_source
+    + "\n" + cargo_cache_ack_component_source
 )
 
 
@@ -513,6 +520,35 @@ cargo_cache_assignments = {
     for target in node.targets
     if isinstance(target, ast.Name)
 }
+if ast.literal_eval(cargo_cache_assignments["CLI_COMPONENT_FILES"]) != (
+    "copy_sumeragi_v2_release_cargo_cache_cli.py",
+):
+    reject("Cargo cache CLI component manifest is not exact")
+if (
+    ast.literal_eval(cargo_cache_assignments["CLI_COMPONENT_SHA256"])
+    != hashlib.sha256(cargo_cache_cli_component.read_bytes()).hexdigest()
+):
+    reject("Cargo cache CLI component digest is not exact")
+if len(cargo_cache_cli_component_source.splitlines()) >= 3_000:
+    reject("Cargo cache CLI component exceeds its source budget")
+cli_component_tree = ast.parse(cargo_cache_cli_component_source)
+if sum(
+    isinstance(node, ast.FunctionDef) and node.name == "_cli_component"
+    for node in cargo_cache_tree.body
+) != 1 or sum(
+    isinstance(node, ast.FunctionDef) and node.name == "run"
+    for node in cli_component_tree.body
+) != 1:
+    reject("Cargo cache CLI loader/dispatcher ownership changed")
+for token in (
+    "component = Path(__file__).parent.resolve(strict=True) / CLI_COMPONENT_FILES[0]",
+    'code = compile(payload, str(component), "exec")',
+    "exec(code, namespace)",
+    "error_type=CacheCopyError,",
+):
+    expected_count = 8 if token == "error_type=CacheCopyError," else 1
+    if cargo_cache_closure_source.count(token) != expected_count:
+        reject(f"Cargo cache CLI authenticated-load contract changed: {token}")
 if ast.literal_eval(cargo_cache_assignments["VALIDATION_ACK_COMPONENT_FILES"]) != (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 ):
@@ -745,6 +781,8 @@ expected_receipt_gate_component_symbols = (
     "_runtime_tool_probe_evidence",
 )
 expected_receipt_publication_component_symbols = (
+    "_validate_framework_python_input_records",
+    "_validate_framework_python_relocation_evidence",
     "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
     "_capture_path_contract",
     "_snapshot_receipt_inputs", "_capture_directory_contract",
@@ -946,7 +984,7 @@ if (
         "plus the one layout-only result"
     )
 expected_changed_module_counts = {
-    "kura::tests": 17,
+    "kura::tests": 18,
     "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 72,
@@ -954,7 +992,7 @@ expected_changed_module_counts = {
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
-    "sumeragi::v2_lane_work::tests": 61,
+    "sumeragi::v2_lane_work::tests": 63,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
     "sumeragi::v2_worker::tests": 135,
@@ -984,8 +1022,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "fc038b30180549cc6002db8ec5630ebf"
-    "8ad5bb04a06be6dd19774d2b6ea5f433"
+    "d34132eb817e08216180c7db186826f1"
+    "860b6703608d4f8862d956eda258dfd5"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1365,7 +1403,6 @@ expected_focus_counts = {
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
     "required_multilane_data_model_focus_tests": 8,
-    "required_multilane_zkp_halo2_focus_tests": 5,
     "required_multilane_torii_focus_tests": 39,
     "required_multilane_torii_shared_focus_tests": 1,
     "required_multilane_integration_lib_focus_tests": 2,
@@ -1404,9 +1441,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 532 or len(set(all_focus_entries)) != 532:
+if len(all_focus_entries) != 527 or len(set(all_focus_entries)) != 527:
     reject(
-        "multilane focus-test arrays must contain 532 globally distinct tests; "
+        "multilane focus-test arrays must contain 527 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1455,13 +1492,6 @@ g_unit_groups = (
         "--lib",
     ),
     (
-        "required_multilane_zkp_halo2_focus_tests",
-        "g-unit-iroha-zkp-halo2",
-        "iroha_zkp_halo2",
-        5,
-        "--lib",
-    ),
-    (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
@@ -1495,7 +1525,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 532 count is not published exactly once")
+        reject("G-UNIT expected 527 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1659,7 +1689,8 @@ python3 -I -S - \
   "$nexus_cross_lane_pr_helper" \
   "$nexus_pr_helper_test" \
   "$release_runner_support" \
-  "$cargo_cache_ack_component" <<'PY'
+  "$cargo_cache_ack_component" \
+  "$cargo_cache_cli_component" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
@@ -1696,6 +1727,11 @@ expected_edges = (
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
+        'pr_clone_helper_cli="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"',
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/run_sumeragi_v2_release_gates_support.sh",
         'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"',
     ),
@@ -1703,6 +1739,11 @@ expected_edges = (
         "scripts/copy_sumeragi_v2_release_cargo_cache.py",
         "scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
         '"copy_sumeragi_v2_release_cargo_cache_validation_ack.py",',
+    ),
+    (
+        "scripts/copy_sumeragi_v2_release_cargo_cache.py",
+        "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
+        '"copy_sumeragi_v2_release_cargo_cache_cli.py",',
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -2694,4 +2735,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 89 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 532/532 G-UNIT (321 core, 143 queue-journal, 13 config, 8 data-model, 5 iroha_zkp_halo2, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 88 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 527/527 G-UNIT (321 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

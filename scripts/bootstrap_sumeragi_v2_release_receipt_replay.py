@@ -1,5 +1,309 @@
 # Executed lexically in bootstrap_sumeragi_v2_release.py after exact digest authentication.
 
+
+def _framework_python_input_records(
+    records: Any, declared_count: Any, declared_bytes: Any,
+) -> list[dict[str, Any]]:
+    """Validate a bounded canonical source inventory before path lookup."""
+
+    if not isinstance(records, list) or len(records) > 250_000:
+        raise BootstrapError("framework Python source inventory is not bounded")
+    schemas = {
+        "directory": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+        },
+        "file": {
+            "path", "kind", "source_device", "source_inode", "source_mode",
+            "destination_device", "destination_inode", "destination_mode",
+            "size", "sha256",
+        },
+        "symlink": {
+            "path", "kind", "source_mode", "destination_mode", "target",
+        },
+    }
+    paths: list[str] = []
+    file_bytes = 0
+    for record in records:
+        kind = record.get("kind") if isinstance(record, dict) else None
+        if kind not in schemas or set(record) != schemas[kind]:
+            raise BootstrapError("framework Python source record is not exact")
+        path = record["path"]
+        if (
+            not isinstance(path, str) or not path or path.startswith("/")
+            or PurePosixPath(path).as_posix() != path
+            or ".." in PurePosixPath(path).parts
+        ):
+            raise BootstrapError("framework Python source path is unsafe")
+        paths.append(path)
+        for key in set(record) & {
+            "source_device", "source_inode", "destination_device",
+            "destination_inode", "size",
+        }:
+            if type(record[key]) is not int or record[key] < 0:
+                raise BootstrapError("framework Python source integer is invalid")
+        for key in set(record) & {"source_mode", "destination_mode"}:
+            if not isinstance(record[key], str) or re.fullmatch(
+                r"[0-7]{4}", record[key]
+            ) is None:
+                raise BootstrapError("framework Python source mode is invalid")
+            if kind != "symlink" and int(record[key], 8) & 0o022:
+                raise BootstrapError("framework Python source mode is unsafe")
+        if kind == "file":
+            if not isinstance(record["sha256"], str) or _DIGEST_RE.fullmatch(
+                record["sha256"]
+            ) is None:
+                raise BootstrapError("framework Python source digest is invalid")
+            file_bytes += record["size"]
+        elif kind == "symlink" and (
+            not isinstance(record["target"], str) or not record["target"]
+        ):
+            raise BootstrapError("framework Python source symlink is invalid")
+    if (
+        paths != sorted(paths) or len(set(paths)) != len(paths)
+        or type(declared_count) is not int or declared_count != len(records)
+        or type(declared_bytes) is not int or declared_bytes != file_bytes
+        or file_bytes > 4 * 1024 * 1024 * 1024
+    ):
+        raise BootstrapError("framework Python source inventory is not exact")
+    return records
+
+
+def _framework_python_marker_record(
+    inventory_snapshot: FileSnapshot,
+) -> dict[str, Any]:
+    """Project the relocated private framework into one path-free marker."""
+
+    inventory = _parse_canonical_json(
+        inventory_snapshot, "framework Python runtime inventory",
+    )
+    required = {
+        "format", "schema_version", "runtime_root", "record_count",
+        "file_bytes", "records", "source_disclosure", "input_record_count",
+        "input_file_bytes", "input_records", "relocation",
+    }
+    if (
+        set(inventory) != required
+        or inventory["format"]
+        != "iroha-sumeragi-v2-private-framework-python-runtime"
+        or type(inventory["schema_version"]) is not int
+        or inventory["schema_version"] != 2
+        or inventory["source_disclosure"] != "withheld"
+        or not isinstance(inventory["records"], list)
+        or not isinstance(inventory["input_records"], list)
+    ):
+        raise BootstrapError(
+            "framework Python runtime helper returned the wrong inventory"
+        )
+    input_records = _framework_python_input_records(
+        inventory["input_records"], inventory["input_record_count"],
+        inventory["input_file_bytes"],
+    )
+    sanitized: list[dict[str, Any]] = []
+    for record in inventory["records"]:
+        if not isinstance(record, dict):
+            raise BootstrapError(
+                "framework Python runtime inventory member is malformed"
+            )
+        kind = record.get("kind")
+        keys = {
+            "directory": {"path", "kind", "device", "inode", "mode"},
+            "file": {
+                "path", "kind", "device", "inode", "mode", "size", "sha256",
+            },
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        path = record.get("path")
+        if (
+            keys is None
+            or set(record) != keys
+            or not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or ".." in Path(path).parts
+            or Path(path).as_posix() != path
+            or not isinstance(record.get("mode"), str)
+            or re.fullmatch(r"[0-7]{4}", record["mode"]) is None
+            or (kind != "symlink" and int(record["mode"], 8) & 0o022)
+        ):
+            raise BootstrapError(
+                "framework Python runtime inventory member is not exact"
+            )
+        projected = {
+            key: record[key]
+            for key in (
+                ("path", "kind", "mode")
+                if kind == "directory"
+                else ("path", "kind", "mode", "size", "sha256")
+                if kind == "file"
+                else ("path", "kind", "mode", "target")
+            )
+        }
+        if (
+            kind == "file"
+            and (
+                type(projected["size"]) is not int
+                or projected["size"] < 0
+                or not isinstance(projected["sha256"], str)
+                or _DIGEST_RE.fullmatch(projected["sha256"]) is None
+            )
+        ) or (
+            kind == "symlink"
+            and (
+                not isinstance(projected["target"], str)
+                or not projected["target"]
+            )
+        ):
+            raise BootstrapError(
+                "framework Python runtime inventory member metadata is invalid"
+            )
+        sanitized.append(projected)
+    sanitized.sort(key=lambda record: record["path"])
+    file_bytes = sum(
+        record["size"] for record in sanitized if record["kind"] == "file"
+    )
+    if (
+        type(inventory["record_count"]) is not int
+        or inventory["record_count"] != len(sanitized)
+        or type(inventory["file_bytes"]) is not int
+        or inventory["file_bytes"] != file_bytes
+    ):
+        raise BootstrapError(
+            "framework Python runtime inventory accounting is not exact"
+        )
+
+    relocation = inventory["relocation"]
+    if not isinstance(relocation, dict) or set(relocation) != {
+        "format", "schema_version", "framework", "tools", "artifacts"
+    }:
+        raise BootstrapError("framework Python relocation is malformed")
+    framework = relocation["framework"]
+    if (
+        relocation["format"]
+        != "iroha-sumeragi-v2-framework-python-relocation"
+        or type(relocation["schema_version"]) is not int
+        or relocation["schema_version"] != 1
+        or not isinstance(framework, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", framework) is None
+        or not isinstance(relocation["tools"], dict)
+        or set(relocation["tools"])
+        != {"codesign", "install_name_tool", "otool"}
+        or not isinstance(relocation["artifacts"], dict)
+        or set(relocation["artifacts"]) != {"launcher", "trampoline"}
+    ):
+        raise BootstrapError("framework Python relocation is not exact")
+    for name in ("codesign", "install_name_tool", "otool"):
+        tool = relocation["tools"][name]
+        if (
+            not isinstance(tool, dict)
+            or set(tool) != {"path", "mode", "sha256", "size_bytes"}
+            or tool["path"] != f"/usr/bin/{name}"
+            or not isinstance(tool["mode"], str)
+            or re.fullmatch(r"[0-7]{4}", tool["mode"]) is None
+            or int(tool["mode"], 8) & 0o022
+            or not int(tool["mode"], 8) & 0o111
+            or not isinstance(tool["sha256"], str)
+            or _DIGEST_RE.fullmatch(tool["sha256"]) is None
+            or type(tool["size_bytes"]) is not int
+            or not 0 < tool["size_bytes"] <= 64 * 1024 * 1024
+        ):
+            raise BootstrapError("framework Python relocation tool is not exact")
+    output_by_path = {record["path"]: record for record in sanitized}
+    input_by_path = {
+        record.get("path"): record
+        for record in input_records
+    }
+    rewrites = {
+        "launcher": ("python3", "bin/python3", "@executable_path/../Python"),
+        "trampoline": (
+            "Resources/Python.app/Contents/MacOS/Python",
+            "Resources/Python.app/Contents/MacOS/Python",
+            "@executable_path/../../../../Python",
+        ),
+    }
+    for name, (input_path, output_path, rewritten) in rewrites.items():
+        artifact = relocation["artifacts"][name]
+        source = artifact.get("source") if isinstance(artifact, dict) else None
+        derived = artifact.get("derived") if isinstance(artifact, dict) else None
+        source_record = input_by_path.get(input_path)
+        output_record = output_by_path.get(output_path)
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != {"path", "source", "derived"}
+            or artifact["path"] != output_path
+            or not isinstance(source, dict)
+            or set(source) != {
+                "mode", "sha256", "size_bytes",
+                "framework_dependency_sha256", "dependency_vector_sha256",
+            }
+            or not isinstance(derived, dict)
+            or set(derived) != {
+                "mode", "sha256", "size_bytes", "framework_dependency",
+                "dependency_vector_sha256", "codesign",
+            }
+            or not isinstance(source["mode"], str)
+            or re.fullmatch(r"[0-7]{4}", source["mode"]) is None
+            or int(source["mode"], 8) & 0o022
+            or not int(source["mode"], 8) & 0o111
+            or type(source["size_bytes"]) is not int
+            or not 0 < source["size_bytes"] <= 256 * 1024 * 1024
+            or type(derived["size_bytes"]) is not int
+            or not 0 < derived["size_bytes"] <= 256 * 1024 * 1024
+            or derived["mode"] != "0500"
+            or derived["framework_dependency"] != rewritten
+            or derived["codesign"] != "adhoc"
+            or not isinstance(source_record, dict)
+            or (
+                source_record.get("source_mode"), source_record.get("sha256"),
+                source_record.get("size"),
+            )
+            != (source["mode"], source["sha256"], source["size_bytes"])
+            or not isinstance(output_record, dict)
+            or output_record.get("kind") != "file"
+            or (
+                output_record.get("mode"), output_record.get("sha256"),
+                output_record.get("size"),
+            )
+            != (derived["mode"], derived["sha256"], derived["size_bytes"])
+        ):
+            raise BootstrapError(
+                "framework Python relocation artifact binding is not exact"
+            )
+        for digest in (
+            source["sha256"], source["framework_dependency_sha256"],
+            source["dependency_vector_sha256"], derived["sha256"],
+            derived["dependency_vector_sha256"],
+        ):
+            if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
+                raise BootstrapError(
+                    "framework Python relocation digest is malformed"
+                )
+        if (
+            source["sha256"] == derived["sha256"]
+            or source["dependency_vector_sha256"]
+            == derived["dependency_vector_sha256"]
+        ):
+            raise BootstrapError("framework Python relocation did not derive output")
+    if output_by_path.get(framework, {}).get("kind") != "file":
+        raise BootstrapError("framework Python relocation names the wrong framework")
+    return {
+        "format": "iroha-sumeragi-v2-framework-python-runtime",
+        "schema_version": 2,
+        "archive_root": "python-runtime",
+        "root_mode": "0500",
+        "executable": "bin/python3",
+        "inventory": {
+            "archive_name": "python-runtime-input.json",
+            "mode": f"{inventory_snapshot.mode:04o}",
+            "sha256": inventory_snapshot.sha256,
+            "size_bytes": inventory_snapshot.size,
+        },
+        "record_count": len(sanitized),
+        "file_bytes": file_bytes,
+        "records": sanitized,
+        "relocation": relocation,
+    }
+
 def _validate_terminal_release_evidence(
     *,
     receipt_evidence: dict[str, Any],
@@ -2590,12 +2894,29 @@ def _validate_terminal_receipt(
         or bootstrap["candidate_tree_oid"] != identity["head_tree"]
     ):
         raise BootstrapError("terminal release receipt has the wrong bootstrap binding")
+    marker_json = _parse_canonical_json(
+        bootstrap_marker, "bootstrap completion marker"
+    )
+    marker_trusted = marker_json.get("trusted_inputs")
+    if (
+        not isinstance(marker_trusted, dict)
+        or set(marker_trusted) != set(protected)
+        or any(
+            not isinstance(record, dict)
+            or not isinstance(record.get("sha256"), str)
+            or _DIGEST_RE.fullmatch(record["sha256"]) is None
+            for record in marker_trusted.values()
+        )
+    ):
+        raise BootstrapError(
+            "bootstrap marker trusted-input inventory is malformed"
+        )
     expected_trusted_digests = {
-        label: snapshot.sha256 for label, snapshot in sorted(protected.items())
+        label: record["sha256"]
+        for label, record in sorted(marker_trusted.items())
     }
     if bootstrap["trusted_input_digests"] != expected_trusted_digests:
         raise BootstrapError("terminal release receipt has wrong trusted-input digests")
-    marker_json = _parse_canonical_json(bootstrap_marker, "bootstrap completion marker")
     try:
         bootstrap_probe_value = marker_json["trusted_execution_probes"][
             "runner_tool_closure"
@@ -2644,9 +2965,6 @@ def _validate_terminal_receipt(
         raise BootstrapError(
             "retained runtime tool probes disagree with bootstrap replay"
         )
-    marker_trusted = marker_json.get("trusted_inputs")
-    if not isinstance(marker_trusted, dict):
-        raise BootstrapError("bootstrap marker trusted-input inventory is malformed")
     expected_trusted_archives = {
         label: {
             key: record[key]

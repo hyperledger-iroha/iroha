@@ -51,6 +51,7 @@ use super::{
         check_production_in_flight_first_release_serve_late_body_transition,
         check_production_in_flight_first_release_transition,
     },
+    v2_runtime::round_timeout_for_view,
     v2_worker::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
@@ -173,25 +174,9 @@ const MAX_FETCH_MERGE_VALIDATORS: usize = 4_096;
 const MAX_FETCH_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_PROOF_BYTES: usize = 96;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
-const NANOS_PER_SECOND: u128 = 1_000_000_000;
 /// Maximum progress-bearing sidecar effects drained before one queued,
 /// replayable responder control receives its own scheduler turn.
 const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;
-/// Derive the same saturating linear timeout used by certified global views.
-///
-/// A lane's synthetic cursor is independent of the global reducer view, but it
-/// needs the same post-GST backoff property and must not wrap while a stalled
-/// payload remains durably recoverable for an arbitrarily long time.
-fn autonomous_new_view_timeout(base_timeout: Duration, view: u64) -> Duration {
-    let multiplier = u128::from(view) + 1;
-    let total_nanos = base_timeout.as_nanos().saturating_mul(multiplier);
-    let bounded_nanos = total_nanos.min(Duration::MAX.as_nanos());
-    let seconds = u64::try_from(bounded_nanos / NANOS_PER_SECOND)
-        .expect("duration nanoseconds were bounded by Duration::MAX");
-    let nanoseconds = u32::try_from(bounded_nanos % NANOS_PER_SECOND)
-        .expect("subsecond nanoseconds are below one billion");
-    Duration::new(seconds, nanoseconds)
-}
 fn classify_committed_lane_block_execution_status(
     receipt_conflicts: impl FnOnce() -> bool,
     matching_receipt: impl FnOnce() -> Option<LaneBlockApplicationReceiptArtifactFormat>,
@@ -805,6 +790,15 @@ pub(crate) enum V2LaneWorkEffect {
     },
     /// Broadcast a merge signature share to the frozen voting roster.
     BroadcastMerge(MergeCommitteeSignature),
+    /// Hand one exact Kura-durable QueuePlan admission certificate to the current leader.
+    PostQueuePlanAdmissionCertificate {
+        /// Current global leader selected by the frozen height context.
+        peer: PeerId,
+        /// Frozen global view which selected `peer` as leader.
+        view: wire::View,
+        /// Exact canonical quorum-certificate bytes.
+        certificate: Arc<Vec<u8>>,
+    },
     /// Send one authenticated certified merge-sidecar request or response.
     PostCertifiedMergeSidecar {
         /// Exact destination selected by the sidecar transport.
@@ -2048,6 +2042,7 @@ impl HistoricalRecoveryIdentity {
     }
 }
 include!("v2_lane_work/canonical_executed_block_application_repair.rs");
+include!("v2_lane_work/queue_plan_admission_handoff.rs");
 /// Durable boundary at which an earlier-height recovery attempt is waiting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoricalRecoveryStage {
@@ -3241,6 +3236,8 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<AcknowledgedMergeSidecarCloseKey, CertifiedMergeSidecarCloseAckV1>,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
+    queue_plan_admission_handoff_retry_required: bool,
+    queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     merge_signing_guard: MergeSigningGuard,
@@ -3959,6 +3956,8 @@ impl V2LaneWorkAdapter {
             acknowledged_merge_sidecar_closes: BTreeMap::new(),
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
+            queue_plan_admission_handoff_retry_required: false,
+            queue_plan_admission_handoff_cursor: 0,
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
             merge_signing_guard,
@@ -7088,6 +7087,7 @@ impl V2LaneWorkAdapter {
                 predecessor_ready_effects.contains(&lane_work_effect_key(effect))
             }
             V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => true,
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
             V2LaneWorkEffect::PostNativeAmx { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
             | V2LaneWorkEffect::BroadcastMerge(_) => false,
@@ -7302,7 +7302,8 @@ impl V2LaneWorkAdapter {
                 | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
                 | V2LaneWorkEffect::PostNativeAmx { .. }
                 | V2LaneWorkEffect::PostLaneDrainVote { .. }
-                | V2LaneWorkEffect::BroadcastMerge(_) => None,
+                | V2LaneWorkEffect::BroadcastMerge(_)
+                | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => None,
             })
             .collect::<BTreeSet<_>>();
         self.sidecar_effects.retain(|effect| {
@@ -10554,7 +10555,11 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         };
         if self.decision_pending()
-            && !matches!(&message, LaneRelayMessage::CertifiedMergeSidecar { .. })
+            && !matches!(
+                &message,
+                LaneRelayMessage::CertifiedMergeSidecar { .. }
+                    | LaneRelayMessage::QueuePlanAdmissionCertificate { .. }
+            )
         {
             operation.complete();
             return V2LaneIngressOutcome::Rejected;
@@ -10564,6 +10569,10 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
             }
+            LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender,
+                certificate,
+            } => self.accept_queue_plan_admission_certificate(sender, certificate, active_view),
             LaneRelayMessage::CertifiedMergeSidecar {
                 sender,
                 reply_route,
@@ -10761,7 +10770,7 @@ impl V2LaneWorkAdapter {
                 ));
             }
             if now.saturating_duration_since(started_at)
-                < autonomous_new_view_timeout(base_timeout, clock_view)
+                < round_timeout_for_view(base_timeout, clock_view)
             {
                 continue;
             }
@@ -13130,8 +13139,13 @@ impl V2LaneWorkAdapter {
         true
     }
     fn purge_queued_merge_broadcasts(&mut self) {
-        self.effects
-            .retain(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)));
+        self.effects.retain(|effect| {
+            !matches!(
+                effect,
+                V2LaneWorkEffect::BroadcastMerge(_)
+                    | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+            )
+        });
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
     fn retain_native_amx_for_global_view(
@@ -13213,7 +13227,8 @@ impl V2LaneWorkAdapter {
             V2LaneWorkEffect::PostLaneBlock { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
             | V2LaneWorkEffect::PostNativeAmx { .. }
-            | V2LaneWorkEffect::BroadcastMerge(_) => false,
+            | V2LaneWorkEffect::BroadcastMerge(_)
+            | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => false,
             V2LaneWorkEffect::PostDurableLaneCertificate { .. } => {
                 allowed_durable_certificates.contains(&lane_work_effect_key(effect))
             }
@@ -16044,6 +16059,7 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
+        self.queue_plan_admission_handoff_retry_required = false;
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -16082,65 +16098,10 @@ impl V2LaneWorkAdapter {
         {
             return Ok(());
         }
-        // Reconcile the durable QueuePlan admission store only at an exact
-        // canonical Kura/WSV parent frontier. Exact registry matches are safe
-        // to forget after their global carrier is durable; absent claims stay
-        // pending across losing proposals and are attached to the next local
-        // leader candidate. Authenticated stale or conflicting claims are
-        // definitive losers and can be removed; malformed durable evidence
-        // still fails closed.
-        let mut pending_queue_plan_admissions = Vec::new();
-        for (certificate_hash, certificate_bytes) in self
-            .kura
-            .pending_queue_plan_admission_certificates_bounded(
-                self.kura.pending_queue_plan_admission_capacity(),
-            )
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
-        {
-            let (admission, disposition) = self
-                .state
-                .classify_pending_queue_plan_admission(&certificate_bytes, self.context.height)
-                .map_err(|error| {
-                    V2LaneWorkError::Persistence(format!(
-                        "pending QueuePlan admission certificate cannot be reconciled: {error}"
-                    ))
-                })?;
-            match disposition {
-                PendingQueuePlanAdmissionDisposition::Exact => self
-                    .kura
-                    .remove_pending_queue_plan_admission_certificate(certificate_hash)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
-                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
-                | PendingQueuePlanAdmissionDisposition::Stale => {
-                    let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {
-                        V2LaneWorkError::Persistence(
-                            "losing QueuePlan admission cannot be retired without the live queue"
-                                .to_owned(),
-                        )
-                    })?;
-                    queue
-                        .reject_exact_queue_plan_admission_claim(
-                            &admission.certificate.binding,
-                        )
-                        .map_err(|error| {
-                            V2LaneWorkError::Persistence(format!(
-                                "losing QueuePlan admission queue claim cannot be durably rejected: {error}"
-                            ))
-                        })?;
-                    self.kura
-                        .remove_pending_queue_plan_admission_certificate(certificate_hash)
-                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-                }
-                PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
-                    pending_queue_plan_admissions.push(certificate_bytes);
-                }
-                PendingQueuePlanAdmissionDisposition::Future => {
-                    // Keep the authenticated, bounded certificate durable until this peer
-                    // reaches its canonical authority frontier. It will be reclassified on
-                    // the next exact parent frontier and must not enter an early carrier.
-                }
-            }
-        }
+        let local_is_leader =
+            self.local_validator_index() == Some(self.context.leader(active_view));
+        let pending_queue_plan_admissions =
+            self.reconcile_pending_queue_plan_admissions(active_view)?;
         self.drive_lane_drain(active_view)?;
         let expected_epoch = self
             .state
@@ -16208,8 +16169,6 @@ impl V2LaneWorkAdapter {
         if let Some((_, candidate, _)) = authorized_candidate {
             installed_candidates.push(candidate);
         }
-        let local_is_leader =
-            self.local_validator_index() == Some(self.context.leader(active_view));
         let leader_candidates = if authorized_digest.is_none() && local_is_leader {
             let base = if let Some(candidate) =
                 self.lane_drain_merge_candidate(&parent_header, active_view)?
@@ -16317,6 +16276,16 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    /// Reconcile Kura-durable QueuePlan admissions and hand each unsent exact
+    /// certificate to the current global leader.
+    pub(crate) fn refresh_pending_queue_plan_admission_handoffs(
+        &mut self,
+        active_view: wire::View,
+    ) -> Result<bool, V2LaneWorkError> {
+        self.refresh_merge_candidates(active_view)?;
+        Ok(!self.queue_plan_admission_handoff_retry_required)
+    }
+
     fn accept_merge_signature(
         &mut self,
         signature: MergeCommitteeSignature,
@@ -16931,7 +16900,8 @@ fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> 
     match effect {
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_) => true,
+        | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
         V2LaneWorkEffect::PostDurableLaneCertificate {
             peer,
             reply_routes,
@@ -16975,7 +16945,8 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
     match effect {
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_) => true,
+        | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
         V2LaneWorkEffect::PostDurableLaneCertificate {
             peer,
             reply_routes,
@@ -17161,7 +17132,11 @@ where
             V2LaneWorkEffect::PostLaneDrainVote { .. },
             V2LaneWorkEffect::PostLaneDrainVote { .. },
         )
-        | (V2LaneWorkEffect::BroadcastMerge(_), V2LaneWorkEffect::BroadcastMerge(_)) => true,
+        | (V2LaneWorkEffect::BroadcastMerge(_), V2LaneWorkEffect::BroadcastMerge(_))
+        | (
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. },
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. },
+        ) => true,
         _ => false,
     }
 }
@@ -17222,6 +17197,16 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             encoded.push(2);
             encoded.extend(signature.encode());
+        }
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer,
+            view,
+            certificate,
+        } => {
+            encoded.push(6);
+            encoded.extend(peer.encode());
+            encoded.extend(view.encode());
+            encoded.extend(certificate.as_ref().encode());
         }
         V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } => {
             encoded.push(3);
@@ -28000,4 +27985,5 @@ pub(super) mod tests {
         );
     }
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
+    include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
 }

@@ -546,7 +546,7 @@
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
             "\"write_sumeragi_v2_release_receipt_gate_evidence.py\": (",
-            "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e",
+            "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5",
             "_SDK_SOURCE_CLOSURE_RESOLVER = \"ci/resolve_sumeragi_v2_sdk_source_closure.py\"",
             "_SDK_SOURCE_CLOSURE_MANIFEST = \"ci/sumeragi_v2_sdk_source_closure.json\"",
             "_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = \"native-amx-v2-grouped\"",
@@ -3085,12 +3085,22 @@
         "kind": "method",
         "symbol": "V2ApplyService::execute_exact_apply",
         "required_tokens": [
+          "self.validate_and_apply(",
           "store_v2_finality_artifact",
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
           "promote_kagemusha_topup_finality_sidecar",
           "finalize_committed_block_merge_reservations"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "kind": "method",
+        "symbol": "V2ApplyService::execute",
+        "required_tokens": [
+          "self.execute_exact_apply(",
+          "finish_durable_apply_completion_against"
         ]
       },
       {
@@ -4237,12 +4247,22 @@
         "kind": "method",
         "symbol": "V2ApplyService::execute_exact_apply",
         "tokens": [
+          "self.validate_and_apply(",
           "store_v2_finality_artifact",
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
           "promote_kagemusha_topup_finality_sidecar",
           "finalize_committed_block_merge_reservations"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "kind": "method",
+        "symbol": "V2ApplyService::execute",
+        "tokens": [
+          "self.execute_exact_apply(",
+          "finish_durable_apply_completion_against"
         ]
       },
       {
@@ -8465,13 +8485,22 @@
           "kind": "method",
           "symbol": "V2ApplyService::execute_exact_apply",
           "required_tokens": [
-            "validate_and_apply",
+            "self.validate_and_apply(",
             "store_v2_finality_artifact",
             "persist_post_apply_metadata",
             "repair_native_amx_participant_application_evidence",
             "publish_committed_block_merge_entry",
             "promote_kagemusha_topup_finality_sidecar",
             "finalize_committed_block_merge_reservations"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::execute",
+          "required_tokens": [
+            "self.execute_exact_apply(",
+            "finish_durable_apply_completion_against"
           ]
         },
         {

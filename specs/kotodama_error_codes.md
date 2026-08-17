@@ -4,8 +4,10 @@ The Kotodama compiler emits stable error codes so that tooling and CLI users can
 quickly understand the cause of a failure. Use `koto explain <code>`
 to print the corresponding hint.
 
-The canonical registry lives in `kotodama_lang::diagnostic`; `koto explain`
-reads that registry directly, so CLI guidance cannot drift from compiler codes.
+The canonical registry data lives in the versioned
+`kotodama_lang/src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv` asset;
+the build emits the same public `kotodama_lang::diagnostic` registry, which
+`koto explain` reads directly so CLI guidance cannot drift from compiler codes.
 The typed linker, shared build driver, `koto build`, and `musubi build` carry the
 same `DiagnosticBundle` through human, JSON, and SARIF rendering. Module-call
 and ambiguous-export diagnostics therefore retain exact primary and related

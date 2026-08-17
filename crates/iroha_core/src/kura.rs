@@ -153,7 +153,7 @@ use norito::{
 };
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     num::{NonZeroU64, NonZeroUsize},
@@ -736,6 +736,12 @@ pub struct Kura {
     /// Number of complete active historical-recovery inventory scans.
     #[cfg(test)]
     historical_autonomous_recovery_inventory_scans: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) pending_queue_plan_admission_inventory_scans: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) pending_queue_plan_admission_exact_reads: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) pending_queue_plan_admission_batch_validations: AtomicUsize,
     /// Test hook for forcing a bounded number of roster sidecar writes to fail.
     #[cfg(test)]
     fail_next_roster_sidecar_writes: AtomicUsize,
@@ -2687,6 +2693,12 @@ impl Kura {
             #[cfg(test)]
             historical_autonomous_recovery_inventory_scans: AtomicUsize::new(0),
             #[cfg(test)]
+            pending_queue_plan_admission_inventory_scans: AtomicUsize::new(0),
+            #[cfg(test)]
+            pending_queue_plan_admission_exact_reads: AtomicUsize::new(0),
+            #[cfg(test)]
+            pending_queue_plan_admission_batch_validations: AtomicUsize::new(0),
+            #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
@@ -3042,6 +3054,12 @@ impl Kura {
             startup_replay_historical_payload_reads: AtomicUsize::new(0),
             #[cfg(test)]
             historical_autonomous_recovery_inventory_scans: AtomicUsize::new(0),
+            #[cfg(test)]
+            pending_queue_plan_admission_inventory_scans: AtomicUsize::new(0),
+            #[cfg(test)]
+            pending_queue_plan_admission_exact_reads: AtomicUsize::new(0),
+            #[cfg(test)]
+            pending_queue_plan_admission_batch_validations: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
@@ -9365,6 +9383,9 @@ impl Kura {
         Ok(())
     }
     fn pending_queue_plan_admission_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
+        #[cfg(test)]
+        self.pending_queue_plan_admission_inventory_scans
+            .fetch_add(1, Ordering::Relaxed);
         let directory = self.pending_queue_plan_admission_dir();
         let read_dir = match std::fs::read_dir(&directory) {
             Ok(read_dir) => read_dir,
@@ -10973,36 +10994,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(hash)
     }
-    /// Resolve one exact pending QueuePlan admission certificate by its byte hash.
-    #[cfg(test)]
-    pub(crate) fn pending_queue_plan_admission_certificate(
-        &self,
-        hash: Hash,
-    ) -> Result<Option<Vec<u8>>> {
-        self.ensure_prune_recovery_not_required()?;
-        let certificate = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
-            let (_, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
-            if !self
-                .pending_control_sidecar_limits
-                .combined_bytes_within_limit(merge_bytes, admission_bytes)
-            {
-                return Err(Self::invalid_pending_queue_plan_admission_error(
-                    self.store_root.clone(),
-                    "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
-                ));
-            }
-            self.read_pending_queue_plan_admission_path(
-                &self.pending_queue_plan_admission_path(hash),
-                Some(hash),
-            )?
-            .map(|(_, bytes)| bytes)
-        };
-        self.ensure_prune_recovery_not_required()?;
-        Ok(certificate)
-    }
     /// Return every pending QueuePlan admission certificate in byte-hash order.
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_certificates(&self) -> Result<Vec<(Hash, Vec<u8>)>> {
@@ -11023,17 +11014,7 @@ impl Kura {
         let certificates = {
             let _guard = self.sidecar_lock.lock();
             self.ensure_prune_recovery_not_required()?;
-            let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
-            let (paths, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
-            if !self
-                .pending_control_sidecar_limits
-                .combined_bytes_within_limit(merge_bytes, admission_bytes)
-            {
-                return Err(Self::invalid_pending_queue_plan_admission_error(
-                    self.store_root.clone(),
-                    "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
-                ));
-            }
+            let paths = self.pending_queue_plan_admission_inventory_paths_unlocked()?;
             let bounded = limit.min(self.pending_control_sidecar_limits.queue_plan_admissions);
             let mut certificates = Vec::with_capacity(paths.len().min(bounded));
             for path in paths.into_iter().take(bounded) {
@@ -11047,11 +11028,6 @@ impl Kura {
         };
         self.ensure_prune_recovery_not_required()?;
         Ok(certificates)
-    }
-    /// Fingerprint-bound QueuePlan admission capacity used by bounded callers.
-    #[must_use]
-    pub(crate) const fn pending_queue_plan_admission_capacity(&self) -> usize {
-        self.pending_control_sidecar_limits.queue_plan_admissions
     }
     /// Remove pending QueuePlan admission certificates rejected by `retain`.
     ///
@@ -13459,6 +13435,7 @@ impl Kura {
     }
 }
 include!("kura/retained_finality_replica_authority.rs");
+include!("kura/queue_plan_admission_batch.rs");
 impl Kura {
     fn canonical_block_store_metadata(
         &self,

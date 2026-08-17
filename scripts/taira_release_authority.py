@@ -28,6 +28,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 
 try:
+    from . import taira_authority_client
     from .release_artifact_contract import (
         ReleaseArtifactError,
         StableFile,
@@ -39,6 +40,7 @@ try:
         stable_hash_relative,
     )
 except ImportError:
+    import taira_authority_client
     from release_artifact_contract import (
         ReleaseArtifactError,
         StableFile,
@@ -57,6 +59,8 @@ PROTOCOL_COUNT = 12
 STAGE_COUNT = 48
 REGISTRY_SHA256 = "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51"
 MAX_AUTHORITY_BYTES = 1024 * 1024
+AUTHORITY_ENVELOPE_SUFFIX = ".authority-envelope-v1.json"
+DURABLE_RECEIPT_SUFFIX = ".durable-authority-receipt-v1.json"
 MAX_ARCHIVE_MEMBERS = 100_000
 MAX_ARCHIVE_LOGICAL_BYTES = 16 * 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -156,16 +160,14 @@ def _fail(message: str) -> None:
 
 
 def require_independent_native_evidence_authority_provisioned() -> None:
-    """Refuse release trust until an independent semantic authority exists.
+    """Authenticate the fixed native-evidence binding and live service."""
 
-    This has deliberately no arguments, environment switch, marker file, or
-    key-based escape hatch.  Provisioning requires a new authenticated broker
-    and verifier path, not reuse of the release or candidate signer.
-    """
-
-    raise TairaReleaseAuthorityError(
-        INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR
-    )
+    try:
+        taira_authority_client.preflight("native-evidence")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise TairaReleaseAuthorityError(
+            f"{INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR}: {error}"
+        ) from error
 
 
 def _sha256(value: str, label: str) -> str:
@@ -675,10 +677,62 @@ def _build_untrusted_authority_structure(args: argparse.Namespace) -> dict[str, 
 
 
 def build_authority(args: argparse.Namespace) -> dict[str, object]:
-    """Production authority entry point, closed before evidence/path access."""
+    """Authorize the exact structural subject with the native-evidence role."""
 
     require_independent_native_evidence_authority_provisioned()
-    return _build_untrusted_authority_structure(args)
+    subject = _build_untrusted_authority_structure(args)
+    try:
+        result = taira_authority_client.authorize(
+            "native-evidence",
+            subject,
+            artifacts=_authority_artifacts(args),
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise TairaReleaseAuthorityError(
+            f"native-evidence authority refused the exact release subject: {error}"
+        ) from error
+    # Keep the long-standing structural return type.  The CLI persists the two
+    # authenticated objects as explicit sidecars instead of adding self-hashes
+    # to the subject schema.
+    setattr(args, "_native_authority_result", result)
+    return subject
+
+
+def _authority_artifacts(
+    args: argparse.Namespace,
+) -> tuple[taira_authority_client.Artifact, ...]:
+    """Return the exact ordered native-evidence descriptor manifest."""
+
+    root = Path(args.evidence_root)
+    artifacts = [
+        taira_authority_client.Artifact(f"evidence/{relative}", root / relative)
+        for relative in EVIDENCE_PATHS.values()
+    ]
+    if args.archive is not None:
+        artifacts.append(
+            taira_authority_client.Artifact("subject/release-archive", Path(args.archive))
+        )
+    return tuple(artifacts)
+
+
+def _sidecar_paths(subject_path: Path) -> tuple[Path, Path]:
+    absolute = Path(os.path.abspath(subject_path))
+    return (
+        absolute.with_name(absolute.name + AUTHORITY_ENVELOPE_SUFFIX),
+        absolute.with_name(absolute.name + DURABLE_RECEIPT_SUFFIX),
+    )
+
+
+def _read_sidecar(path: Path, label: str) -> dict[str, object]:
+    _, payload = _stable_read(
+        Path(os.path.abspath(path)).parent,
+        Path(os.path.abspath(path)).name,
+        maximum=MAX_AUTHORITY_BYTES,
+    )
+    try:
+        return taira_authority_client.decode_canonical_json(payload, label)
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise TairaReleaseAuthorityError(str(error)) from error
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -712,10 +766,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        expected = build_authority(args)
+        # This authenticated call is intentionally before evidence, subject,
+        # output, or sidecar path access.
+        if args.command == "create":
+            expected = build_authority(args)
+        else:
+            require_independent_native_evidence_authority_provisioned()
+            expected = _build_untrusted_authority_structure(args)
         expected_bytes = canonical_json_bytes(expected)
         if args.command == "create":
             exclusive_write_bytes(Path(args.output), expected_bytes, mode=0o644)
+            result = getattr(args, "_native_authority_result", None)
+            if not isinstance(result, taira_authority_client.AuthorityResult):
+                _fail("native-evidence authority did not return authenticated sidecars")
+            envelope_path, receipt_path = _sidecar_paths(Path(args.output))
+            exclusive_write_bytes(
+                envelope_path, result.authority_envelope_bytes, mode=0o644
+            )
+            exclusive_write_bytes(
+                receipt_path, result.durable_receipt_bytes, mode=0o644
+            )
         else:
             authority = Path(args.authority)
             _, payload = _stable_read(
@@ -728,6 +798,21 @@ def main(argv: list[str] | None = None) -> int:
                 _fail("Taira release authority is not canonical deterministic JSON")
             if parsed != expected:
                 _fail("Taira release authority does not match the exact release subject")
+            envelope_path, receipt_path = _sidecar_paths(authority)
+            envelope = _read_sidecar(envelope_path, "native-evidence authority envelope")
+            receipt = _read_sidecar(receipt_path, "native-evidence durable receipt")
+            try:
+                taira_authority_client.verify_receipt(
+                    "native-evidence",
+                    expected,
+                    authority_envelope=envelope,
+                    durable_receipt=receipt,
+                    artifacts=_authority_artifacts(args),
+                )
+            except taira_authority_client.TairaAuthorityClientError as error:
+                raise TairaReleaseAuthorityError(
+                    f"native-evidence historical receipt verification failed: {error}"
+                ) from error
     except (
         OSError,
         ReleaseArtifactError,

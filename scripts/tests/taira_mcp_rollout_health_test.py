@@ -12,6 +12,17 @@ SCRIPT = ROOT / "configs" / "soranexus" / "taira" / "check_mcp_rollout.sh"
 DPN_COMMIT = "d" * 40
 
 
+def _manifest_bindings(dataspace: str, validators: list[str]) -> list[dict[str, str]]:
+    return [
+        {
+            "validator": validator,
+            "peer_id": f"{dataspace}-peer-{index}",
+            "torii_url": f"https://{dataspace}-validator-{index}.test",
+        }
+        for index, validator in enumerate(validators, start=1)
+    ]
+
+
 def test_rollout_has_one_absolute_deadline_for_network_and_canary_waits() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
@@ -181,6 +192,10 @@ def _fleet_record(label: str, node: str) -> dict[str, object]:
                 alias: {
                     "source": "lane_manifest",
                     "members": [f"{alias}-validator-{index}" for index in range(1, 5)],
+                    "bindings": _manifest_bindings(
+                        alias,
+                        [f"{alias}-validator-{index}" for index in range(1, 5)],
+                    ),
                     "quorum": 3,
                 }
                 for alias in ("universal", "dpn", "is", "is2", "cbsi")
@@ -444,6 +459,11 @@ def _healthy_physical_dataspace_status() -> dict[str, object]:
                 "manifest_path": manifest_path,
                 "manifest_validators": (
                     rosters[dataspace_alias].copy() if has_manifest else []
+                ),
+                "manifest_validator_bindings": (
+                    _manifest_bindings(dataspace_alias, rosters[dataspace_alias])
+                    if has_manifest
+                    else []
                 ),
                 "manifest_quorum": 3 if has_manifest else None,
             }
@@ -762,12 +782,160 @@ def test_physical_dataspace_rosters_accept_distinct_manifest_cohorts(
     assert summary["universal"]["source"] == "lane_manifest"
     assert summary["universal"]["inherited_lanes"] == ["core", "zk"]
     assert len(summary["dpn"]["members"]) == 4
+    assert len(summary["dpn"]["bindings"]) == 4
+    assert all(
+        set(binding) == {"validator", "peer_id", "torii_url"}
+        for binding in summary["dpn"]["bindings"]
+    )
     assert summary["dpn"]["quorum"] == 3
     lanes = status["teu_lane_commit"]
     assert isinstance(lanes, list)
     for lane in lanes[3:]:
         assert isinstance(lane, dict)
         assert lane["manifest_required"] is False
+
+
+def test_physical_dataspace_rosters_accept_identical_same_dataspace_bindings(
+    tmp_path: Path,
+) -> None:
+    status = _healthy_physical_dataspace_status()
+    lanes = status["teu_lane_commit"]
+    catalog = status["dataspace_catalog"]
+    assert isinstance(lanes, list) and isinstance(catalog, list)
+    governance = lanes[1]
+    zk = lanes[2]
+    zk_catalog = catalog[2]
+    assert isinstance(governance, dict)
+    assert isinstance(zk, dict) and isinstance(zk_catalog, dict)
+    zk.update(
+        {
+            "manifest_ready": True,
+            "manifest_path": "/manifests/zk.manifest.json",
+            "manifest_validators": list(governance["manifest_validators"]),
+            "manifest_validator_bindings": list(
+                governance["manifest_validator_bindings"]
+            ),
+            "manifest_quorum": governance["manifest_quorum"],
+        }
+    )
+    zk_catalog.update(
+        {
+            "manifest_ready": True,
+            "manifest_path": "/manifests/zk.manifest.json",
+        }
+    )
+
+    result = _run_physical_dataspace_roster_checker(
+        tmp_path, status, _healthy_base_payload()
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["universal"]["inherited_lanes"] == ["core"]
+
+
+def test_physical_dataspace_rosters_require_schema_closed_binding_rows(
+    tmp_path: Path,
+) -> None:
+    for mutation, expected in (
+        ("missing_field", "fields must be exactly"),
+        ("unknown_field", "fields must be exactly"),
+        ("missing_projection", "manifest_validator_bindings is not an array"),
+    ):
+        status = _healthy_physical_dataspace_status()
+        lanes = status["teu_lane_commit"]
+        assert isinstance(lanes, list)
+        dpn = lanes[3]
+        assert isinstance(dpn, dict)
+        if mutation == "missing_projection":
+            dpn.pop("manifest_validator_bindings")
+        else:
+            bindings = dpn["manifest_validator_bindings"]
+            assert isinstance(bindings, list) and isinstance(bindings[0], dict)
+            if mutation == "missing_field":
+                bindings[0].pop("torii_url")
+            else:
+                bindings[0]["unexpected"] = True
+
+        result = _run_physical_dataspace_roster_checker(
+            tmp_path, status, _healthy_base_payload()
+        )
+
+        assert result.returncode == 1
+        assert expected in result.stderr
+
+
+def test_physical_dataspace_rosters_require_exact_binding_account_set(
+    tmp_path: Path,
+) -> None:
+    status = _healthy_physical_dataspace_status()
+    lanes = status["teu_lane_commit"]
+    assert isinstance(lanes, list)
+    dpn = lanes[3]
+    assert isinstance(dpn, dict)
+    bindings = dpn["manifest_validator_bindings"]
+    assert isinstance(bindings, list) and isinstance(bindings[0], dict)
+    bindings[0]["validator"] = "unlisted-validator"
+
+    result = _run_physical_dataspace_roster_checker(
+        tmp_path, status, _healthy_base_payload()
+    )
+
+    assert result.returncode == 1
+    assert "roster does not exactly match its validator-binding account set" in result.stderr
+
+
+def test_physical_dataspace_rosters_reject_duplicate_binding_identity(
+    tmp_path: Path,
+) -> None:
+    for field, expected in (
+        ("peer_id", "contains duplicate PeerIds"),
+        ("torii_url", "contains duplicate Torii origins"),
+    ):
+        status = _healthy_physical_dataspace_status()
+        lanes = status["teu_lane_commit"]
+        assert isinstance(lanes, list)
+        dpn = lanes[3]
+        assert isinstance(dpn, dict)
+        bindings = dpn["manifest_validator_bindings"]
+        assert isinstance(bindings, list)
+        first, second = bindings[:2]
+        assert isinstance(first, dict) and isinstance(second, dict)
+        second[field] = first[field]
+
+        result = _run_physical_dataspace_roster_checker(
+            tmp_path, status, _healthy_base_payload()
+        )
+
+        assert result.returncode == 1
+        assert expected in result.stderr
+
+
+def test_physical_dataspace_rosters_reject_noncanonical_torii_origin(
+    tmp_path: Path,
+) -> None:
+    for torii_url in (
+        "https://DPN-validator-1.test",
+        "https://dpn-validator-1.test/",
+        "https://dpn-validator-1.test:443",
+        "https://dpn-validator-1.test/path",
+        "http://dpn-validator-1.test",
+    ):
+        status = _healthy_physical_dataspace_status()
+        lanes = status["teu_lane_commit"]
+        assert isinstance(lanes, list)
+        dpn = lanes[3]
+        assert isinstance(dpn, dict)
+        bindings = dpn["manifest_validator_bindings"]
+        assert isinstance(bindings, list) and isinstance(bindings[0], dict)
+        bindings[0]["torii_url"] = torii_url
+
+        result = _run_physical_dataspace_roster_checker(
+            tmp_path, status, _healthy_base_payload()
+        )
+
+        assert result.returncode == 1
+        assert "torii_url" in result.stderr
 
 
 def test_effective_routing_policy_accepts_canonical_live_status(tmp_path: Path) -> None:
@@ -898,6 +1066,7 @@ def test_physical_dataspace_rosters_reject_required_manifest_without_roster(
             "manifest_ready": False,
             "manifest_path": None,
             "manifest_validators": [],
+            "manifest_validator_bindings": [],
             "manifest_quorum": None,
         }
     )
@@ -930,6 +1099,7 @@ def test_physical_dataspace_rosters_reject_universal_without_manifest_membership
             "manifest_ready": False,
             "manifest_path": None,
             "manifest_validators": [],
+            "manifest_validator_bindings": [],
             "manifest_quorum": None,
         }
     )
@@ -961,6 +1131,7 @@ def test_physical_dataspace_rosters_fail_closed_without_private_manifest(
     cbsi = lanes[6]
     assert isinstance(cbsi, dict)
     cbsi["manifest_validators"] = []
+    cbsi["manifest_validator_bindings"] = []
     cbsi["manifest_quorum"] = None
 
     result = _run_physical_dataspace_roster_checker(
@@ -1001,12 +1172,52 @@ def test_physical_dataspace_rosters_reject_reused_cross_dataspace_cohort(
         assert isinstance(universal, dict) and isinstance(target, dict)
         if target_lane == 3:
             target["manifest_validators"] = list(universal["manifest_validators"])
+            target["manifest_validator_bindings"] = list(
+                universal["manifest_validator_bindings"]
+            )
             expected = "physical dataspaces 'universal' and 'dpn' reuse the same validator roster"
         else:
             source = lanes[4]
             assert isinstance(source, dict)
             target["manifest_validators"] = list(source["manifest_validators"])
+            target["manifest_validator_bindings"] = list(
+                source["manifest_validator_bindings"]
+            )
             expected = "physical dataspaces 'is' and 'is2' reuse the same validator roster"
+
+        result = _run_physical_dataspace_roster_checker(
+            tmp_path, status, _healthy_base_payload()
+        )
+
+        assert result.returncode == 1
+        assert expected in result.stderr
+
+
+def test_physical_dataspace_rosters_reject_partial_cross_dataspace_binding_reuse(
+    tmp_path: Path,
+) -> None:
+    for field, expected in (
+        ("validator", "same manifest validator account"),
+        ("peer_id", "same manifest PeerId"),
+        ("torii_url", "same manifest Torii origin"),
+    ):
+        status = _healthy_physical_dataspace_status()
+        lanes = status["teu_lane_commit"]
+        assert isinstance(lanes, list)
+        universal = lanes[1]
+        dpn = lanes[3]
+        assert isinstance(universal, dict) and isinstance(dpn, dict)
+        universal_bindings = universal["manifest_validator_bindings"]
+        dpn_bindings = dpn["manifest_validator_bindings"]
+        assert isinstance(universal_bindings, list) and isinstance(dpn_bindings, list)
+        source = universal_bindings[0]
+        target = dpn_bindings[0]
+        assert isinstance(source, dict) and isinstance(target, dict)
+        target[field] = source[field]
+        if field == "validator":
+            members = dpn["manifest_validators"]
+            assert isinstance(members, list)
+            members[0] = source[field]
 
         result = _run_physical_dataspace_roster_checker(
             tmp_path, status, _healthy_base_payload()
@@ -1032,6 +1243,9 @@ def test_physical_dataspace_rosters_reject_same_dataspace_projection_drift(
             "manifest_ready": True,
             "manifest_path": "/manifests/zk.manifest.json",
             "manifest_validators": [f"zk-validator-{index}" for index in range(1, 5)],
+            "manifest_validator_bindings": _manifest_bindings(
+                "zk", [f"zk-validator-{index}" for index in range(1, 5)]
+            ),
             "manifest_quorum": 3,
         }
     )

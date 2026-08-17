@@ -245,12 +245,9 @@ impl<'a> PoseidonWordPacker<'a> {
     }
     #[inline]
     fn finish(self) {
-        if self.pending_len > 0 {
-            self.words.push(partial_u64_from_le_bytes(
-                &self.pending_bytes,
-                self.pending_len,
-            ));
-        }
+        let delimiter_word = partial_u64_from_le_bytes(&self.pending_bytes, self.pending_len)
+            | (1u64 << (self.pending_len * 8));
+        self.words.push(delimiter_word);
     }
 }
 impl Write for PoseidonWordPacker<'_> {
@@ -1134,7 +1131,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "e18ad4e6b7fc5a63b849db3f3d8da27fe551fee68954e849b8c253a18efd1623"
+            "6cb8fd166f7fc8eb87a2af9601a37189a517891e0884f0efe0916a5a51c10f25"
         );
     }
     #[test]
@@ -1168,7 +1165,7 @@ mod tests {
         );
     }
     #[test]
-    fn poseidon_word_packer_matches_little_endian_chunks() {
+    fn poseidon_word_packer_matches_delimited_little_endian_chunks() {
         for len in [0usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65] {
             let input = (0..len)
                 .map(|idx| (idx as u8).wrapping_mul(17).wrapping_add(3))
@@ -1181,7 +1178,7 @@ mod tests {
                 }
                 packer.finish();
             }
-            let expected = input
+            let mut expected = input
                 .chunks(8)
                 .map(|chunk| {
                     let mut word = [0u8; 8];
@@ -1189,6 +1186,14 @@ mod tests {
                     u64::from_le_bytes(word)
                 })
                 .collect::<Vec<_>>();
+            if input.len().is_multiple_of(8) {
+                expected.push(1);
+            } else {
+                let last = expected
+                    .last_mut()
+                    .expect("a partial input chunk produces one packed word");
+                *last |= 1u64 << ((input.len() % 8) * 8);
+            }
             assert_eq!(words, expected, "len {len}");
         }
     }

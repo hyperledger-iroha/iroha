@@ -353,18 +353,35 @@ def test_repository_verus_evidence_binds_exact_timeout_proposal_corridor() -> No
 
 
 def test_repository_verus_evidence_binds_lexically_included_proof_tail() -> None:
-    """Every file included into the root Verus module is independently sealed."""
+    """Lexically included proof and checked-token providers are sealed."""
 
     module = load_module()
     root_source = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
     included_tail = (
         "crates/iroha_sumeragi_core/src/verus_proofs/production_kernel_tail.rs"
     )
-    assert {root_source, included_tail} <= set(module.REQUIRED_SOURCE_PATHS)
+    checked_token_parent = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    )
+    checked_token_provider = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
+    )
+    assert {
+        root_source,
+        included_tail,
+        checked_token_parent,
+        checked_token_provider,
+    } <= set(module.REQUIRED_SOURCE_PATHS)
     assert (
         ROOT.joinpath(root_source)
         .read_text(encoding="utf-8")
         .count('include!("verus_proofs/production_kernel_tail.rs");')
+        == 1
+    )
+    assert (
+        ROOT.joinpath(checked_token_parent)
+        .read_text(encoding="utf-8")
+        .count('include!("refinement/first_release_witness.rs");')
         == 1
     )
 

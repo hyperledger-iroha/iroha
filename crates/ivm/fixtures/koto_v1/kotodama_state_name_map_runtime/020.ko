@@ -1,0 +1,12 @@
+
+        seiyaku C {
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
+                var value = 0;
+                if (Foo.contains(Name::parse("alice"))) {
+                    value = Foo.get(Name::parse("alice")).unwrap_or(0);
+                }
+                return value;
+            }
+        }
+    

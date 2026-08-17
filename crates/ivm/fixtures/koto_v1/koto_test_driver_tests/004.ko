@@ -1,0 +1,7 @@
+
+            module Ambient {
+                koto_test { target: "unit.ko" }
+                #[test]
+                fn must_not_run() { test::assert(false); }
+            }
+            

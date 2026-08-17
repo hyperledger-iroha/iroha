@@ -60,6 +60,9 @@ if [[ "$profile" == "--release" \
     exit 1
   fi
   bootstrap_python="${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python3"
+  if [[ -x "${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python-runtime/bin/python3" ]]; then
+    bootstrap_python="${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python-runtime/bin/python3"
+  fi
   if [[ ! -f "$bootstrap_python" || ! -x "$bootstrap_python" ]]; then
     echo "production release requires the bootstrap-archived Python" >&2
     exit 1
@@ -96,6 +99,7 @@ if [[ "$profile" == "--release" ]]; then
       echo "production release sealed child requires its authenticated Python" >&2
       exit 1
     fi
+    bootstrap_python="$IROHA_RELEASE_PYTHON_BIN"
     export IROHA_RELEASE_POLICY_PYTHON="$IROHA_RELEASE_PYTHON_BIN"
   else
     export IROHA_RELEASE_POLICY_PYTHON="$bootstrap_python"
@@ -238,7 +242,7 @@ if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
     exit 1
   fi
   pr_lock_sha256="$(sha256_file "$repo_root/Cargo.lock")"
-  pr_helper_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py")"
+  pr_helper_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py")"; pr_helper_cli_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py")"
   pr_lock_mode="$(
     "$pr_python_bin" -I -S -c \
       'from pathlib import Path; import stat, sys; print(format(stat.S_IMODE(Path(sys.argv[1]).lstat().st_mode), "04o"))' \
@@ -256,9 +260,9 @@ print(Path(tempfile.mkdtemp(prefix="iroha-sumeragi-v2-pr.", dir=base)))
 PY
   )"
   pr_invocation_root="$(canonical_path "$pr_invocation_root")"
-  pr_helper_stage="$(mktemp "$pr_invocation_root/.release-helper.XXXXXX")" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" "$pr_helper_stage" && chmod 0400 "$pr_helper_stage" && exec 9<"$pr_helper_stage" && rm -f -- "$pr_helper_stage" && [[ "$(sha256_file /dev/fd/9)" == "$pr_helper_sha256" ]] || { pr_stage_status=$?; [[ -z "${pr_helper_stage:-}" ]] || rm -f -- "$pr_helper_stage"; rmdir "$pr_invocation_root" || pr_stage_status=1; exit "$pr_stage_status"; }
+  pr_helper_stage="$(mktemp "$pr_invocation_root/.release-helper.XXXXXX")" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" "$pr_helper_stage" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py" "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py" && chmod 0400 "$pr_helper_stage" "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py" && exec 9<"$pr_helper_stage" && rm -f -- "$pr_helper_stage" && [[ "$(sha256_file /dev/fd/9)" == "$pr_helper_sha256" && "$(sha256_file "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py")" == "$pr_helper_cli_sha256" ]] || { pr_stage_status=$?; [[ -z "${pr_helper_stage:-}" ]] || rm -f -- "$pr_helper_stage"; rm -f -- "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py"; rmdir "$pr_invocation_root" || pr_stage_status=1; exit "$pr_stage_status"; }
   run_pr_helper() {
-    "$pr_python_bin" -I -S -c 'import os,sys; os.lseek(9,0,os.SEEK_SET); data=os.fdopen(os.dup(9),"rb").read(8*1024*1024+1); len(data)<=8*1024*1024 or sys.exit("private PR helper is oversized"); sys.argv=["copy-release-runtime.py",*sys.argv[1:]]; exec(compile(data,"<protected-pr-helper>","exec"),{"__name__":"__main__"})' "$@"
+    "$pr_python_bin" -I -S -c 'import os,sys; os.lseek(9,0,os.SEEK_SET); data=os.fdopen(os.dup(9),"rb").read(8*1024*1024+1); len(data)<=8*1024*1024 or sys.exit("private PR helper is oversized"); helper_path=sys.argv[1]; sys.argv=["copy-release-runtime.py",*sys.argv[2:]]; exec(compile(data,"<protected-pr-helper>","exec"),{"__name__":"__main__","__file__":helper_path})' "$pr_invocation_root/copy-release-runtime.py" "$@"
   }
   cleanup_private_pr_invocation() {
     local status=$?
@@ -344,7 +348,8 @@ PY
     exit 1
   fi
   pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"
-  if [[ "$(sha256_file "$pr_clone_helper")" != "$pr_helper_sha256" ]]; then
+  pr_clone_helper_cli="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"
+  if [[ "$(sha256_file "$pr_clone_helper")" != "$pr_helper_sha256" || "$(sha256_file "$pr_clone_helper_cli")" != "$pr_helper_cli_sha256" ]]; then
     echo "private PR helper differs from the pre-clone source identity" >&2
     exit 1
   fi
@@ -557,7 +562,7 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   readonly release_git_bin release_ssh_keygen_bin release_python_bin release_bash_bin
   if [[ "$release_git_bin" != "$release_bootstrap_evidence_dir/git" \
     || "$release_ssh_keygen_bin" != "$release_bootstrap_evidence_dir/ssh-keygen" \
-    || "$release_python_bin" != "$release_bootstrap_evidence_dir/python3" \
+    || "$release_python_bin" != "$bootstrap_python" \
     || "$release_bash_bin" != "$release_bootstrap_evidence_dir/bash" ]]; then
     echo "release executables escaped the authenticated bootstrap archive" >&2
     exit 1
@@ -1601,7 +1606,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 532/532 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 527/527 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1769,6 +1774,31 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
+# Prove that the sealed candidate descends from the protected build-efficiency
+# lineage before consulting any mutable budget or starting the first build.
+# The pinned isolated Python, read-only log, and identity checkpoints keep this
+# structural-only provenance result inside the sealed-manifest boundary.
+if [[ "$profile" == "--release" ]]; then
+  readonly build_efficiency_provenance_log="${release_source_bound_root}/build-efficiency-provenance.log"
+  mkdir -m 700 -p -- "$release_source_bound_root"
+  verify_release_identity "before build-efficiency provenance guard"
+  release_gate_boundary "build-efficiency-provenance:before" || exit $?
+  set +e
+  "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_build_efficiency_provenance.py \
+    2>&1 | tee "$build_efficiency_provenance_log"
+  build_efficiency_provenance_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_gate_boundary "build-efficiency-provenance:after-natural-completion" \
+    || exit $?
+  if ((build_efficiency_provenance_pipeline_status[0] != 0 \
+    || build_efficiency_provenance_pipeline_status[1] != 0)); then
+    echo "production build-efficiency provenance guard failed closed" >&2
+    exit 1
+  fi
+  chmod 0400 "$build_efficiency_provenance_log"
+  verify_release_identity "after build-efficiency provenance guard"
+fi
+
 # Reject an oversized or newly unbudgeted production source before the first
 # build command. The log and both identity checkpoints are sealed-manifest-bound.
 if [[ "$profile" == "--release" ]]; then
@@ -1778,6 +1808,7 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "source-file-budget:before" || exit $?
   set +e
   "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py \
+    --require-objective \
     2>&1 | tee "$source_budget_log"
   source_budget_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -1849,6 +1880,7 @@ required_production_liveness_tests=(
   kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation
   kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart
   kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal
+  kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -2226,6 +2258,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
   sumeragi::v2_lane_work::tests::planner_view_one_binds_rotated_global_leader_to_fresh_lane_view
   sumeragi::v2_lane_work::tests::enabled_nexus_binds_independent_lane_author_distinct_from_global_leader
+  sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag
+  sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts
   sumeragi::v2_lane_work::tests::lane_work_stays_quiescent_until_the_exact_global_prepare_lock
   sumeragi::v2_lane_work::tests::global_body_lock_replacement_requires_higher_prepare_round_and_exact_subject
   sumeragi::v2_lane_work::tests::superseded_commit_protected_lane_session_cannot_retransmit
@@ -2690,7 +2724,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=857
+readonly expected_production_liveness_test_count=860
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2708,12 +2742,6 @@ production_integration_ignored_unit_list="$(
 production_data_model_unit_list="$(run_cargo test --locked --offline -p iroha_data_model --lib -- --list)"
 production_data_model_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored
-)"
-production_zkp_halo2_unit_list="$(
-  run_cargo test --locked --offline -p iroha_zkp_halo2 --lib -- --list
-)"
-production_zkp_halo2_ignored_unit_list="$(
-  run_cargo test --locked --offline -p iroha_zkp_halo2 --lib -- --list --ignored
 )"
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
@@ -2787,7 +2815,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 857-test liveness inventory above. The later
+# not belong to the canonical 860-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3269,13 +3297,6 @@ required_multilane_data_model_focus_tests=(
   block::consensus::tests::autonomous_lane_execution_conflict_is_explicit_and_fail_closed
   block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
 )
-required_multilane_zkp_halo2_focus_tests=(
-  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::kats::stable_key_and_all_lifecycle_record_checksums_are_literal
-  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::kats::stable_key_binds_context_party_slot_digit_and_party_identity
-  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::exact_cas_replay_conflict_mutation_error_and_false_winner_mint_nothing
-  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::exact_width_corruption_scope_and_reserved_state_are_fail_closed
-  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::reservation_mints_only_the_unique_insert_winner_and_recovery_is_observation_only
-)
 required_multilane_torii_focus_tests=(
   tests_runtime_handlers::torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_binding
   tests_runtime_handlers::queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity
@@ -3343,14 +3364,13 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=532
+readonly expected_multilane_focus_test_count=527
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
     + ${#required_multilane_config_runtime_focus_tests[@]}
     + ${#required_multilane_config_fixtures_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
-    + ${#required_multilane_zkp_halo2_focus_tests[@]}
     + ${#required_multilane_torii_focus_tests[@]}
     + ${#required_multilane_torii_shared_focus_tests[@]}
     + ${#required_multilane_integration_lib_focus_tests[@]}
@@ -3420,16 +3440,6 @@ for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
     exit 1
   fi
 done
-for required_test in "${required_multilane_zkp_halo2_focus_tests[@]}"; do
-  if ! grep -Fqx -- "${required_test}: test" <<<"$production_zkp_halo2_unit_list"; then
-    echo "missing required multilane iroha_zkp_halo2 focus test: ${required_test}" >&2
-    exit 1
-  fi
-  if grep -Fqx -- "${required_test}: test" <<<"$production_zkp_halo2_ignored_unit_list"; then
-    echo "required multilane iroha_zkp_halo2 focus test is ignored: ${required_test}" >&2
-    exit 1
-  fi
-done
 multilane_torii_unit_list="$(
   run_cargo test --locked --offline -p iroha_torii --lib -- --list
 )"
@@ -3484,7 +3494,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 532-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 527-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3560,17 +3570,6 @@ if ((corridor_enabled)); then
   require_g_unit_log_results "${required_multilane_data_model_focus_tests[@]}"
 
   append_g_unit_inventory \
-    g-unit-iroha-zkp-halo2 iroha_zkp_halo2 \
-    "${required_multilane_zkp_halo2_focus_tests[@]}"
-  run_corridor_leg \
-    g-unit-iroha-zkp-halo2 cargo-focus \
-    "${#required_multilane_zkp_halo2_focus_tests[@]}" \
-    'for test in required_multilane_zkp_halo2_focus_tests; do cargo test --locked --offline -p iroha_zkp_halo2 --lib "$test" -- --exact --test-threads=1; done' \
-    run_multilane_focus_crate_tests \
-      iroha_zkp_halo2 "${required_multilane_zkp_halo2_focus_tests[@]}"
-  require_g_unit_log_results "${required_multilane_zkp_halo2_focus_tests[@]}"
-
-  append_g_unit_inventory \
     g-unit-iroha-torii iroha_torii "${required_multilane_torii_focus_tests[@]}"
   run_corridor_leg \
     g-unit-iroha-torii cargo-focus "${#required_multilane_torii_focus_tests[@]}" \
@@ -3603,8 +3602,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 533 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 532 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 528 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 527 focused tests" >&2
     exit 1
   fi
 fi
@@ -4420,8 +4419,8 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,189 ledger/checker cases (including the
-# lexically executed case components), 28 pinned-Verus evidence cases,
+# Collection is source-bound as 5,410 ledger/checker cases (including the
+# lexically executed case components), 29 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
 # multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
@@ -4433,15 +4432,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5291 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5513 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5291 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5513 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5291 \
+  preflight-proof-fidelity pytest 5513 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -4518,10 +4517,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production-module + 10 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 89.
-  readonly expected_corridor_leg_count=89
+  # SDK + 6 diagnostics + 11 pytest legs = 88.
+  readonly expected_corridor_leg_count=88
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

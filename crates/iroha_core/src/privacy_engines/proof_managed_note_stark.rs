@@ -1453,9 +1453,9 @@ fn mixed_deep_fri_base_v1(
     result
         .try_reserve_exact(rows)
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    for start in (0..rows).step_by(aggregate::DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1) {
+    for start in (0..rows).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
         let end = start
-            .checked_add(aggregate::DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1)
+            .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
             .ok_or(ProofManagedNoteStarkErrorV1::Resource)?
             .min(rows);
         let denominator_count = end

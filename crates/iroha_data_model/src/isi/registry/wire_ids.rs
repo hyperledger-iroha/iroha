@@ -13,10 +13,11 @@ pub(super) struct BuiltInWireId {
     pub(super) wire_id: &'static str,
     #[cfg(test)]
     pub(super) governance_only: bool,
-    apply: Registrar,
+    register: Registrar,
+    remap_wire_id: Registrar,
 }
 macro_rules! built_in_wire_id_with_scope {
-    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal) => {
+    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, register = $register:expr) => {
         BuiltInWireId {
             #[cfg(test)]
             type_label: stringify!($ty),
@@ -26,19 +27,49 @@ macro_rules! built_in_wire_id_with_scope {
             wire_id: $wire_id,
             #[cfg(test)]
             governance_only: $governance_only,
-            apply: |registry| registry.remap_wire_id::<$ty>($wire_id),
+            register: $register,
+            remap_wire_id: |registry| registry.remap_wire_id::<$ty>($wire_id),
         }
     };
 }
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
-        built_in_wire_id_with_scope!($ty => $wire_id, governance_only = false)
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            register = InstructionRegistry::register_slice::<$ty>
+        )
+    };
+    ($ty:ty => $wire_id:literal, register) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            register = InstructionRegistry::register::<$ty>
+        )
+    };
+    ($ty:ty => $wire_id:literal, register_with_id) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            register = |registry| registry.register_with_id::<$ty>(<$ty>::WIRE_ID)
+        )
+    };
+    ($ty:ty => $wire_id:literal, register_with_id_slice) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
+        )
     };
 }
 #[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
     ($ty:ty => $wire_id:literal) => {
-        built_in_wire_id_with_scope!($ty => $wire_id, governance_only = true)
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = true,
+            register = InstructionRegistry::register_slice::<$ty>
+        )
     };
 }
 /// Complete canonical wire-ID inventory for built-in instructions.
@@ -54,7 +85,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_transfer_control::SetAssetTransferControl => "iroha.asset.transfer.control.set"),
     built_in_wire_id!(asset_transfer_control::SetAssetHoldingLimit => "iroha.asset.holding_limit.set"),
     built_in_wire_id!(rwa::RwaInstructionBox => "iroha.rwa"),
-    built_in_wire_id!(defi::DeFiInstructionBox => "iroha.defi"),
+    built_in_wire_id!(defi::DeFiInstructionBox => "iroha.defi", register_with_id),
     built_in_wire_id!(repo::RepoInstructionBox => "iroha.repo"),
     built_in_wire_id!(settlement::SettlementInstructionBox => "iroha.settlement"),
     built_in_wire_id!(SetParameter => "iroha.set_parameter"),
@@ -68,7 +99,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
     built_in_wire_id!(account_alias_lease::AcquireAccountAliasLease => "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease"),
-    built_in_wire_id!(domain_link::SetAccountAliasBinding => "identity::SetAccountAliasBinding"),
+    built_in_wire_id!(domain_link::SetAccountAliasBinding => "identity::SetAccountAliasBinding", register_with_id_slice),
     built_in_wire_id!(offline::TopUpKagemushaRecursiveV4 => "iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4"),
     built_in_wire_id!(offline::RedeemKagemushaRecursiveV4 => "iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4"),
     built_in_wire_id!(offline::ActivateKagemushaRecursiveReleaseV4 => "iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4"),
@@ -78,13 +109,13 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::staking::RebindPublicLaneValidatorPeer => "iroha.staking.rebind_public_lane_validator_peer"),
     built_in_wire_id!(crate::isi::staking::ActivatePublicLaneValidator => "iroha.staking.activate_public_lane_validator"),
     built_in_wire_id!(crate::isi::staking::ExitPublicLaneValidator => "iroha.staking.exit_public_lane_validator"),
-    built_in_wire_id!(crate::isi::staking::BondPublicLaneStake => "iroha_data_model::isi::staking::BondPublicLaneStake"),
-    built_in_wire_id!(crate::isi::staking::SchedulePublicLaneUnbond => "iroha_data_model::isi::staking::SchedulePublicLaneUnbond"),
-    built_in_wire_id!(crate::isi::staking::FinalizePublicLaneUnbond => "iroha_data_model::isi::staking::FinalizePublicLaneUnbond"),
-    built_in_wire_id!(crate::isi::staking::SlashPublicLaneValidator => "iroha_data_model::isi::staking::SlashPublicLaneValidator"),
+    built_in_wire_id!(crate::isi::staking::BondPublicLaneStake => "iroha_data_model::isi::staking::BondPublicLaneStake", register),
+    built_in_wire_id!(crate::isi::staking::SchedulePublicLaneUnbond => "iroha_data_model::isi::staking::SchedulePublicLaneUnbond", register),
+    built_in_wire_id!(crate::isi::staking::FinalizePublicLaneUnbond => "iroha_data_model::isi::staking::FinalizePublicLaneUnbond", register),
+    built_in_wire_id!(crate::isi::staking::SlashPublicLaneValidator => "iroha_data_model::isi::staking::SlashPublicLaneValidator", register),
     built_in_wire_id!(crate::isi::staking::CancelConsensusEvidencePenalty => "iroha_data_model::isi::staking::CancelConsensusEvidencePenalty"),
-    built_in_wire_id!(crate::isi::staking::RecordPublicLaneRewards => "iroha_data_model::isi::staking::RecordPublicLaneRewards"),
-    built_in_wire_id!(crate::isi::staking::ClaimPublicLaneRewards => "iroha_data_model::isi::staking::ClaimPublicLaneRewards"),
+    built_in_wire_id!(crate::isi::staking::RecordPublicLaneRewards => "iroha_data_model::isi::staking::RecordPublicLaneRewards", register),
+    built_in_wire_id!(crate::isi::staking::ClaimPublicLaneRewards => "iroha_data_model::isi::staking::ClaimPublicLaneRewards", register),
     built_in_wire_id!(nexus::SetLaneRelayEmergencyValidators => "nexus::SetLaneRelayEmergencyValidators"),
     built_in_wire_id!(nexus::RegisterVerifiedLaneRelay => "nexus::RegisterVerifiedLaneRelay"),
     built_in_wire_id!(nexus::RegisterVerifiedFeeSponsorVaultAllocation => "nexus::RegisterVerifiedFeeSponsorVaultAllocation"),
@@ -295,15 +326,15 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(sorafs::ResolveSorafsModerationChallenge => "iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge"),
     built_in_wire_id!(sorafs::SubmitSorafsModerationReveal => "iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal"),
     built_in_wire_id!(sorafs::FinalizeSorafsModerationCase => "iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase"),
-    built_in_wire_id!(content::PublishContentBundle => "iroha_data_model::isi::content::PublishContentBundle"),
-    built_in_wire_id!(content::RetireContentBundle => "iroha_data_model::isi::content::RetireContentBundle"),
-    built_in_wire_id!(soradns::SubmitDirectoryDraft => "iroha_data_model::isi::soradns::SubmitDirectoryDraft"),
-    built_in_wire_id!(soradns::PublishDirectory => "iroha_data_model::isi::soradns::PublishDirectory"),
-    built_in_wire_id!(soradns::RevokeResolver => "iroha_data_model::isi::soradns::RevokeResolver"),
-    built_in_wire_id!(soradns::UnrevokeResolver => "iroha_data_model::isi::soradns::UnrevokeResolver"),
-    built_in_wire_id!(soradns::AddReleaseSigner => "iroha_data_model::isi::soradns::AddReleaseSigner"),
-    built_in_wire_id!(soradns::RemoveReleaseSigner => "iroha_data_model::isi::soradns::RemoveReleaseSigner"),
-    built_in_wire_id!(soradns::SetDirectoryRotationPolicy => "iroha_data_model::isi::soradns::SetDirectoryRotationPolicy"),
+    built_in_wire_id!(content::PublishContentBundle => "iroha_data_model::isi::content::PublishContentBundle", register),
+    built_in_wire_id!(content::RetireContentBundle => "iroha_data_model::isi::content::RetireContentBundle", register),
+    built_in_wire_id!(soradns::SubmitDirectoryDraft => "iroha_data_model::isi::soradns::SubmitDirectoryDraft", register),
+    built_in_wire_id!(soradns::PublishDirectory => "iroha_data_model::isi::soradns::PublishDirectory", register),
+    built_in_wire_id!(soradns::RevokeResolver => "iroha_data_model::isi::soradns::RevokeResolver", register),
+    built_in_wire_id!(soradns::UnrevokeResolver => "iroha_data_model::isi::soradns::UnrevokeResolver", register),
+    built_in_wire_id!(soradns::AddReleaseSigner => "iroha_data_model::isi::soradns::AddReleaseSigner", register),
+    built_in_wire_id!(soradns::RemoveReleaseSigner => "iroha_data_model::isi::soradns::RemoveReleaseSigner", register),
+    built_in_wire_id!(soradns::SetDirectoryRotationPolicy => "iroha_data_model::isi::soradns::SetDirectoryRotationPolicy", register),
     built_in_wire_id!(space_directory::PublishSpaceDirectoryManifest => "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"),
     built_in_wire_id!(space_directory::RevokeSpaceDirectoryManifest => "iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest"),
     built_in_wire_id!(space_directory::ExpireSpaceDirectoryManifest => "iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest"),
@@ -363,10 +394,10 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(bridge::SubmitBridgeProof => "iroha_data_model::isi::bridge::SubmitBridgeProof"),
     built_in_wire_id!(bridge::RecordBridgeReceipt => "iroha_data_model::isi::bridge::RecordBridgeReceipt"),
     built_in_wire_id!(bridge::RecordSccpMessage => "iroha_data_model::isi::bridge::RecordSccpMessage"),
-    built_in_wire_id!(confidential::PublishPedersenParams => "iroha_data_model::isi::confidential::PublishPedersenParams"),
-    built_in_wire_id!(confidential::SetPedersenParamsLifecycle => "iroha_data_model::isi::confidential::SetPedersenParamsLifecycle"),
-    built_in_wire_id!(confidential::PublishPoseidonParams => "iroha_data_model::isi::confidential::PublishPoseidonParams"),
-    built_in_wire_id!(confidential::SetPoseidonParamsLifecycle => "iroha_data_model::isi::confidential::SetPoseidonParamsLifecycle"),
+    built_in_wire_id!(confidential::PublishPedersenParams => "iroha_data_model::isi::confidential::PublishPedersenParams", register),
+    built_in_wire_id!(confidential::SetPedersenParamsLifecycle => "iroha_data_model::isi::confidential::SetPedersenParamsLifecycle", register),
+    built_in_wire_id!(confidential::PublishPoseidonParams => "iroha_data_model::isi::confidential::PublishPoseidonParams", register),
+    built_in_wire_id!(confidential::SetPoseidonParamsLifecycle => "iroha_data_model::isi::confidential::SetPoseidonParamsLifecycle", register),
     built_in_wire_id!(ministry::SubmitAgendaProposal => "iroha_data_model::isi::ministry::SubmitAgendaProposal"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeDeployContract => "iroha_data_model::isi::governance::ProposeDeployContract"),
@@ -410,8 +441,15 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
     built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
 ];
-/// Apply every canonical built-in wire identifier to an already populated registry.
-pub(super) fn apply(registry: InstructionRegistry) -> InstructionRegistry {
+/// Register every built-in instruction using its canonical typed codec constructor.
+pub(super) fn register_all() -> InstructionRegistry {
     ALL.iter()
-        .fold(registry, |registry, entry| (entry.apply)(registry))
+        .fold(InstructionRegistry::new(), |registry, entry| {
+            (entry.register)(registry)
+        })
+}
+/// Apply every canonical built-in wire identifier after all constructors are registered.
+pub(super) fn remap_all(registry: InstructionRegistry) -> InstructionRegistry {
+    ALL.iter()
+        .fold(registry, |registry, entry| (entry.remap_wire_id)(registry))
 }

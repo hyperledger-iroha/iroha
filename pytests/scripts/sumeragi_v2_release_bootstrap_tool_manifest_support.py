@@ -26,6 +26,7 @@ RELEASE_LANGUAGE_TOOL_NAMES = (
 REQUIRED_RUNNER_TOOL_NAMES = tuple(
     sorted((*RELEASE_SHELL_UTILITY_NAMES, *RELEASE_LANGUAGE_TOOL_NAMES))
 )
+_FRAMEWORK_STDLIB_OMITTED_PATHS = frozenset({"site-packages"})
 PROBE_OPERATION_IDS = {
     "awk": "release-tool.awk-program.v1",
     "basename": "release-tool.basename-path.v1",
@@ -211,23 +212,44 @@ def provision_archived_python_runtime(source: Path, archive: Path) -> None:
         assert _tree_members(archived_resources) == _tree_members(
             framework_resources
         )
-        assert _tree_members(archived_stdlib) == _tree_members(framework_stdlib)
+        assert _tree_members(archived_stdlib) == _tree_members(
+            framework_stdlib,
+            omitted_paths=_FRAMEWORK_STDLIB_OMITTED_PATHS,
+        )
         return
 
     shutil.copyfile(framework_binary, archived_framework)
     archived_framework.chmod(0o500)
     shutil.copytree(framework_resources, archived_resources, symlinks=True)
     archived_stdlib.parent.mkdir(mode=0o700)
-    shutil.copytree(framework_stdlib, archived_stdlib, symlinks=True)
+    shutil.copytree(
+        framework_stdlib,
+        archived_stdlib,
+        symlinks=True,
+        ignore=lambda directory, names: (
+            _FRAMEWORK_STDLIB_OMITTED_PATHS.intersection(names)
+            if Path(directory) == framework_stdlib
+            else frozenset()
+        ),
+    )
 
 
-def _tree_members(root: Path) -> dict[str, tuple[object, ...]]:
+def _tree_members(
+    root: Path,
+    *,
+    omitted_paths: frozenset[str] = frozenset(),
+) -> dict[str, tuple[object, ...]]:
     """Return an exact no-follow member inventory for one fixture tree."""
 
     assert root.is_dir() and not root.is_symlink()
     records: dict[str, tuple[object, ...]] = {}
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
+        if any(
+            relative == omitted or relative.startswith(f"{omitted}/")
+            for omitted in omitted_paths
+        ):
+            continue
         metadata = path.lstat()
         if path.is_symlink():
             records[relative] = ("symlink", os.readlink(path))

@@ -36,5 +36,5 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 # Preserve the reviewed lock graph without restoring retired production edges.
 iroha_config.workspace = true
-iroha_core.workspace = true
+iroha_core = { workspace = true, default-features = false }
 iroha_genesis.workspace = true

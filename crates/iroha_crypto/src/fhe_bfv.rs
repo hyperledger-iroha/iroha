@@ -77,7 +77,6 @@ macro_rules! invalid_guards {
         $(invalid_if!($condition, $($arg)*);)+
     };
 }
-
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const BOUNDED_NOISE_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.bounded_noise.v1";
 /// Seed-derivation domain for exact-lift BFV encryption and rotation refreshes.
@@ -11561,61 +11560,18 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(
     );
     Ok(())
 }
-/// Return the digest for externally supplied BFV full-bootstrap arithmetic trace profile material.
-///
-/// # Errors
-/// Returns [`BfvError`] when profile validation or canonical Norito encoding fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(
-    profile: &BfvFullBootstrapArithmeticTraceProfileV1,
-) -> Result<Hash, BfvError> {
-    validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(profile)?;
-    let bytes = norito::encode_canonical(profile).map_err(|err| {
-        invalid!("BFV full-bootstrap arithmetic trace profile encoding failed: {err}")
-    })?;
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_DIGEST_DOMAIN,
-        bytes.as_slice(),
-    ]))
-}
-/// Decode canonical BFV full-bootstrap arithmetic trace profile bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, not valid Norito trace-profile material,
-/// fail trace-profile validation, or are not the canonical v1 Norito encoding of the decoded
-/// profile.
-pub fn decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(
-    bytes: &[u8],
-) -> Result<BfvFullBootstrapArithmeticTraceProfileV1, BfvError> {
-    decode_bfv_base_material_bytes_v1(
-        "BFV full-bootstrap arithmetic trace profile bytes",
-        bytes,
-        validate_bfv_full_bootstrap_arithmetic_trace_profile_v1,
-    )
-}
-/// Return the digest for canonical BFV full-bootstrap arithmetic trace profile bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace-profile digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap arithmetic trace profile bytes.
-///
-/// This byte-admission helper keeps the decoded arithmetic trace profile and its domain-separated
-/// profile digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace-profile digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapArithmeticTraceProfileV1, Hash), BfvError> {
-    let profile = decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(bytes)?;
-    let profile_digest =
-        bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(&profile)?;
-    Ok((profile, profile_digest))
+define_bfv_canonical_material_codec_v1! {
+    material = BfvFullBootstrapArithmeticTraceProfileV1;
+    material_label = "BFV full-bootstrap arithmetic trace profile";
+    bytes_label = "BFV full-bootstrap arithmetic trace profile bytes";
+    encoded_kind = "Norito-encoded BFV material";
+    domain = BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_DIGEST_DOMAIN;
+    validate = validate_bfv_full_bootstrap_arithmetic_trace_profile_v1;
+    digest = bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1;
+    decode = decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1;
+    digest_from_bytes = bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1;
+    and_digest_from_bytes =
+        bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1;
 }
 /// Return the canonical BFV full-bootstrap arithmetic trace profile digest.
 ///
@@ -11854,71 +11810,19 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
     require_contract_flag!(supports_bounded_noise, "bounded-noise claims");
     Ok(())
 }
-/// Return the digest for externally supplied BFV full-bootstrap arithmetic AIR contract material.
-///
-/// # Errors
-/// Returns [`BfvError`] when the material does not validate or cannot be canonically encoded.
-pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(
-    material: &BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
-) -> Result<Hash, BfvError> {
-    validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(material)?;
-    let bytes = norito::encode_canonical(material).map_err(|err| {
-        invalid!(
-            "BFV full-bootstrap arithmetic AIR constraint-system material encoding failed: {err}"
-        )
-    })?;
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
-        bytes.as_slice(),
-    ]))
-}
-/// Decode canonical BFV full-bootstrap arithmetic AIR constraint-system material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, not valid Norito AIR contract material,
-/// fail AIR contract validation, or are not the canonical v1 Norito encoding of the decoded
-/// material.
-pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1(
-    bytes: &[u8],
-) -> Result<BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1, BfvError> {
-    decode_bfv_base_material_bytes_v1(
-        "BFV full-bootstrap arithmetic AIR constraint-system material bytes",
-        bytes,
-        validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1,
-    )
-}
-/// Return the digest for canonical BFV full-bootstrap arithmetic AIR material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or AIR contract digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap arithmetic AIR material bytes.
-///
-/// This byte-admission helper keeps the decoded AIR constraint-system material and its
-/// domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or AIR contract digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<
-    (
-        BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
-        Hash,
-    ),
-    BfvError,
-> {
-    let material =
-        decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1(bytes)?;
-    let material_digest =
-        bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&material)?;
-    Ok((material, material_digest))
+define_bfv_canonical_material_codec_v1! {
+    material = BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1;
+    material_label = "BFV full-bootstrap arithmetic AIR constraint-system material";
+    bytes_label = "BFV full-bootstrap arithmetic AIR constraint-system material bytes";
+    encoded_kind = "Norito-encoded BFV material";
+    domain = BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN;
+    validate = validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1;
+    digest = bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1;
+    decode = decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1;
+    digest_from_bytes =
+        bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1;
+    and_digest_from_bytes =
+        bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1;
 }
 /// Return the digest for the canonical BFV full-bootstrap arithmetic AIR contract.
 ///
@@ -14755,59 +14659,17 @@ where
     validate(&value)?;
     Ok(value)
 }
-/// Return the digest of typed BFV full-bootstrap release audit evidence.
-///
-/// # Errors
-/// Returns [`BfvError`] when the evidence is malformed or canonical encoding fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_digest_v1(
-    evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
-) -> Result<Hash, BfvError> {
-    validate_bfv_full_bootstrap_release_audit_evidence_v1(evidence)?;
-    let bytes = norito::encode_canonical(evidence).map_err(|err| {
-        invalid!("BFV full-bootstrap release audit evidence encoding failed: {err}")
-    })?;
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN,
-        bytes.as_slice(),
-    ]))
-}
-/// Decode canonical BFV full-bootstrap release audit evidence bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when `bytes` is not a well-formed release-audit evidence object, fails
-/// evidence validation, or is not the canonical v1 Norito encoding of the decoded evidence.
-pub fn decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(
-    bytes: &[u8],
-) -> Result<BfvFullBootstrapReleaseAuditEvidenceV1, BfvError> {
-    decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1(
-        "BFV full-bootstrap release audit evidence bytes",
-        bytes,
-        validate_bfv_full_bootstrap_release_audit_evidence_v1,
-    )
-}
-/// Return the digest of canonical BFV full-bootstrap release audit evidence bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap release audit evidence bytes.
-///
-/// This byte-admission helper keeps the decoded evidence and domain-separated evidence digest bound
-/// to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditEvidenceV1, Hash), BfvError> {
-    let evidence = decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(bytes)?;
-    let evidence_digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)?;
-    Ok((evidence, evidence_digest))
+define_bfv_canonical_material_codec_v1! {
+    material = BfvFullBootstrapReleaseAuditEvidenceV1;
+    material_label = "BFV full-bootstrap release audit evidence";
+    bytes_label = "BFV full-bootstrap release audit evidence bytes";
+    encoded_kind = "a Norito-encoded release-audit object";
+    domain = BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN;
+    validate = validate_bfv_full_bootstrap_release_audit_evidence_v1;
+    digest = bfv_full_bootstrap_release_audit_evidence_digest_v1;
+    decode = decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1;
+    digest_from_bytes = bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1;
+    and_digest_from_bytes = bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1;
 }
 /// Derive and digest deterministic BFV full-bootstrap release audit evidence.
 ///

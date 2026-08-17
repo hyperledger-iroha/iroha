@@ -29,6 +29,13 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, NoReturn, Sequence
 
+try:
+    from scripts import taira_privacy_rollout_contract as rollout_observation
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    import taira_privacy_rollout_contract as rollout_observation
+
 SCHEMA = "iroha.taira.release_controller_closure"
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "authority-controller-v1.json"
@@ -125,6 +132,7 @@ PYTHON_ENV_SCRUBBER = (
 COMMON_FILES = (
     "scripts/compute_workspace_source_manifest.py",
     "scripts/seal_taira_release_controllers.py",
+    "scripts/taira_authority_client.py",
 )
 LINUX_FILES = COMMON_FILES + (
     "scripts/build_privacy_v1_boi_handoff.py",
@@ -338,6 +346,10 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--expected-qualification-receipt-id",
         "--repository",
         "--suffix",
+        "--rollout-plan",
+        "--rollout-result",
+        "--rollout-authority-envelope",
+        "--rollout-durable-receipt",
     },
     "build-public-soak-candidate": {
         "--candidate-root",
@@ -399,6 +411,8 @@ INPUT_PATH_FLAGS = {
     "--candidate-root",
     "--candidate-handoff", "--publication-root",
     "--result", "--write-config",
+    "--rollout-plan", "--rollout-result",
+    "--rollout-authority-envelope", "--rollout-durable-receipt",
 }
 KAGEMUSHA_PREPARE_RESET_FLAGS = frozenset(
     {"--kagemusha-release-root", "--kagemusha-activation-authority"}
@@ -544,6 +558,14 @@ SENSITIVE_TRUSTED_INPUT_FLAGS = frozenset(
         "--write-config",
     }
 )
+ROLLOUT_OBSERVATION_INPUT_FLAGS = frozenset(
+    {
+        "--rollout-plan",
+        "--rollout-result",
+        "--rollout-authority-envelope",
+        "--rollout-durable-receipt",
+    }
+)
 
 
 class ControllerSealError(RuntimeError):
@@ -554,10 +576,15 @@ def _fail(message: str) -> NoReturn:
     raise ControllerSealError(message)
 
 
-def _require_authenticated_rollout_observation_authority() -> NoReturn:
-    """Keep observation verification/publication closed before controller I/O."""
+def _require_authenticated_rollout_observation_authority() -> None:
+    """Authenticate the fixed observation service before controller I/O."""
 
-    _fail(AUTHENTICATED_ROLLOUT_OBSERVATION_ISSUANCE_BARRIER)
+    try:
+        rollout_observation.require_authenticated_rollout_observation_authority_provisioned()
+    except rollout_observation.RolloutContractError as error:
+        raise ControllerSealError(
+            f"{AUTHENTICATED_ROLLOUT_OBSERVATION_ISSUANCE_BARRIER}: {error}"
+        ) from error
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -2239,6 +2266,17 @@ def _validate_operation_args(
             ):
                 _fail("controller manifest path is not the exact installed manifest")
             continue
+        if operation == "publish-rollout" and flag in ROLLOUT_OBSERVATION_INPUT_FLAGS:
+            uid, gid, root = identity_contracts["authority"]
+            _validate_privacy_rollout_input(
+                canonical,
+                identity_root=root,
+                identity_uid=uid,
+                identity_gid=gid,
+                label=f"authenticated rollout observation input {flag}",
+                maximum=MAX_CONTROLLER_BYTES,
+            )
+            continue
         if flag in SENSITIVE_TRUSTED_INPUT_FLAGS:
             if not _trusted_input_for(attestation, operation, flag, canonical):
                 _fail("operation input lacks its exact trusted input record")
@@ -3270,6 +3308,14 @@ def _dispatch_publication_composite(
             executable_values["--release-manifest-verifier"][1],
             "--terminal-handoff",
             str(terminal),
+            "--rollout-plan",
+            option_values["--rollout-plan"][0],
+            "--rollout-result",
+            option_values["--rollout-result"][0],
+            "--rollout-authority-envelope",
+            option_values["--rollout-authority-envelope"][0],
+            "--rollout-durable-receipt",
+            option_values["--rollout-durable-receipt"][0],
         ]
         result = _dispatch(
             "publish-rollout",
@@ -3309,6 +3355,14 @@ def _dispatch_publication_composite(
                 option_values[
                     "--expected-workspace-source-manifest-sha256"
                 ][0],
+                "--rollout-plan",
+                option_values["--rollout-plan"][0],
+                "--rollout-result",
+                option_values["--rollout-result"][0],
+                "--rollout-authority-envelope",
+                option_values["--rollout-authority-envelope"][0],
+                "--rollout-durable-receipt",
+                option_values["--rollout-durable-receipt"][0],
             ],
             None,
         )

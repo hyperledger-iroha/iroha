@@ -1918,6 +1918,7 @@ impl ConsensusIngressLimiter {
             iroha_core::NetworkMessage::SumeragiControlFlow(_)
             | iroha_core::NetworkMessage::LaneDrainVote(_)
             | iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_) => IngressPolicy::bulk(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
                 | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
@@ -2029,6 +2030,13 @@ impl ConsensusIngressLimiter {
     ) -> Option<ConsensusIngressDropReason> {
         if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_))
             && size_bytes > iroha_core::MAX_LANE_DRAIN_VOTE_WIRE_BYTES
+        {
+            return Some(ConsensusIngressDropReason::Bytes);
+        }
+        if matches!(
+            msg,
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_)
+        ) && size_bytes > iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES
         {
             return Some(ConsensusIngressDropReason::Bytes);
         }
@@ -2478,7 +2486,8 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         | MergeCommitteeSignature(_)
         | LaneDrainVote(_)
         | CertifiedMergeSidecar(_)
-        | NativeAmx(_) => Some(SumeragiRelayClass::Lane),
+        | NativeAmx(_)
+        | QueuePlanAdmissionCertificate(_) => Some(SumeragiRelayClass::Lane),
         _ => None,
     }
 }
@@ -2709,63 +2718,7 @@ fn prepare_sumeragi_block_relay_item(
         }
     }
 }
-fn prepare_sumeragi_lane_relay_item(
-    context: SumeragiRelayBuildContext,
-    message: iroha_core::NetworkMessage,
-) -> PrepareSumeragiRelayResult {
-    use iroha_core::NetworkMessage::{
-        CertifiedMergeSidecar, LaneDrainVote, LaneRelay, MergeCommitteeSignature, NativeAmx,
-    };
-    let peer_id = context.peer.id().clone();
-    let item = match message {
-        LaneRelay(envelope) => LaneRelayMessage::Envelope(*envelope),
-        MergeCommitteeSignature(signature) => {
-            LaneRelayMessage::MergeSignature(Arc::unwrap_or_clone(signature))
-        }
-        CertifiedMergeSidecar(message) => {
-            let reply_route = certified_merge_sidecar_ingress_reply_route(
-                message.as_ref(),
-                context.reply_route.clone(),
-            );
-            LaneRelayMessage::CertifiedMergeSidecar {
-                sender: peer_id.clone(),
-                reply_route: Some(reply_route),
-                message: Arc::unwrap_or_clone(message),
-            }
-        }
-        NativeAmx(message) => LaneRelayMessage::NativeAmx {
-            sender: peer_id.clone(),
-            reply_route: Some(context.reply_route.clone()),
-            message: Arc::unwrap_or_clone(message),
-        },
-        LaneDrainVote(vote) => {
-            let vote = *vote;
-            if vote.signer != peer_id {
-                iroha_logger::debug!(
-                    peer = %context.peer,
-                    signer = %vote.signer,
-                    "rejecting lane-drain vote whose signed identity differs from its authenticated sender"
-                );
-                return context.terminal(SumeragiRelayTerminalOutcome::Failed);
-            }
-            LaneRelayMessage::DrainVote {
-                sender: peer_id,
-                vote,
-            }
-        }
-        _ => {
-            iroha_logger::error!(
-                peer = %context.peer,
-                "non-Sumeragi message reached the retained Sumeragi dispatcher"
-            );
-            return context.terminal(SumeragiRelayTerminalOutcome::Failed);
-        }
-    };
-    context.prepared(
-        SumeragiRelayClass::Lane,
-        PreparedSumeragiRelayItem::Lane(Box::new(item)),
-    )
-}
+include!("sumeragi_lane_relay_item.rs");
 impl NetworkRelayShared {
     fn authorize_sumeragi_relay_parts(
         &self,
@@ -4198,7 +4151,11 @@ impl NetworkRelayShared {
         use iroha_core::NetworkMessage::*;
         if !matches!(
             msg,
-            SumeragiBlock(_) | SumeragiControlFlow(_) | LaneDrainVote(_) | CertifiedMergeSidecar(_)
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | LaneDrainVote(_)
+                | CertifiedMergeSidecar(_)
+                | QueuePlanAdmissionCertificate(_)
         ) {
             return true;
         }
@@ -4246,6 +4203,7 @@ impl NetworkRelayShared {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
             },
+            QueuePlanAdmissionCertificate(_) => ("QueuePlanAdmissionCertificate", None, None),
             _ => ("Other", None, None),
         };
         iroha_logger::debug!(
@@ -4345,7 +4303,8 @@ impl NetworkRelayShared {
             | MergeCommitteeSignature(_)
             | LaneDrainVote(_)
             | CertifiedMergeSidecar(_)
-            | NativeAmx(_) => {
+            | NativeAmx(_)
+            | QueuePlanAdmissionCertificate(_) => {
                 iroha_logger::error!(
                     %peer,
                     via = %authenticated_via,
@@ -5438,6 +5397,15 @@ mod network_relay_tests {
     }
     #[test]
     fn sumeragi_v2_ingress_policy_and_metadata_match_payload_kind() {
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
+            Some(IngressRateClass::Bulk)
+        );
+        assert_eq!(
+            sumeragi_relay_class(&handoff),
+            Some(SumeragiRelayClass::Lane)
+        );
         let chunk = v2_payload_chunk_block_message();
         let chunk_policy = ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(chunk.clone()));
         assert_eq!(chunk_policy.rate_class, Some(IngressRateClass::Critical));
@@ -6246,6 +6214,8 @@ mod network_relay_tests {
         }
         let peer = sample_peer();
         assert_bulk(&peer, &v2_certified_body_response_msg());
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        assert_bulk(&peer, &handoff);
     }
     #[test]
     fn consensus_ingress_bytes_limit_drops_oversize() {
@@ -6272,6 +6242,13 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, &msg, 5), None);
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        let max = iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES;
+        assert_eq!(
+            limiter.should_drop(&peer, &handoff, max + 1),
+            Some(ConsensusIngressDropReason::Bytes)
+        );
+        assert_eq!(limiter.should_drop(&peer, &handoff, max), None);
     }
     #[test]
     fn low_priority_ingress_rate_limit_drops_burst() {

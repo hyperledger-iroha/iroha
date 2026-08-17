@@ -1,0 +1,7 @@
+
+            seiyaku ListGetGasControl {
+                view fn main(int index) -> int {
+                    return 0;
+                }
+            }
+            

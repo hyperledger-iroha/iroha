@@ -1,0 +1,6 @@
+
+module Parenthesized {
+    fn inspect(Option<int> input) {
+        (if let Option::some(payload) = input { return; })
+    }
+}

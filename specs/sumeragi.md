@@ -113,7 +113,7 @@ validators must never replace it with local TOML.
 
 The view-zero round deadline is ten signed block-cadence intervals. Critical
 message retransmission is one fifth of that deadline. Certified view `v` uses a
-linear `(v + 1)` deadline multiplier, while retransmission stays fixed. Startup
+`min(v + 1, 10)` deadline multiplier, while retransmission stays fixed. Startup
 and recovery do not consume the first live deadline; after clock arming, only a
 certified `EnterView` transition restarts the clocks. See
 `specs/sumeragi_pacemaker.md` for the source-coupled timing contract.

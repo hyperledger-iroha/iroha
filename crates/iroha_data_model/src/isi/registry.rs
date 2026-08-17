@@ -18,388 +18,11 @@ use crate::{
 };
 /// Signature of helper functions that register instructions into [`InstructionRegistry`].
 type Registrar = fn(InstructionRegistry) -> InstructionRegistry;
-/// Built-in instruction registrations that make up the default registry used by Iroha.
-const ALL_REGISTRARS: &[Registrar] = &[
-    InstructionRegistry::register_slice::<RegisterBox>,
-    InstructionRegistry::register_slice::<UnregisterBox>,
-    InstructionRegistry::register_slice::<MintBox>,
-    InstructionRegistry::register_slice::<BurnBox>,
-    InstructionRegistry::register_slice::<TransferAssetBatch>,
-    InstructionRegistry::register_slice::<TransferBox>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferAvailability>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferBlacklist>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetHoldingLimit>,
-    InstructionRegistry::register_slice::<rwa::RwaInstructionBox>,
-    |registry| {
-        registry.register_with_id::<defi::DeFiInstructionBox>(defi::DeFiInstructionBox::WIRE_ID)
-    },
-    InstructionRegistry::register_slice::<repo::RepoInstructionBox>,
-    InstructionRegistry::register_slice::<settlement::SettlementInstructionBox>,
-    InstructionRegistry::register_slice::<SetParameter>,
-    InstructionRegistry::register_slice::<SetKeyValueBox>,
-    InstructionRegistry::register_slice::<AddSignatory>,
-    InstructionRegistry::register_slice::<RemoveSignatory>,
-    InstructionRegistry::register_slice::<SetAccountQuorum>,
-    InstructionRegistry::register_slice::<SetAssetKeyValue>,
-    InstructionRegistry::register_slice::<RemoveKeyValueBox>,
-    InstructionRegistry::register_slice::<RemoveAssetKeyValue>,
-    InstructionRegistry::register_slice::<GrantBox>,
-    InstructionRegistry::register_slice::<RevokeBox>,
-    InstructionRegistry::register_slice::<account_alias_lease::AcquireAccountAliasLease>,
-    |registry| {
-        registry.register_with_id_slice::<domain_link::SetAccountAliasBinding>(
-            "identity::SetAccountAliasBinding",
-        )
-    },
-    InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV4>,
-    InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV4>,
-    InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
-    InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
-    InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
-    InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
-    InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
-    InstructionRegistry::register_slice::<crate::isi::staking::ActivatePublicLaneValidator>,
-    InstructionRegistry::register_slice::<crate::isi::staking::ExitPublicLaneValidator>,
-    InstructionRegistry::register::<crate::isi::staking::BondPublicLaneStake>,
-    InstructionRegistry::register::<crate::isi::staking::SchedulePublicLaneUnbond>,
-    InstructionRegistry::register::<crate::isi::staking::FinalizePublicLaneUnbond>,
-    InstructionRegistry::register::<crate::isi::staking::SlashPublicLaneValidator>,
-    InstructionRegistry::register_slice::<crate::isi::staking::CancelConsensusEvidencePenalty>,
-    InstructionRegistry::register::<crate::isi::staking::RecordPublicLaneRewards>,
-    InstructionRegistry::register::<crate::isi::staking::ClaimPublicLaneRewards>,
-    InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
-    InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
-    InstructionRegistry::register_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>,
-    InstructionRegistry::register_slice::<nexus::CreateFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<nexus::StageFeeSponsorProgramRevision>,
-    InstructionRegistry::register_slice::<nexus::ActivateFeeSponsorProgramRevision>,
-    InstructionRegistry::register_slice::<nexus::PauseFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<nexus::BeginCloseFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<nexus::CloseFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<nexus::EnrollFeeSponsorBeneficiary>,
-    InstructionRegistry::register_slice::<nexus::UnenrollFeeSponsorBeneficiary>,
-    InstructionRegistry::register_slice::<nexus::FundFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<nexus::WithdrawFeeSponsorProgram>,
-    InstructionRegistry::register_slice::<bridge::ApplySccpRouteGovernance>,
-    InstructionRegistry::register_slice::<bridge::FundSccpRouteEscrow>,
-    InstructionRegistry::register_slice::<bridge::RefundSccpRouteEscrow>,
-    InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
-    InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
-    InstructionRegistry::register_slice::<oracle::AggregateOracleFeed>,
-    InstructionRegistry::register_slice::<oracle::OpenOracleDispute>,
-    InstructionRegistry::register_slice::<oracle::ResolveOracleDispute>,
-    InstructionRegistry::register_slice::<oracle::ProposeOracleChange>,
-    InstructionRegistry::register_slice::<oracle::VoteOracleChangeStage>,
-    InstructionRegistry::register_slice::<oracle::RollbackOracleChange>,
-    InstructionRegistry::register_slice::<oracle::SubmitDefiOracleAttestation>,
-    InstructionRegistry::register_slice::<oracle::RecordTwitterBinding>,
-    InstructionRegistry::register_slice::<oracle::RevokeTwitterBinding>,
-    InstructionRegistry::register_slice::<social::ClaimTwitterFollowReward>,
-    InstructionRegistry::register_slice::<social::SendToTwitter>,
-    InstructionRegistry::register_slice::<social::CancelTwitterEscrow>,
-    InstructionRegistry::register_slice::<escrow::OpenAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::AcceptAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::MarkEscrowPaymentSent>,
-    InstructionRegistry::register_slice::<escrow::ReleaseAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::CancelAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::OpenEscrowDispute>,
-    InstructionRegistry::register_slice::<escrow::ResolveEscrowDispute>,
-    InstructionRegistry::register_slice::<escrow::OpenAssetLock>,
-    InstructionRegistry::register_slice::<escrow::OpenConditionalEscrow>,
-    InstructionRegistry::register_slice::<escrow::AttestEscrowCondition>,
-    InstructionRegistry::register_slice::<escrow::ExpireConditionalEscrow>,
-    InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
-    InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
-    InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
-    InstructionRegistry::register_slice::<vpn::OpenVpnLeaseEscrow>,
-    InstructionRegistry::register_slice::<vpn::SettleVpnLease>,
-    InstructionRegistry::register_slice::<vpn::RefundExpiredVpnLease>,
-    InstructionRegistry::register_slice::<soracloud::DeploySoracloudService>,
-    InstructionRegistry::register_slice::<soracloud::UpgradeSoracloudService>,
-    InstructionRegistry::register_slice::<soracloud::DeploySoracloudAppInfra>,
-    InstructionRegistry::register_slice::<soracloud::UpgradeSoracloudAppInfra>,
-    InstructionRegistry::register_slice::<soracloud::RollbackSoracloudService>,
-    InstructionRegistry::register_slice::<soracloud::SetSoracloudServiceConfig>,
-    InstructionRegistry::register_slice::<soracloud::DeleteSoracloudServiceConfig>,
-    InstructionRegistry::register_slice::<soracloud::SetSoracloudServiceSecret>,
-    InstructionRegistry::register_slice::<soracloud::DeleteSoracloudServiceSecret>,
-    InstructionRegistry::register_slice::<soracloud::MutateSoracloudState>,
-    InstructionRegistry::register_slice::<soracloud::RegisterSoracloudFhePolicy>,
-    InstructionRegistry::register_slice::<soracloud::RotateSoracloudFhePolicy>,
-    InstructionRegistry::register_slice::<soracloud::RevokeSoracloudFhePolicy>,
-    InstructionRegistry::register_slice::<soracloud::RunSoracloudFheJob>,
-    InstructionRegistry::register_slice::<soracloud::RecordSoracloudDecryptionRequest>,
-    InstructionRegistry::register_slice::<soracloud::JoinSoracloudHfSharedLease>,
-    InstructionRegistry::register_slice::<soracloud::LeaveSoracloudHfSharedLease>,
-    InstructionRegistry::register_slice::<soracloud::RenewSoracloudHfSharedLease>,
-    InstructionRegistry::register_slice::<soracloud::AdvertiseSoracloudModelHost>,
-    InstructionRegistry::register_slice::<soracloud::HeartbeatSoracloudModelHost>,
-    InstructionRegistry::register_slice::<soracloud::WithdrawSoracloudModelHost>,
-    InstructionRegistry::register_slice::<soracloud::ReconcileSoracloudModelHosts>,
-    InstructionRegistry::register_slice::<soracloud::AdvertiseSoracloudInrouHost>,
-    InstructionRegistry::register_slice::<soracloud::WithdrawSoracloudInrouHost>,
-    InstructionRegistry::register_slice::<soracloud::ReconcileSoracloudInrouPlacements>,
-    InstructionRegistry::register_slice::<soracloud::ReportSoracloudModelHostViolation>,
-    InstructionRegistry::register_slice::<soracloud::DeploySoracloudAgentApartment>,
-    InstructionRegistry::register_slice::<soracloud::RenewSoracloudAgentLease>,
-    InstructionRegistry::register_slice::<soracloud::RestartSoracloudAgentApartment>,
-    InstructionRegistry::register_slice::<soracloud::RevokeSoracloudAgentPolicy>,
-    InstructionRegistry::register_slice::<soracloud::RequestSoracloudAgentWalletSpend>,
-    InstructionRegistry::register_slice::<soracloud::ApproveSoracloudAgentWalletSpend>,
-    InstructionRegistry::register_slice::<soracloud::EnqueueSoracloudAgentMessage>,
-    InstructionRegistry::register_slice::<soracloud::AcknowledgeSoracloudAgentMessage>,
-    InstructionRegistry::register_slice::<soracloud::AllowSoracloudAgentAutonomyArtifact>,
-    InstructionRegistry::register_slice::<soracloud::RunSoracloudAgentAutonomy>,
-    InstructionRegistry::register_slice::<soracloud::RecordSoracloudAgentAutonomyExecution>,
-    InstructionRegistry::register_slice::<soracloud::StartSoracloudTrainingJob>,
-    InstructionRegistry::register_slice::<soracloud::CheckpointSoracloudTrainingJob>,
-    InstructionRegistry::register_slice::<soracloud::RetrySoracloudTrainingJob>,
-    InstructionRegistry::register_slice::<soracloud::RegisterSoracloudModelArtifact>,
-    InstructionRegistry::register_slice::<soracloud::RegisterSoracloudModelWeight>,
-    InstructionRegistry::register_slice::<soracloud::PromoteSoracloudModelWeight>,
-    InstructionRegistry::register_slice::<soracloud::RollbackSoracloudModelWeight>,
-    InstructionRegistry::register_slice::<soracloud::RegisterSoracloudUploadedModelBundle>,
-    InstructionRegistry::register_slice::<soracloud::FinalizeSoracloudUploadedModelBundle>,
-    InstructionRegistry::register_slice::<soracloud::AdvanceSoracloudRollout>,
-    InstructionRegistry::register_slice::<soracloud::SetSoracloudRuntimeState>,
-    InstructionRegistry::register_slice::<soracloud::SetSoracloudInrouReplicaRuntimeState>,
-    InstructionRegistry::register_slice::<soracloud::ClearSoracloudInrouReplicaRuntimeState>,
-    InstructionRegistry::register_slice::<soracloud::ReportSoracloudServiceLeaseUsage>,
-    InstructionRegistry::register_slice::<soracloud::RecordSoracloudMailboxMessage>,
-    InstructionRegistry::register_slice::<soracloud::RecordSoracloudRuntimeReceipt>,
-    InstructionRegistry::register_slice::<
-        soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
-    >,
-    InstructionRegistry::register_slice::<ExecuteTrigger>,
-    InstructionRegistry::register_slice::<Upgrade>,
-    InstructionRegistry::register_slice::<Log>,
-    InstructionRegistry::register_slice::<CustomInstruction>,
-    InstructionRegistry::register_slice::<InvalidInstruction>,
-    InstructionRegistry::register_slice::<verifying_keys::RegisterVerifyingKey>,
-    InstructionRegistry::register_slice::<verifying_keys::UpdateVerifyingKey>,
-    InstructionRegistry::register_slice::<consensus_keys::RegisterConsensusKey>,
-    InstructionRegistry::register_slice::<consensus_keys::RotateConsensusKey>,
-    InstructionRegistry::register_slice::<consensus_keys::DisableConsensusKey>,
-    InstructionRegistry::register_slice::<endorsement::RegisterDomainCommittee>,
-    InstructionRegistry::register_slice::<endorsement::SetDomainEndorsementPolicy>,
-    InstructionRegistry::register_slice::<endorsement::SubmitDomainEndorsement>,
-    InstructionRegistry::register_slice::<alias_setup::EnsureAlias>,
-    InstructionRegistry::register_slice::<alias_setup::RenewAliasLease>,
-    InstructionRegistry::register_slice::<alias_setup::ConfigureAliasAutoRenew>,
-    InstructionRegistry::register_slice::<alias_setup::RebindAccountAlias>,
-    InstructionRegistry::register_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>,
-    InstructionRegistry::register_slice::<account_recovery::ReplaceAccountController>,
-    InstructionRegistry::register_slice::<account_recovery::SetAccountRecoveryPolicy>,
-    InstructionRegistry::register_slice::<account_recovery::ClearAccountRecoveryPolicy>,
-    InstructionRegistry::register_slice::<account_recovery::ProposeAccountRecovery>,
-    InstructionRegistry::register_slice::<account_recovery::ApproveAccountRecovery>,
-    InstructionRegistry::register_slice::<account_recovery::CancelAccountRecovery>,
-    InstructionRegistry::register_slice::<account_recovery::FinalizeAccountRecovery>,
-    InstructionRegistry::register_slice::<contract_alias::SetContractAlias>,
-    InstructionRegistry::register_slice::<musubi::RegisterMusubiNamespaceBindingV1>,
-    InstructionRegistry::register_slice::<musubi::RegisterMusubiArchiveV1>,
-    InstructionRegistry::register_slice::<musubi::RegisterMusubiProviderBundleAttestationV1>,
-    InstructionRegistry::register_slice::<musubi::AddMusubiArchiveLocationV1>,
-    InstructionRegistry::register_slice::<musubi::RetireMusubiArchiveLocationV1>,
-    InstructionRegistry::register_slice::<musubi::PublishMusubiReleaseV1>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiReleaseYankV1>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMetadataV1>,
-    InstructionRegistry::register_slice::<musubi::InviteMusubiPackageMaintainerV1>,
-    InstructionRegistry::register_slice::<musubi::AcceptMusubiPackageMaintainerV1>,
-    InstructionRegistry::register_slice::<musubi::RevokeMusubiPackageMaintainerInvitationV1>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMaintainerRoleV1>,
-    InstructionRegistry::register_slice::<musubi::RemoveMusubiPackageMaintainerV1>,
-    InstructionRegistry::register_slice::<musubi::RegisterMusubiAliasV1>,
-    InstructionRegistry::register_slice::<musubi::RecoverMusubiPackageV1>,
-    InstructionRegistry::register_slice::<musubi::RetargetMusubiAliasV1>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiArtifactTakedownV1>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiRegistryPolicyV1>,
-    InstructionRegistry::register_slice::<musubi::AssertMusubiReleaseDigestV1>,
-    InstructionRegistry::register_slice::<ram_lfe::RegisterRamLfeProgramPolicy>,
-    InstructionRegistry::register_slice::<ram_lfe::ActivateRamLfeProgramPolicy>,
-    InstructionRegistry::register_slice::<ram_lfe::DeactivateRamLfeProgramPolicy>,
-    InstructionRegistry::register_slice::<identifier::RegisterIdentifierPolicy>,
-    InstructionRegistry::register_slice::<identifier::ActivateIdentifierPolicy>,
-    InstructionRegistry::register_slice::<identifier::ClaimIdentifier>,
-    InstructionRegistry::register_slice::<identifier::RevokeIdentifier>,
-    InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionAlias>,
-    InstructionRegistry::register_slice::<sorafs::RegisterPinManifest>,
-    InstructionRegistry::register_slice::<sorafs::ApprovePinManifest>,
-    InstructionRegistry::register_slice::<sorafs::RetirePinManifest>,
-    InstructionRegistry::register_slice::<sorafs::BindManifestAlias>,
-    InstructionRegistry::register_slice::<sorafs::RegisterCapacityDeclaration>,
-    InstructionRegistry::register_slice::<sorafs::RecordCapacityTelemetry>,
-    InstructionRegistry::register_slice::<sorafs::RegisterCapacityDispute>,
-    InstructionRegistry::register_slice::<sorafs::ResolveSorafsCapacityDispute>,
-    InstructionRegistry::register_slice::<sorafs::IssueReplicationOrder>,
-    InstructionRegistry::register_slice::<sorafs::CompleteReplicationOrder>,
-    InstructionRegistry::register_slice::<sorafs::ReviseReplicationOrderAssignments>,
-    InstructionRegistry::register_slice::<sorafs::ExpireReplicationOrder>,
-    InstructionRegistry::register_slice::<sorafs::RegisterProviderOwner>,
-    InstructionRegistry::register_slice::<sorafs::UnregisterProviderOwner>,
-    InstructionRegistry::register_slice::<sorafs::SetProviderIngestCompletionAuthority>,
-    InstructionRegistry::register_slice::<sorafs::RevokeProviderIngestCompletionAuthority>,
-    InstructionRegistry::register_slice::<sorafs::SetPricingSchedule>,
-    InstructionRegistry::register_slice::<sorafs::UpsertProviderCredit>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsPopIssuerPolicy>,
-    InstructionRegistry::register_slice::<sorafs::CommitSorafsPopCredentialBatch>,
-    InstructionRegistry::register_slice::<sorafs::PublishSorafsPopRevocationList>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsOrderbookPolicy>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsOrderbookOrder>,
-    InstructionRegistry::register_slice::<sorafs::CancelSorafsOrderbookOrder>,
-    InstructionRegistry::register_slice::<sorafs::MatchSorafsOrderbook>,
-    InstructionRegistry::register_slice::<sorafs::MaintainSorafsOrderbook>,
-    InstructionRegistry::register_slice::<sorafs::RecordSorafsOrderbookSettlementReceipt>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsReservePolicy>,
-    InstructionRegistry::register_slice::<sorafs::RegisterSorafsReserveAccount>,
-    InstructionRegistry::register_slice::<sorafs::RequestSorafsReserveMovement>,
-    InstructionRegistry::register_slice::<sorafs::DecideSorafsReserveMovement>,
-    InstructionRegistry::register_slice::<sorafs::ChargeSorafsReserveRent>,
-    InstructionRegistry::register_slice::<sorafs::AdvanceSorafsReserveLifecycle>,
-    InstructionRegistry::register_slice::<sorafs::DrawSorafsReserveCredit>,
-    InstructionRegistry::register_slice::<sorafs::RepaySorafsReserveCredit>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsReserveAppeal>,
-    InstructionRegistry::register_slice::<sorafs::DecideSorafsReserveAppeal>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsRepairTask>,
-    InstructionRegistry::register_slice::<sorafs::ApplySorafsRepairTaskAction>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsRepairAppeal>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsProofOutcomeSignerPolicy>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsProofOutcome>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsReputationJournalAuthorityPolicy>,
-    InstructionRegistry::register_slice::<sorafs::AppendSorafsPorReputationJournalEntry>,
-    InstructionRegistry::register_slice::<sorafs::AppendSorafsStreamTokenReputationJournalEntry>,
-    InstructionRegistry::register_slice::<sorafs::SetSorafsModerationPolicy>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsModerationAppeal>,
-    InstructionRegistry::register_slice::<sorafs::RegisterSorafsModerationJurorEligibility>,
-    InstructionRegistry::register_slice::<sorafs::FinalizeSorafsModerationSortition>,
-    InstructionRegistry::register_slice::<sorafs::AcceptSorafsModerationJurorAssignment>,
-    InstructionRegistry::register_slice::<sorafs::ActivateSorafsModerationCase>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsModerationCommit>,
-    InstructionRegistry::register_slice::<sorafs::RaiseSorafsModerationChallenge>,
-    InstructionRegistry::register_slice::<sorafs::ResolveSorafsModerationChallenge>,
-    InstructionRegistry::register_slice::<sorafs::SubmitSorafsModerationReveal>,
-    InstructionRegistry::register_slice::<sorafs::FinalizeSorafsModerationCase>,
-    InstructionRegistry::register::<content::PublishContentBundle>,
-    InstructionRegistry::register::<content::RetireContentBundle>,
-    InstructionRegistry::register::<soradns::SubmitDirectoryDraft>,
-    InstructionRegistry::register::<soradns::PublishDirectory>,
-    InstructionRegistry::register::<soradns::RevokeResolver>,
-    InstructionRegistry::register::<soradns::UnrevokeResolver>,
-    InstructionRegistry::register::<soradns::AddReleaseSigner>,
-    InstructionRegistry::register::<soradns::RemoveReleaseSigner>,
-    InstructionRegistry::register::<soradns::SetDirectoryRotationPolicy>,
-    InstructionRegistry::register_slice::<space_directory::PublishSpaceDirectoryManifest>,
-    InstructionRegistry::register_slice::<space_directory::RevokeSpaceDirectoryManifest>,
-    InstructionRegistry::register_slice::<space_directory::ExpireSpaceDirectoryManifest>,
-    InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractCode>,
-    InstructionRegistry::register_slice::<smart_contract_code::DeactivateContractInstance>,
-    InstructionRegistry::register_slice::<smart_contract_code::ActivateContractInstance>,
-    InstructionRegistry::register_slice::<smart_contract_code::CommitContractDeployment>,
-    InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractBytes>,
-    InstructionRegistry::register_slice::<smart_contract_code::UploadSmartContractCodeChunk>,
-    InstructionRegistry::register_slice::<smart_contract_code::FinalizeSmartContractCodeUpload>,
-    InstructionRegistry::register_slice::<smart_contract_code::CancelSmartContractCodeUpload>,
-    InstructionRegistry::register_slice::<smart_contract_code::RemoveSmartContractBytes>,
-    InstructionRegistry::register_slice::<zk::VerifyProof>,
-    InstructionRegistry::register_slice::<zk::PruneProofs>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyProtocolActivationV1>,
-    InstructionRegistry::register_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>,
-    InstructionRegistry::register_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>,
-    InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
-    InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
-    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyOrchardPoolV1>,
-    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>,
-    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
-    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkAcePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkAcePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyVegaIssuerV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyVegaIssuerV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyVegaIssuerV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>,
-    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CrlV1>,
-    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CrlV1>,
-    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CrlV1>,
-    InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
-    InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
-    InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
-    InstructionRegistry::register_slice::<kaigi::LeaveKaigi>,
-    InstructionRegistry::register_slice::<kaigi::EndKaigi>,
-    InstructionRegistry::register_slice::<kaigi::RecordKaigiUsage>,
-    InstructionRegistry::register_slice::<kaigi::SetKaigiRelayManifest>,
-    InstructionRegistry::register_slice::<kaigi::RegisterKaigiRelay>,
-    InstructionRegistry::register_slice::<kaigi::ReportKaigiRelayHealth>,
-    InstructionRegistry::register_slice::<zk::RegisterZkAsset>,
-    InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
-    InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
-    InstructionRegistry::register_slice::<zk::CreateElection>,
-    InstructionRegistry::register_slice::<zk::SubmitBallot>,
-    InstructionRegistry::register_slice::<zk::FinalizeElection>,
-    InstructionRegistry::register_slice::<bridge::SubmitBridgeProof>,
-    InstructionRegistry::register_slice::<bridge::RecordBridgeReceipt>,
-    InstructionRegistry::register_slice::<bridge::RecordSccpMessage>,
-    InstructionRegistry::register::<confidential::PublishPedersenParams>,
-    InstructionRegistry::register::<confidential::SetPedersenParamsLifecycle>,
-    InstructionRegistry::register::<confidential::PublishPoseidonParams>,
-    InstructionRegistry::register::<confidential::SetPoseidonParamsLifecycle>,
-    InstructionRegistry::register_slice::<ministry::SubmitAgendaProposal>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeDeployContract>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeRuntimeUpgradeProposal>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeSccpRouteGovernance>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeSorafsProviderGovernance>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeValidationFeePolicy>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeValidationFeePayoutLifecycle>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::CastZkBallot>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::CastPlainBallot>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::SlashGovernanceLock>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::RestituteGovernanceLock>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::EnactReferendum>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::EnactSccpRouteGovernance>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::FinalizeReferendum>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ApproveGovernanceProposal>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::CastParliamentBallot>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::PersistCouncilForEpoch>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::RecordCitizenServiceOutcome>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::RegisterCitizen>,
-    #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::UnregisterCitizen>,
-    InstructionRegistry::register_slice::<runtime_upgrade::ProposeRuntimeUpgrade>,
-    InstructionRegistry::register_slice::<runtime_upgrade::ActivateRuntimeUpgrade>,
-    InstructionRegistry::register_slice::<runtime_upgrade::CancelRuntimeUpgrade>,
-];
 /// Create an [`InstructionRegistry`] populated with all instructions supported
 /// by Iroha out of the box.
 pub fn default() -> InstructionRegistry {
-    let registry = apply_registrars(ALL_REGISTRARS.iter().copied());
-    wire_ids::apply(registry)
+    let registry = wire_ids::register_all();
+    wire_ids::remap_all(registry)
 }
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
@@ -409,14 +32,6 @@ pub fn default() -> InstructionRegistry {
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
     DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
-}
-/// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].
-fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> InstructionRegistry {
-    registrars
-        .into_iter()
-        .fold(InstructionRegistry::new(), |registry, register| {
-            register(registry)
-        })
 }
 #[cfg(test)]
 mod tests {
@@ -631,8 +246,8 @@ mod tests {
     }
     #[test]
     fn stable_wire_id_remapping_preserves_every_codec_byte_path() {
-        let typed = apply_registrars(ALL_REGISTRARS.iter().copied());
-        let remapped = wire_ids::apply(typed.clone());
+        let typed = wire_ids::register_all();
+        let remapped = wire_ids::remap_all(typed.clone());
         for inventory in wire_ids::ALL {
             let type_name = (inventory.type_name)();
             let before = typed
@@ -679,20 +294,20 @@ mod tests {
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 347;
         #[cfg(not(feature = "governance"))]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 328;
-        let source = include_str!("registry.rs");
-        let production = source
+        let registry_source = include_str!("registry.rs");
+        let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
             .next()
             .expect("production registry source");
-        let inventory_and_tail = production
-            .split_once("const ALL_REGISTRARS: &[Registrar] = &[")
-            .expect("typed registrar inventory");
+        let wire_source = include_str!("registry/wire_ids.rs");
+        let (provider, inventory_and_tail) = wire_source
+            .split_once("pub(super) const ALL: &[BuiltInWireId] = &[")
+            .expect("single typed registrar and wire-ID inventory");
         let (inventory, tail) = inventory_and_tail
-            .1
             .split_once("\n];")
-            .expect("typed registrar inventory boundary");
+            .expect("single inventory boundary");
         assert_eq!(
-            inventory.matches("::<").count(),
+            inventory.matches("_wire_id!(").count(),
             EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS,
             "typed codec registrations changed; update the canonical inventory and this bound together"
         );
@@ -703,17 +318,25 @@ mod tests {
         );
         assert_eq!(
             EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
-            ALL_REGISTRARS.len(),
-            "enabled typed codec registrations exceeded their pinned bound"
+            inventory.matches("built_in_wire_id!(").count()
+                + if cfg!(feature = "governance") {
+                    inventory.matches("governance_wire_id!(").count()
+                } else {
+                    0
+                },
+            "source feature scope and enabled inventory length diverged"
         );
-        for forbidden in [
-            "register::<",
-            "register_slice::<",
-            "register_with_id::<",
-            "register_with_id_slice::<",
+        for (forbidden, expected_provider_owners) in [
+            ("register::<", 1),
+            ("register_slice::<", 2),
+            ("register_with_id::<", 1),
+            ("register_with_id_slice::<", 1),
         ] {
             assert!(
-                !tail.contains(forbidden),
+                provider.matches(forbidden).count() == expected_provider_owners
+                    && !production.contains(forbidden)
+                    && !inventory.contains(forbidden)
+                    && !tail.contains(forbidden),
                 "typed codec registration escaped the sole bounded inventory: {forbidden}"
             );
         }
@@ -771,7 +394,7 @@ mod tests {
     }
     #[test]
     fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
-        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let static_registry = wire_ids::register_all();
         let registry = default();
         let mut wire_ids = std::collections::BTreeSet::new();
         macro_rules! assert_bootle_registration {
@@ -806,7 +429,7 @@ mod tests {
     }
     #[test]
     fn x509_governance_instructions_have_unique_canonical_registrations() {
-        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let static_registry = wire_ids::register_all();
         let registry = default();
         let mut wire_ids = std::collections::BTreeSet::new();
         macro_rules! assert_x509_registration {

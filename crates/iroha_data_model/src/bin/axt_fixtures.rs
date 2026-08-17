@@ -81,12 +81,8 @@ fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     }
 }
 fn seeded_account(seed: u8) -> String {
-    iroha_data_model::account::AccountId::new(
-        KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    )
-    .to_string()
+    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    iroha_data_model::account::AccountId::new(key_pair.public_key().clone()).to_string()
 }
 fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
     let descriptor = AxtDescriptorBuilder::new()

@@ -999,6 +999,7 @@ pub(crate) fn validate_and_prepare_verifying_key_record_v1(
             "declared verifying-key length exceeds the {max_payload_bytes}-byte backend limit"
         ));
     }
+    validate_verifying_key_record_metadata_v1(record)?;
     let Some(vk) = record.key.as_ref() else {
         return Ok(None);
     };
@@ -1021,9 +1022,119 @@ pub(crate) fn validate_and_prepare_verifying_key_record_v1(
     validate_and_prepare_verifying_key_material_v1(backend, &record.circuit_id, record.backend, vk)
         .map(Some)
 }
+
+fn validate_verifying_key_record_metadata_v1(record: &VerifyingKeyRecord) -> Result<(), String> {
+    if !iroha_data_model::proof::verifying_key_id_field_is_portable(&record.namespace) {
+        return Err("verifying-key namespace is not bounded and portable".to_owned());
+    }
+    if record
+        .owner_manifest_id
+        .as_ref()
+        .is_some_and(|owner| !iroha_data_model::proof::verifying_key_id_field_is_portable(owner))
+    {
+        return Err("verifying-key owner manifest id is not bounded and portable".to_owned());
+    }
+    let Some(gas_schedule_id) = record.gas_schedule_id.as_deref() else {
+        return Err("verifying-key gas schedule id is required".to_owned());
+    };
+    if !iroha_data_model::proof::verifying_key_id_field_is_portable(gas_schedule_id) {
+        return Err("verifying-key gas schedule id is not bounded and portable".to_owned());
+    }
+    if record
+        .metadata_uri_cid
+        .as_deref()
+        .is_some_and(|uri| !verifying_key_content_uri_is_portable_v1(uri))
+    {
+        return Err("verifying-key metadata URI is not bounded and portable".to_owned());
+    }
+    if record
+        .vk_bytes_cid
+        .as_deref()
+        .is_some_and(|uri| !verifying_key_content_uri_is_portable_v1(uri))
+    {
+        return Err("verifying-key bytes URI is not bounded and portable".to_owned());
+    }
+    if matches!(
+        (record.activation_height, record.withdraw_height),
+        (Some(activation), Some(withdraw)) if withdraw <= activation
+    ) {
+        return Err(
+            "verifying-key withdraw height must be greater than activation height".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn verifying_key_content_uri_is_portable_v1(uri: &str) -> bool {
+    const MAX_URI_BYTES: usize = 512;
+    if uri.is_empty()
+        || uri.len() > MAX_URI_BYTES
+        || uri.trim() != uri
+        || uri
+            .as_bytes()
+            .iter()
+            .any(|byte| !byte.is_ascii_graphic() || matches!(*byte, b'\\' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+    let body = uri
+        .strip_prefix("ipfs://")
+        .or_else(|| uri.strip_prefix("cid:"))
+        .unwrap_or(uri);
+    if body.is_empty()
+        || body.starts_with('/')
+        || body.ends_with('/')
+        || body.contains("..")
+        || body.contains("//")
+    {
+        return false;
+    }
+    body.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
+    })
+}
 #[cfg(test)]
 mod strict_verifying_key_preparation_tests {
     use super::*;
+
+    fn portable_off_ledger_record() -> VerifyingKeyRecord {
+        let mut record = VerifyingKeyRecord::new(
+            1,
+            IVM_EXECUTION_V1_CIRCUIT_ID,
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x41; 32],
+            [0x42; 32],
+        );
+        record.gas_schedule_id = Some("halo2_default".to_owned());
+        record
+    }
+
+    #[test]
+    fn record_preparation_rejects_empty_activation_window() {
+        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "empty-window");
+        let mut record = portable_off_ledger_record();
+        record.activation_height = Some(10);
+        record.withdraw_height = Some(10);
+        let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
+            .expect_err("an empty activation window must not enter persistent state");
+        assert!(error.contains("greater"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn record_preparation_rejects_nonportable_metadata() {
+        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "bad-metadata");
+        let mut record = portable_off_ledger_record();
+        record.metadata_uri_cid = Some("ipfs://cid?query".to_owned());
+        let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
+            .expect_err("nonportable metadata must not poison registry rehydration");
+        assert!(error.contains("metadata URI"), "unexpected error: {error}");
+    }
+
     #[test]
     fn record_preparation_rejects_oversized_off_ledger_declaration() {
         let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "oversized-off-ledger");
@@ -3501,6 +3612,18 @@ macro_rules! advice {
             $column,
             $offset,
             $value,
+        )
+    };
+    ($region:ident, $label:literal, $column:expr => value $value:expr) => {
+        advice!(@call $region, || $label, $column, 0, || $value)
+    };
+    ($region:ident, format $label:literal, $column:expr, $offset:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            || format!($label),
+            $column,
+            $offset,
+            || halo2_proofs::circuit::Value::known($value)
         )
     };
     ($region:ident, $label:literal, $column:expr => $value:expr) => {
@@ -7362,6 +7485,39 @@ mod stark_prover_tests {
         }
     }
     #[test]
+    fn verify_stark_open_verify_envelope_rejects_namespaced_reserved_aliases() {
+        let backend = "stark/fri/sha256-goldilocks";
+        for canonical in [
+            super::IVM_EXECUTION_V1_CIRCUIT_ID,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        ] {
+            for circuit_id in [
+                format!("tenant:{canonical}"),
+                format!("{backend}:tenant:{canonical}"),
+            ] {
+                let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload)
+                        .expect("encode namespaced reserved STARK VK payload"),
+                );
+                let proof = weak_stark_open_verify_proof(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"reserved:forged-generic-schema:v1".to_vec(),
+                    vec![vec![[0x79; 32]]],
+                );
+                let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+                assert!(
+                    !report.ok,
+                    "reserved circuit alias {circuit_id} must not verify as generic binding AIR"
+                );
+            }
+        }
+    }
+    #[test]
     fn prove_stark_open_verify_envelope_rejects_bfv_full_bootstrap_circuit_aliases() {
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
         for backend in [
@@ -9215,8 +9371,6 @@ mod halo2_ipa_parameter_source_tests {
 /// Expects proof bytes to be a Norito-encoded `OpenVerifyEnvelope`.
 #[cfg(feature = "zk-ipa-native")]
 fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
-    #[cfg(feature = "goldilocks_backend")]
-    use iroha_zkp_halo2::backend::goldilocks;
     use iroha_zkp_halo2::{
         OpenVerifyEnvelope, Transcript,
         backend::{bn254, pallas},
@@ -9251,21 +9405,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             metadata,
         ),
         #[cfg(feature = "goldilocks_backend")]
-        DecodedEnvelope::Goldilocks {
-            params,
-            proof,
-            z,
-            t,
-            p_g,
-        } => goldilocks::Polynomial::verify_open_with_metadata(
-            params.as_ref(),
-            &mut tr,
-            z,
-            p_g,
-            t,
-            proof.as_ref(),
-            metadata,
-        ),
+        DecodedEnvelope::Goldilocks { .. } => return false,
         #[cfg(not(feature = "goldilocks_backend"))]
         DecodedEnvelope::Goldilocks => return false,
         DecodedEnvelope::Bn254 {

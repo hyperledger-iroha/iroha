@@ -1839,10 +1839,11 @@ impl SoracloudFheInputAdmissionProofV1 {
             self.residual_multiple_bound,
             self.bound_mode,
         )?;
-        validate_soracloud_fhe_input_admission_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
@@ -1939,10 +1940,11 @@ impl SoracloudFhePublicKeyProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_public_key_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
@@ -2039,10 +2041,11 @@ impl SoracloudFheBootstrapKeyProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
@@ -2139,10 +2142,11 @@ impl SoracloudFheFullBootstrapExecutionProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
@@ -2593,360 +2597,143 @@ fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
             .windows(needle.len())
             .any(|window| window == needle)
 }
-fn validate_soracloud_fhe_input_admission_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_input_admission_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe input admission proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
+#[derive(Clone, Copy)]
+struct SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: &'static str,
+    max_open_verify_bytes: usize,
+    bounds: fn() -> OpenVerifyEnvelopeBounds,
+    circuit_id: &'static str,
+    public_inputs: &'static [u8],
+    max_native_envelope_bytes: usize,
 }
-fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_public_key_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe public-key proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
-}
-fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_bootstrap_key_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe bootstrap key proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
-}
-fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs
-        != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe full-bootstrap execution proof",
-        &open_proof.envelope_bytes,
+
+const SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe input admission proof",
+    max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_input_admission_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+};
+const SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe public-key proof",
+    max_open_verify_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_public_key_proof_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+};
+const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe bootstrap key proof",
+    max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+};
+const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe full-bootstrap execution proof",
+    max_open_verify_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes:
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
+};
+
+fn validate_soracloud_fhe_open_verify_envelope(
+    proof_bytes: &[u8],
+    vk_commitment: [u8; 32],
+    statement_hash: Hash,
+    contract: SoracloudFheOpenVerifyEnvelopeContract,
+) -> Result<(), SoracloudManifestError> {
+    if proof_bytes.len() > contract.max_open_verify_bytes {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope length {} exceeds maximum {}",
+                proof_bytes.len(),
+                contract.max_open_verify_bytes
+            ),
+        });
+    }
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+        SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
+        }
+    })?;
+    envelope
+        .validate_with_bounds((contract.bounds)())
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
+        })?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
+        });
+    }
+    if envelope.circuit_id != contract.circuit_id {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
+        });
+    }
+    if envelope.public_inputs != contract.public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
+        });
+    }
+    if vk_commitment != envelope.vk_hash {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.vk_commitment",
+            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
+        });
+    }
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
+            ),
+        })?;
+    if open_proof.version != 1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "STARK public-input wrapper version must be 1".to_string(),
+        });
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open_proof.public_inputs != expected_public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "STARK public inputs must match statement_hash".to_string(),
+        });
+    }
+    validate_soracloud_fhe_stark_native_envelope_bytes(
+        contract.manifest,
+        &open_proof.envelope_bytes,
+        contract.max_native_envelope_bytes,
+    )
 }
+
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE input admission.
 ///
 /// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK

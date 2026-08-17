@@ -1,0 +1,7 @@
+
+        seiyaku DomainLiteral {
+            view fn get() -> DomainId {
+                return DomainId::parse("wonderland.universal");
+            }
+        }
+    

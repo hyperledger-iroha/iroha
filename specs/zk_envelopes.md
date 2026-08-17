@@ -1,7 +1,7 @@
 # ZK Envelopes (Norito)
 
 This page specifies Norito-encoded envelopes used by native verifiers in the
-Iroha 2 codebase. Envelopes are versioned, deterministic, and designed to be
+Iroha 3 codebase. Envelopes are versioned, deterministic, and designed to be
 portable between components (clients, IVM, node).
 
 Scope (current)
@@ -38,9 +38,18 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
   - `n: u32` — vector length (power of two)
 
   Generator vectors are not part of the wire format. V1 defines exactly one
-  transparent parameter set for each `(curve_id, n)`, derived under the fixed
-  crate DST. This prevents a prover from choosing bases with known discrete-log
-  relationships and avoids transmitting `O(n)` redundant point encodings.
+  transparent parameter set for each `(curve_id, n)`. For the production Pallas
+  (Vesta commitment group) and BN254 backends, every point is independently
+  derived with the backend's `CurveExt::hash_to_curve` map under
+  `IROHA-ZK-HALO2-IPA-v1-generator`. The mapped message is
+  `dst || 0x00 || u64_le(kind_len) || kind || u64_le(n) || u64_le(i)`, where
+  `kind` is `G`, `H`, or `U`. If the map ever returns the identity, derivation
+  retries with `message || 0xff || u64_le(counter)`, starting at counter 1. This
+  prevents a prover from choosing bases or
+  learning discrete-log relationships between them and avoids transmitting
+  `O(n)` redundant point encodings. The optional additive Goldilocks backend
+  cannot provide unknown-discrete-log bases and is compatibility-test-only, not
+  a production commitment backend.
 
 - `IpaProofData`
   - `version: u16` — format version, currently 1

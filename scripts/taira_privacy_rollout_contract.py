@@ -24,8 +24,14 @@ import re
 import stat
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
+
+try:
+    from . import taira_authority_client
+except ImportError:
+    import taira_authority_client
 
 
 PLAN_SCHEMA = "iroha.taira.privacy_rollout_plan"
@@ -35,6 +41,9 @@ CANDIDATE_ID_DOMAIN = b"iroha.taira.privacy_rollout_candidate.v1\0"
 ROLLOUT_ID_DOMAIN = b"iroha.taira.privacy_rollout_observation.v1\0"
 MAX_PLAN_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 8 * 1024 * 1024
+MAX_AUTHORITY_SIDECAR_BYTES = 8 * 1024 * 1024
+AUTHORITY_ENVELOPE_SUFFIX = ".rollout-authority-envelope-v1.json"
+DURABLE_RECEIPT_SUFFIX = ".rollout-authority-receipt-v1.json"
 FROZEN_CARGO_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
@@ -157,21 +166,36 @@ class RolloutContractError(RuntimeError):
     """The plan or observation record violates the closed rollout contract."""
 
 
+@dataclass(frozen=True)
+class AuthenticatedRolloutObservation:
+    """Validated identifiers and the two explicit authenticated sidecars."""
+
+    plan_sha256: str
+    rollout_id: str
+    operation_id: str
+    authority_envelope: bytes
+    durable_receipt: bytes
+
+    def __iter__(self):
+        """Preserve the historical two-value unpacking interface."""
+
+        yield self.plan_sha256
+        yield self.rollout_id
+
+
 def _fail(message: str) -> NoReturn:
     raise RolloutContractError(message)
 
 
-def require_authenticated_rollout_observation_authority_provisioned() -> NoReturn:
-    """Keep observation validation closed until independent authority exists.
+def require_authenticated_rollout_observation_authority_provisioned() -> None:
+    """Authenticate the fixed rollout-observation binding and live service."""
 
-    This deliberately has no argument, environment switch, marker file, signer
-    digest, or caller-provided key escape hatch.  Provisioning requires a new
-    authenticated semantic-verifier and replay-broker path.
-    """
-
-    raise RolloutContractError(
-        AUTHENTICATED_ROLLOUT_OBSERVATION_PROVISIONING_ERROR
-    )
+    try:
+        taira_authority_client.preflight("rollout-observation")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise RolloutContractError(
+            f"{AUTHENTICATED_ROLLOUT_OBSERVATION_PROVISIONING_ERROR}: {error}"
+        ) from error
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -1173,11 +1197,127 @@ def _validate_unsigned_result_structure(
 
 def validate_result(
     result: Mapping[str, object], *, plan: Mapping[str, object]
-) -> tuple[str, str]:
-    """Authoritative entry point, closed before inspecting caller result fields."""
+) -> AuthenticatedRolloutObservation:
+    """Validate and authorize one exact rollout observation."""
 
     require_authenticated_rollout_observation_authority_provisioned()
-    return _validate_unsigned_result_structure(result, plan=plan)
+    identifiers = _validate_unsigned_result_structure(result, plan=plan)
+    subject = _rollout_authority_subject(result, plan)
+    try:
+        authority = taira_authority_client.authorize(
+            "rollout-observation", subject
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise RolloutContractError(
+            f"rollout-observation authority refused the exact result: {error}"
+        ) from error
+    return AuthenticatedRolloutObservation(
+        plan_sha256=identifiers[0],
+        rollout_id=identifiers[1],
+        operation_id=authority.operation_id,
+        authority_envelope=authority.authority_envelope_bytes,
+        durable_receipt=authority.durable_receipt_bytes,
+    )
+
+
+def _rollout_authority_subject(
+    result: Mapping[str, object], plan: Mapping[str, object]
+) -> dict[str, object]:
+    return {
+        "authority_schema": AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA,
+        "observation": dict(result),
+        "plan": dict(plan),
+        "replay_namespace": (
+            AUTHENTICATED_ROLLOUT_OBSERVATION_REPLAY_NAMESPACE
+        ),
+    }
+
+
+def verify_authenticated_result(
+    result: Mapping[str, object],
+    *,
+    plan: Mapping[str, object],
+    authority_envelope: bytes,
+    durable_receipt: bytes,
+) -> tuple[str, str]:
+    """Historically verify one observation receipt without issuing another."""
+
+    require_authenticated_rollout_observation_authority_provisioned()
+    identifiers = _validate_unsigned_result_structure(result, plan=plan)
+    try:
+        envelope = taira_authority_client.decode_canonical_json(
+            authority_envelope, "rollout authority envelope"
+        )
+        receipt = taira_authority_client.decode_canonical_json(
+            durable_receipt, "rollout durable receipt"
+        )
+        taira_authority_client.verify_receipt(
+            "rollout-observation",
+            _rollout_authority_subject(result, plan),
+            authority_envelope=envelope,
+            durable_receipt=receipt,
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise RolloutContractError(
+            f"rollout-observation historical receipt verification failed: {error}"
+        ) from error
+    return identifiers
+
+
+def verify_authenticated_result_files(
+    *,
+    plan_path: Path,
+    result_path: Path,
+    authority_envelope_path: Path,
+    durable_receipt_path: Path,
+) -> tuple[str, str]:
+    """Stable-load and historically verify four explicit observation files."""
+
+    # This native authentication is deliberately before the first caller path
+    # read.  ``verify_authenticated_result`` repeats it immediately before the
+    # native historical-verification operation.
+    require_authenticated_rollout_observation_authority_provisioned()
+    plan = _load(plan_path, MAX_PLAN_BYTES, "rollout plan")
+    result = _load(result_path, MAX_RESULT_BYTES, "rollout observation")
+    authority_envelope = _read_stable(
+        authority_envelope_path,
+        MAX_AUTHORITY_SIDECAR_BYTES,
+        "rollout authority envelope",
+    )
+    durable_receipt = _read_stable(
+        durable_receipt_path,
+        MAX_AUTHORITY_SIDECAR_BYTES,
+        "rollout durable receipt",
+    )
+    return verify_authenticated_result(
+        result,
+        plan=plan,
+        authority_envelope=authority_envelope,
+        durable_receipt=durable_receipt,
+    )
+
+
+def _write_sidecar(path: Path, payload: bytes) -> None:
+    """Publish one new receipt sidecar without following or replacing links."""
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags, 0o644)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                _fail("short write while publishing rollout authority sidecar")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _load(path: Path, maximum: int, label: str) -> dict[str, object]:
@@ -1219,12 +1359,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         else:
             result = _load(args.result, MAX_RESULT_BYTES, "rollout observation")
-            plan_sha256, rollout_id = _validate_unsigned_result_structure(
-                result, plan=plan
+            authenticated = validate_result(result, plan=plan)
+            plan_sha256, rollout_id = authenticated
+            result_path = Path(os.path.abspath(args.result))
+            envelope_path = result_path.with_name(
+                result_path.name + AUTHORITY_ENVELOPE_SUFFIX
             )
+            receipt_path = result_path.with_name(
+                result_path.name + DURABLE_RECEIPT_SUFFIX
+            )
+            _write_sidecar(envelope_path, authenticated.authority_envelope)
+            _write_sidecar(receipt_path, authenticated.durable_receipt)
             output = {
+                "authority_operation_id": authenticated.operation_id,
+                "authority_receipt_sha256": hashlib.sha256(
+                    authenticated.durable_receipt
+                ).hexdigest(),
                 "plan_sha256": plan_sha256,
-                "qualification_authority": False,
+                "qualification_authority": True,
                 "rollout_id": rollout_id,
                 "schema": "iroha.taira.privacy_rollout_observation_verification",
                 "schema_version": 1,

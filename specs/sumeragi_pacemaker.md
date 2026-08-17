@@ -13,9 +13,10 @@ validator derives the same two values:
 - critical-message retransmission interval: `view_zero_deadline / 5`.
 
 For certified view `v`, the runtime deadline is
-`view_zero_deadline * (v + 1)`, saturating at the platform duration limit. The
-retransmission interval remains fixed. A zero cadence or an overflowing
-view-zero derivation is rejected before the runner starts.
+`min(view_zero_deadline * (v + 1), view_zero_deadline * 10)`. The same bound
+applies to autonomous lane NewView clocks, while retransmission remains fixed.
+A zero cadence or an overflowing view-zero derivation is rejected before the
+runner starts.
 
 There is no local timeout override, RTT floor, latency EMA input, random or
 peer-specific jitter, adaptive pacing governor, or DA-specific reschedule
@@ -56,4 +57,5 @@ Byzantine messages.
 The canonical derivation is implemented by `sumeragi_v2_timing_ms` in
 `crates/iroha_config/src/parameters/actual.rs`; the linear view deadline and
 clock-ownership rules are implemented in
-`crates/iroha_core/src/sumeragi/v2_runtime.rs`.
+`crates/iroha_core/src/sumeragi/v2_runtime.rs`; autonomous lanes call that same
+helper rather than maintaining a second timer formula.

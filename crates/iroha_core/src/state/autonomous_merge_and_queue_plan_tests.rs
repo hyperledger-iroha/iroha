@@ -570,19 +570,7 @@ fn competing_retry_queue_plan_bindings_choose_one_deterministic_admission() {
         .expect("one QueuePlan control produces a candidate");
     assert_eq!(forward.queue_plan_admissions, vec![expected]);
     assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
-    let registry_key =
-        State::queue_plan_admission_registry_marker_key(&winning_binding.registry_key())
-            .expect("winning retry registry key");
-    let registry_value =
-        State::queue_plan_admission_registry_marker_payload(&winning_binding.registry_value())
-            .expect("winning retry registry value");
-    {
-        let mut world = state.world.block();
-        world
-            .smart_contract_state
-            .insert(registry_key, registry_value);
-        world.commit();
-    }
+    seed_pending_queue_plan_binding_state_for_test(&state, winning_binding);
     assert_eq!(
         state
             .classify_pending_queue_plan_admission(&losing_certificate, 2)
@@ -2592,6 +2580,7 @@ fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
                 .is_none(),
         "control-only merge entries must never mint autonomous WSV or carrier metadata authority"
     );
+    drop(staged);
     let mut non_control_entry = entry;
     non_control_entry.queue_plan_admissions.clear();
     assert!(matches!(

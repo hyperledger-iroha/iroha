@@ -407,6 +407,11 @@ def test_public_entry_point_cannot_relax_root_controller_identity(
         "_require_authenticated_rollout_observation_authority",
         lambda: None,
     )
+    monkeypatch.setattr(
+        closer.rollout_observation,
+        "verify_authenticated_result_files",
+        lambda **_kwargs: ("a" * 64, "b" * 64),
+    )
 
     with pytest.raises(closer.PublicationHandoffError, match="root controller"):
         closer.close_handoff(
@@ -424,6 +429,10 @@ def test_public_entry_point_cannot_relax_root_controller_identity(
             expected_workspace_source_manifest_sha256=(
                 WORKSPACE_MANIFEST_SHA256
             ),
+            rollout_plan=tmp_path / "plan.json",
+            rollout_result=tmp_path / "result.json",
+            rollout_authority_envelope=tmp_path / "envelope.json",
+            rollout_durable_receipt=tmp_path / "receipt.json",
         )
 
 

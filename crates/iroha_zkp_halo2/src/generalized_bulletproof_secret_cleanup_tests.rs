@@ -870,7 +870,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         "ct_eq_window_nibble(",
         "&encodings.0[index][byte_index],",
         "shift,",
-        "candidate as u8,",
+        "candidate as u8",
         "accumulator.add_assign_secret(selected);",
     ] {
         let offset = window_scan[cursor..]
@@ -1750,10 +1750,10 @@ fn inner_product_owner_clears_success_error_length_panic_and_unwind() {
     CLEAR_CALLS.store(0, Ordering::SeqCst);
     let left = ScalarVector(vec![TrackingScalar(11), TrackingScalar(13)]);
     let right = [TrackingScalar(17), TrackingScalar(19)];
-    let error = (|| -> Result<(), GeneralizedBulletproofErrorV1> {
+    let error: Result<(), GeneralizedBulletproofErrorV1> = {
         let _product = left.inner_product(right.iter());
         Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
-    })();
+    };
     assert_eq!(
         error,
         Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)

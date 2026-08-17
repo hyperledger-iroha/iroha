@@ -28722,14 +28722,14 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height) {
-        if act > withdraw {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "withdraw_height must be >= activation_height".into(),
-                ),
-            )));
-        }
+    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height)
+        && act >= withdraw
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "withdraw_height must be > activation_height".into(),
+            ),
+        )));
     }
     let mut record = VerifyingKeyRecord::new_with_owner(
         version,
@@ -29053,24 +29053,26 @@ mod vk_record_input_tests {
         assert_eq!(record.status, ConfidentialStatus::Withdrawn);
     }
     routing_test! { sync mk_record_rejects_inconsistent_heights
-        let res = mk_record_from_inputs(VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
-            version: 1,
-            status: Some(ConfidentialStatus::Active),
-            vk_bytes: Some(vec![1, 2, 3]),
-            commitment_hex: None,
-            circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hash_hex: sample_hex32(0x55),
-            curve: Some("pallas".to_string()),
-            gas_schedule_id: Some("sched_default".to_string()),
-            vk_len: Some(3),
-            max_proof_bytes: None,
-            metadata_uri_cid: None,
-            vk_bytes_cid: None,
-            activation_height: Some(200),
-            withdraw_height: Some(100),
-        });
-        assert!(res.is_err());
+        for withdraw_height in [100, 200] {
+            let res = mk_record_from_inputs(VkRecordInputs {
+                backend: "halo2/ipa".to_string(),
+                version: 1,
+                status: Some(ConfidentialStatus::Active),
+                vk_bytes: Some(vec![1, 2, 3]),
+                commitment_hex: None,
+                circuit_id: "circuit_alpha".to_string(),
+                public_inputs_schema_hash_hex: sample_hex32(0x55),
+                curve: Some("pallas".to_string()),
+                gas_schedule_id: Some("sched_default".to_string()),
+                vk_len: Some(3),
+                max_proof_bytes: None,
+                metadata_uri_cid: None,
+                vk_bytes_cid: None,
+                activation_height: Some(200),
+                withdraw_height: Some(withdraw_height),
+            });
+            assert!(res.is_err(), "withdraw height {withdraw_height} must be rejected");
+        }
     }
 }
 /// POST /v1/zk/vk/register — prepare `RegisterVerifyingKey` for local signing.

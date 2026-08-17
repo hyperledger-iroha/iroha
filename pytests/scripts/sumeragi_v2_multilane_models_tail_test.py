@@ -20,7 +20,7 @@ def test_stable_generation_diagnostics_rejects_retry_bound_weakening(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path, module)
     replace_once(
         state,
         "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;",
@@ -34,7 +34,7 @@ def test_stable_generation_diagnostics_rejects_missing_fail_closed_sink(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    _state, helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    _state, helper = copy_stable_generation_diagnostics_fixture(tmp_path, module)
     replace_once(helper, "Err(generation_drift_error())", "derive()")
     errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
     assert any(

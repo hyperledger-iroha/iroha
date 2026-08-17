@@ -288,7 +288,7 @@ def _open_absolute_parent_directory(
                 raise SourceSealError(f"{label} path traverses a symlink")
             child = os.open(component, flags, dir_fd=current)
             opened = os.fstat(child)
-            if _stable_identity(before) != _stable_identity(opened):
+            if _stable_directory_identity(before) != _stable_directory_identity(opened):
                 os.close(child)
                 raise SourceSealError(f"{label} ancestor changed while opened")
             chain.append(
@@ -296,7 +296,7 @@ def _open_absolute_parent_directory(
                     parent_descriptor=current,
                     name=component,
                     descriptor=child,
-                    identity=_stable_identity(opened),
+                    identity=_stable_directory_identity(opened),
                 )
             )
             current = child
@@ -805,6 +805,18 @@ def _stable_identity(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _stable_directory_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return path identity fields unaffected by unrelated directory entries."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+    )
+
+
 def _git_mode(metadata: os.stat_result) -> bytes:
     if stat.S_ISREG(metadata.st_mode):
         return b"100755" if metadata.st_mode & 0o111 else b"100644"
@@ -828,18 +840,18 @@ def _open_root_directory(root: pathlib.Path) -> tuple[bytes, int, tuple[int, ...
     )
     descriptor = os.open(root_bytes, flags)
     opened = os.fstat(descriptor)
-    if _stable_identity(before) != _stable_identity(opened):
+    if _stable_directory_identity(before) != _stable_directory_identity(opened):
         os.close(descriptor)
         raise SourceSealError("repository root changed while opened")
-    return root_bytes, descriptor, _stable_identity(opened)
+    return root_bytes, descriptor, _stable_directory_identity(opened)
 
 
 def _verify_root_directory(
     root_bytes: bytes, descriptor: int, expected: tuple[int, ...]
 ) -> None:
     if (
-        _stable_identity(os.fstat(descriptor)) != expected
-        or _stable_identity(os.lstat(root_bytes)) != expected
+        _stable_directory_identity(os.fstat(descriptor)) != expected
+        or _stable_directory_identity(os.lstat(root_bytes)) != expected
     ):
         raise SourceSealError("repository root changed while sealing")
 
@@ -873,7 +885,7 @@ def _open_parent_directory(
                 )
             child = os.open(component, flags, dir_fd=current)
             opened = os.fstat(child)
-            if _stable_identity(before) != _stable_identity(opened):
+            if _stable_directory_identity(before) != _stable_directory_identity(opened):
                 os.close(child)
                 raise SourceSealError(
                     f"source ancestor changed while opened: {os.fsdecode(path)}"
@@ -883,7 +895,7 @@ def _open_parent_directory(
                     parent_descriptor=current,
                     name=component,
                     descriptor=child,
-                    identity=_stable_identity(opened),
+                    identity=_stable_directory_identity(opened),
                 )
             )
             current = child
@@ -907,8 +919,9 @@ def _verify_directory_chain(chain: list[OpenedDirectory], path: bytes) -> None:
                 follow_symlinks=False,
             )
             if (
-                _stable_identity(bound) != opened.identity
-                or _stable_identity(os.fstat(opened.descriptor)) != opened.identity
+                _stable_directory_identity(bound) != opened.identity
+                or _stable_directory_identity(os.fstat(opened.descriptor))
+                != opened.identity
             ):
                 raise SourceSealError(
                     f"source ancestor changed while read: {os.fsdecode(path)}"

@@ -18,6 +18,11 @@ import json
 import re
 from typing import NoReturn
 
+try:
+    from . import taira_authority_client
+except ImportError:
+    import taira_authority_client
+
 
 AUTHORITY_SCHEMA = "iroha.taira.public-v2-24h-soak-authority-envelope.v1"
 CLAIMS_SCHEMA = "iroha.taira.public-v2-24h-soak-authority-claims.v1"
@@ -396,13 +401,73 @@ def validate_durable_admission_receipt_claims(
     )
 
 
-def require_public_soak_authority_provisioned() -> NoReturn:
-    """Refuse before caller input inspection until independent provisioning."""
+def require_public_soak_authority_provisioned() -> None:
+    """Authenticate the distinct observation and replay-admission services."""
 
-    # TODO: provision the independent authority verifier and atomic replay
-    # broker, then replace this unconditional refusal with their authenticated
-    # fresh-admission and durable-receipt interfaces.
-    raise PublicSoakAuthorityError(PROVISIONING_ERROR)
+    observation = taira_authority_client.ROLE_REGISTRY[
+        "public-soak-observation"
+    ]
+    replay = taira_authority_client.ROLE_REGISTRY[
+        "public-soak-replay-admission"
+    ]
+    if (
+        observation.service_id == replay.service_id
+        or observation.administrator_id == replay.administrator_id
+        or observation.binding_path == replay.binding_path
+        or observation.request_socket == replay.request_socket
+        or observation.state_directory == replay.state_directory
+    ):
+        _fail("public-soak observation signer and replay broker are not distinct")
+    try:
+        taira_authority_client.preflight("public-soak-observation")
+        taira_authority_client.preflight("public-soak-replay-admission")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PublicSoakAuthorityError(f"{PROVISIONING_ERROR}: {error}") from error
+
+
+def _observation_subject(
+    subject_core: Mapping[str, object], completed_at_unix_ms: int
+) -> dict[str, object]:
+    return {
+        "completed_at_unix_ms": completed_at_unix_ms,
+        "subject": dict(subject_core),
+        "subject_digest": subject_digest(subject_core),
+    }
+
+
+def _replay_subject(
+    payload: bytes,
+    subject_core: Mapping[str, object],
+    completed_at_unix_ms: int,
+) -> dict[str, object]:
+    envelope = _decode_canonical(payload)
+    return {
+        "authority_envelope": envelope,
+        "authority_envelope_sha256": hashlib.sha256(payload).hexdigest(),
+        "completed_at_unix_ms": completed_at_unix_ms,
+        "replay_namespace": REPLAY_NAMESPACE,
+        "subject": dict(subject_core),
+        "subject_digest": subject_digest(subject_core),
+    }
+
+
+def _verify_observation_signature(
+    payload: bytes,
+    subject_core: Mapping[str, object],
+    completed_at_unix_ms: int,
+) -> None:
+    envelope = _decode_canonical(payload)
+    try:
+        taira_authority_client.verify_receipt(
+            "public-soak-observation",
+            _observation_subject(subject_core, completed_at_unix_ms),
+            authority_envelope=envelope,
+            durable_receipt={},
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PublicSoakAuthorityError(
+            f"public-soak observation signature verification failed: {error}"
+        ) from error
 
 
 def consume_fresh_public_soak_admission(
@@ -410,11 +475,28 @@ def consume_fresh_public_soak_admission(
     *,
     subject_core: Mapping[str, object],
     completed_at_unix_ms: int,
-) -> NoReturn:
-    """Reserved consume-once replay-broker interface; currently refuses."""
+) -> bytes:
+    """Verify the observation and atomically consume its replay identity once."""
 
-    del payload, subject_core, completed_at_unix_ms
     require_public_soak_authority_provisioned()
+    _verify_observation_signature(payload, subject_core, completed_at_unix_ms)
+    subject = _replay_subject(payload, subject_core, completed_at_unix_ms)
+    try:
+        result = taira_authority_client.authorize(
+            "public-soak-replay-admission", subject
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PublicSoakAuthorityError(
+            f"public-soak replay admission failed: {error}"
+        ) from error
+    receipt_payload = _canonical_json(result.durable_receipt)
+    validate_durable_admission_receipt_claims(
+        receipt_payload,
+        authority_envelope=payload,
+        subject_core=subject_core,
+        completed_at_unix_ms=completed_at_unix_ms,
+    )
+    return receipt_payload
 
 
 def verify_authenticated_public_soak_authority_envelope(
@@ -423,8 +505,8 @@ def verify_authenticated_public_soak_authority_envelope(
     durable_admission_receipt: bytes,
     subject_core: Mapping[str, object],
     completed_at_unix_ms: int,
-) -> NoReturn:
-    """Reserved historical verifier interface; currently always refuses.
+) -> DurableAdmissionClaims:
+    """Historically verify both signatures without consuming replay state.
 
     Provisioning must authenticate the authority signature over
     :func:`authority_envelope_signing_bytes` and the distinct broker signature
@@ -433,5 +515,27 @@ def verify_authenticated_public_soak_authority_envelope(
     It must not consume the replay ID again during historical re-verification.
     """
 
-    del payload, durable_admission_receipt, subject_core, completed_at_unix_ms
     require_public_soak_authority_provisioned()
+    structural = validate_durable_admission_receipt_claims(
+        durable_admission_receipt,
+        authority_envelope=payload,
+        subject_core=subject_core,
+        completed_at_unix_ms=completed_at_unix_ms,
+    )
+    _verify_observation_signature(payload, subject_core, completed_at_unix_ms)
+    envelope = _decode_canonical(payload)
+    receipt = _decode_canonical(
+        durable_admission_receipt, "durable admission receipt"
+    )
+    try:
+        taira_authority_client.verify_receipt(
+            "public-soak-replay-admission",
+            _replay_subject(payload, subject_core, completed_at_unix_ms),
+            authority_envelope=envelope,
+            durable_receipt=receipt,
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PublicSoakAuthorityError(
+            f"public-soak historical replay receipt verification failed: {error}"
+        ) from error
+    return structural

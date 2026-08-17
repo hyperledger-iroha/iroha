@@ -1686,6 +1686,41 @@ fn only_enter_view_effect_restarts_both_clocks() {
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
+fn high_view_enter_effect_rearms_the_bounded_timeout() {
+    let start = Instant::now();
+    let initial = tag(259);
+    let next = tag(260);
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(8, 2, 2),
+    );
+    enqueue_fake(
+        &mut runtime,
+        initial,
+        CommandClass::Progress,
+        FakeCommand::enter_view(next),
+    )
+    .expect("admit the TC-like high-view transition");
+    let entered_at = start + Duration::from_secs(1);
+    assert!(matches!(
+        runtime.step_and_take_scheduler_ownership_for_test(entered_at),
+        Ok(RuntimeStep::Advanced(_))
+    ));
+    assert_eq!(runtime.round_tag(), next);
+    runtime
+        .reconcile_active_view_producer(next, false)
+        .expect("the nonleader test peer retires the positional view producer");
+    assert_eq!(runtime.round_timeout(), Duration::from_secs(100));
+    assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(102));
+    let _ =
+        runtime.step_and_take_scheduler_ownership_for_test(entered_at + Duration::from_secs(99));
+    assert!(runtime.driver.timeouts.is_empty());
+    let _ =
+        runtime.step_and_take_scheduler_ownership_for_test(entered_at + Duration::from_secs(100));
+    assert_eq!(runtime.driver.timeouts, vec![next]);
+}
+#[test]
 fn same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner() {
     let start = Instant::now();
     let initial = EventTag::new(7, 0, Generation::new(11));

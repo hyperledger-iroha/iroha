@@ -1,0 +1,16 @@
+
+        seiyaku C {
+            state StateMap<Name, int> Foo;
+
+            fn touch() -> int {
+                return 7;
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
+                Foo[key] = 1;
+                let ignored = touch();
+                return Foo.get(key).unwrap_or(0);
+            }
+        }
+    

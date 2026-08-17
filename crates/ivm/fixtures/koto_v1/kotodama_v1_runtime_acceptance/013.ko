@@ -1,0 +1,33 @@
+
+seiyaku ShortCircuitAcceptance {
+  error enum LogicError {
+    FalseAndChangedResult = 1,
+    TrueOrChangedResult = 2,
+    TrueAndChangedResult = 3,
+    FalseOrChangedResult = 4,
+    WrongSideEffectCount = 5
+  }
+
+  state StateMap<int, int> Hits;
+
+  fn bump(bool result) -> bool {
+    let previous = Hits.get_or(key: 0, default: 0);
+    Hits[0] = previous + 1;
+    return result;
+  }
+
+  kotoage fn run() -> int authorize("WriteState") {
+    let false_and = false && bump(true);
+    let true_or = true || bump(false);
+    let true_and = true && bump(true);
+    let false_or = false || bump(true);
+
+    require(!false_and, LogicError::FalseAndChangedResult);
+    require(true_or, LogicError::TrueOrChangedResult);
+    require(true_and, LogicError::TrueAndChangedResult);
+    require(false_or, LogicError::FalseOrChangedResult);
+    let count = Hits.get_or(key: 0, default: 0);
+    require(count == 2, LogicError::WrongSideEffectCount);
+    return count;
+  }
+}

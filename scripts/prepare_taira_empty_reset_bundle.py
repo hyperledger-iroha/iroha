@@ -105,6 +105,15 @@ KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS = frozenset(
         "CanManageOfflineDeviceAttestationPolicy",
     }
 )
+KAGEMUSHA_CONFIG_PROJECTION_SCHEMA = "iroha.taira.kagemusha-config-projection.v1"
+KAGEMUSHA_MANAGED_OFFLINE_FIELDS = frozenset(
+    {
+        "kagemusha_release_policy_path",
+        "kagemusha_artifact_dir",
+        "kagemusha_catalog_qualification_seal_path",
+        "kagemusha_max_decoded_bytes",
+    }
+)
 
 
 def fail(message: str) -> NoReturn:
@@ -196,6 +205,83 @@ def _kagemusha_release_policy_sha256(release_root: Path) -> str:
             "configured Kagemusha release policy must exist as one stable canonical file "
             "before genesis signing"
         ) from error
+
+
+def _kagemusha_config_projection(release_root: Path) -> dict[str, object]:
+    """Return the canonical final runtime projection derived from one release root."""
+
+    return {
+        "schema": KAGEMUSHA_CONFIG_PROJECTION_SCHEMA,
+        "release_root": str(release_root),
+        "release_policy_path": str(
+            release_root / renderer.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+        ),
+        "artifact_dir": str(
+            release_root / renderer.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+        ),
+        "catalog_qualification_seal_path": str(
+            release_root / renderer.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+        ),
+        "max_decoded_bytes": renderer.KAGEMUSHA_MAX_DECODED_BYTES,
+    }
+
+
+def _kagemusha_config_projection_sha256(release_root: Path) -> str:
+    """Hash the canonical final Kagemusha runtime projection."""
+
+    return hashlib.sha256(
+        canonical_json_bytes(_kagemusha_config_projection(release_root))
+    ).hexdigest()
+
+
+def _require_rendered_kagemusha_config_projection(
+    output: Path,
+    release_root: Path | None,
+    *,
+    include_qualification_seal: bool,
+) -> dict[str, object] | None:
+    """Require the exact same managed Kagemusha projection on all four peers."""
+
+    final_projection = (
+        _kagemusha_config_projection(release_root)
+        if release_root is not None
+        else None
+    )
+    expected_offline: dict[str, object] = {}
+    if final_projection is not None:
+        expected_offline = {
+            "kagemusha_release_policy_path": final_projection[
+                "release_policy_path"
+            ],
+            "kagemusha_artifact_dir": final_projection["artifact_dir"],
+            "kagemusha_max_decoded_bytes": final_projection[
+                "max_decoded_bytes"
+            ],
+        }
+        if include_qualification_seal:
+            expected_offline["kagemusha_catalog_qualification_seal_path"] = (
+                final_projection["catalog_qualification_seal_path"]
+            )
+
+    for slug in SLUGS:
+        config_path = output / "rendered" / slug / "config.toml"
+        config = renderer._load_toml(config_path)
+        settlement = config.get("settlement")
+        offline = (
+            settlement.get("offline") if isinstance(settlement, dict) else None
+        )
+        actual_offline = offline if isinstance(offline, dict) else {}
+        managed = {
+            key: actual_offline[key]
+            for key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS
+            if key in actual_offline
+        }
+        if managed != expected_offline:
+            fail(
+                f"rendered {slug} config does not carry the exact managed "
+                "Kagemusha release projection"
+            )
+    return final_projection
 
 
 def require_minimum_free_space(path: Path, minimum_free_bytes: int) -> int:
@@ -1090,6 +1176,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             _validate_rendered_configs(
                 output, renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER
             )
+            _require_rendered_kagemusha_config_projection(
+                output,
+                args.kagemusha_release_root,
+                include_qualification_seal=False,
+            )
             if (
                 _executable_identity(
                     args.onboarding_token_hash_tool,
@@ -1173,6 +1264,13 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 fail("native onboarding-token hash tool changed during rendering")
 
         config_hashes = _validate_rendered_configs(output, expected_hash)
+        kagemusha_config_projection = (
+            _require_rendered_kagemusha_config_projection(
+                output,
+                args.kagemusha_release_root,
+                include_qualification_seal=True,
+            )
+        )
         release_config = renderer._load_toml(output / "base-config.toml")
         genesis_table = release_config.get("genesis")
         genesis_public_key = (
@@ -1273,6 +1371,12 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             manifest["kagemusha_activation_authority"] = (
                 kagemusha_activation_authority
             )
+            if kagemusha_config_projection is None:
+                fail("Kagemusha final config projection was not authenticated")
+            manifest["kagemusha_config_projection"] = kagemusha_config_projection
+            manifest["kagemusha_config_projection_sha256"] = hashlib.sha256(
+                canonical_json_bytes(kagemusha_config_projection)
+            ).hexdigest()
         atomic_write_json(output / "reset-manifest.json", manifest)
         _chmod_private_tree(output)
         _require_exact_names(output, OUTPUT_TOP_LEVEL_NAMES, "fresh signed reset")
@@ -1305,6 +1409,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             )
             result["kagemusha_activation_authority"] = (
                 kagemusha_activation_authority
+            )
+            result["kagemusha_config_projection_sha256"] = (
+                _kagemusha_config_projection_sha256(args.kagemusha_release_root)
             )
         return result
     except BaseException:

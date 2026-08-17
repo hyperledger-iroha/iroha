@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "source_commit": "51deea83409635f99ce2fcbb6a983b7cca18b99b",
+  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
+  "assets": [
+    {
+      "path": "diagnostic_explanations_v1.tsv",
+      "byte_length": 39643,
+      "sha256": "d12abdddddc438f19961d2b8430f99caf1d68aba6dcbaac74b6feb5adb3eb9dc",
+      "layout": "header and schema followed by 235 tab-separated code, phase, summary, and help rows with backslash escapes",
+      "source_preimages": [
+        {
+          "path": "../../diagnostic.rs",
+          "constant": "DIAGNOSTIC_EXPLANATIONS",
+          "physical_lines": 1412,
+          "sha256": "f86d6313b3ab9204e650655f5110310f81acbcf4c536478e0a1ce320b51d595c"
+        }
+      ]
+    },
+    {
+      "path": "compile_fail_cases_v1.tsv",
+      "byte_length": 11009,
+      "sha256": "58565aa087a733efefb3202cf2491ab3771d8c47bf8869ee41fdfa8e07f42445",
+      "layout": "header and schema followed by 59 tab-separated compile-fail case rows with backslash escapes",
+      "source_preimages": [
+        {
+          "path": "../../../tests/compile_fail_goldens.rs",
+          "constant": "CASES",
+          "physical_lines": 474,
+          "sha256": "5b354d74eb1067d4d66c84a61dd0af5c0700f5bd6cb98e0c20b97ac911c2a39d"
+        }
+      ]
+    },
+    {
+      "path": "secret_reject_cases_v1.tsv",
+      "byte_length": 3255,
+      "sha256": "f454ac1a07f0c2566a197fb92b9993cb3ba624f87eed1e7a650cad6c383eaace",
+      "layout": "header and schema followed by 13 tab-separated secret-flow rejection rows with backslash escapes",
+      "source_preimages": [
+        {
+          "path": "../../../tests/secret_security_diagnostics.rs",
+          "constant": "REJECT_CASES",
+          "physical_lines": 142,
+          "sha256": "bb21a9d524fa8e5681cef11bdd3c438086bd786f5a27749af0ba15a2a2d9a9a1"
+        }
+      ]
+    }
+  ]
+}

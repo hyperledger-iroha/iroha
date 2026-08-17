@@ -1,0 +1,9 @@
+
+            seiyaku Structured {
+                #[test]
+                fn z_passes() { test::assert(true); }
+
+                #[test]
+                fn a_fails() { test::assert(false); }
+            }
+            

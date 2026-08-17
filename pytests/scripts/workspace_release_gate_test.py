@@ -27,6 +27,12 @@ COMPILE_UNIT_GUARD_COMMAND = (
 )
 COMPILE_UNIT_REPORT = "target/ci/iroha-data-model-compile-units.json"
 COMPILE_UNIT_ARTIFACT_IDENTITY = "cargo-package-target-features-profile-v2"
+BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
+    "python3 -I -S scripts/check_build_efficiency_provenance.py"
+)
+BUILD_EFFICIENCY_PROVENANCE_TEST = (
+    "scripts/tests/check_build_efficiency_provenance_test.py"
+)
 REQUIRED_NUMERIC_TEST_COMMANDS = (
     "cargo test --locked -p ivm --test ivm_group_06 numeric_",
     "cargo test --locked -p ivm --test ivm_group_01 abi_hash_versions::",
@@ -209,12 +215,14 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
             "pytests/scripts/check_cargo_feature_hygiene_test.py",
             "pytests/scripts/check_workspace_target_inventory_test.py",
+            BUILD_EFFICIENCY_PROVENANCE_TEST,
             "scripts/tests/check_source_file_budget_test.py",
             "scripts/tests/check_compile_unit_budget_test.py",
             "scripts/tests/check_generated_artifacts_test.py",
             "python3 scripts/check_cargo_feature_hygiene.py",
             "python3 scripts/check_workspace_target_inventory.py",
-            "python3 scripts/check_source_file_budget.py",
+            BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "python3 scripts/check_source_file_budget.py --require-objective",
             "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
@@ -229,6 +237,27 @@ def _validate_pr_parity(workflow: str) -> list[str]:
                 errors.append(
                     f"PR Rust classifier is missing required behavior: {requirement}"
                 )
+        provenance_position = normalized_classifier.find(
+            BUILD_EFFICIENCY_PROVENANCE_COMMAND
+        )
+        provenance_followers = (
+            "python3 scripts/rust_ci.py validate",
+            "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
+            "python3 scripts/check_cargo_feature_hygiene.py",
+            "python3 scripts/check_workspace_target_inventory.py",
+            "python3 scripts/check_compile_time_table_assets.py",
+            "python3 scripts/check_dependency_budget.py",
+            "python3 scripts/check_source_file_budget.py --require-objective",
+        )
+        if provenance_position >= 0 and any(
+            normalized_classifier.find(command) < provenance_position
+            for command in provenance_followers
+            if normalized_classifier.find(command) >= 0
+        ):
+            errors.append(
+                "PR build-efficiency provenance guard must run before dependency, "
+                "source-budget, and Cargo-facing checks"
+            )
 
     affected_job = _job_block(workflow, "rust_affected")
     if not affected_job:
@@ -511,6 +540,35 @@ def test_release_workflow_guard_rejects_weakening(
                 "true # Cargo target guard removed",
             ),
             "PR Rust classifier is missing required behavior",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                BUILD_EFFICIENCY_PROVENANCE_TEST,
+                "scripts/tests/check_source_file_budget_test.py",
+            ),
+            "PR Rust classifier is missing required behavior",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+                "true # build-efficiency provenance removed",
+            ),
+            "PR Rust classifier is missing required behavior",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"{BUILD_EFFICIENCY_PROVENANCE_COMMAND}\n"
+                "          python3 scripts/rust_ci.py validate",
+                "python3 scripts/rust_ci.py validate\n"
+                f"          {BUILD_EFFICIENCY_PROVENANCE_COMMAND}",
+            ),
+            "PR build-efficiency provenance guard must run before",
         ),
         (
             lambda workflow: _replace_once_in_job(
