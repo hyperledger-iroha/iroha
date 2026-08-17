@@ -374,15 +374,17 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   immediately before cache insertion. The native AMX QC builder also verifies
   each vote signer and individual signature before BLS aggregation, so polluted
   builder inputs cannot produce a receipt that only fails at later block
-  validation. Native AMX vote caches now bound exact attestation-body buckets
-  within each session and evict the oldest bucket FIFO, preventing a single
-  source/plan from retaining unbounded retried or adversarial bodies while
-  proposer collection is pending. Operators tune the session and per-session
-  body-bucket bounds from the shared revision-4 projection: session capacity
-  follows the control/reducer capacity projected from
-  `sumeragi.queues.commands`, and exact-body buckets per session follow
-  `sumeragi.block.max_transactions`. No separate Native AMX cache switches are
-  accepted.
+  validation. Only an exact locally issued `(body, signer)` request authorizes
+  vote-cache allocation. Certified global-view changes retire stale request,
+  vote-bucket, and already-transferred output ownership. Request delivery stays
+  bounded by `sumeragi.queues.commands` and rotates fairly across missing
+  committee members; cache and signing geometry are derived from
+  `sumeragi.block.max_transactions`, the maximum participant-leg count, and the
+  protocol lane bound. The request catalog stores one full message per body and
+  a compact expected-peer set; exact identical topology retries coalesce in the
+  worker corridor, while a worker-declined request releases its adapter slot
+  back to fair catalog rotation. Global lock and Decision are terminal for both adapter and
+  transferred Native output. No separate Native AMX cache switches are accepted.
 - When a lifecycle update retires a lane, queue reconfiguration reroutes
   pending autoscaled default-route traffic onto the surviving elastic/default
   candidates. If a lifecycle update otherwise removes the only route that a

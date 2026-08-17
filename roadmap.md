@@ -1,12 +1,22 @@
 # Roadmap
 
-Last updated: 2026-08-16
+Last updated: 2026-08-17
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
+- Validate the bounded high-view pacemaker and corrected selected-Serve
+  late-Fetch regression in the four-validator loss/hold/heal corridor. The
+  promotion canary must submit real work, observe it commit within the finite
+  timeout envelope, then prove the empty queue leaves total and non-empty block
+  heights stable; empty blocks are not a liveness mechanism.
+- Exercise the combined Sumeragi liveness changes in the authenticated
+  four-validator loss/hold/heal corridor, then complete full-workspace tests and
+  strict all-target Clippy before the release freeze. The focused `iroha_core`
+  compile and regression slices are green, but they are not a substitute for
+  the release-wide run.
 - Freeze the current revision-4 candidate only after the physical ChainEpoch
   proof shards, exact four-validator fault corridor, and remaining authoritative
   formal and workspace-wide validation are complete. Historical mutable-tree
@@ -70,15 +80,15 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
-  4,500,000-line working target. Derive the mutable tree's exact aggregate
-  count and remaining gap again only after source freeze; do not redefine the
-  baseline, count moved test code as a physical reduction,
-  or weaken required runtime, security, consensus, SDK, or release-evidence
-  behavior to close it. Keep deterministic oversized-file exceptions as exact
-  ratchets and require the source-budget gate to return to finding-free.
-- Track every reviewed production module and add the new source and fixture
-  files to the eventual signed commit, then rerun the strict SDK source-closure
-  guard from that frozen candidate. Keep the staged merge-resolution and
+  4,500,000-line working target. The resolved index contains 4,820,899 Rust
+  lines across 7,964 checked files and 191 exact exceptions, with zero per-file
+  findings and 193,704 lines of ratchet headroom. The hard aggregate objective
+  is still unmet by 280,899 lines; do not redefine the baseline,
+  count moved test code as a physical reduction, or weaken required runtime,
+  security, consensus, SDK, or release-evidence behavior to close it.
+- Keep every reviewed production module and newly introduced companion source
+  in the eventual signed commit, then rerun the strict SDK source-closure guard
+  from that immutable candidate. Keep the staged merge-resolution and
   optimization changes reviewable until the signed commit is prepared.
 - Use the unchanged protected workspace lockfile now that the incompatible
   prototype manifest edge is withdrawn. From that immutable candidate, run the
@@ -992,9 +1002,9 @@ publication ordered under one lock, leaves process gas/telemetry untouched
 during dry-run validation, and blocks empty-state fallback when either the
 configured-primary durable binding disagrees or its geometry floor was
 compacted. Reset capture now reads native Darwin argv, binds the direct
-root-controlled Python.app runtime for new supervisors, and permits the legacy
-same-framework Homebrew argv0 rewrite only through an explicit testnet-reset
-authorization. Restart proof now binds a bounded same-inode log cursor,
+root-controlled Python.app runtime for new supervisors, and requires every
+loaded supervisor argv to match its launchd `ProgramArguments` exactly. Restart
+proof now binds a bounded same-inode log cursor,
 requires exactly one authenticated snapshot load with no Kura/empty-state
 fallback, rechecks the final process identities and advancing fleet, and emits
 the measured duration under the 45-second ceiling. Controller and public smoke
@@ -1147,23 +1157,26 @@ the signed receipts and completion marker against that same commit and ledger
 digest.
 
 On the current mutable tree, the independent static release inventory contract
-enumerates 88 legs, 860 production tests across 40 modules, 441 named
-ownership/regression cases, 527 G-UNIT rows, and four mandatory four-peer
-gates. The affected module totals are 18 Kura tests, 63 lane-work tests, and 135
-worker tests. This is source inventory, not a sealed receipt. The structural
-model/source checker and source-only causal-FIFO seam check pass, as do all 26
-checked-token real-source tests. The bare aggregate proof-ledger checker also
-remains under current-source validation; no aggregate pass is claimed for this
-mutable merge. The
-complete production inventory, Cargo, network, and release-proof execution must run
-against the final frozen tree. The package-layout contract permits only the reviewed
-test-only `v2_core/refinement_cases.rs` source split and rejects additional,
-parent-relative, non-test, or skipped-verifier mutations.
-The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
-after binding Kura's whole-plan route preflight, all-manifest readback,
-transition-checked latest-index publication, configured evidence-byte bounds,
-and State-frontier authentication. Its focused failing-mutation pytest cases
-must still execute on the final source before freeze.
+passes with 88 legs, 860/860 production tests across 40 modules, 527/527 G-UNIT
+rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
+`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
+The grouped SDK closure is 1,399 paths at
+`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`,
+and diagnostics is 1,401 paths at
+`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
+These are mutable-tree source inventories, not a sealed receipt.
+
+Both reproduced clean-`d24` consensus root causes are closed in source and
+their three focused regressions pass. The bounded Kura-backed tag-21 QueuePlan
+handoff is independently audited, but no fresh exact four-peer run exists for
+this merge. The macOS framework-Python relocation chain also passes its real
+copy/rewrite/sign/probe path, exact bootstrap, general runtime population,
+validator, and receipt checks on frozen bytes; its independent audit is clear.
+Neither focused result substitutes for complete Cargo, network, formal, or
+release-proof execution against an immutable candidate. The package-layout
+contract still permits only the reviewed test-only
+`v2_core/refinement_cases.rs` split and rejects additional, parent-relative,
+non-test, or skipped-verifier mutations.
 
 - Run the live four-validator idle-chain and Native AMX phase-cut recovery
   checks for the restored proposal-work gate, confirming that genuinely idle
@@ -1188,13 +1201,12 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-The current source-budget gate is not green because unrelated findings remain.
-Its configured aggregate baseline is 5,067,263 lines, its active ratchet is
-5,014,603, its hard aggregate ceiling is 4,540,000, and its working target is
-4,500,000. Recompute the mutable-tree count and remaining gap after source
-freeze. The separate generic lifecycle-coordinator cutover receives no
-multilane credit toward that reduction, and immutable-candidate evidence
-remains open.
+The current source-file gate is green: 7,964 paths, 191 exact exceptions,
+4,820,899 Rust lines, and zero findings. Its configured baseline is 5,067,263
+lines, active ratchet 5,014,603, hard aggregate ceiling 4,540,000, and working
+target 4,500,000. The hard objective therefore remains open by 280,899 lines.
+The separate generic lifecycle-coordinator cutover receives no multilane credit
+toward that reduction, and immutable-candidate evidence remains open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
@@ -1237,9 +1249,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 50 parents and 309
+source check. The reviewed Rust include topology contains 50 parents and 317
 direct entries; its canonical payload SHA-256 is
-`75185b8559c169d095333e7683b197c9504a48a4fb69a65bef6b7c18951702df`.
+`7eee4e44535cee07db90ff756c4b54786fcef23ea3dc7f0ada6c663a454c72d7`.
 The release-inventory contract is statically reconciled at 88/860/527, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
@@ -1252,9 +1264,9 @@ hashes to
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
 its staged grouped and diagnostics suite-source manifests contain 1,399 and
 1,401 records respectively and hash to
-`c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
+`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
 and
-`e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`;
+`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -1351,9 +1363,9 @@ The remaining work is evidence-driven and must stay in order:
   `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
   staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
   records with SHA-256 values
-  `c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
+  `8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
   and
-  `e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`,
+  `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -20634,11 +20646,12 @@ operator-provided rollout bundles.
   active-height Nexus predicate, so stale state-free route hints cannot target
   future-created or otherwise inactive autoscale lanes during admission, gossip
   routing, proposal refresh, pending reroute, journal replay, or requeue, while
-  preserving the legacy dynamic-dataspace fallback only for the unreserved
-  default public lane. The queue and transaction-gossip negative fixtures now
-  use canonical autoscale elastic lane shape and assert activation at the
-  declared creation height, so those regressions prove the height gate rather
-  than malformed-lane rejection.
+  requiring every concrete dataspace to have one exact catalog lane. Dynamically
+  discovered SNS dataspaces without an explicit lane now fail closed instead of
+  borrowing the universal lane. The queue and transaction-gossip negative
+  fixtures use canonical autoscale elastic lane shape and assert activation at
+  the declared creation height, so those regressions prove the height gate
+  rather than malformed-lane rejection.
   Lane relay authority applies the same activation-height boundary before
   accepting manifest-bound or commit-topology-derived validator sets for
   autoscale elastic lanes, so relays for not-yet-created lanes cannot be
@@ -27660,7 +27673,35 @@ runtime premise on the final signed source.
   attestation and zero-drift lifecycle evidence, and the candidate/publication/
   deploy-bound `TAIRA_PUBLIC_V2_24H_COMPLETED.json` plus durable admission
   receipt; the local fault-profile receipt above is not a substitute for this
-  public-cohort evidence.
+  public-cohort evidence. The fail-closed process lease and a structural
+  long-lived runner now own one exact 432,000-slot attempt, stream its bounded
+  workload/capture inventories, and require exact native launch and backend-
+  shutdown receipts. The public runner remains source-disabled before path or
+  network I/O until a genuine runtime signer/native verifier is provisioned;
+  its captured handoff must still be submitted to the independently provisioned
+  authority and replay broker. Do not
+  register the state library itself as a controller operation or treat an
+  abandoned lease as resumable evidence. The installed controller must inject
+  its preprovisioned state root beneath non-writable trusted ancestry rather
+  than accepting a caller-selected root. The signed pre-deploy chain now carries
+  an explicit key-derived receipt-signer node ID for every validator and binds
+  it to the exact binary, config, restart generation, runtime, and lifecycle
+  identities; no label-derived substitute is accepted. The supervisor and plist
+  renderers support fixed owner-private peer-local journals, and the offline
+  collector validates, retains, and globally resequences all four windows before
+  passing the four source journals plus the global journal to a digest-pinned
+  native verifier and capturing its receipt. The collector still needs to run
+  behind the protected controller. The path-only candidate/publication
+  prerequisite producer is now sealed into `macos-publish`, and the publication
+  workflow retains both root-closed outputs; its three upstream authority
+  refusals remain intentional. The structural post-deploy handoff producer now
+  derives the exact checker identity from a closed applied-report/reset/native-
+  receipt evidence root plus both prior handoffs and the installed deploy
+  controller attestation, but its independent native-evidence authority remains
+  an unconditional source barrier and it is not yet a sealed workflow operation.
+  The genuine native producer/verifier, authority verifier, replay broker, and
+  protected controller/workflow integration remain to be implemented and
+  provisioned.
 
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof conditions height progress on a valid

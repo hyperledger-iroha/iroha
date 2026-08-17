@@ -1,6 +1,7 @@
 #[test]
 fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps() {
     let mut fixture = ProductionTransportFixture::new();
+    let fetch_tag = fixture.executor.current_tag();
     let fetch_ordinal = fixture
         .lifecycle_ordinals
         .reserve_one()
@@ -27,7 +28,7 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
     };
     let manifest = canonical_payload_manifest(&fixture.context, fixture.round, subject, &body);
     let fetch = AdapterEffect::FetchBody {
-        tag: tag(0),
+        tag: fetch_tag,
         round: fixture.round,
         subject,
         manifest: Some(manifest.clone()),
@@ -37,7 +38,7 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
     let ownership = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&fetch),
         vec![RuntimeEffectOwnership::fresh_for_test(
-            tag(0),
+            fetch_tag,
             fetch_ordinal,
         )],
     )

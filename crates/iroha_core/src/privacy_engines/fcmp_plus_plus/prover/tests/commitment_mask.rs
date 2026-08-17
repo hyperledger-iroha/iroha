@@ -14,9 +14,7 @@ fn prover_input_constructor_takes_secret_bytes_before_validation() {
             SourcePoint::Last("ProverSecretCopyValueV1::take(&mut"),
             SourcePoint::First("let spend_x_encoding ="),
             SourcePoint::First("let output_y_encoding ="),
-            SourcePoint::First(
-                "let mut spend_x_scalar = spend_x_encoding.into_scalar_owner_v1()",
-            ),
+            SourcePoint::First("let mut spend_x_scalar = spend_x_encoding.into_scalar_owner_v1()"),
             SourcePoint::First(
                 "let mut output_y_scalar = output_y_encoding.into_scalar_owner_v1()",
             ),
@@ -28,13 +26,9 @@ fn prover_input_constructor_takes_secret_bytes_before_validation() {
             SourcePoint::First("if duplicate_leaf"),
             SourcePoint::Last("decoded.push("),
             SourcePoint::First("let mut input = Self {"),
-            SourcePoint::First(
-                "core::mem::swap(&mut input.spend_x, &mut spend_x_scalar.0)",
-            ),
+            SourcePoint::First("core::mem::swap(&mut input.spend_x, &mut spend_x_scalar.0)"),
             SourcePoint::First("drop(spend_x_scalar)"),
-            SourcePoint::First(
-                "core::mem::swap(&mut input.output_y, &mut output_y_scalar.0)",
-            ),
+            SourcePoint::First("core::mem::swap(&mut input.output_y, &mut output_y_scalar.0)"),
             SourcePoint::First("drop(output_y_scalar)"),
             SourcePoint::First("Ok(input)"),
         ],
@@ -881,14 +875,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
             .split_once("Ok(Prepared")
             .expect("prepared owner handoff")
             .1;
-        assert_source_order(
+        assert_source_contract_group(
+            "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/00",
             handoff,
-            &[
-                "scalar,",
-                "decomposition: core::mem::take(&mut *decomposition)",
-                "divisor,",
-                "point,",
-            ],
         );
         assert!(!blind.contains("scalar.expose_copy()"));
         assert!(!blind.contains("point.expose_copy()"));
@@ -929,32 +918,18 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "for branch in &path.c1_non_root {",
         "let mut c2_non_root = Vec::with_capacity(path.c2_non_root.len())",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/01",
         c1_branch_masks,
-        &[
-            "c1_non_root.push(c1_tape.append_branch(branch)?)",
-            "require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?",
-            "require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?",
-            "let blind = prepare_selene_blind(random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
-            "selene_blinds.push(blind)",
-        ],
     );
     let c2_branch_masks = between(
         prover,
         "for branch in &path.c2_non_root {",
         "transcripted_paths.push(TranscriptedPath {",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/02",
         c2_branch_masks,
-        &[
-            "c2_non_root.push(c2_tape.append_branch(branch)?)",
-            "require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?",
-            "require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?",
-            "let blind = prepare_helios_blind(random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?",
-            "helios_blinds.push(blind)",
-        ],
     );
     for branch_masks in [c1_branch_masks, c2_branch_masks] {
         assert_eq!(branch_masks.matches("blind.scalar").count(), 1);
@@ -977,14 +952,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
             assert!(!branch_masks.contains(forbidden), "retained {forbidden}");
         }
     }
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/03",
         blind_consumers,
-        &[
-            "for branch in &path.c1_non_root {",
-            "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
-            "for branch in &path.c2_non_root {",
-            "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?",
-        ],
     );
     assert!(
         !blind_consumers.contains(".point\n            .expose_ref()\n            .coordinates()")
@@ -1004,14 +974,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
             "if c1_tape.commitment_count() > c1_rows",
         ),
     ] {
-        assert_source_order(
+        assert_source_contract_group(
+            "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/04",
             claim,
-            &[
-                "let coordinates = blind",
-                ".secret_coordinates_ref_v1()",
-                ".append_claimed_point(",
-                "coordinates.component_pair_ref()",
-            ],
         );
         assert!(!claim.contains(".coordinates()"));
         assert!(!claim.contains("Zeroizing::new("));
@@ -1028,17 +993,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "struct SecretDlogCoefficientV1",
         "/// Erases one callee-owned `Copy` scalar parameter",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/05",
         dlog_coefficient_owner,
-        &[
-            "fn copy_from_borrowed(value: &u64) -> Self",
-            "fn into_scalar_owner_v1<F: ProofScalar>(self) -> SecretScalarGuard<F>",
-            "SecretScalarGuard::new(F::from_u64(self.0))",
-            "drop(self)",
-            "self.0.zeroize()",
-            "compiler_fence(core::sync::atomic::Ordering::SeqCst)",
-            "core::hint::black_box(&mut self.0)",
-        ],
     );
     for forbidden in [
         "derive(",
@@ -1064,48 +1021,23 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "impl<F: ProofScalar> Drop for ZeroizingScalarVec<F>",
     );
     let owned_insertion = between(scalar_vector, "fn push_owned(", "fn push_borrowed(");
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/06",
         owned_insertion,
-        &[
-            "let allocation_capacity = self.values.capacity()",
-            "let allocation_ptr = self.values.as_ptr()",
-            "if self.values.len() >= self.logical_capacity",
-            "self.values.push(F::ZERO)",
-            "core::mem::swap(&mut self.values[destination], &mut value.0)",
-            "drop(value)",
-            "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
-            "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)",
-        ],
     );
     assert!(!owned_insertion.contains("expose_copy"));
     let borrowed_insertion = between(scalar_vector, "fn push_borrowed(", "fn extend_borrowed_v1(");
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/07",
         borrowed_insertion,
-        &[
-            "if self.values.len() >= self.logical_capacity",
-            "SecretScalarGuard::copy_from_borrowed(value)",
-            "self.push_owned(value)?",
-        ],
     );
     assert!(!borrowed_insertion.contains("expose_copy"));
     assert!(!borrowed_insertion.contains("self.values.push("));
     source_lacks!(scalar_vector; "fn extend_from_slice(");
     let borrowed_extension = between(scalar_vector, "fn extend_borrowed_v1(", "fn take(");
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/08",
         borrowed_extension,
-        &[
-            "let start_len = self.values.len()",
-            "let allocation_capacity = self.values.capacity()",
-            "let allocation_ptr = self.values.as_ptr()",
-            "let end = start_len",
-            ".checked_add(values.len())",
-            "if end > self.logical_capacity || end > allocation_capacity",
-            "for value in values",
-            "self.push_borrowed(value)?",
-            "debug_assert_eq!(self.values.len(), end)",
-            "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
-            "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)",
-        ],
     );
     assert_eq!(
         borrowed_extension
@@ -1140,18 +1072,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "fn append_word(&mut self, values: &[F])",
         "pub(super) fn append_branch(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/09",
         append_word,
-        &[
-            "if values.len() != COMMITMENT_WORD_LEN",
-            "if starts_commitment && !self.has_commitment_capacity()",
-            "let mut destination = starts_commitment",
-            "let variables = self.layout.append_word()?",
-            "destination.extend_borrowed_v1(values)?",
-            "self.push_commitment(destination)?",
-            ".last_mut()",
-            ".extend_borrowed_v1(values)?",
-        ],
     );
     assert_eq!(
         append_word.matches("extend_borrowed_v1(values)?").count(),
@@ -1190,15 +1113,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "pub(super) fn append_branch(\n        &mut self,\n        branch: &[F],",
         "pub(super) fn append_dlog(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/10",
         append_branch,
-        &[
-            "if !self.has_commitment_capacity()",
-            "let mut destination = ZeroizingScalarVec::new",
-            "let variables = self.layout.append_branch(branch.len())?",
-            "destination.extend_borrowed_v1(branch)?",
-            "self.push_commitment(destination)?",
-        ],
     );
     assert_eq!(
         append_branch
@@ -1227,18 +1144,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "dlog: &[u64],",
         "pub(super) fn append_divisor(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/11",
         dlog_ingestion,
-        &[
-            "parameters.validate()?",
-            "if dlog.len() != parameters.scalar_bits",
-            "let mut witness = ZeroizingScalarVec::new",
-            "for coefficient in dlog",
-            "SecretDlogCoefficientV1::copy_from_borrowed(coefficient)",
-            "coefficient.into_scalar_owner_v1::<F>()",
-            "witness.push_owned(scalar)?",
-            "witness.extend_borrowed_v1(padding)?",
-        ],
     );
     assert_eq!(
         dlog_ingestion
@@ -1366,19 +1274,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "impl SecretCycleCoordinatesV1<Field25519>",
         "struct SecretU256V1",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/12",
         coordinate_constructor,
-        &[
-            "mut wei_x: SecretCopyValueV1<Field25519>",
-            "mut wei_y: SecretCopyValueV1<Field25519>",
-            "Field25519::ZERO",
-            "let (destination_x, destination_y) = &mut coordinates.0.0",
-            "core::mem::swap(destination_x, &mut wei_x.0)",
-            "core::mem::swap(destination_y, &mut wei_y.0)",
-            "drop(wei_x)",
-            "drop(wei_y)",
-            "\n        coordinates\n",
-        ],
     );
     for forbidden in [
         "expose_copy",
@@ -1444,23 +1342,9 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "let sal_y = prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output)",
         "prepared_inputs.push(PreparedInput {",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/13",
         sal_handoff,
-        &[
-            "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(sal_y.expose_ref())",
-            "let sal_linking_bytes =",
-            "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
-            "let sal_spend_x_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&input.spend_x)",
-            "let sal_rerandomization_blind_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
-            "&rerandomization.rerandomization_blind,\n        );",
-            "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
-            "sal_spend_x_bytes,",
-            "sal_y_bytes,",
-            "sal_linking_bytes,",
-            "sal_rerandomization_blind_bytes,",
-            "let sal = prove_fcmp_sal_with_checked_rng_v1(",
-            "drop(sal_witness)",
-        ],
     );
     assert_eq!(
         sal_handoff

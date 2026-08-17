@@ -7,7 +7,6 @@
 //! signing, broadcast, view-change, or apply effect which was causally ordered
 //! after an unacknowledged safety write.
 use super::v2_core as reducer;
-
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
 pub(in crate::sumeragi) use pending_kura_recovery::{
@@ -6960,16 +6959,29 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
     }
 }
 // READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_END
-/// Post-finality cleanup result for a reducer height already durable in Kura.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Closed height retaining safety stores through durable lane/output rollover.
+#[must_use = "finalized safety stores must be retained through output handoff"]
 pub(crate) struct FinalizedV2Height {
-    wal_retirement_warning: Option<String>,
+    wal: SafetyWal,
+    serviced_candidate_store: ServicedCandidateStore,
+    retirement: reducer::WalRetirementAuthorization,
 }
 impl FinalizedV2Height {
-    /// Consume the cleanup result into its retained warning.
-    /// It exposes no reducer, WAL, or serviced-candidate owner.
-    pub(in crate::sumeragi) fn into_wal_retirement_warning(self) -> Option<String> {
-        self.wal_retirement_warning
+    /// Retire safety stores after rollover; earlier drops preserve restart state.
+    pub(in crate::sumeragi) fn retire_after_output_handoff(self) -> Option<String> {
+        let serviced_candidate_warning = self.serviced_candidate_store.retire().err();
+        let safety_wal_warning = self
+            .wal
+            .retire(self.retirement)
+            .err()
+            .map(|e| e.to_string());
+        match (safety_wal_warning, serviced_candidate_warning) {
+            (None, None) => None,
+            (Some(warning), None) | (None, Some(warning)) => Some(warning),
+            (Some(wal), Some(candidates)) => {
+                Some(format!("{wal}; serviced-candidate cleanup: {candidates}"))
+            }
+        }
     }
 }
 /// Canonical consensus input whose structure and cryptography were verified.
@@ -15196,9 +15208,8 @@ impl SumeragiV2Adapter {
     /// This is the only production path which retires the height safety WAL.
     /// It compares the non-forgeable Kura receipt, the persisted artifact, and
     /// the reducer's cryptographically verified decision before consuming the
-    /// reducer, then attempts to remove and directory-sync the obsolete WAL.
-    /// Once the typed Kura receipt matches, cleanup failure is reported on the
-    /// finalized result rather than misreporting the durable decision as lost.
+    /// reducer, then transfers the live safety stores into a sealed owner.
+    /// That owner keeps both stores intact until durable rollover completes.
     pub(crate) fn finish_height(
         mut self,
         kura_receipt: &KuraV2CommitReceipt,
@@ -15242,22 +15253,10 @@ impl SumeragiV2Adapter {
         if !retirement.matches_finalized_height(&closed) {
             return Err(AdapterError::DurableCommitMismatch);
         }
-        let serviced_candidate_warning = self.serviced_candidate_store.retire().err();
-        let safety_wal_warning = self
-            .wal
-            .retire(retirement)
-            .err()
-            .map(|error| error.to_string());
-        let wal_retirement_warning = match (safety_wal_warning, serviced_candidate_warning) {
-            (None, None) => None,
-            (Some(wal), None) => Some(wal),
-            (None, Some(candidates)) => Some(candidates),
-            (Some(wal), Some(candidates)) => {
-                Some(format!("{wal}; serviced-candidate cleanup: {candidates}"))
-            }
-        };
         Ok(FinalizedV2Height {
-            wal_retirement_warning,
+            wal: self.wal,
+            serviced_candidate_store: self.serviced_candidate_store,
+            retirement,
         })
     }
     /// Build the compact canonical status payload from durable reducer state.

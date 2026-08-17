@@ -482,8 +482,9 @@ Sumeragi deadline telemetry
 
 - Revision 4 derives its view-zero deadline as ten signed cadence intervals,
   retransmits every one fifth of that deadline, and applies linear
-  view-indexed backoff. Validate cadence and the shared configuration
-  fingerprint through authenticated `/v1/sumeragi/status`.
+  view-indexed backoff capped at ten view-zero deadlines. Validate cadence and
+  the shared configuration fingerprint through authenticated
+  `/v1/sumeragi/status`.
 - `sumeragi_pacemaker_backpressure_deferrals_total` and its reason-labelled
   variants remain useful finite-queue observations. They do not configure or
   report an adaptive timer.
@@ -743,9 +744,9 @@ Revision-4 Sumeragi context and diagnostics
   Change these bounds consistently across validators; the shared projection is
   fingerprinted and a mismatch fails activation.
 - The view-zero deadline is ten signed cadence intervals, critical-message
-  retransmission is one fifth of that deadline, and view `v` uses a linear
-  `(v + 1)` deadline multiplier. RTT samples, EMA values, jitter, and local wall
-  clock tuning never change these deadlines.
+  retransmission is one fifth of that deadline, and view `v` uses a
+  `min(v + 1, 10)` deadline multiplier. RTT samples, EMA values, jitter, and
+  local wall clock tuning never change these deadlines.
 
 The telemetry catalog still contains legacy-labeled, non-authoritative fields
 whose names include `rbc`, `da`, or `pacemaker`. Treat them as

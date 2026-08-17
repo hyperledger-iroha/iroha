@@ -51,6 +51,10 @@ MAX_POLICY_BYTES = 1024 * 1024
 MAX_PLATFORM_OBJECT_BYTES = 128 * 1024
 MAX_CERTIFICATE_BYTES = 64 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
+ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES = 37
+MIN_ASSERTION_AUTHENTICATOR_DATA_BYTES = (
+    ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1
+)
 MAX_AUTHENTICATOR_DATA_BYTES = 4 * 1024
 MAX_CBOR_ARRAY_ITEMS = 1024
 MAX_CBOR_MAP_ITEMS = 64
@@ -600,7 +604,11 @@ def _parse_assertion_object(
         auth_data = value["authenticatorData"]
         if not isinstance(signature, bytes) or not isinstance(auth_data, bytes):
             raise ValueError("App Attest assertion fields must be byte strings")
-        if not 37 < len(auth_data) <= MAX_AUTHENTICATOR_DATA_BYTES:
+        if not (
+            MIN_ASSERTION_AUTHENTICATOR_DATA_BYTES
+            <= len(auth_data)
+            <= MAX_AUTHENTICATOR_DATA_BYTES
+        ):
             raise ValueError("App Attest assertion authenticatorData length is outside bounds")
         app_id = f"{policy['app_id_prefix']}.{policy['bundle_id']}".encode("ascii")
         if auth_data[:32] != hashlib.sha256(app_id).digest():
@@ -610,7 +618,10 @@ def _parse_assertion_object(
         if int.from_bytes(auth_data[33:37], "big") == 0:
             raise ValueError("App Attest assertion counter must be positive")
         _validate_extensions(
-            _decode_cbor(auth_data[37:], "App Attest assertion extensions"),
+            _decode_cbor(
+                auth_data[ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES:],
+                "App Attest assertion extensions",
+            ),
             attestation=False,
             policy=policy,
         )

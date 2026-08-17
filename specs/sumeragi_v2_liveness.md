@@ -2266,6 +2266,8 @@ invocation passes those protected paths and digests explicitly, for example:
   --expected-receipt-validator-support-sha256 <sha256> \
   --runtime-helper /protected/copy_sumeragi_v2_release_cargo_cache.py \
   --expected-runtime-helper-sha256 <sha256> \
+  --runtime-helper-cli /protected/copy_sumeragi_v2_release_cargo_cache_cli.py \
+  --expected-runtime-helper-cli-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \

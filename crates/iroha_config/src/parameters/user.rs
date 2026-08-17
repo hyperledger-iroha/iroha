@@ -16722,11 +16722,11 @@ impl ToriiKagemushaCommands {
     }
 }
 #[cfg(test)]
-#[path = "user/torii_kagemusha_commands_tests.rs"]
-mod torii_kagemusha_commands_tests;
-#[cfg(test)]
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
+#[cfg(test)]
+#[path = "user/torii_kagemusha_commands_tests.rs"]
+mod torii_kagemusha_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRamLfe {

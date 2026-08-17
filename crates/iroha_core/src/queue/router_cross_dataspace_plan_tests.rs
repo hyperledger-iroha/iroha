@@ -57,6 +57,366 @@ fn opaque_asset_transfer_with_universal_and_private_account_scope_uses_default_r
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     );
 }
+
+#[test]
+fn scoped_permission_route_remains_coordinator_with_other_private_targets() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let deploy_dataspace = DataSpaceId::new(2);
+    let ordinary_dataspace = DataSpaceId::new(7);
+    let permission_dataspace = DataSpaceId::new(8);
+    let contract_dataspace = DataSpaceId::new(10);
+    let router = ConfigLaneRouter::new(
+        LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(2),
+                dataspace: Some(deploy_dataspace),
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".to_owned()),
+                    description: None,
+                },
+            }],
+        },
+        dataspace_catalog(&[
+            (deploy_dataspace, "deploy"),
+            (ordinary_dataspace, "ordinary"),
+            (permission_dataspace, "permission"),
+            (contract_dataspace, "contracts"),
+        ]),
+        catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), deploy_dataspace),
+            (LaneId::new(3), ordinary_dataspace),
+            (LaneId::new(4), permission_dataspace),
+            (LaneId::new(5), contract_dataspace),
+        ]),
+    );
+    let permission: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: permission_dataspace,
+    }
+    .into();
+    let tx = sample_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![
+            InstructionBox::from(Grant::account_permission(permission, authority_id.clone())),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "ordinary").expect("domain id"),
+            ))),
+        ],
+    );
+    let expected = RoutingPlan::native_amx(
+        RoutingDecision::new(LaneId::new(4), permission_dataspace),
+        vec![
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(3), ordinary_dataspace),
+                RouteLegRole::Participant,
+            ),
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(4), permission_dataspace),
+                RouteLegRole::Participant,
+            ),
+        ],
+    );
+    assert_eq!(
+        router
+            .try_route_plan_without_state(&tx)
+            .expect("explicit permission scope should not require world state"),
+        Some(expected.clone()),
+    );
+    assert_eq!(
+        router
+            .try_route_plan(&tx)
+            .expect("permission route should coordinate the native AMX plan"),
+        expected,
+    );
+
+    let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+    let contract_address = ContractAddress::derive(
+        &super::super::queue_test_network_id(),
+        &authority_id,
+        0,
+        contract_dataspace,
+    )
+    .expect("contract address");
+    let deployment = vec![
+        InstructionBox::from(RegisterSmartContractBytes {
+            code_hash: Hash::new(&code),
+            code,
+        }),
+        InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                contract_address,
+                code_hash: Hash::new(b"contract-code"),
+            },
+        ),
+    ];
+    let deploy_permission: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: permission_dataspace,
+    }
+    .into();
+    let mut deploy_instructions = vec![InstructionBox::from(Grant::account_permission(
+        deploy_permission,
+        authority_id.clone(),
+    ))];
+    deploy_instructions.extend(deployment.clone());
+    let deploy_tx = sample_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        deploy_instructions,
+    );
+    assert_eq!(
+        router
+            .try_route_plan_without_state(&deploy_tx)
+            .expect("explicit permission and deploy targets should be state-free"),
+        Some(RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(4), permission_dataspace),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), deploy_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(4), permission_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(5), contract_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        )),
+        "permission shortcut must retain the deploy-policy participant",
+    );
+
+    let same_scope_permission: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: contract_dataspace,
+    }
+    .into();
+    let mut strict_instructions = vec![InstructionBox::from(Grant::account_permission(
+        same_scope_permission,
+        authority_id.clone(),
+    ))];
+    strict_instructions.extend(deployment);
+    let mut strict_metadata = Metadata::default();
+    strict_metadata.insert(
+        AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+        iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+    );
+    let strict_tx = sample_transaction_with_metadata(
+        &authority_id,
+        authority_keypair.private_key(),
+        strict_instructions,
+        strict_metadata,
+    );
+    assert_eq!(
+        router.try_route_plan_without_state(&strict_tx),
+        Err(
+            RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                first_dataspace_id: deploy_dataspace,
+                second_dataspace_id: contract_dataspace,
+            }
+        ),
+        "strict permission plans must include deploy-policy targets",
+    );
+
+    let universal_permission: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: DataSpaceId::UNIVERSAL,
+    }
+    .into();
+    let universal_tx = sample_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![InstructionBox::from(Grant::account_permission(
+            universal_permission,
+            authority_id.clone(),
+        ))],
+    );
+    assert_eq!(
+        router
+            .try_route_plan_without_state(&universal_tx)
+            .expect("universal permission route should resolve without state"),
+        Some(RoutingPlan::single(RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))),
+    );
+}
+
+#[test]
+fn strict_scoped_permission_decision_apis_match_full_plan_rejection() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let permission_dataspace = DataSpaceId::new(7);
+    let ordinary_dataspace = DataSpaceId::new(8);
+    let dataspace_catalog = dataspace_catalog(&[
+        (permission_dataspace, "permission"),
+        (ordinary_dataspace, "ordinary"),
+    ]);
+    let lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (LaneId::new(2), permission_dataspace),
+        (LaneId::new(3), ordinary_dataspace),
+    ]);
+    let policy = default_routing_policy();
+    let router = ConfigLaneRouter::new(
+        policy.clone(),
+        dataspace_catalog.clone(),
+        lane_catalog.clone(),
+    );
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+        iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+    );
+    let tx = sample_transaction_with_metadata(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![
+            InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifest {
+                    dataspace: permission_dataspace,
+                },
+                authority_id.clone(),
+            )),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "ordinary").expect("domain id"),
+            ))),
+        ],
+        metadata,
+    );
+    let expected_error = || RoutingResolveError::ConflictingTransactionDataspaceTargets {
+        first_dataspace_id: permission_dataspace,
+        second_dataspace_id: ordinary_dataspace,
+    };
+
+    assert_eq!(router.try_route(&tx), Err(expected_error()));
+    assert_eq!(router.try_route_plan(&tx), Err(expected_error()));
+    assert_eq!(router.try_route_without_state(&tx), Err(expected_error()));
+    assert_eq!(
+        router.try_route_plan_without_state(&tx),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog(&policy, &lane_catalog, &dataspace_catalog, &tx),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog(&policy, &lane_catalog, &dataspace_catalog, &tx),
+        Err(expected_error())
+    );
+
+    let state = blank_state();
+    install_router_nexus(&state, &router);
+    let state_view = state.view();
+    assert_eq!(
+        router.try_route_with_view(&tx, &state_view),
+        Err(expected_error())
+    );
+    assert_eq!(
+        router.try_route_plan_with_view(&tx, &state_view),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error())
+    );
+}
+
+#[test]
+fn explicit_universal_target_is_not_rewritten_by_authority_account_rule() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let private_dataspace = DataSpaceId::new(10);
+    let private_lane = LaneId::new(2);
+    let dataspace_catalog = dataspace_catalog(&[(private_dataspace, "paynet")]);
+    let lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (private_lane, private_dataspace),
+    ]);
+    let policy = LaneRoutingPolicy {
+        default_lane: LaneId::SINGLE,
+        default_dataspace: DataSpaceId::UNIVERSAL,
+        rules: vec![LaneRoutingRule {
+            lane: private_lane,
+            dataspace: Some(private_dataspace),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority_id.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let router = ConfigLaneRouter::new(
+        policy.clone(),
+        dataspace_catalog.clone(),
+        lane_catalog.clone(),
+    );
+    let tx = sample_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![InstructionBox::from(Register::domain(Domain::new(
+            DomainId::try_new("universal-write", "universal").expect("domain id"),
+        )))],
+    );
+    let state = state_with_account_scope_entries(
+        &[(authority_id, account_scope_entry(private_dataspace))],
+        dataspace_catalog.clone(),
+    );
+    install_router_nexus(&state, &router);
+    let expected_error = RoutingResolveError::LaneDataspaceMismatch {
+        lane_id: private_lane,
+        lane_dataspace_id: private_dataspace,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+    };
+    let state_view = state.view();
+
+    assert_eq!(
+        router.try_route_plan_with_view(&tx, &state_view),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        router.try_route_with_view(&tx, &state_view),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error)
+    );
+}
+
 #[test]
 fn opaque_asset_transfer_with_multiple_private_account_bindings_uses_default_route() {
     let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -1078,16 +1438,18 @@ fn matches_dataspace_root_account_alias_scope_rule() {
     let dataspace_tx = sample_transaction(
         &dataspace_id,
         dataspace_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("paynet-match", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &dataspace_id,
+            "paynet_alias_match",
+        )],
     );
     let domain_tx = sample_transaction(
         &domain_id,
         domain_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("banka-no-match", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &domain_id,
+            "paynet_domain_alias_match",
+        )],
     );
     let state = state_with_account_aliases(
         &[
@@ -1145,9 +1507,10 @@ fn try_route_with_view_resolves_against_same_state_catalog_snapshot() {
     let tx = sample_transaction(
         &authority_id,
         authority_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("state-catalog-route", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &authority_id,
+            "state_catalog_route",
+        )],
     );
     let state = state_with_account_aliases(
         &[(

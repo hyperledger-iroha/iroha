@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Assemble the source-bound Privacy v1 handoff consumed by BOI.
+"""Assemble the source-bound Privacy v1 qualification handoff.
 
 The input artifact handoff is inert data from an untrusted build job.  This
 command is intended to run in the sealed, secret-free qualification
-environment.  Qualification issuance is deliberately disabled until the
-installed controller provides the pinned runtime-sandbox and authority-only
-signer-broker contract named below.  Once provisioned, the runtime side must
-independently re-admit the signed Taira candidate, replay the wheel and ABI-22
-native validators, and return only bounded results to the authority side before
-the immutable BOI directory can be signed.
+environment.  The installed native authority independently re-admits the
+signed Taira candidate, runs the wheel and ABI-22 validators inside its bounded
+Linux sandbox, and returns only authenticated results before the immutable
+qualification directory is signed.
 
 No signing key, wallet witness, network credential, or deployment endpoint is
 accepted.  Missing release evidence is a hard failure; this command cannot
@@ -262,8 +260,12 @@ if tuple(sorted(SOURCE_ARTIFACT_PATHS)) != admission.BOI_SOURCE_ARTIFACT_PATHS:
     raise RuntimeError("BOI assembler and signed-candidate inventories diverged")
 
 
-class BoiHandoffError(RuntimeError):
+class QualificationHandoffError(RuntimeError):
     """The proposed BOI handoff is incomplete, mutable, or unauthenticated."""
+
+
+# Compatibility name retained for callers that consume the existing public API.
+BoiHandoffError = QualificationHandoffError
 
 
 @dataclass(frozen=True)
@@ -292,7 +294,7 @@ class AuthenticatedCandidate:
 
 
 @dataclass(frozen=True)
-class QualifiedBoiSnapshot:
+class QualifiedHandoffSnapshot:
     """Stable identity of one independently verified qualified BOI handoff."""
 
     root: Path
@@ -310,8 +312,12 @@ class QualifiedBoiSnapshot:
     source: Mapping[str, object]
 
 
+# Compatibility name retained without changing the serialized handoff contract.
+QualifiedBoiSnapshot = QualifiedHandoffSnapshot
+
+
 def _fail(message: str) -> NoReturn:
-    raise BoiHandoffError(message)
+    raise QualificationHandoffError(message)
 
 
 def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
@@ -322,7 +328,7 @@ def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
     return value
 
 
-def require_boi_qualification_isolation(
+def require_native_qualification_isolation(
     trusted_qualification_external_signer_sha256: object,
 ) -> None:
     """Authenticate the fixed qualification service before caller path access."""
@@ -331,9 +337,13 @@ def require_boi_qualification_isolation(
     try:
         taira_authority_client.preflight("qualification")
     except taira_authority_client.TairaAuthorityClientError as error:
-        raise BoiHandoffError(
+        raise QualificationHandoffError(
             f"{BOI_QUALIFICATION_ISSUANCE_BARRIER}: {error}"
         ) from error
+
+
+# Compatibility name retained for the existing installed controller CLI.
+require_boi_qualification_isolation = require_native_qualification_isolation
 
 
 def _json_sha256(value: object, label: str) -> str:
@@ -1690,7 +1700,7 @@ def _validate_candidate_receipts(candidate: AuthenticatedCandidate) -> None:
         _json_sha256(pair["norito_sha256"], f"native receipt {name} Norito digest")
 
 
-def validate_candidate_boi_artifact_handoff(
+def validate_candidate_artifact_handoff(
     artifact_root: Path,
     *,
     source: Mapping[str, object],
@@ -1732,6 +1742,10 @@ def validate_candidate_boi_artifact_handoff(
         require_native_execution=False,
     )
     return captured
+
+
+# Compatibility name retained for existing candidate-builder callers.
+validate_candidate_boi_artifact_handoff = validate_candidate_artifact_handoff
 
 
 def _qualification_authority_artifacts(
@@ -1874,7 +1888,7 @@ def _authority_probe_results(
     return {"abi22": dict(abi_result), "python_wheel": dict(wheel_result)}
 
 
-def assemble_boi_handoff(
+def assemble_qualification_handoff(
     artifact_root: Path,
     output: Path,
     candidate: AuthenticatedCandidate,
@@ -1903,7 +1917,7 @@ def assemble_boi_handoff(
     """Validate every input and create one closed, immutable BOI directory."""
 
     # Direct callers receive the same fail-before-input guarantee as the CLI.
-    require_boi_qualification_isolation(None)
+    require_native_qualification_isolation(None)
     # Native execution is owned by the installed qualification service.  These
     # legacy callbacks remain accepted for source compatibility but are never
     # invoked by the production path.
@@ -2380,6 +2394,10 @@ def assemble_boi_handoff(
     }
 
 
+# Compatibility name retained for the existing installed controller operation.
+assemble_boi_handoff = assemble_qualification_handoff
+
+
 def _qualified_contract() -> dict[str, object]:
     return {
         "abi_version": 22,
@@ -2396,7 +2414,7 @@ def _qualified_contract() -> dict[str, object]:
     }
 
 
-def verify_qualified_boi_handoff(
+def verify_qualified_handoff(
     root: Path,
     *,
     candidate_archive: Path,
@@ -2418,10 +2436,10 @@ def verify_qualified_boi_handoff(
     qualification_signature_verifier: Callable[..., Mapping[str, object]] = (
         verify_release_manifest
     ),
-) -> QualifiedBoiSnapshot:
+) -> QualifiedHandoffSnapshot:
     """Independently authenticate and bind one closed qualified BOI handoff."""
 
-    require_boi_qualification_isolation(None)
+    require_native_qualification_isolation(None)
     root = _canonical_directory(Path(os.path.abspath(root)), "qualified BOI handoff")
     external_archive = Path(os.path.abspath(candidate_archive))
     external_authority = _canonical_directory(
@@ -3084,7 +3102,7 @@ def verify_qualified_boi_handoff(
         if actual_payload != expected_payload:
             _fail(f"qualified BOI receipt differs from signed candidate: {relative!r}")
 
-    snapshot = QualifiedBoiSnapshot(
+    snapshot = QualifiedHandoffSnapshot(
         root=root,
         files=captured,
         handoff_inventory_sha256=manifest_info.sha256,
@@ -3103,7 +3121,7 @@ def verify_qualified_boi_handoff(
         ),
         source=normalized_source,
     )
-    recheck_qualified_boi_handoff(snapshot)
+    recheck_qualified_handoff(snapshot)
     if stable_hash_path(external_archive) != external_archive_info:
         _fail("deployment candidate archive changed during BOI verification")
     for relative, before in external_authority_files.items():
@@ -3112,7 +3130,11 @@ def verify_qualified_boi_handoff(
     return snapshot
 
 
-def recheck_qualified_boi_handoff(snapshot: QualifiedBoiSnapshot) -> None:
+# Compatibility name retained for existing deployment callers.
+verify_qualified_boi_handoff = verify_qualified_handoff
+
+
+def recheck_qualified_handoff(snapshot: QualifiedHandoffSnapshot) -> None:
     """Reject any qualified-handoff path, byte, or ordering change after admission."""
 
     try:
@@ -3129,7 +3151,13 @@ def recheck_qualified_boi_handoff(snapshot: QualifiedBoiSnapshot) -> None:
         ):
             _fail("trusted BOI qualification public key changed after verification")
     except ReleaseArtifactError as exc:
-        raise BoiHandoffError(f"cannot recheck qualified BOI handoff: {exc}") from exc
+        raise QualificationHandoffError(
+            f"cannot recheck qualified BOI handoff: {exc}"
+        ) from exc
+
+
+# Compatibility name retained for existing deployment callers.
+recheck_qualified_boi_handoff = recheck_qualified_handoff
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -3170,11 +3198,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        require_boi_qualification_isolation(
+        require_native_qualification_isolation(
             args.trusted_qualification_external_signer_sha256
         )
         candidate = authenticate_candidate(args)
-        result = assemble_boi_handoff(
+        result = assemble_qualification_handoff(
             Path(os.path.abspath(args.artifact_handoff_root)),
             Path(os.path.abspath(args.output)),
             candidate,
@@ -3204,7 +3232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         abi22.ArtifactContractError,
         admission.TairaRolloutAdmissionError,
     ) as exc:
-        print(f"Privacy v1 BOI handoff refused: {exc}", file=sys.stderr)
+        print(f"Privacy v1 qualification handoff refused: {exc}", file=sys.stderr)
         return 1
     sys.stdout.buffer.write(canonical_json_bytes(result))
     return 0

@@ -60,6 +60,9 @@ if [[ "$profile" == "--release" \
     exit 1
   fi
   bootstrap_python="${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python3"
+  if [[ -x "${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python-runtime/bin/python3" ]]; then
+    bootstrap_python="${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python-runtime/bin/python3"
+  fi
   if [[ ! -f "$bootstrap_python" || ! -x "$bootstrap_python" ]]; then
     echo "production release requires the bootstrap-archived Python" >&2
     exit 1
@@ -96,6 +99,7 @@ if [[ "$profile" == "--release" ]]; then
       echo "production release sealed child requires its authenticated Python" >&2
       exit 1
     fi
+    bootstrap_python="$IROHA_RELEASE_PYTHON_BIN"
     export IROHA_RELEASE_POLICY_PYTHON="$IROHA_RELEASE_PYTHON_BIN"
   else
     export IROHA_RELEASE_POLICY_PYTHON="$bootstrap_python"
@@ -238,7 +242,7 @@ if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
     exit 1
   fi
   pr_lock_sha256="$(sha256_file "$repo_root/Cargo.lock")"
-  pr_helper_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py")"
+  pr_helper_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py")"; pr_helper_cli_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py")"
   pr_lock_mode="$(
     "$pr_python_bin" -I -S -c \
       'from pathlib import Path; import stat, sys; print(format(stat.S_IMODE(Path(sys.argv[1]).lstat().st_mode), "04o"))' \
@@ -256,9 +260,9 @@ print(Path(tempfile.mkdtemp(prefix="iroha-sumeragi-v2-pr.", dir=base)))
 PY
   )"
   pr_invocation_root="$(canonical_path "$pr_invocation_root")"
-  pr_helper_stage="$(mktemp "$pr_invocation_root/.release-helper.XXXXXX")" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" "$pr_helper_stage" && chmod 0400 "$pr_helper_stage" && exec 9<"$pr_helper_stage" && rm -f -- "$pr_helper_stage" && [[ "$(sha256_file /dev/fd/9)" == "$pr_helper_sha256" ]] || { pr_stage_status=$?; [[ -z "${pr_helper_stage:-}" ]] || rm -f -- "$pr_helper_stage"; rmdir "$pr_invocation_root" || pr_stage_status=1; exit "$pr_stage_status"; }
+  pr_helper_stage="$(mktemp "$pr_invocation_root/.release-helper.XXXXXX")" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" "$pr_helper_stage" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py" "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py" && chmod 0400 "$pr_helper_stage" "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py" && exec 9<"$pr_helper_stage" && rm -f -- "$pr_helper_stage" && [[ "$(sha256_file /dev/fd/9)" == "$pr_helper_sha256" && "$(sha256_file "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py")" == "$pr_helper_cli_sha256" ]] || { pr_stage_status=$?; [[ -z "${pr_helper_stage:-}" ]] || rm -f -- "$pr_helper_stage"; rm -f -- "$pr_invocation_root/copy_sumeragi_v2_release_cargo_cache_cli.py"; rmdir "$pr_invocation_root" || pr_stage_status=1; exit "$pr_stage_status"; }
   run_pr_helper() {
-    "$pr_python_bin" -I -S -c 'import os,sys; os.lseek(9,0,os.SEEK_SET); data=os.fdopen(os.dup(9),"rb").read(8*1024*1024+1); len(data)<=8*1024*1024 or sys.exit("private PR helper is oversized"); sys.argv=["copy-release-runtime.py",*sys.argv[1:]]; exec(compile(data,"<protected-pr-helper>","exec"),{"__name__":"__main__"})' "$@"
+    "$pr_python_bin" -I -S -c 'import os,sys; os.lseek(9,0,os.SEEK_SET); data=os.fdopen(os.dup(9),"rb").read(8*1024*1024+1); len(data)<=8*1024*1024 or sys.exit("private PR helper is oversized"); helper_path=sys.argv[1]; sys.argv=["copy-release-runtime.py",*sys.argv[2:]]; exec(compile(data,"<protected-pr-helper>","exec"),{"__name__":"__main__","__file__":helper_path})' "$pr_invocation_root/copy-release-runtime.py" "$@"
   }
   cleanup_private_pr_invocation() {
     local status=$?
@@ -344,7 +348,8 @@ PY
     exit 1
   fi
   pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"
-  if [[ "$(sha256_file "$pr_clone_helper")" != "$pr_helper_sha256" ]]; then
+  pr_clone_helper_cli="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"
+  if [[ "$(sha256_file "$pr_clone_helper")" != "$pr_helper_sha256" || "$(sha256_file "$pr_clone_helper_cli")" != "$pr_helper_cli_sha256" ]]; then
     echo "private PR helper differs from the pre-clone source identity" >&2
     exit 1
   fi
@@ -557,7 +562,7 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   readonly release_git_bin release_ssh_keygen_bin release_python_bin release_bash_bin
   if [[ "$release_git_bin" != "$release_bootstrap_evidence_dir/git" \
     || "$release_ssh_keygen_bin" != "$release_bootstrap_evidence_dir/ssh-keygen" \
-    || "$release_python_bin" != "$release_bootstrap_evidence_dir/python3" \
+    || "$release_python_bin" != "$bootstrap_python" \
     || "$release_bash_bin" != "$release_bootstrap_evidence_dir/bash" ]]; then
     echo "release executables escaped the authenticated bootstrap archive" >&2
     exit 1
@@ -3115,7 +3120,7 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent
   kura::tests::native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling
   native_amx::tests::signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restart
-  native_amx::tests::signing_guard_rejects_anchor_deletion_or_wrong_v4_anchor_version
+  native_amx::tests::signing_guard_rejects_anchor_deletion_or_wrong_v5_anchor_version
   native_amx::tests::signing_guard_rejects_wrong_version_noncanonical_and_hardlinked_records
   native_amx::tests::signing_guard_restart_rejects_duplicate_record_sequence
   native_amx::tests::signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails

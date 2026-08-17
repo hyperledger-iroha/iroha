@@ -315,7 +315,9 @@ fn authenticated_serve_request(
                 1,
                 Hash::new(b"Serve fixture executed block"),
             ),
-            signers: (0..context.roster.len())
+            signers: (0..super::super::network_topology::commit_quorum_from_len(
+                context.roster.len(),
+            ))
                 .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
                 .collect(),
             aggregate_signature: vec![0xA5; 48],
@@ -341,6 +343,10 @@ pub(in crate::sumeragi) fn production_authenticated_serve_request(
     phase: wire::GlobalPhase,
     signer_indices: &[usize],
 ) -> (AuthenticatedCertifiedBodyRequest, Vec<Vec<u8>>) {
+    let exact_quorum = super::super::network_topology::commit_quorum_from_len(context.roster.len());
+    let signer_indices = signer_indices
+        .get(..exact_quorum)
+        .expect("production Serve fixture supplies an exact quorum");
     let mut request = authenticated_serve_request(context, requester_key, round, subject, phase)
         .request()
         .clone();

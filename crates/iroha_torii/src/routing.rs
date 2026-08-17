@@ -28712,17 +28712,17 @@ fn mk_record_from_inputs(
         &public_inputs_schema_hash_hex,
         "public_inputs_schema_hash_hex",
     )?;
-    if gas_schedule_id
-        .as_ref()
-        .is_some_and(|id| id.trim().is_empty())
-    {
+    if matches!(gas_schedule_id.as_deref(), Some(id) if id.trim().is_empty()) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "gas_schedule_id must not be empty".into(),
             ),
         )));
     }
-    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height) && act >= withdraw {
+    if activation_height
+        .zip(withdraw_height)
+        .is_some_and(|(act, withdraw)| act >= withdraw)
+    {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "withdraw_height must be > activation_height".into(),

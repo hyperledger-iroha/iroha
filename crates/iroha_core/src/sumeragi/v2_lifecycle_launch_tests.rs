@@ -390,7 +390,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         include_str!("../kura/bound_progress_and_retained_support.rs")
     );
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
-    let worker_source = include_str!("v2_worker.rs");
+    let worker_source = concat!(
+        include_str!("v2_worker.rs"),
+        include_str!("v2_worker/effect_services_impl.rs")
+    );
     let effects_source = include_str!("v2_effects.rs");
     let runtime_source =
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
@@ -773,9 +776,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "/// Sign and retain all canonical chunks",
     );
     let legacy_start = worker_start
-        .split_once(
-            "/// Start with the exact application service used for recovered marker replay.",
-        )
+        .split_once("pub(in crate::sumeragi) fn start_with_apply_service(")
         .expect("legacy construction ends before the sealed transfer seam")
         .0;
     assert!(legacy_start.contains("let apply_service = V2ApplyService::new("));
@@ -830,7 +831,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let observer_activation = source_region(
         worker_source,
         "fn activate_effect_completion_observer(",
-        "/// Atomically reserve the selected lifecycle carrier",
+        "pub(crate) fn capture_lifecycle_capacity_rank<'a>(",
     );
     assert!(observer_activation.contains("ProductionV2CompletionObserverActivationPermitV1"));
     assert_source_tokens_in_order(
@@ -850,7 +851,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let preactivation_runner = source_region(
         runner_source,
         "pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1",
-        "/// Cadence-derived process-local deadline",
+        "/// Exact reducer facts which own one local proposal-side work item",
     );
     assert_required_source_tokens(
         preactivation_runner,
@@ -948,7 +949,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let preactivation_setup = source_region(
         &source,
         "fn with_runner_setup_transaction<R, E>(",
-        "/// Borrow executor and services for closed-ingress runner setup",
+        "fn with_canonical_body_recovery_ingress_transaction<R, E, Activation>(",
     );
     let setup_guard = preactivation_setup
         .find("let output_guard = self.services.lifecycle_output_guard()")
@@ -1206,7 +1207,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let fixture_retirement = source_region(
         activated_borrow,
         "fn retire_lifecycle_stores_for_test(",
-        "/// Borrow the live owner/runtime/service triple",
+        "/// Borrow the live owner/runtime/service/local-Proposal owners only from the runner",
     );
     assert_source_tokens_in_order(
         fixture_retirement,
@@ -1257,6 +1258,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "rollover_finalized_height_outputs_for_lifecycle(",
             "ProductionLifecycleOutputRolloverPermitV1 {",
+            "finalized_adapter.retire_after_output_handoff()",
             "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
         ],
     );
@@ -1314,7 +1316,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             .find(&format!("struct {state}"))
             .unwrap_or_else(|| panic!("missing opaque finalization state {state}"));
         let prefix = &declaration_source[..start];
-        let declaration_start = prefix.rfind("\n\n").unwrap_or(0);
+        let declaration_start = prefix
+            .rfind("\n}\n")
+            .map_or(0, |offset| offset + 3)
+            .max(prefix.rfind("\n\n").map_or(0, |offset| offset + 2));
         let declaration_end = declaration_source[start..]
             .find("\n}")
             .map(|offset| start + offset)
@@ -1384,16 +1389,15 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "block_builder.set_da_proof_policies(Some(proof_policy_bundle))",
             ".try_build_with_signature(0, genesis_key.private_key())",
             "BlockSignaturePolicy::GenesisAuthority(",
-            "WalRecordV2::Decision(decision)",
+            "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
-            ".dispatch_recovered_decision_apply(",
-            "settle_recovered_decision_apply_completion(&mut lane_work)",
-            "let activated = launched",
-            ".into_finalized_rollover(&mut runner)",
+            "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+            "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+            "let mut activated = launched",
+            "lifecycle_run_inner::finalize_lifecycle_height(",
             ".retain_merge_sidecars_for_global_view(",
-            ".rollover_outputs(&mut runner, lane_work, &successor, 64)",
-            ".retire_lifecycle_stores()",
-            "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+            "assert!(outcome.cleanup().warnings().is_empty())",
+            "assert!(outcome.wal_retirement_warning().is_none())",
         ],
     );
     assert!(registry_validate_source.contains("broadcast.is_unpaired()"));
@@ -1447,7 +1451,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let runner_dependency_permit = source_region(
         runner_authority_source,
         "pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
-        "/// Cadence-derived process-local deadline",
+        "/// Process-local borrow key for preparing a launched lifecycle before activation",
     );
     assert_required_source_tokens(
         runner_dependency_permit,
@@ -1539,7 +1543,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let complete_tip_activation = source_region(
         runner_dependency_permit,
         "struct ProductionLifecycleCompleteTipRunnerActivationV1",
-        "struct ProductionLifecycleActivatedRunnerAuthorityV1",
+        "struct ProductionLifecyclePendingKuraRunnerActivationV1",
     );
     assert_required_source_tokens(
         complete_tip_activation,

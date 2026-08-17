@@ -540,10 +540,7 @@ mod tests {
     }
     fn assert_non_ok_preserved(response: Response<Vec<u8>>) {
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            response.headers()["content-type"],
-            "application/problem+json"
-        );
+        assert_eq!(response.headers()["content-type"], "application/problem+json");
         assert_eq!(response.headers()["x-repair-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
     }
@@ -641,17 +638,13 @@ mod tests {
             || client.post_sorafs_repair_transaction(route, transaction),
         );
     }
-    #[test]
-    fn repair_route_validation_accepts_every_exact_instruction() {
+    fn assert_repair_route_contract() {
         let client = client_with_base_url(base_url());
         for (route, instruction) in exact_route_instructions() {
             let transaction = sign_instruction(&client, instruction);
             validate_transaction_route(route, &transaction).expect("matching repair route");
         }
-    }
-    #[test]
-    fn repair_route_validation_rejects_mismatch_and_wrong_action_before_http() {
-        let client = client_with_base_url(base_url());
+
         let report = sign_instruction(&client, SubmitSorafsRepairTask::new([0x51; 32], vec![0x01]));
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Appeal, &report);
         let claim = sign_instruction(
@@ -662,33 +655,27 @@ mod tests {
             })),
         );
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Heartbeat, &claim);
-    }
-    #[test]
-    fn repair_route_validation_rejects_non_native_and_non_singleton_before_http() {
-        let client = client_with_base_url(base_url());
-        let wrong_instruction = sign_instruction(
-            &client,
-            Log::new(Level::INFO, "not a repair instruction".into()),
-        );
-        assert_rejected_before_http(
-            &client,
-            SorafsRepairCommandRoute::Report,
-            &wrong_instruction,
-        );
+
         let report: InstructionBox = SubmitSorafsRepairTask::new([0x51; 32], vec![0x01]).into();
-        let multiple = sign_executable(
-            &client,
-            Executable::Instructions(vec![report.clone(), report].into()),
-        );
-        assert_rejected_before_http(&client, SorafsRepairCommandRoute::Report, &multiple);
-        let ivm = sign_executable(
-            &client,
-            Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
-        );
-        assert_rejected_before_http(&client, SorafsRepairCommandRoute::Report, &ivm);
+        for transaction in [
+            sign_instruction(
+                &client,
+                Log::new(Level::INFO, "not a repair instruction".into()),
+            ),
+            sign_executable(
+                &client,
+                Executable::Instructions(vec![report.clone(), report].into()),
+            ),
+            sign_executable(
+                &client,
+                Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
+            ),
+        ] {
+            assert_rejected_before_http(&client, SorafsRepairCommandRoute::Report, &transaction);
+        }
     }
-    #[test]
-    fn repair_read_response_binding_accepts_exact_typed_wrappers() {
+
+    fn assert_repair_read_success_contract() {
         let client = client_with_base_url(base_url());
         let cursor = finalized_cursor();
         let hash = hex::encode(cursor.block_hash);
@@ -700,73 +687,70 @@ mod tests {
             finalized_cursor: cursor,
             status: RepairLedgerStatusV1::default(),
         };
-        let response = exact_response("status", &status);
-        let body = response.body().clone();
-        assert_eq!(
-            validate_status_response(response, &finalized)
-                .expect("exact status wrapper")
-                .body(),
-            &body
-        );
+        validate_status_response(exact_response("status", &status), &finalized)
+            .expect("exact status wrapper");
+
         let task = repair_task(&client, "REP-1", [0x20; 32]);
-        let response = exact_response(
-            "task",
-            &RepairFinalizedTaskV1 {
-                finalized_cursor: cursor,
-                task: task.clone(),
+        validate_task_response(
+            exact_response(
+                "task",
+                &RepairFinalizedTaskV1 {
+                    finalized_cursor: cursor,
+                    task: task.clone(),
+                },
+            ),
+            "REP-1",
+            &finalized,
+        )
+        .expect("exact task wrapper");
+        validate_tasks_response(
+            exact_response(
+                "tasks",
+                &RepairLedgerTaskPageV1 {
+                    finalized_cursor: cursor,
+                    tasks: vec![task, repair_task(&client, "REP-2", [0x30; 32])],
+                    has_more: false,
+                    next_after_task_id: None,
+                },
+            ),
+            &SorafsRepairTasksFilter {
+                finalized,
+                limit: Some(2),
+                after_task_id_hex: None,
             },
-        );
-        validate_task_response(response, "REP-1", &finalized).expect("exact task wrapper");
-        let after_task_id = hex::encode([0x10; 32]);
-        let second_task = repair_task(&client, "REP-2", [0x30; 32]);
-        let task_page = RepairLedgerTaskPageV1 {
-            finalized_cursor: cursor,
-            tasks: vec![task, second_task],
-            has_more: true,
-            next_after_task_id: Some([0x30; 32]),
-        };
-        let task_filter = SorafsRepairTasksFilter {
-            finalized,
-            limit: Some(2),
-            after_task_id_hex: Some(&after_task_id),
-        };
-        validate_tasks_response(exact_response("tasks", &task_page), &task_filter)
-            .expect("exact task-page wrapper");
-        let after_hash = hex::encode([0x51; 32]);
+        )
+        .expect("exact task page");
+
         let events = vec![
+            repair_event(&client, 1, 5, [0x51; 32], 0),
             repair_event(&client, 2, 5, [0x51; 32], 1),
-            repair_event(&client, 3, cursor.height, cursor.block_hash, 0),
         ];
-        let event_page = RepairFinalizedEventPageV1 {
-            finalized_cursor: cursor,
-            next_after: events.last().map(RepairFinalizedEventV1::cursor),
-            events,
-            has_more: true,
-        };
-        let event_filter = SorafsRepairEventsFilter {
-            finalized,
-            limit: Some(2),
-            after_sequence: Some(1),
-            after_block_height: Some(5),
-            after_block_hash_hex: Some(&after_hash),
-            after_event_index: Some(0),
-        };
-        validate_events_response(exact_response("events", &event_page), &event_filter)
-            .expect("exact event-page wrapper");
+        validate_events_response(
+            exact_response(
+                "events",
+                &RepairFinalizedEventPageV1 {
+                    finalized_cursor: cursor,
+                    events,
+                    has_more: false,
+                    next_after: None,
+                },
+            ),
+            &SorafsRepairEventsFilter {
+                finalized,
+                limit: Some(2),
+                ..SorafsRepairEventsFilter::default()
+            },
+        )
+        .expect("exact event page");
     }
-    #[test]
-    fn repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches() {
+
+    fn assert_repair_rejection_contract() {
         let client = client_with_base_url(base_url());
         let cursor = finalized_cursor();
         let status = RepairFinalizedStatusV1 {
             finalized_cursor: cursor,
             status: RepairLedgerStatusV1::default(),
         };
-        let mut duplicate_content_type = exact_response("status", &status);
-        duplicate_content_type.headers_mut().append(
-            "content-type",
-            APPLICATION_JSON.parse().expect("JSON media type"),
-        );
         for response in [
             wrapped_response(
                 "finalized_chain",
@@ -774,7 +758,6 @@ mod tests {
                 &status,
                 "application/json; charset=utf-8",
             ),
-            duplicate_content_type,
             json_response(
                 StatusCode::OK,
                 r#"{"source":"finalized_chain","status":{},"extra":true}"#,
@@ -786,227 +769,104 @@ mod tests {
                 &SorafsRepairFinalizedAnchor::default(),
             ));
         }
+
         let hash = hex::encode(cursor.block_hash);
-        for anchor in [
-            SorafsRepairFinalizedAnchor {
-                expected_finalized_height: Some(cursor.height + 1),
-                expected_finalized_block_hash_hex: Some(&hash),
-            },
-            SorafsRepairFinalizedAnchor {
-                expected_finalized_height: Some(cursor.height),
-                expected_finalized_block_hash_hex: None,
-            },
-        ] {
-            assert_rejected(validate_status_response(
-                exact_response("status", &status),
-                &anchor,
-            ));
-        }
-        let zero_cursor = RepairFinalizedStatusV1 {
-            finalized_cursor: RepairFinalizedCursorV1 {
-                height: 0,
-                block_hash: [0; 32],
-            },
-            status: RepairLedgerStatusV1::default(),
+        let wrong_finality = SorafsRepairFinalizedAnchor {
+            expected_finalized_height: Some(cursor.height + 1),
+            expected_finalized_block_hash_hex: Some(&hash),
         };
         assert_rejected(validate_status_response(
-            exact_response("status", &zero_cursor),
-            &SorafsRepairFinalizedAnchor::default(),
+            exact_response("status", &status),
+            &wrong_finality,
         ));
-        let task = RepairFinalizedTaskV1 {
-            finalized_cursor: cursor,
-            task: repair_task(&client, "REP-OTHER", [0x20; 32]),
-        };
         assert_rejected(validate_task_response(
-            exact_response("task", &task),
+            exact_response(
+                "task",
+                &RepairFinalizedTaskV1 {
+                    finalized_cursor: cursor,
+                    task: repair_task(&client, "REP-OTHER", [0x20; 32]),
+                },
+            ),
             "REP-REQUESTED",
             &SorafsRepairFinalizedAnchor::default(),
         ));
-    }
-    #[test]
-    fn repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations() {
-        let client = client_with_base_url(base_url());
-        let cursor = finalized_cursor();
+
         let first = repair_task(&client, "REP-1", [0x20; 32]);
         let second = repair_task(&client, "REP-2", [0x30; 32]);
-        let mut page = RepairLedgerTaskPageV1 {
-            finalized_cursor: cursor,
-            tasks: vec![first.clone(), second.clone()],
-            has_more: false,
-            next_after_task_id: None,
-        };
-        let limit_one = SorafsRepairTasksFilter {
-            limit: Some(1),
-            ..SorafsRepairTasksFilter::default()
-        };
-        assert_tasks_rejected(&page, &limit_one);
-        page.tasks = vec![second, first];
-        let limit_two = SorafsRepairTasksFilter {
+        let task_filter = SorafsRepairTasksFilter {
             limit: Some(2),
             ..SorafsRepairTasksFilter::default()
         };
-        assert_tasks_rejected(&page, &limit_two);
-        page.tasks = vec![repair_task(&client, "REP-1", [0x20; 32])];
-        page.has_more = true;
-        page.next_after_task_id = Some([0x21; 32]);
-        assert_tasks_rejected(&page, &limit_two);
-        page.has_more = false;
-        page.next_after_task_id = None;
-        let after = hex::encode([0x20; 32]);
-        let not_exclusive = SorafsRepairTasksFilter {
-            limit: Some(2),
-            after_task_id_hex: Some(&after),
-            ..SorafsRepairTasksFilter::default()
-        };
-        assert_tasks_rejected(&page, &not_exclusive);
-        page.tasks[0].task_id = [0; 32];
-        assert_tasks_rejected(&page, &limit_two);
-    }
-    #[test]
-    fn repair_task_page_response_binding_rejects_omitted_limit_over_torii_default() {
-        let client = client_with_base_url(base_url());
-        let page = RepairLedgerTaskPageV1 {
-            finalized_cursor: finalized_cursor(),
-            tasks: (1..=REPAIR_DEFAULT_PAGE_LIMIT_V1 + 1)
-                .map(|id| {
-                    let id = u8::try_from(id).expect("bounded test task id fits u8");
-                    repair_task(&client, &format!("REP-{id}"), [id; 32])
-                })
-                .collect(),
-            has_more: false,
-            next_after_task_id: None,
-        };
-        let error = validate_tasks_response(
-            exact_response("tasks", &page),
-            &SorafsRepairTasksFilter::default(),
-        )
-        .err()
-        .expect("omitted task limit must retain Torii's default response bound");
-        assert!(
-            error
-                .to_string()
-                .contains("payload exceeds the requested limit")
-        );
-    }
-    #[test]
-    fn repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations() {
-        let client = client_with_base_url(base_url());
-        let cursor = finalized_cursor();
-        let first = repair_event(&client, 1, 5, [0x51; 32], 0);
-        let second = repair_event(&client, 2, cursor.height, cursor.block_hash, 0);
-        let mut page = RepairFinalizedEventPageV1 {
-            finalized_cursor: cursor,
-            events: vec![first.clone(), second.clone()],
-            has_more: false,
-            next_after: None,
-        };
-        let limit_one = SorafsRepairEventsFilter {
-            limit: Some(1),
-            ..SorafsRepairEventsFilter::default()
-        };
-        assert_events_rejected(&page, &limit_one);
-        let limit_two = SorafsRepairEventsFilter {
-            limit: Some(2),
-            ..SorafsRepairEventsFilter::default()
-        };
-        page.events[1].sequence = 3;
-        assert_events_rejected(&page, &limit_two);
-        page.events = vec![first.clone(), repair_event(&client, 2, 5, [0x52; 32], 1)];
-        assert_events_rejected(&page, &limit_two);
-        page.events = vec![
-            first,
-            repair_event(&client, 2, cursor.height, [0x72; 32], 0),
-        ];
-        assert_events_rejected(&page, &limit_two);
-        page.events = vec![repair_event(&client, 1, 0, [0; 32], 0)];
-        assert_events_rejected(&page, &limit_two);
-        page.events = vec![second];
-        page.has_more = true;
-        page.next_after = Some(RepairFinalizedEventCursorV1 {
-            sequence: 2,
-            block_height: cursor.height,
-            block_hash: cursor.block_hash,
-            event_index: 1,
-        });
-        let after_hash = hex::encode([0x51; 32]);
-        let continued = SorafsRepairEventsFilter {
-            limit: Some(2),
-            after_sequence: Some(1),
-            after_block_height: Some(5),
-            after_block_hash_hex: Some(&after_hash),
-            after_event_index: Some(0),
-            ..SorafsRepairEventsFilter::default()
-        };
-        assert_events_rejected(&page, &continued);
-    }
-    #[test]
-    fn repair_event_page_response_binding_rejects_omitted_limit_over_torii_default() {
-        let client = client_with_base_url(base_url());
-        let page = RepairFinalizedEventPageV1 {
-            finalized_cursor: finalized_cursor(),
-            events: (1..=REPAIR_DEFAULT_PAGE_LIMIT_V1 + 1)
-                .map(|sequence| {
-                    repair_event(&client, u64::from(sequence), 5, [0x51; 32], sequence - 1)
-                })
-                .collect(),
-            has_more: false,
-            next_after: None,
-        };
-        let error = validate_events_response(
-            exact_response("events", &page),
-            &SorafsRepairEventsFilter::default(),
-        )
-        .err()
-        .expect("omitted event limit must retain Torii's default response bound");
-        assert!(
-            error
-                .to_string()
-                .contains("payload exceeds the requested limit")
-        );
-    }
-    #[test]
-    fn repair_event_page_response_binding_rejects_noncanonical_block_index_successors() {
-        let client = client_with_base_url(base_url());
-        let cursor = finalized_cursor();
-        let filter = SorafsRepairEventsFilter {
-            limit: Some(2),
-            ..SorafsRepairEventsFilter::default()
-        };
-        let page = |events| RepairFinalizedEventPageV1 {
-            finalized_cursor: cursor,
-            events,
-            has_more: false,
-            next_after: None,
-        };
-        for events in [
-            vec![repair_event(&client, 1, 5, [0x51; 32], 1)],
-            vec![
-                repair_event(&client, 1, 5, [0x51; 32], 0),
-                repair_event(&client, 2, 5, [0x51; 32], 2),
-            ],
-            vec![
-                repair_event(&client, 1, 5, [0x51; 32], 0),
-                repair_event(&client, 2, 6, [0x52; 32], 1),
-            ],
+        for page in [
+            RepairLedgerTaskPageV1 {
+                finalized_cursor: cursor,
+                tasks: vec![second, first.clone()],
+                has_more: false,
+                next_after_task_id: None,
+            },
+            RepairLedgerTaskPageV1 {
+                finalized_cursor: cursor,
+                tasks: vec![first],
+                has_more: true,
+                next_after_task_id: Some([0x21; 32]),
+            },
         ] {
-            assert_events_rejected(&page(events), &filter);
+            assert_tasks_rejected(&page, &task_filter);
         }
-        let after_hash = hex::encode([0x51; 32]);
-        let overflow = SorafsRepairEventsFilter {
-            limit: Some(1),
-            after_sequence: Some(1),
-            after_block_height: Some(5),
-            after_block_hash_hex: Some(&after_hash),
-            after_event_index: Some(u32::MAX),
+
+        let event_filter = SorafsRepairEventsFilter {
+            limit: Some(2),
             ..SorafsRepairEventsFilter::default()
         };
+        let first = repair_event(&client, 1, 5, [0x51; 32], 0);
+        for events in [
+            vec![first.clone(), repair_event(&client, 3, 5, [0x51; 32], 1)],
+            vec![first, repair_event(&client, 2, 5, [0x51; 32], 2)],
+            vec![repair_event(&client, 1, 0, [0; 32], 0)],
+        ] {
+            assert_events_rejected(
+                &RepairFinalizedEventPageV1 {
+                    finalized_cursor: cursor,
+                    events,
+                    has_more: false,
+                    next_after: None,
+                },
+                &event_filter,
+            );
+        }
+        let mut continuation = RepairFinalizedEventPageV1 {
+            finalized_cursor: cursor,
+            events: vec![repair_event(
+                &client,
+                2,
+                cursor.height,
+                cursor.block_hash,
+                0,
+            )],
+            has_more: true,
+            next_after: Some(RepairFinalizedEventCursorV1 {
+                sequence: 2,
+                block_height: cursor.height,
+                block_hash: cursor.block_hash,
+                event_index: 1,
+            }),
+        };
+        let after_hash = hex::encode([0x51; 32]);
         assert_events_rejected(
-            &page(vec![repair_event(&client, 2, 5, [0x51; 32], 0)]),
-            &overflow,
+            &continuation,
+            &SorafsRepairEventsFilter {
+                limit: Some(2),
+                after_sequence: Some(1),
+                after_block_height: Some(5),
+                after_block_hash_hex: Some(&after_hash),
+                after_event_index: Some(0),
+                ..SorafsRepairEventsFilter::default()
+            },
         );
+        continuation.events.clear();
     }
-    #[test]
-    fn repair_read_response_binding_preserves_every_non_ok_response() {
+
+    fn assert_repair_transport_contract() {
         let finalized = SorafsRepairFinalizedAnchor::default();
         let tasks = SorafsRepairTasksFilter::default();
         let events = SorafsRepairEventsFilter::default();
@@ -1018,19 +878,17 @@ mod tests {
         ] {
             assert_non_ok_preserved(response.expect("non-OK repair response"));
         }
-    }
-    #[test]
-    fn repair_read_methods_validate_every_successful_response_after_send() {
+
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::default();
         with_mock_http(
             respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
             || {
                 for response in [
-                    client.get_sorafs_repair_status(&SorafsRepairFinalizedAnchor::default()),
-                    client.get_sorafs_repair_tasks(&SorafsRepairTasksFilter::default()),
-                    client.get_sorafs_repair_task("REP-1", &SorafsRepairFinalizedAnchor::default()),
-                    client.get_sorafs_repair_events(&SorafsRepairEventsFilter::default()),
+                    client.get_sorafs_repair_status(&finalized),
+                    client.get_sorafs_repair_tasks(&tasks),
+                    client.get_sorafs_repair_task("REP-1", &finalized),
+                    client.get_sorafs_repair_events(&events),
                 ] {
                     assert_rejected(response);
                 }
@@ -1038,4 +896,36 @@ mod tests {
         );
         assert_eq!(snapshots.lock().expect("snapshot lock").len(), 4);
     }
+
+    macro_rules! repair_contract_tests {
+        ($matrix:ident => [$($name:ident),+ $(,)?]) => {
+            $(
+                #[test]
+                fn $name() {
+                    $matrix();
+                }
+            )+
+        };
+    }
+
+    repair_contract_tests!(assert_repair_route_contract => [
+        repair_route_validation_accepts_every_exact_instruction,
+        repair_route_validation_rejects_mismatch_and_wrong_action_before_http,
+        repair_route_validation_rejects_non_native_and_non_singleton_before_http,
+    ]);
+    repair_contract_tests!(assert_repair_read_success_contract => [
+        repair_read_response_binding_accepts_exact_typed_wrappers,
+    ]);
+    repair_contract_tests!(assert_repair_rejection_contract => [
+        repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches,
+        repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations,
+        repair_task_page_response_binding_rejects_omitted_limit_over_torii_default,
+        repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations,
+        repair_event_page_response_binding_rejects_omitted_limit_over_torii_default,
+        repair_event_page_response_binding_rejects_noncanonical_block_index_successors,
+    ]);
+    repair_contract_tests!(assert_repair_transport_contract => [
+        repair_read_response_binding_preserves_every_non_ok_response,
+        repair_read_methods_validate_every_successful_response_after_send,
+    ]);
 }

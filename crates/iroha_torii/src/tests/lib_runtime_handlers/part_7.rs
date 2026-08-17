@@ -5,205 +5,21 @@ fn install_unavailable_local_read_runtime(
 ) {
     Arc::get_mut(app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
         local_peer_id,
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                message,
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        message,
+    )));
 }
 #[tokio::test]
 async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates_on_one_node() {
-    use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind upstream listener");
-    let addr = listener.local_addr().expect("upstream addr");
-    let upstream = axum::Router::new().route(
-        "/search",
-        get(|| async {
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(br#"{"source":"live"}"#.to_vec()))
-                .expect("upstream response")
-        }),
-    );
-    let upstream_task = tokio::spawn(async move {
-        axum::serve(listener, upstream.into_make_service())
-            .await
-            .expect("serve upstream");
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let temp = tempfile::tempdir().expect("tempdir");
-    let listen_base_url = format!("http://{addr}");
-    let live_materialization_dir = temp.path().join("travel-ops-live");
-    let mut world = seed_public_soracloud_world();
-    let seed_bundle = world
-        .view()
-        .soracloud_service_revisions()
-        .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
-        .cloned()
-        .expect("seed bundle");
-    let mut live_bundle = seed_bundle.clone();
-    live_bundle.service.service_name = "travel_ops_live".parse().expect("service");
-    live_bundle.service.service_version = "2026.04.0".to_owned();
-    live_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
-    live_bundle.container.bundle_hash = Hash::new(b"travel-ops-live-update-bundle");
-    live_bundle.container.bundle_path = "/bundles/travel-ops-live-update.to".to_owned();
-    live_bundle.container.entrypoint = "/runtime/bin/launch.sh".to_owned();
-    live_bundle.container.inrou = Some(test_inrou_manifest());
-    live_bundle.service.execution_plane =
-        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-    live_bundle.service.route = Some(iroha_data_model::soracloud::SoraRouteTargetV1 {
-        host: "travel.sora".to_owned(),
-        path_prefix: "/api/v1".to_owned(),
-        service_port: std::num::NonZeroU16::new(8787).expect("port"),
-        visibility: iroha_data_model::soracloud::SoraRouteVisibilityV1::Public,
-        tls_mode: iroha_data_model::soracloud::SoraTlsModeV1::Required,
-    });
-    live_bundle.service.handlers.clear();
-    live_bundle.service.state_bindings.clear();
-    live_bundle.service.container.manifest_hash = live_bundle.container_manifest_hash();
-    let mut vault_bundle = seed_bundle;
-    vault_bundle.service.service_name = "travel_ops_vault".parse().expect("service");
-    vault_bundle.service.service_version = "2026.04.0".to_owned();
-    vault_bundle.container.bundle_hash = Hash::new(b"travel-ops-vault-update-bundle");
-    vault_bundle.container.bundle_path = "/bundles/travel-ops-vault-update.to".to_owned();
-    vault_bundle.service.route = Some(iroha_data_model::soracloud::SoraRouteTargetV1 {
-        host: "travel.sora".to_owned(),
-        path_prefix: "/api".to_owned(),
-        service_port: std::num::NonZeroU16::new(8788).expect("port"),
-        visibility: iroha_data_model::soracloud::SoraRouteVisibilityV1::Public,
-        tls_mode: iroha_data_model::soracloud::SoraTlsModeV1::Required,
-    });
-    vault_bundle.service.handlers = vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
-        handler_name: "preferences_put".parse().expect("handler"),
-        class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
-        entrypoint: "store_user_preferences".to_owned(),
-        route_path: Some("/v1/user/preferences".to_owned()),
-        certified_response: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-        mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
-            queue_name: "private_updates".parse().expect("queue"),
-            max_pending_messages: std::num::NonZeroU32::new(128).expect("pending"),
-            max_message_bytes: std::num::NonZeroU64::new(131_072).expect("bytes"),
-            retention_blocks: std::num::NonZeroU32::new(64).expect("retention"),
-        }),
-    }];
-    vault_bundle.service.container.manifest_hash = vault_bundle.container_manifest_hash();
-    for bundle in [live_bundle.clone(), vault_bundle.clone()] {
-        let service_name = bundle.service.service_name.clone();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
-        world
-            .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                service_name,
-                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 0,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::new(),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: if bundle.service.execution_plane
-                        == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
-                    {
-                        Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
-                            schema_version:
-                                iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
-                            status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                            quota_class: "taira-open".to_owned(),
-                            deployment_deposit: "1".parse().expect("deployment deposit"),
-                            prepaid_runtime_balance: "50".parse().expect("runtime balance"),
-                            runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
-                            storage_price_per_gib_sequence: "0.000025"
-                                .parse()
-                                .expect("storage price"),
-                            egress_price_per_mib: "0.000005".parse().expect("egress price"),
-                            lease_started_sequence: 0,
-                            lease_expires_sequence: 100,
-                            last_billed_sequence: 0,
-                            accounted_egress_bytes: 0,
-                            last_status_reason: None,
-                        })
-                    } else {
-                        None
-                    },
-                    lease_volume_states: Vec::new(),
-                },
-            );
-    }
-    let live_validator_account_id = checked_torii_test_account_id(
-        0x47,
-        "derive hosted live/mailbox split validator fixture key",
-    );
-    let live_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x48,
-            "derive hosted live/mailbox split peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    seed_authoritative_hosted_http_revision(
-        &mut world,
-        &live_bundle,
-        live_bundle.service.replicas.get(),
-        &[(
-            1,
-            live_validator_account_id,
-            live_peer_id.to_string(),
-            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-        )],
-    );
-    let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
-    snapshot.local_peer_id = Some(live_peer_id.to_string());
-    snapshot.services.insert(
-        "travel_ops_live".to_owned(),
-        BTreeMap::from([(
-            "2026.04.0".to_owned(),
-            hosted_http_runtime_plan(
-                &live_materialization_dir,
-                "travel_ops_live",
-                "2026.04.0",
-                iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
-                100,
-                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-                vec![hosted_http_runtime_replica_plan(
-                    &live_materialization_dir,
-                    1,
-                    iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-                    Some(listen_base_url.as_str()),
-                    Some(1),
-                )],
-            ),
-        )]),
-    );
+    let TravelSplitTopologyFixture {
+        world,
+        snapshot,
+        temp,
+        live_peer_id,
+        upstream_task,
+    } = travel_split_topology_fixture(TravelSplitVaultMode::OrderedMailbox).await;
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestMailboxRuntime {
         snapshot,
@@ -259,12 +75,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         .await
         .expect("live response");
     assert_eq!(live_response.status(), StatusCode::OK);
-    let live_body = live_response
-        .into_body()
-        .collect()
-        .await
-        .expect("live body")
-        .to_bytes();
+    let live_body = torii_body_bytes(live_response, "live body").await;
     assert_eq!(live_body.as_ref(), br#"{"source":"live"}"#);
     assert!(
         captured_requests.lock().expect("capture lock").is_empty(),
@@ -285,12 +96,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         .await
         .expect("vault response");
     assert_eq!(vault_response.status(), StatusCode::OK);
-    let vault_body = vault_response
-        .into_body()
-        .collect()
-        .await
-        .expect("vault body")
-        .to_bytes();
+    let vault_body = torii_body_bytes(vault_response, "vault body").await;
     assert_eq!(vault_body.as_ref(), br#"{"status":"queued"}"#);
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
@@ -345,7 +151,6 @@ async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() 
 }
 #[tokio::test]
 async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritative_context() {
-    use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestMailboxRuntime {
@@ -406,25 +211,14 @@ async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritati
     let expected_receipt_id = Hash::new(b"public-mailbox-receipt").to_string();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "content-type"),
         Some("application/json")
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-soracloud-receipt-id")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-soracloud-receipt-id"),
         Some(expected_receipt_id.as_str())
     );
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
+    let body = torii_body_bytes(response, "body").await;
     assert_eq!(body.as_ref(), br#"{"status":"queued"}"#);
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
@@ -591,11 +385,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         );
     let hosted_validator_account_id =
         checked_torii_test_account_id(0x49, "derive hosted SSE validator fixture key");
-    let hosted_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x4a, "derive hosted SSE peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let hosted_peer_id = checked_torii_test_peer_id(0x4a, "derive hosted SSE peer fixture key");
     seed_authoritative_hosted_http_revision(
         &mut world,
         &bundle,
@@ -688,20 +478,17 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             },
         )]),
     );
-    let runtime = TestLocalReadRuntime {
+    let runtime = TestLocalReadRuntime::with_result(
         snapshot,
-        state_dir: temp.path().to_path_buf(),
-        local_peer_id: Some(hosted_peer_id.to_string()),
-        result: Err(
+        temp.path().to_path_buf(),
+        Some(hosted_peer_id.to_string()),
+        Err(
             iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 "hosted HTTP proxy should bypass local-read execution",
             ),
         ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    };
+    );
     let mut app = mk_app_state_for_tests_with_world(world);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.local_peer_id = Some(hosted_peer_id);
@@ -765,10 +552,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "content-type"),
         Some("text/event-stream")
     );
     let mut body = response.into_body();
@@ -1132,22 +916,8 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replic
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let remote_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x4b,
-            "derive hosted HTTP remote snapshot peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x4c,
-            "derive hosted HTTP local snapshot peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let remote_peer_id = checked_torii_test_peer_id(0x4b, "derive hosted HTTP remote snapshot peer fixture key");
+    let local_peer_id = checked_torii_test_peer_id(0x4c, "derive hosted HTTP local snapshot peer fixture key");
     let mut app = seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -1229,19 +999,13 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
-    let local_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x4e,
-        Algorithm::BlsNormal,
-        "derive hosted HTTP local proxy-candidate peer fixture key",
-    );
-    let first_remote_keypair = checked_torii_test_keypair_from_seed_byte(
+    let local_keypair = checked_torii_test_bls_keypair(0x4e, "derive hosted HTTP local proxy-candidate peer fixture key");
+    let first_remote_keypair = checked_torii_test_bls_keypair(
         0x4f,
-        Algorithm::BlsNormal,
         "derive hosted HTTP first remote proxy-candidate peer fixture key",
     );
-    let second_remote_keypair = checked_torii_test_keypair_from_seed_byte(
+    let second_remote_keypair = checked_torii_test_bls_keypair(
         0x50,
-        Algorithm::BlsNormal,
         "derive hosted HTTP second remote proxy-candidate peer fixture key",
     );
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
@@ -1281,16 +1045,8 @@ async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
 #[tokio::test]
 async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let local_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x51,
-        Algorithm::BlsNormal,
-        "derive hosted HTTP local fallback peer fixture key",
-    );
-    let remote_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x52,
-        Algorithm::BlsNormal,
-        "derive hosted HTTP remote fallback peer fixture key",
-    );
+    let local_keypair = checked_torii_test_bls_keypair(0x51, "derive hosted HTTP local fallback peer fixture key");
+    let remote_keypair = checked_torii_test_bls_keypair(0x52, "derive hosted HTTP remote fallback peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
     let mut app = seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
@@ -1409,15 +1165,10 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         .expect("proxy response task should complete");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "content-type"),
         Some("text/plain")
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
+    let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"remote-hosted-http");
 }
 fn sample_generated_hf_infer_request(
@@ -1556,23 +1307,9 @@ fn active_generated_hf_replica_peer_id(
 }
 #[tokio::test]
 async fn resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is_not_primary() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x54,
-            "derive generated-HF primary proxy target fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x54, "derive generated-HF primary proxy target fixture key")
     .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x55,
-            "derive generated-HF local proxy target fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let local_peer_id = checked_torii_test_peer_id(0x55, "derive generated-HF local proxy target fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
@@ -1591,14 +1328,7 @@ async fn resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is
 }
 #[tokio::test]
 async fn resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_primary() {
-    let local_primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x56,
-            "derive generated-HF local primary proxy target fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let local_primary_peer_id = checked_torii_test_peer_id(0x56, "derive generated-HF local primary proxy target fixture key")
     .to_string();
     let (world, service_name, service_version) =
         seed_generated_hf_public_world(&local_primary_peer_id);
@@ -1622,14 +1352,7 @@ async fn resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_pri
 async fn soracloud_proxy_response_completes_pending_request() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"soracloud-proxy-response");
-    let responder_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x57,
-            "derive generated-HF proxy response responder fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let responder_peer_id = checked_torii_test_peer_id(0x57, "derive generated-HF proxy response responder fixture key");
     let response = iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
         response_bytes: b"proxied-body".to_vec(),
         content_type: Some("text/plain".to_owned()),
@@ -1932,16 +1655,8 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
         0x5b,
         "derive authoritative-lane remote validator fixture key",
     );
-    let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5c,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane local peer fixture key",
-    );
-    let remote_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5d,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane remote peer fixture key",
-    );
+    let local_peer_keypair = checked_torii_test_bls_keypair(0x5c, "derive authoritative-lane local peer fixture key");
+    let remote_peer_keypair = checked_torii_test_bls_keypair(0x5d, "derive authoritative-lane remote peer fixture key");
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
@@ -2078,11 +1793,7 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
         0x5e,
         "derive authoritative-lane manifest validator fixture key",
     );
-    let authoritative_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
+    let authoritative_peer_keypair = checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -2352,14 +2063,7 @@ async fn incoming_read_proxy_response_for_route(
     app: SharedAppState,
     route: RoutingDecision,
 ) -> Response {
-    let ingress_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x67,
-            "derive stale-route proxied read ingress peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let ingress_peer_id = checked_torii_test_peer_id(0x67, "derive stale-route proxied read ingress peer fixture key");
     let request = ToriiProxyRequestV6 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"incoming-read-proxy-stale-route"),
@@ -2416,33 +2120,17 @@ async fn incoming_verified_query_proxy_response_for_route(
 fn assert_incoming_proxy_stale_route_rejection(response: &Response, route: RoutingDecision) {
     let expected_lane = route.lane_id.as_u32().to_string();
     let expected_dataspace = route.dataspace_id.as_u64().to_string();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_route_unavailable_response(&response);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-unavailable-reason")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-unavailable-reason"),
         Some("stale_route")
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-lane-id")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-lane-id"),
         Some(expected_lane.as_str())
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-dataspace-id"),
         Some(expected_dataspace.as_str())
     );
 }

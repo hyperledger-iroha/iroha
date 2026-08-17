@@ -12,7 +12,7 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     let (_keypair, signer) = signing_guard_signer(0x6E);
     let validators = vec![signer.clone()];
     let request = full_plan_request(
-        body_for_validator_set(NativeAmxPhase::Prepare, &validators),
+        body_for_validator_set(NativeAmxPhase::Commit, &validators),
         validators,
     );
     let base = request.body;
@@ -82,46 +82,42 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     drop(guard);
     let mut drifts = Vec::new();
     let mut entrypoint = base;
-    entrypoint.phase = NativeAmxPhase::Commit;
+    entrypoint.phase = NativeAmxPhase::Prepare;
     entrypoint.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         Hash::new(b"source-entrypoint-drift"),
     );
     drifts.push(entrypoint);
-    let mut global_view = base;
-    global_view.phase = NativeAmxPhase::Commit;
-    global_view.round.view = global_view.round.view.saturating_add(1);
-    drifts.push(global_view);
     let mut coordinator_route = base;
-    coordinator_route.phase = NativeAmxPhase::Commit;
+    coordinator_route.phase = NativeAmxPhase::Prepare;
     coordinator_route.coordinator_lane_id = LaneId::new(9);
     drifts.push(coordinator_route);
     let mut coordinator_dataspace = base;
-    coordinator_dataspace.phase = NativeAmxPhase::Commit;
+    coordinator_dataspace.phase = NativeAmxPhase::Prepare;
     coordinator_dataspace.coordinator_dataspace_id = DataSpaceId::new(70);
     drifts.push(coordinator_dataspace);
     let mut coordinator_incarnation = base;
-    coordinator_incarnation.phase = NativeAmxPhase::Commit;
+    coordinator_incarnation.phase = NativeAmxPhase::Prepare;
     coordinator_incarnation.coordinator_lane_incarnation =
         Hash::new(b"coordinator-incarnation-drift");
     drifts.push(coordinator_incarnation);
     let mut planned_height = base;
-    planned_height.phase = NativeAmxPhase::Commit;
+    planned_height.phase = NativeAmxPhase::Prepare;
     planned_height.planned_coordinator_block_height = planned_height
         .planned_coordinator_block_height
         .saturating_add(1);
     drifts.push(planned_height);
     let mut coordinator_view = base;
-    coordinator_view.phase = NativeAmxPhase::Commit;
+    coordinator_view.phase = NativeAmxPhase::Prepare;
     coordinator_view.coordinator_lane_block_view = coordinator_view
         .coordinator_lane_block_view
         .saturating_add(1);
     drifts.push(coordinator_view);
     let mut coordinator_proposal = base;
-    coordinator_proposal.phase = NativeAmxPhase::Commit;
+    coordinator_proposal.phase = NativeAmxPhase::Prepare;
     coordinator_proposal.coordinator_proposal_hash = Hash::new(b"coordinator-proposal-drift");
     drifts.push(coordinator_proposal);
     let mut participant_incarnation = base;
-    participant_incarnation.phase = NativeAmxPhase::Commit;
+    participant_incarnation.phase = NativeAmxPhase::Prepare;
     participant_incarnation.participant_lane_incarnation =
         Hash::new(b"participant-incarnation-drift");
     drifts.push(participant_incarnation);
@@ -139,19 +135,19 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
         );
     }
     let mut round_context = base;
-    round_context.phase = NativeAmxPhase::Commit;
+    round_context.phase = NativeAmxPhase::Prepare;
     round_context.round.context_id = another_context(b"source-round-context-drift");
     let mut round_height = base;
-    round_height.phase = NativeAmxPhase::Commit;
+    round_height.phase = NativeAmxPhase::Prepare;
     round_height.round.height = round_height.round.height.saturating_add(1);
     let mut epoch = base;
-    epoch.phase = NativeAmxPhase::Commit;
+    epoch.phase = NativeAmxPhase::Prepare;
     epoch.epoch = epoch.epoch.saturating_add(1);
     let mut chain = base;
-    chain.phase = NativeAmxPhase::Commit;
+    chain.phase = NativeAmxPhase::Prepare;
     chain.network_id = network_id(b"source-foreign-genesis");
     let mut authority_height = base;
-    authority_height.phase = NativeAmxPhase::Commit;
+    authority_height.phase = NativeAmxPhase::Prepare;
     authority_height.authority_context_height =
         authority_height.authority_context_height.saturating_add(1);
     for (label, drift, expected) in [
@@ -220,7 +216,7 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
         .expect("a distinct source owns an independent durable claim");
     assert_eq!(restarted.record_count_for_test(), 3);
     let mut second_source_conflict = second_source;
-    second_source_conflict.phase = NativeAmxPhase::Commit;
+    second_source_conflict.phase = NativeAmxPhase::Prepare;
     second_source_conflict.coordinator_dataspace_id = DataSpaceId::new(71);
     assert_eq!(
         restarted.record_body_for_test(&second_source_conflict),
@@ -234,14 +230,14 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
 fn signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restart() {
     let root = tempfile::tempdir().expect("temp dir");
     let (_keypair, signer) = signing_guard_signer(0x72);
-    let body = body(NativeAmxPhase::Prepare);
+    let body = body(NativeAmxPhase::Commit);
     let guard =
         open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
     guard
         .record_body_for_test(&body)
         .expect("record source-plan claim");
     let mut conflicting_plan = body;
-    conflicting_plan.phase = NativeAmxPhase::Commit;
+    conflicting_plan.phase = NativeAmxPhase::Prepare;
     conflicting_plan.plan_digest = Hash::new(b"conflicting durable native AMX plan");
     assert_eq!(
         guard.record_body_for_test(&conflicting_plan),
@@ -283,7 +279,7 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
     for (seed, slot_conflict) in [(0x94, false), (0x95, true)] {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(seed);
-        let base = body(NativeAmxPhase::Prepare);
+        let base = body(NativeAmxPhase::Commit);
         let guard =
             open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
         guard
@@ -299,9 +295,20 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
             conflicting_tail.participant_settlement_commitment =
                 Hash::new(b"unpublished tail slot settlement conflict");
         } else {
-            // A different phase gives the tail a fresh signing key and slot,
-            // leaving the source-session claim as the only conflict.
-            conflicting_tail.phase = NativeAmxPhase::Commit;
+            // A different participant route gives the tail a fresh signing
+            // key and slot, leaving the source-session claim as the only
+            // conflict.
+            conflicting_tail.participant_lane_id = LaneId::new(3);
+            conflicting_tail.participant_dataspace_id = DataSpaceId::new(9);
+            conflicting_tail.participant_lane_incarnation =
+                Hash::new(b"unpublished tail participant incarnation");
+            conflicting_tail.participant_proposal_hash =
+                Hash::new(b"unpublished tail participant proposal");
+            conflicting_tail.participant_settlement_commitment = conflicting_tail
+                .computed_grouped_participant_settlement_commitment(&[
+                    conflicting_tail.source_id,
+                ])
+                .expect("single-source unpublished tail settlement");
             conflicting_tail.coordinator_proposal_hash =
                 Hash::new(b"unpublished tail source-session conflict");
         }
@@ -349,7 +356,7 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
     fn assert_record_corruption_rejected(seed: u8, oversized: bool) {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(seed);
-        let body = body(NativeAmxPhase::Prepare);
+        let body = body(NativeAmxPhase::Commit);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
         guard
@@ -380,7 +387,7 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
     fn assert_anchor_corruption_rejected(seed: u8, oversized: bool) {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(seed);
-        let body = body(NativeAmxPhase::Prepare);
+        let body = body(NativeAmxPhase::Commit);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
         guard
@@ -415,7 +422,7 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
 fn signing_guard_restart_rejects_duplicate_record_sequence() {
     let root = tempfile::tempdir().expect("temp dir");
     let (_keypair, signer) = signing_guard_signer(0x9A);
-    let base = body(NativeAmxPhase::Prepare);
+    let base = body(NativeAmxPhase::Commit);
     let guard =
         open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
     guard

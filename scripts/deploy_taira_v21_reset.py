@@ -8,10 +8,8 @@ reset manifest, and exact four configs, then authenticates the
 current launchd cohort, disk headroom, and a read-only directory fsync barrier.
 An explicitly authorized reset of an already-degraded testnet may use
 ``--allow-absent-old-child`` only when an exact loaded old supervisor has
-neither a PID file nor any child process. A legacy macOS CPython supervisor may
-use ``--allow-framework-python-argv0-rewrite`` only for its structurally exact
-same-framework Python.app executable rewrite. ``--apply`` additionally requires
-root, re-verifies admission under the deployment lock, atomically consumes its
+neither a PID file nor any child process. ``--apply`` additionally requires root,
+re-verifies admission under the deployment lock, atomically consumes its
 receipt in the canonical protected replay ledger, and installs
 content-addressed root-owned code and validates all four configs before
 mutating the old cohort.  The
@@ -53,7 +51,10 @@ from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
+    from scripts import deploy_taira_v21_reset_authority as deploy_authority
+    from scripts import deploy_taira_v21_reset_health as deploy_health
     from scripts.operator_http_headers import load_operator_context_from_file
+    from scripts import render_taira_validator_bundle as validator_renderer
     from scripts import taira_authority_client
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
@@ -61,7 +62,10 @@ except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
+    import deploy_taira_v21_reset_authority as deploy_authority
+    import deploy_taira_v21_reset_health as deploy_health
     from operator_http_headers import load_operator_context_from_file
+    import render_taira_validator_bundle as validator_renderer
     import taira_authority_client
     import taira_rollout_admission as rollout_admission
     import taira_constants
@@ -69,6 +73,9 @@ except ModuleNotFoundError as error:
 PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
+NETWORK_NAME = taira_constants.NETWORK_NAME
+NETWORK_ID = taira_constants.NETWORK_ID
+PROTOCOL_VERSION = 4
 TAIRA_LANE_COUNT = 7
 UNIVERSAL_DATASPACE_ID = 0
 DPN_DATASPACE_ID = 10
@@ -195,10 +202,18 @@ VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "s
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
+RECEIPT_PUBLIC_PAYLOAD_RE = re.compile(r"(?:02|03)[0-9a-f]{64}")
+LIFECYCLE_NODE_ID_RE = re.compile(
+    r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
+)
 BLOCK_HASH_RE = re.compile(
     r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?"
 )
 TERMINAL_UNHEALTHY_SCHEMA = "taira-terminal-unhealthy-v1"
+LIFECYCLE_STATE_SCHEMA = "iroha.taira.peer-supervisor-lifecycle-state.v1"
+LIFECYCLE_BINDING_DOMAIN = (
+    b"iroha.taira.peer-supervisor-lifecycle-binding.v1\x00"
+)
 INSTALL_ROOT = Path("/Library/SORA/Taira")
 LAUNCH_DAEMONS = Path("/Library/LaunchDaemons")
 DEFAULT_SUPERVISOR_PYTHON = Path("/usr/bin/python3")
@@ -231,8 +246,6 @@ DEPLOY_ISSUANCE_BARRIER = (
     "(or one stronger immutable candidate identity); deployment is disabled for "
     "both dry-run and apply before identity, admission, or path inspection"
 )
-
-
 class DeploymentError(RuntimeError):
     """Raised when an identity, safety, rollout, or rollback gate fails."""
 
@@ -259,6 +272,30 @@ def require_deploy_issuance_contracts() -> None:
         taira_authority_client.preflight("deploy-issuance")
     except taira_authority_client.TairaAuthorityClientError as error:
         raise DeploymentError(f"{DEPLOY_ISSUANCE_BARRIER}: {error}") from error
+
+
+_DEPLOY_AUTHORITY = deploy_authority.DeploymentAuthorityProjection(
+    artifact_factory=taira_authority_client.Artifact,
+    canonical_json_bytes=taira_authority_client.canonical_json_bytes,
+    bounds=deploy_authority.ArtifactBounds(
+        binary=MAX_BINARY_BYTES,
+        config=MAX_CONFIG_BYTES,
+        manifest=MAX_MANIFEST_BYTES,
+        supervisor=4 * 1024 * 1024,
+        kagemusha_policy=MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
+        kagemusha_qualification_seal=MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
+        kagemusha_manifest=MAX_KAGEMUSHA_MANIFEST_BYTES,
+        kagemusha_manifest_sidecar=MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES,
+    ),
+    contracts=deploy_authority.AuthorityContracts(
+        complete_source=COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+        run_assignment=DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
+        lease_authorization=DEPLOY_AUTHORIZATION_LEASE_CONTRACT,
+        result_binding=DEPLOY_RESULT_BINDING_CONTRACT,
+    ),
+    qualified_handoff_manifest=boi_handoff.QUALIFIED_HANDOFF_MANIFEST,
+    qualified_handoff_maximum=boi_handoff.MAX_HANDOFF_MANIFEST_BYTES,
+)
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -594,7 +631,11 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "chain_discriminant": "integer",
     },
     ("network",): {"address": "string"},
-    ("torii",): {"address": "string"},
+    ("torii",): {
+        "address": "string",
+        "receipt_public_key": "string",
+        "receipt_private_key": "string",
+    },
     ("nexus", "storage"): {"local_budget_bytes": "integer"},
     ("nexus", "storage", "disk_budget_weights"): {
         "kura_blocks_bps": "integer",
@@ -957,6 +998,80 @@ class KagemushaExternalPathIdentity:
 
 
 @dataclasses.dataclass(frozen=True)
+class ReceiptSignerPlan:
+    """One secret-free receipt signer bound to a canonical validator slug."""
+
+    slug: str
+    node_id: str
+    public_key: str
+
+
+def require_receipt_signer_map(
+    value: object,
+    label: str,
+) -> tuple[ReceiptSignerPlan, ...]:
+    """Validate the exact ordered public receipt-signer projection."""
+
+    if not isinstance(value, dict) or list(value) != list(SLUGS):
+        fail(f"{label} must bind the exact ordered four validator slugs")
+    result: list[ReceiptSignerPlan] = []
+    seen_nodes: set[str] = set()
+    seen_keys: set[str] = set()
+    for slug in SLUGS:
+        row = value.get(slug)
+        if not isinstance(row, dict) or set(row) != {"node_id", "public_key"}:
+            fail(f"{label} row for {slug} is not schema-exact")
+        public = row.get("public_key")
+        if (
+            not isinstance(public, dict)
+            or set(public) != {"algorithm", "payload_hex"}
+            or public.get("algorithm") != "secp256k1"
+            or not isinstance(public.get("payload_hex"), str)
+            or RECEIPT_PUBLIC_PAYLOAD_RE.fullmatch(public["payload_hex"]) is None
+        ):
+            fail(f"{label} row for {slug} has a noncanonical receipt public key")
+        canonical_key = (
+            validator_renderer.RECEIPT_PUBLIC_KEY_PREFIX
+            + public["payload_hex"].upper()
+        )
+        try:
+            derived_node_id = validator_renderer.receipt_node_id(canonical_key)
+        except ValueError as error:
+            raise DeploymentError(
+                f"{label} row for {slug} has an invalid receipt public key"
+            ) from error
+        if row.get("node_id") != derived_node_id:
+            fail(f"{label} row for {slug} node ID is not derived from its receipt key")
+        if derived_node_id in seen_nodes or canonical_key in seen_keys:
+            fail(f"{label} aliases receipt signer identities")
+        seen_nodes.add(derived_node_id)
+        seen_keys.add(canonical_key)
+        result.append(ReceiptSignerPlan(slug, derived_node_id, canonical_key))
+    return tuple(result)
+
+
+def receipt_signer_public_map(
+    signers: Sequence[ReceiptSignerPlan],
+) -> dict[str, dict[str, object]]:
+    """Serialize an already verified signer plan without private material."""
+
+    if tuple(row.slug for row in signers) != SLUGS:
+        fail("receipt signer plan is not the exact ordered validator set")
+    return {
+        row.slug: {
+            "node_id": row.node_id,
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": row.public_key[
+                    len(validator_renderer.RECEIPT_PUBLIC_KEY_PREFIX) :
+                ].lower(),
+            },
+        }
+        for row in signers
+    }
+
+
+@dataclasses.dataclass(frozen=True)
 class KagemushaExternalReleasePlan:
     """Bounded external Kagemusha inputs observed without reading proving keys."""
 
@@ -988,6 +1103,7 @@ class BundlePlan:
     manifest_sha256: str
     manifest_identity: tuple[int, ...]
     signed_genesis_identity: tuple[int, ...]
+    receipt_signers: tuple[ReceiptSignerPlan, ...]
     peers: tuple[PeerPlan, ...]
     bundle_bytes: int
     free_bytes: int
@@ -1517,6 +1633,7 @@ def validate_config_projection(
     p2p_port: int,
     genesis_public_key: str,
     genesis_expected_hash: str,
+    receipt_signer: ReceiptSignerPlan,
     kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
@@ -1541,6 +1658,26 @@ def validate_config_projection(
         fail(f"validator config P2P port is not exact {p2p_port}")
     if address_port(torii.get("address"), "torii.address") != torii_port:
         fail(f"validator config Torii port is not exact {torii_port}")
+    receipt_public_key = torii.get("receipt_public_key")
+    receipt_private_key = torii.get("receipt_private_key")
+    if (
+        not isinstance(receipt_public_key, str)
+        or not isinstance(receipt_private_key, str)
+    ):
+        fail("validator config lacks its explicit Torii receipt keypair")
+    try:
+        node_id = validator_renderer.validate_receipt_keypair(
+            receipt_public_key,
+            receipt_private_key,
+            "validator config",
+        )
+    except ValueError as error:
+        raise DeploymentError("validator config Torii receipt keypair is invalid") from error
+    if (
+        receipt_signer.public_key != receipt_public_key
+        or receipt_signer.node_id != node_id
+    ):
+        fail("validator config Torii receipt signer differs from the reset manifest")
     storage = nexus.get("storage")
     if (
         not isinstance(storage, dict)
@@ -1730,6 +1867,10 @@ def validate_bundle(
         slug: EMPTY_TREE_SHA256 for slug in SLUGS
     }:
         fail("reset manifest does not seal four empty storage trees")
+    receipt_signers = require_receipt_signer_map(
+        manifest.get("receipt_signers"),
+        "reset manifest receipt signer map",
+    )
     peers: list[PeerPlan] = []
     peer_columns = (SLUGS, LABELS, TORII_PORTS, P2P_PORTS)
     if any(len(column) != PEER_COUNT for column in peer_columns):
@@ -1764,6 +1905,7 @@ def validate_bundle(
             p2p_port=p2p_port,
             genesis_public_key=genesis_public_key,
             genesis_expected_hash=genesis_expected_hash,
+            receipt_signer=receipt_signers[index - 1],
             kagemusha_offline_projection=kagemusha_offline_projection,
         )
         peers.append(
@@ -1814,6 +1956,7 @@ def validate_bundle(
         manifest_sha256=manifest_sha256,
         manifest_identity=metadata_identity(manifest_info),
         signed_genesis_identity=metadata_identity(signed_genesis_info),
+        receipt_signers=receipt_signers,
         peers=tuple(peers),
         bundle_bytes=bundle_bytes,
         free_bytes=free_bytes,
@@ -1909,6 +2052,7 @@ class AdmissionPlan:
     binary_sha256: str
     supervisor_sha256: str
     validator_config_sha256: tuple[tuple[str, str], ...]
+    receipt_signers: tuple[ReceiptSignerPlan, ...]
     restart_generation: str
     signer_fingerprint_sha256: str
     release_manifest_verifier_sha256: str
@@ -2170,6 +2314,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         "receipt_id",
         "release_manifest_sha256",
         "release_manifest_verifier_sha256",
+        "receipt_signers",
         "reset_manifest_sha256",
         "restart_generation",
         "schema",
@@ -2207,6 +2352,10 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     config_digests = tuple(
         (slug, require_sha256(raw_configs[slug], f"verified {slug} config SHA-256"))
         for slug in SLUGS
+    )
+    receipt_signers = require_receipt_signer_map(
+        result["receipt_signers"],
+        "rollout admission receipt signer map",
     )
     try:
         if rollout_admission.scan_inventory_paths(authority_dir) != list(
@@ -2320,6 +2469,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
             result["supervisor_sha256"], "verified supervisor SHA-256"
         ),
         validator_config_sha256=config_digests,
+        receipt_signers=receipt_signers,
         restart_generation=require_sha256(
             result["restart_generation"], "verified restart generation"
         ),
@@ -2379,8 +2529,12 @@ def require_inputs_match_admission(
         or bundle.manifest.get("source_commit") != admission.source_commit
         or bundle.manifest.get("dpn_validator_release_commit")
         != admission.dpn_validator_release_commit
+        or bundle.receipt_signers != admission.receipt_signers
     ):
-        fail("deployment executable inputs do not match the verified qualification receipt")
+        fail(
+            "deployment executable or receipt-signer inputs do not match the "
+            "verified qualification receipt"
+        )
 
 
 def require_admission_bound_inputs_unchanged(
@@ -2669,82 +2823,6 @@ def required_option(argv: tuple[str, ...], option: str, label: str) -> str:
     return argv[indices[0] + 1]
 
 
-def framework_python_argv0_rewrite_matches(
-    plist_argv: tuple[str, ...],
-    runtime_argv: tuple[str, ...],
-    *,
-    owner_uid: int,
-) -> bool:
-    """Authenticate CPython's same-framework launcher-to-Python.app rewrite."""
-
-    if (
-        len(plist_argv) != len(runtime_argv)
-        or not plist_argv
-        or plist_argv[1:] != runtime_argv[1:]
-        or not Path(plist_argv[0]).is_absolute()
-        or not Path(runtime_argv[0]).is_absolute()
-    ):
-        return False
-    launcher = Path(plist_argv[0])
-    try:
-        resolved_launcher_before = launcher.resolve(strict=True)
-        canonical_path(resolved_launcher_before, "old supervisor Python launcher")
-        launcher_before = resolved_launcher_before.lstat()
-    except (OSError, DeploymentError):
-        return False
-    launcher_name = re.fullmatch(
-        r"python3(?:\.([0-9]+))?", resolved_launcher_before.name
-    )
-    if (
-        resolved_launcher_before.parent.name != "bin"
-        or launcher_name is None
-        or not stat.S_ISREG(launcher_before.st_mode)
-        or launcher_before.st_nlink != 1
-        or not launcher_before.st_mode & 0o111
-        or stat.S_IMODE(launcher_before.st_mode) & 0o022
-        or launcher_before.st_uid != owner_uid
-    ):
-        return False
-    version_root = resolved_launcher_before.parent.parent
-    minor = launcher_name.group(1)
-    if (
-        version_root.parent.name != "Versions"
-        or version_root.parent.parent.name not in {"Python.framework", "Python3.framework"}
-        or version_root.parent.parent.parent.name != "Frameworks"
-        or (minor is not None and version_root.name != f"3.{minor}")
-    ):
-        return False
-    expected_runtime = (
-        version_root / "Resources/Python.app/Contents/MacOS/Python"
-    )
-    try:
-        expected_runtime = canonical_path(
-            expected_runtime, "old supervisor Python runtime"
-        )
-        runtime_before = expected_runtime.lstat()
-        resolved_launcher_after = launcher.resolve(strict=True)
-        launcher_after = resolved_launcher_after.lstat()
-        runtime_after = expected_runtime.lstat()
-    except (OSError, DeploymentError):
-        return False
-    if (
-        str(expected_runtime) != runtime_argv[0]
-        or resolved_launcher_after != resolved_launcher_before
-        or metadata_identity(launcher_before) != metadata_identity(launcher_after)
-        or metadata_identity(runtime_before) != metadata_identity(runtime_after)
-        or not stat.S_ISREG(runtime_before.st_mode)
-        or runtime_before.st_nlink != 1
-        or not runtime_before.st_mode & 0o111
-        or stat.S_IMODE(runtime_before.st_mode) & 0o022
-        or runtime_before.st_dev != launcher_before.st_dev
-        or runtime_before.st_uid != launcher_before.st_uid
-        or runtime_before.st_gid != launcher_before.st_gid
-        or runtime_before.st_uid != owner_uid
-    ):
-        return False
-    return True
-
-
 def inspect_old_managed_identity(
     payload: dict[str, Any],
     label: str,
@@ -2752,7 +2830,6 @@ def inspect_old_managed_identity(
     ops: SystemOps,
     *,
     allow_absent_child: bool = False,
-    allow_framework_python_argv0_rewrite: bool = False,
 ) -> OldManagedIdentity:
     """Authenticate one old launchd supervisor and its exact managed child."""
 
@@ -2778,17 +2855,7 @@ def inspect_old_managed_identity(
     if (
         supervisor.ppid != 1
         or supervisor.uid != uid
-        or (
-            supervisor.argv != plist_supervisor_argv
-            and not (
-                allow_framework_python_argv0_rewrite
-                and framework_python_argv0_rewrite_matches(
-                    plist_supervisor_argv,
-                    supervisor.argv,
-                    owner_uid=uid,
-                )
-            )
-        )
+        or supervisor.argv != plist_supervisor_argv
     ):
         fail(f"old LaunchDaemon supervisor identity differs from its plist: {label}")
     pid_file = Path(required_option(plist_supervisor_argv, "--pid-file", label))
@@ -2905,7 +2972,6 @@ def capture_old_cohort(
     ops: SystemOps,
     *,
     allow_absent_child: bool = False,
-    allow_framework_python_argv0_rewrite: bool = False,
 ) -> tuple[PlistSnapshot, ...]:
     """Read the exact four old plists and require all four jobs loaded."""
 
@@ -2930,9 +2996,6 @@ def capture_old_cohort(
             supervisor_pid,
             ops,
             allow_absent_child=allow_absent_child,
-            allow_framework_python_argv0_rewrite=(
-                allow_framework_python_argv0_rewrite
-            ),
         )
         if launchd_pid(ops.launchd_print(label), label) != supervisor_pid:
             fail(f"old LaunchDaemon supervisor changed during capture: {label}")
@@ -3321,10 +3384,20 @@ def render_plist(
     installed_supervisor: Path,
     runtime_root: Path,
     restart_generation: str,
+    lifecycle_journal_root: Path,
+    authenticated_node_id: str,
 ) -> bytes:
-    """Render one fresh known-argument LaunchDaemon with all five stat fields."""
+    """Render one fresh LaunchDaemon bound to authenticated lifecycle identity."""
 
     pid_file = runtime_root / "pids" / f"validator-{peer.number}.pid"
+    expected_lifecycle_root = runtime_root / "lifecycle" / peer.slug
+    if (
+        not runtime_root.is_absolute()
+        or ".." in runtime_root.parts
+        or lifecycle_journal_root != expected_lifecycle_root
+        or LIFECYCLE_NODE_ID_RE.fullmatch(authenticated_node_id) is None
+    ):
+        fail("lifecycle journal path or authenticated node ID is not canonical")
     terminal_binding = supervisor_terminal_binding(
         sources.binary_sha256,
         binary_info,
@@ -3374,6 +3447,12 @@ def render_plist(
         str(terminal_file),
         "--restart-generation",
         restart_generation,
+        "--lifecycle-journal-root",
+        str(lifecycle_journal_root),
+        "--validator-id",
+        peer.slug,
+        "--node-id",
+        authenticated_node_id,
         "--initial-backoff-seconds",
         "1.0",
         "--maximum-backoff-seconds",
@@ -3549,750 +3628,79 @@ def validate_dry_run_kagemusha_exact_config(
         or metadata_identity(installed_info) != metadata_identity(hashed_info)
     ):
         fail("installed dry-run candidate does not match the admitted binary")
-    require_kagemusha_external_release_unchanged(
+    require_mutable_bundle_identities(
         bundle,
         phase="before exact dry-run config validation",
     )
     checker(installed_binary, bundle)
-    require_kagemusha_external_release_unchanged(
+    require_mutable_bundle_identities(
         bundle,
         phase="after exact dry-run config validation",
     )
     return True
 
 
-def http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
-    """Fetch one bounded JSON response without retaining error bodies."""
-
-    request = urllib.request.Request(
-        url,
-        method="GET",
-        headers={"Accept": "application/json", "User-Agent": "taira-v21-reset/1"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                fail(f"health endpoint returned HTTP {response.status}: {url}")
-            body = response.read(MAX_HTTP_BYTES + 1)
-    except (OSError, urllib.error.URLError, TimeoutError) as error:
-        raise DeploymentError(f"health endpoint is unavailable: {url}") from error
-    if len(body) > MAX_HTTP_BYTES:
-        fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
-    return parse_json_bytes(body, f"health response from {url}")
-
-
-def http_ok(url: str, timeout: float = 2.0) -> None:
-    """Require one bounded HTTP 200 response without parsing or retaining its body."""
-
-    request = urllib.request.Request(
-        url,
-        method="GET",
-        headers={"Accept": "*/*", "User-Agent": "taira-v21-reset/1"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                fail(f"health endpoint returned HTTP {response.status}: {url}")
-            body = response.read(MAX_HTTP_BYTES + 1)
-    except (OSError, urllib.error.URLError, TimeoutError) as error:
-        raise DeploymentError(f"health endpoint is unavailable: {url}") from error
-    if len(body) > MAX_HTTP_BYTES:
-        fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
-
-
-class _RejectRedirects(urllib.request.HTTPRedirectHandler):
-    """Prevent replay of a fresh operator signature at a redirected target."""
-
-    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        del request, file_pointer, code, message, headers, new_url
-        return None
-
-
-def build_operator_http_getter(network_id: str, private_key_file: Path) -> HttpGetter:
-    """Build a token-free, no-redirect getter with a fresh signature per request."""
-
-    context = load_operator_context_from_file(network_id, private_key_file)
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        _RejectRedirects(),
-    )
-
-    def operator_http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
-        parsed = urllib.parse.urlsplit(url)
-        if parsed.path != "/v1/sumeragi/status":
-            return http_json(url, timeout)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.fragment
-        ):
-            fail("operator endpoint must be an absolute credential-free HTTP(S) URL")
-        target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-        headers = context.headers("GET", target, b"")
-        headers.update(
-            {"Accept": "application/json", "User-Agent": "taira-v21-reset/1"}
+deploy_health.configure_runtime(
+    deployment_error=DeploymentError,
+    fail_callback=fail,
+    parse_json=parse_json_bytes,
+    load_operator_context=(
+        lambda network_id, private_key_file: load_operator_context_from_file(
+            network_id, private_key_file
         )
-        request = urllib.request.Request(url, method="GET", headers=headers)
-        try:
-            with opener.open(request, timeout=timeout) as response:
-                if response.status != 200:
-                    fail(f"operator endpoint returned HTTP {response.status}: {url}")
-                body = response.read(MAX_HTTP_BYTES + 1)
-        except (OSError, urllib.error.URLError, TimeoutError) as error:
-            raise DeploymentError(f"operator endpoint is unavailable: {url}") from error
-        if len(body) > MAX_HTTP_BYTES:
-            fail(f"operator endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
-        return parse_json_bytes(body, f"operator response from {url}")
+    ),
+    require_acl_free=require_acl_free_path,
+    metadata_identity_callback=metadata_identity,
+    require_lifecycle_node_ids=(
+        lambda bundle: require_authenticated_lifecycle_node_ids(bundle)
+    ),
+    receipt_signer_map=receipt_signer_public_map,
+    max_http_bytes=MAX_HTTP_BYTES,
+    max_terminal_unhealthy_bytes=MAX_TERMINAL_UNHEALTHY_BYTES,
+    block_hash_re=BLOCK_HASH_RE,
+    commit_re=COMMIT_RE,
+    sha256_re=SHA256_RE,
+    lifecycle_node_id_re=LIFECYCLE_NODE_ID_RE,
+    peer_count=PEER_COUNT,
+    slugs=SLUGS,
+    lane_count=TAIRA_LANE_COUNT,
+    lane_dataspace_bindings=TAIRA_LANE_DATASPACE_BINDINGS,
+    physical_dataspaces=TAIRA_PHYSICAL_DATASPACES,
+    terminal_unhealthy_schema=TERMINAL_UNHEALTHY_SCHEMA,
+    lifecycle_state_schema=LIFECYCLE_STATE_SCHEMA,
+    lifecycle_binding_domain=LIFECYCLE_BINDING_DOMAIN,
+)
 
-    return operator_http_json
-
-
-def require_uint(value: object, label: str, *, positive: bool = False) -> int:
-    """Require one non-boolean unsigned JSON integer."""
-
-    if not isinstance(value, int) or isinstance(value, bool) or value < int(positive):
-        fail(f"{label} is not a valid unsigned integer")
-    return value
-
-
-def normalized_block_hash(value: object, label: str) -> str:
-    """Normalize a canonical Iroha block hash to lowercase hexadecimal."""
-
-    if not isinstance(value, str):
-        fail(f"{label} is not a block hash")
-    match = BLOCK_HASH_RE.fullmatch(value)
-    if match is None:
-        fail(f"{label} is not a canonical block hash")
-    return match.group(1).lower()
-
-
-def nested(payload: dict[str, Any], *keys: str) -> object:
-    """Return a nested mapping value, or ``None`` on a missing object."""
-
-    current: object = payload
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def tagged_unit(value: object, key: str, label: str, allowed: set[str]) -> str:
-    """Decode one canonical tagged-unit status value."""
-
-    if (
-        not isinstance(value, dict)
-        or set(value) != {key, "details"}
-        or not isinstance(value.get(key), str)
-        or value.get(key) not in allowed
-        or value.get("details") is not None
-    ):
-        fail(f"{label} is not a canonical tagged unit")
-    tag = value[key]
-    assert isinstance(tag, str)
-    return tag
-
-
-def published_source_commit(status: dict[str, Any]) -> str:
-    """Read the exact full build commit from public node status."""
-
-    build = status.get("build")
-    if not isinstance(build, dict):
-        fail("/status omitted its build identity")
-    for key in ("git_commit_sha", "git_sha", "commit_sha", "commit"):
-        value = build.get(key)
-        if isinstance(value, str) and COMMIT_RE.fullmatch(value.lower()):
-            return value.lower()
-    fail("/status omitted one full build Git commit")
-
-
-def published_dpn_validator_release_commit(status: dict[str, Any]) -> str:
-    """Read the exact DPN validator release commit from public node status."""
-
-    build = status.get("build")
-    if not isinstance(build, dict):
-        fail("/status omitted its build identity")
-    value = build.get("dpn_validator_release_commit")
-    if not isinstance(value, str) or COMMIT_RE.fullmatch(value) is None:
-        fail("/status omitted one full DPN validator release commit")
-    return value
-
-
-@dataclasses.dataclass(frozen=True)
-class PeerSample:
-    """Coherent commit and lane/dataspace topology observed from one validator."""
-
-    label: str
-    height: int
-    block_hash: str
-    context: str
-    node: str
-    build: str
-    config: str
-    nexus_topology: str
-
-
-@dataclasses.dataclass(frozen=True)
-class FleetSample:
-    """One exact four-validator common-commit sample."""
-
-    height: int
-    block_hash: str
-    context: str
-    build: str
-    config: str
-    nexus_topology: str
-    nodes: tuple[str, ...]
-
-
-@dataclasses.dataclass(frozen=True)
-class RestartProofResult:
-    """Validated post-restart fleet state and bounded measured recovery time."""
-
-    fleet: FleetSample
-    duration_ms: int
-
-
-HttpGetter = Callable[[str, float], dict[str, Any]]
-HealthGetter = Callable[[str, float], None]
-TerminalChecker = Callable[[], None]
-
-
-def no_terminal_check() -> None:
-    """Default no-op for focused read-path tests without a runtime layout."""
-
-
-def supervisor_terminal_binding(
-    binary_sha256: str,
-    binary_info: os.stat_result,
-    config_sha256: str,
-    restart_generation: str,
-) -> str:
-    """Reproduce the supervisor's redaction-safe runtime binding."""
-
-    payload = {
-        "binary_sha256": binary_sha256,
-        "binary_stat_seal": [
-            binary_info.st_dev,
-            binary_info.st_ino,
-            binary_info.st_size,
-            binary_info.st_mtime_ns,
-            binary_info.st_ctime_ns,
-        ],
-        "config_sha256": config_sha256,
-        "restart_generation": restart_generation,
-        "schema": TERMINAL_UNHEALTHY_SCHEMA,
-    }
-    return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("ascii")
-    ).hexdigest()
-
-
-def terminal_unhealthy_path(runtime_root: Path, peer: PeerPlan, binding: str) -> Path:
-    """Return the identity-scoped private marker for one peer supervisor."""
-
-    return (
-        runtime_root
-        / "terminal"
-        / f"validator-{peer.number}-{binding}-terminal-unhealthy.json"
-    )
-
-
-def require_terminal_marker(
-    path: Path,
-    peer: PeerPlan,
-    owner_uid: int,
-    owner_gid: int,
-    expected_binding: str,
-) -> None:
-    """Authenticate one marker and raise a redaction-safe terminal error."""
-
-    try:
-        before = require_acl_free_path(path, "terminal-unhealthy marker")
-    except FileNotFoundError:
-        return
-    except (DeploymentError, OSError) as error:
-        raise DeploymentError(
-            f"{peer.label} terminal-unhealthy marker is unsafe"
-        ) from error
-    if (
-        stat.S_ISLNK(before.st_mode)
-        or not stat.S_ISREG(before.st_mode)
-        or before.st_uid != owner_uid
-        or before.st_gid != owner_gid
-        or before.st_nlink != 1
-        or stat.S_IMODE(before.st_mode) != 0o600
-        or not 0 < before.st_size <= MAX_TERMINAL_UNHEALTHY_BYTES
-    ):
-        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
-    try:
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
-        )
-    except OSError as error:
-        raise DeploymentError(
-            f"{peer.label} terminal-unhealthy marker is unsafe"
-        ) from error
-    try:
-        body = bytearray()
-        while len(body) <= MAX_TERMINAL_UNHEALTHY_BYTES:
-            chunk = os.read(
-                descriptor,
-                min(
-                    256,
-                    MAX_TERMINAL_UNHEALTHY_BYTES + 1 - len(body),
-                ),
-            )
-            if not chunk:
-                break
-            body.extend(chunk)
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    if (
-        metadata_identity(before) != metadata_identity(after)
-        or len(body) > MAX_TERMINAL_UNHEALTHY_BYTES
-    ):
-        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
-    try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise DeploymentError(
-            f"{peer.label} terminal-unhealthy marker is unsafe"
-        ) from error
-    if (
-        not isinstance(payload, dict)
-        or set(payload)
-        != {
-            "binding_sha256",
-            "fatal_fingerprint_sha256",
-            "hit_count",
-            "schema",
-        }
-        or payload.get("schema") != TERMINAL_UNHEALTHY_SCHEMA
-        or payload.get("hit_count") != 3
-        or not isinstance(payload.get("binding_sha256"), str)
-        or SHA256_RE.fullmatch(payload["binding_sha256"]) is None
-        or not isinstance(payload.get("fatal_fingerprint_sha256"), str)
-        or SHA256_RE.fullmatch(payload["fatal_fingerprint_sha256"]) is None
-        or payload.get("binding_sha256") != expected_binding
-        or (
-            json.dumps(
-                payload,
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\n"
-        ).encode("ascii")
-        != body
-    ):
-        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
-    fail(f"{peer.label} entered terminal-unhealthy state")
-
-
-def require_no_terminal_unhealthy(
-    bundle: BundlePlan,
-    runtime_root: Path,
-    bindings: dict[str, str],
-) -> None:
-    """Fail fast when any supervisor has durably stopped respawning."""
-
-    for peer in bundle.peers:
-        binding = bindings.get(peer.label)
-        if binding is None or SHA256_RE.fullmatch(binding) is None:
-            fail("terminal-unhealthy binding map is incomplete")
-        require_terminal_marker(
-            terminal_unhealthy_path(runtime_root, peer, binding),
-            peer,
-            bundle.owner_uid,
-            bundle.owner_gid,
-            binding,
-        )
-
-
-def validate_peer_health(
-    peer: PeerPlan,
-    bundle: BundlePlan,
-    expected_source_commit: str,
-    expected_dpn_validator_release_commit: str,
-    *,
-    getter: HttpGetter = http_json,
-    health_getter: HealthGetter = http_ok,
-) -> PeerSample:
-    """Validate readiness, exact lane/dataspace topology, and durable consensus."""
-
-    root = f"http://127.0.0.1:{peer.torii_port}"
-    health_getter(f"{root}/health", 2.0)
-    health_getter(f"{root}/readyz", 2.0)
-
-    lifecycle = getter(f"{root}/v1/nexus/lifecycle", 2.0)
-    lanes = lifecycle.get("lanes")
-    if lifecycle.get("version") != 1 or lifecycle.get("nexus_enabled") is not True:
-        fail(f"{peer.label} Nexus lifecycle identity is invalid")
-    lane_count = lifecycle.get("lane_count")
-    if (
-        not isinstance(lane_count, int)
-        or isinstance(lane_count, bool)
-        or lane_count != TAIRA_LANE_COUNT
-    ):
-        fail(f"{peer.label} Nexus lifecycle lane_count is not exactly 7")
-    if not isinstance(lanes, list):
-        fail(f"{peer.label} Nexus lifecycle omitted its lane catalog")
-    if len(lanes) != TAIRA_LANE_COUNT:
-        fail(f"{peer.label} Nexus lifecycle does not contain exactly seven lanes")
-    expected_lane_records = [
-        {"id": lane_id, "alias": lane_alias, "dataspace_id": dataspace_id}
-        for lane_id, lane_alias, _dataspace_alias, dataspace_id in (
-            TAIRA_LANE_DATASPACE_BINDINGS
-        )
-    ]
-    observed_lane_records: list[dict[str, int | str]] = []
-    seen_lane_ids: set[int] = set()
-    seen_lane_aliases: set[str] = set()
-    for position, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
-            fail(f"{peer.label} Nexus lifecycle lane {position} is malformed")
-        lane_id = lane.get("id")
-        alias = lane.get("alias")
-        dataspace_id = lane.get("dataspace_id")
-        if not isinstance(lane_id, int) or isinstance(lane_id, bool) or lane_id < 0:
-            fail(f"{peer.label} Nexus lifecycle lane {position} has an invalid id")
-        if not isinstance(alias, str) or not alias:
-            fail(f"{peer.label} Nexus lifecycle lane {position} has an invalid alias")
-        if (
-            not isinstance(dataspace_id, int)
-            or isinstance(dataspace_id, bool)
-            or dataspace_id < 0
-        ):
-            fail(
-                f"{peer.label} Nexus lifecycle lane {position} has an invalid dataspace id"
-            )
-        if lane_id in seen_lane_ids or alias in seen_lane_aliases:
-            fail(f"{peer.label} Nexus lifecycle duplicates a lane id or alias")
-        seen_lane_ids.add(lane_id)
-        seen_lane_aliases.add(alias)
-        observed_lane_records.append(
-            {"id": lane_id, "alias": alias, "dataspace_id": dataspace_id}
-        )
-    if observed_lane_records != expected_lane_records:
-        fail(
-            f"{peer.label} does not expose the exact canonical "
-            "seven-lane/five-dataspace topology"
-        )
-    observed_dataspace_ids = {
-        record["dataspace_id"] for record in observed_lane_records
-    }
-    expected_dataspace_ids = {
-        dataspace_id for _alias, dataspace_id in TAIRA_PHYSICAL_DATASPACES
-    }
-    if observed_dataspace_ids != expected_dataspace_ids:
-        fail(f"{peer.label} does not expose exactly five physical dataspaces")
-    catalog_hash = lifecycle.get("catalog_hash")
-    if not isinstance(catalog_hash, str) or BLOCK_HASH_RE.fullmatch(catalog_hash) is None:
-        fail(f"{peer.label} Nexus lifecycle omitted a canonical catalog identity")
-
-    canonical_lane_binding_evidence = [
-        {
-            "lane_id": lane_id,
-            "lane_alias": lane_alias,
-            "dataspace_id": dataspace_id,
-            "dataspace_alias": dataspace_alias,
-        }
-        for lane_id, lane_alias, dataspace_alias, dataspace_id in (
-            TAIRA_LANE_DATASPACE_BINDINGS
-        )
-    ]
-    canonical_physical_dataspace_evidence = [
-        {"dataspace_id": dataspace_id, "dataspace_alias": dataspace_alias}
-        for dataspace_alias, dataspace_id in TAIRA_PHYSICAL_DATASPACES
-    ]
-
-    status = getter(f"{root}/status", 2.0)
-    blocks = require_uint(
-        status.get("blocks"), f"{peer.label} /status.blocks", positive=True
-    )
-    if published_source_commit(status) != expected_source_commit:
-        fail(f"{peer.label} publishes the wrong build source commit")
-    if (
-        published_dpn_validator_release_commit(status)
-        != expected_dpn_validator_release_commit
-    ):
-        fail(f"{peer.label} publishes the wrong DPN validator release commit")
-
-    sumeragi = getter(f"{root}/v1/sumeragi/status", 2.0)
-    if (
-        sumeragi.get("protocol_version") != 4
-        or sumeragi.get("restart_required") is not False
-    ):
-        fail(f"{peer.label} is not running one restart-clean Sumeragi v2 reducer")
-    reducer_height = require_uint(
-        sumeragi.get("height"), f"{peer.label} reducer height", positive=True
-    )
-    committed = require_uint(
-        sumeragi.get("last_committed_height"),
-        f"{peer.label} last_committed_height",
-        positive=True,
-    )
-    if committed != blocks:
-        fail(f"{peer.label} /status.blocks differs from durable committed height")
-    if committed > reducer_height:
-        fail(f"{peer.label} committed height is ahead of its reducer height")
-    context_record = sumeragi.get("height_context")
-    if not isinstance(context_record, dict):
-        fail(f"{peer.label} omitted its frozen height context")
-    validator_count = require_uint(
-        context_record.get("validator_count"),
-        f"{peer.label} frozen validator count",
-        positive=True,
-    )
-    quorum = context_record.get("quorum")
-    if not isinstance(quorum, dict):
-        fail(f"{peer.label} omitted its frozen quorum")
-    context_min_signers = require_uint(
-        quorum.get("min_signers"), f"{peer.label} frozen minimum signers"
-    )
-    context_total_power = require_uint(
-        quorum.get("total_power"), f"{peer.label} frozen total power", positive=True
-    )
-    mode = tagged_unit(
-        context_record.get("mode"),
-        "mode",
-        f"{peer.label} consensus mode",
-        {"permissioned", "npos"},
-    )
-    if (
-        validator_count != PEER_COUNT
-        or context_min_signers != 3
-        or context_total_power < PEER_COUNT
-        or (mode == "permissioned" and context_total_power != PEER_COUNT)
-    ):
-        fail(f"{peer.label} frozen context is not the exact four-validator quorum")
-    subject = sumeragi.get("last_committed_subject")
-    if not isinstance(subject, dict):
-        fail(f"{peer.label} omitted the durable committed subject")
-    block_hash = normalized_block_hash(
-        subject.get("block_hash"), f"{peer.label} committed block"
-    )
-    qc_height = require_uint(
-        nested(sumeragi, "last_commit_qc", "certificate", "round", "height"),
-        f"{peer.label} CommitQC height",
-        positive=True,
-    )
-    if qc_height != committed:
-        fail(f"{peer.label} CommitQC height differs from committed height")
-    require_uint(
-        nested(sumeragi, "last_commit_qc", "certificate", "round", "view"),
-        f"{peer.label} CommitQC view",
-    )
-    tagged_unit(
-        nested(sumeragi, "last_commit_qc", "certificate", "phase"),
-        "phase",
-        f"{peer.label} CommitQC phase",
-        {"commit"},
-    )
-    qc_subject = nested(sumeragi, "last_commit_qc", "certificate", "subject")
-    if qc_subject != subject:
-        fail(f"{peer.label} CommitQC subject differs from committed subject")
-    commit_record = sumeragi.get("last_commit_qc")
-    assert isinstance(commit_record, dict)
-    commit_validators = require_uint(
-        commit_record.get("validator_count"),
-        f"{peer.label} CommitQC validator count",
-        positive=True,
-    )
-    commit_signers = require_uint(
-        commit_record.get("signer_count"), f"{peer.label} CommitQC signer count"
-    )
-    commit_min_signers = require_uint(
-        commit_record.get("min_signers"), f"{peer.label} CommitQC minimum signers"
-    )
-    commit_signed_power = require_uint(
-        commit_record.get("signed_power"), f"{peer.label} CommitQC signed power"
-    )
-    commit_total_power = require_uint(
-        commit_record.get("total_power"),
-        f"{peer.label} CommitQC total power",
-        positive=True,
-    )
-    if (
-        commit_validators != PEER_COUNT
-        or commit_min_signers != 3
-        or not 3 <= commit_signers <= PEER_COUNT
-        or commit_total_power != context_total_power
-        or commit_signed_power > commit_total_power
-        or commit_signed_power * 3 <= commit_total_power * 2
-        or (mode == "permissioned" and commit_signed_power != commit_signers)
-    ):
-        fail(f"{peer.label} durable CommitQC lacks the exact four-validator quorum")
-    context = sumeragi.get("height_context_id")
-    node_fingerprint = sumeragi.get("node_fingerprint")
-    build_fingerprint = sumeragi.get("build_fingerprint")
-    config_fingerprint = sumeragi.get("config_fingerprint")
-    if any(
-        value in (None, "", {})
-        for value in (context, node_fingerprint, build_fingerprint, config_fingerprint)
-    ):
-        fail(f"{peer.label} omitted a required reducer fingerprint")
-
-    canonical = lambda value: json.dumps(
-        value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-    )
-    return PeerSample(
-        label=peer.label,
-        height=committed,
-        block_hash=block_hash,
-        context=canonical(context),
-        node=canonical(node_fingerprint),
-        build=canonical(build_fingerprint),
-        config=canonical(config_fingerprint),
-        nexus_topology=canonical(
-            {
-                "observed_catalog_hash": catalog_hash.lower(),
-                "observed_lane_count": lane_count,
-                "canonical_lane_bindings": canonical_lane_binding_evidence,
-                "canonical_physical_dataspaces": (
-                    canonical_physical_dataspace_evidence
-                ),
-            }
-        ),
-    )
-
-
-def capture_fleet(
-    bundle: BundlePlan,
-    expected_source_commit: str,
-    expected_dpn_validator_release_commit: str,
-    *,
-    getter: HttpGetter = http_json,
-    health_getter: HealthGetter = http_ok,
-) -> FleetSample:
-    """Require all four direct validators to expose one exact common commit."""
-
-    samples = [
-        validate_peer_health(
-            peer,
-            bundle,
-            expected_source_commit,
-            expected_dpn_validator_release_commit,
-            getter=getter,
-            health_getter=health_getter,
-        )
-        for peer in bundle.peers
-    ]
-    baseline = samples[0]
-    for sample in samples[1:]:
-        for field in (
-            "height",
-            "block_hash",
-            "context",
-            "build",
-            "config",
-            "nexus_topology",
-        ):
-            if getattr(sample, field) != getattr(baseline, field):
-                fail(f"four-validator fleet disagrees on {field}")
-    nodes = tuple(sorted(sample.node for sample in samples))
-    if len(set(nodes)) != PEER_COUNT:
-        fail("four validator roots do not expose four distinct node identities")
-    return FleetSample(
-        height=baseline.height,
-        block_hash=baseline.block_hash,
-        context=baseline.context,
-        build=baseline.build,
-        config=baseline.config,
-        nexus_topology=baseline.nexus_topology,
-        nodes=nodes,
-    )
-
-
-def wait_for_fleet_sample(
-    bundle: BundlePlan,
-    expected_source_commit: str,
-    expected_dpn_validator_release_commit: str,
-    deadline: float,
-    *,
-    getter: HttpGetter = http_json,
-    health_getter: HealthGetter = http_ok,
-    terminal_checker: TerminalChecker = no_terminal_check,
-) -> FleetSample:
-    """Retry startup/alignment failures until one coherent sample is available."""
-
-    last_error: Optional[Exception] = None
-    while time.monotonic() < deadline:
-        terminal_checker()
-        try:
-            sample = capture_fleet(
-                bundle,
-                expected_source_commit,
-                expected_dpn_validator_release_commit,
-                getter=getter,
-                health_getter=health_getter,
-            )
-        except (DeploymentError, OSError) as error:
-            last_error = error
-            time.sleep(1)
-            continue
-        terminal_checker()
-        return sample
-    raise DeploymentError(f"four-validator readiness did not converge: {last_error}")
-
-
-def wait_for_advancement(
-    bundle: BundlePlan,
-    expected_source_commit: str,
-    expected_dpn_validator_release_commit: str,
-    previous: FleetSample,
-    deadline: float,
-    *,
-    getter: HttpGetter = http_json,
-    health_getter: HealthGetter = http_ok,
-    terminal_checker: TerminalChecker = no_terminal_check,
-) -> FleetSample:
-    """Require a later common height with a different common block hash."""
-
-    last_error: Optional[Exception] = None
-    while time.monotonic() < deadline:
-        terminal_checker()
-        try:
-            current = capture_fleet(
-                bundle,
-                expected_source_commit,
-                expected_dpn_validator_release_commit,
-                getter=getter,
-                health_getter=health_getter,
-            )
-            if (
-                current.height > previous.height
-                and current.block_hash != previous.block_hash
-                and current.build == previous.build
-                and current.config == previous.config
-                and current.nexus_topology == previous.nexus_topology
-                and current.nodes == previous.nodes
-            ):
-                advanced = True
-            else:
-                advanced = False
-                last_error = DeploymentError(
-                    "fleet has not advanced one stable common build/config/topology"
-                )
-        except (DeploymentError, OSError) as error:
-            last_error = error
-            advanced = False
-        if advanced:
-            terminal_checker()
-            return current
-        time.sleep(1)
-    raise DeploymentError(f"four-validator consensus did not advance: {last_error}")
-
+http_json = deploy_health.http_json
+http_ok = deploy_health.http_ok
+_RejectRedirects = deploy_health._RejectRedirects
+build_operator_http_getter = deploy_health.build_operator_http_getter
+require_uint = deploy_health.require_uint
+normalized_block_hash = deploy_health.normalized_block_hash
+nested = deploy_health.nested
+tagged_unit = deploy_health.tagged_unit
+published_source_commit = deploy_health.published_source_commit
+published_dpn_validator_release_commit = deploy_health.published_dpn_validator_release_commit
+PeerSample = deploy_health.PeerSample
+FleetSample = deploy_health.FleetSample
+RestartProofResult = deploy_health.RestartProofResult
+HttpGetter = deploy_health.HttpGetter
+HealthGetter = deploy_health.HealthGetter
+TerminalChecker = deploy_health.TerminalChecker
+no_terminal_check = deploy_health.no_terminal_check
+deployment_completed_at_unix_ms = deploy_health.deployment_completed_at_unix_ms
+deployed_config_set_sha256 = deploy_health.deployed_config_set_sha256
+deployed_topology_sha256 = deploy_health.deployed_topology_sha256
+supervisor_terminal_binding = deploy_health.supervisor_terminal_binding
+supervisor_lifecycle_binding = deploy_health.supervisor_lifecycle_binding
+deployed_receipt_signer_map = deploy_health.deployed_receipt_signer_map
+terminal_unhealthy_path = deploy_health.terminal_unhealthy_path
+require_terminal_marker = deploy_health.require_terminal_marker
+require_no_terminal_unhealthy = deploy_health.require_no_terminal_unhealthy
+validate_peer_health = deploy_health.validate_peer_health
+capture_fleet = deploy_health.capture_fleet
+wait_for_fleet_sample = deploy_health.wait_for_fleet_sample
+wait_for_advancement = deploy_health.wait_for_advancement
 
 def parse_pid_file(path: Path, uid: int, gid: int) -> int:
     """Read one private managed-child PID file through a no-follow descriptor."""
@@ -4644,7 +4052,49 @@ def install_runtime_layout(bundle: BundlePlan) -> Path:
     ensure_runtime_directory(
         runtime_root / "terminal", bundle.owner_uid, bundle.owner_gid
     )
+    install_lifecycle_journal_layout(bundle, runtime_root)
     return runtime_root
+
+
+def lifecycle_journal_root(runtime_root: Path, peer: PeerPlan) -> Path:
+    """Return the fixed owner-private journal root for one public validator."""
+
+    return runtime_root / "lifecycle" / peer.slug
+
+
+def install_lifecycle_journal_layout(
+    bundle: BundlePlan, runtime_root: Path
+) -> dict[str, Path]:
+    """Provision four distinct owner-private lifecycle journal roots."""
+
+    parent = runtime_root / "lifecycle"
+    ensure_runtime_directory(parent, bundle.owner_uid, bundle.owner_gid)
+    roots: dict[str, Path] = {}
+    for peer in bundle.peers:
+        root = lifecycle_journal_root(runtime_root, peer)
+        if root in roots.values():
+            fail("lifecycle journal roots are not distinct")
+        ensure_runtime_directory(root, bundle.owner_uid, bundle.owner_gid)
+        roots[peer.label] = root
+    if set(roots) != set(LABELS) or len(set(roots.values())) != PEER_COUNT:
+        fail("lifecycle journal layout is not the exact four-peer projection")
+    return roots
+
+
+def require_authenticated_lifecycle_node_ids(
+    bundle: BundlePlan,
+) -> dict[str, str]:
+    """Return only config-, manifest-, and qualification-bound lifecycle IDs."""
+
+    verified = require_receipt_signer_map(
+        bundle.manifest.get("receipt_signers"),
+        "reset manifest receipt signer map",
+    )
+    if verified != bundle.receipt_signers:
+        fail("authenticated receipt signer plan changed after bundle validation")
+    if tuple(row.slug for row in verified) != tuple(peer.slug for peer in bundle.peers):
+        fail("authenticated receipt signer order differs from the deploy peer plan")
+    return {row.slug: row.node_id for row in verified}
 
 
 def apply_reset(
@@ -4668,6 +4118,7 @@ def apply_reset(
     if len(old_cohort) != PEER_COUNT:
         fail("--apply requires exactly four authenticated rollback plists")
     require_kagemusha_apply_material(bundle)
+    lifecycle_node_ids = require_authenticated_lifecycle_node_ids(bundle)
     ops = ops or SystemOps()
 
     ensure_root_directory(INSTALL_ROOT, 0o755)
@@ -4731,6 +4182,8 @@ def apply_reset(
             installed_supervisor=installed_supervisor,
             runtime_root=runtime_root,
             restart_generation=args.restart_generation,
+            lifecycle_journal_root=lifecycle_journal_root(runtime_root, peer),
+            authenticated_node_id=lifecycle_node_ids[peer.slug],
         )
         for peer in bundle.peers
     }
@@ -4743,6 +4196,12 @@ def apply_reset(
         )
         for peer in bundle.peers
     }
+    deployed_receipt_signers = deployed_receipt_signer_map(
+        bundle,
+        sources,
+        binary_info,
+        args.restart_generation,
+    )
     for label, body in plist_bodies.items():
         payload = plistlib.loads(body)
         if payload.get("Label") != label:
@@ -4895,10 +4354,25 @@ def apply_reset(
         "binary": str(installed_binary),
         "binary_sha256": sources.binary_sha256,
         "bundle": str(bundle.root),
+        "chain_id": CHAIN_ID,
+        "config_set_sha256": deployed_config_set_sha256(bundle),
+        "deployment_completed_at_unix_ms": deployment_completed_at_unix_ms(),
+        "genesis_block_hash": require_genesis_expected_hash(
+            bundle.manifest.get("genesis_expected_hash")
+        ),
         "nexus_topology": restarted.nexus_topology,
+        "network_id": NETWORK_ID,
+        "network_name": NETWORK_NAME,
+        "protocol_version": PROTOCOL_VERSION,
+        "signed_genesis_sha256": require_sha256(
+            bundle.manifest.get("signed_genesis_sha256"),
+            "deployed signed genesis SHA-256",
+        ),
+        "topology_sha256": deployed_topology_sha256(restarted.nexus_topology),
         "end_block_hash": restarted.block_hash,
         "end_height": restarted.height,
         "peer_count": PEER_COUNT,
+        "receipt_signers": deployed_receipt_signers,
         "restart_generation": args.restart_generation,
         "restart_duration_ms": restart_result.duration_ms,
         "restart_proof": "passed",
@@ -4982,16 +4456,6 @@ def build_parser() -> argparse.ArgumentParser:
             "explicitly authorize capture of an already-degraded old job only "
             "when its exact loaded supervisor has no PID file and no child "
             "process; stale or mismatched children remain fatal"
-        ),
-    )
-    parser.add_argument(
-        "--allow-framework-python-argv0-rewrite",
-        action="store_true",
-        help=(
-            "explicitly authorize only the same-framework bin/python* to "
-            "Resources/Python.app executable rewrite for the old testnet "
-            "supervisors; every remaining argument and managed child must "
-            "still match exactly"
         ),
     )
     parser.add_argument("--apply", action="store_true")
@@ -5079,221 +4543,13 @@ def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     return None if os.geteuid() != 0 else (uid, gid)
 
 
-def _kagemusha_authority_subject(
-    bundle: BundlePlan, *, exact_binary_config_verified: bool = False
-) -> dict[str, object]:
-    """Return the digest-only Kagemusha deployment authority projection."""
+_kagemusha_authority_subject = _DEPLOY_AUTHORITY.kagemusha_subject
+_kagemusha_authority_artifacts = _DEPLOY_AUTHORITY.kagemusha_artifacts
+_kagemusha_report_fields = _DEPLOY_AUTHORITY.report_fields
+_deploy_authority_subject = _DEPLOY_AUTHORITY.subject
+_deploy_authority_artifacts = _DEPLOY_AUTHORITY.artifacts
 
-    projection_sha256 = getattr(bundle, "kagemusha_config_projection_sha256", None)
-    external = getattr(bundle, "kagemusha_external_release", None)
-    if projection_sha256 is None:
-        return {"configured": False}
-    material_present = _kagemusha_bounded_material_present(bundle)
-    semantic_verified = bool(material_present and exact_binary_config_verified)
-    return {
-        "configured": True,
-        "config_projection_sha256": projection_sha256,
-        "bounded_material_present": material_present,
-        "exact_binary_config_verified": semantic_verified,
-        "external_release_verified": semantic_verified,
-        "manifest_directory_digests": (
-            list(external.manifest_directory_digests) if external else []
-        ),
-        "manifest_directory_inventory_sha256": (
-            external.manifest_directory_inventory_sha256 if external else None
-        ),
-        "policy_sha256": external.expected_policy_sha256 if external else None,
-        "qualification_seal_sha256": (
-            external.qualification_seal_sha256 if external else None
-        ),
-    }
-
-
-def _kagemusha_authority_artifacts(
-    bundle: BundlePlan,
-) -> tuple[taira_authority_client.Artifact, ...]:
-    """Expose only bounded external Kagemusha bytes to deploy authority."""
-
-    external = getattr(bundle, "kagemusha_external_release", None)
-    if external is None:
-        return ()
-    artifacts: list[taira_authority_client.Artifact] = []
-    if external.policy_sha256 is not None:
-        artifacts.append(
-            taira_authority_client.Artifact(
-                "kagemusha/policy/release-policy-v1.norito",
-                external.policy_path,
-                maximum=MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
-            )
-        )
-    if external.qualification_seal_sha256 is not None:
-        artifacts.append(
-            taira_authority_client.Artifact(
-                "kagemusha/seals/catalog-qualification-v1.norito",
-                external.qualification_seal_path,
-                maximum=MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
-            )
-        )
-    for digest, manifest_path, sidecar_path in zip(
-        external.manifest_directory_digests,
-        external.manifest_files,
-        external.manifest_digest_sidecars,
-    ):
-        artifacts.extend(
-            (
-                taira_authority_client.Artifact(
-                    f"kagemusha/catalog/{digest}/manifest.norito",
-                    manifest_path,
-                    maximum=MAX_KAGEMUSHA_MANIFEST_BYTES,
-                ),
-                taira_authority_client.Artifact(
-                    f"kagemusha/catalog/{digest}/manifest.norito.sha256",
-                    sidecar_path,
-                    maximum=MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES,
-                ),
-            )
-        )
-    return tuple(artifacts)
-
-
-def _kagemusha_report_fields(
-    bundle: BundlePlan, *, exact_binary_config_verified: bool
-) -> dict[str, object]:
-    """Return non-ambiguous Kagemusha readiness fields for controller reports."""
-
-    projection_sha256 = getattr(bundle, "kagemusha_config_projection_sha256", None)
-    external = getattr(bundle, "kagemusha_external_release", None)
-    configured = projection_sha256 is not None
-    material_present = _kagemusha_bounded_material_present(bundle)
-    exact_verified = bool(
-        configured and material_present and exact_binary_config_verified
-    )
-    if not configured:
-        status = "not-configured"
-    elif not material_present:
-        status = "blocked-external-release-unavailable"
-    elif exact_verified:
-        status = "exact-installed-binary-config-verified"
-    else:
-        status = "blocked-exact-installed-binary-config-pending"
-    return {
-        "kagemusha_config_projection_sha256": projection_sha256,
-        "kagemusha_exact_binary_config_verified": exact_verified,
-        "kagemusha_external_release_material_present": material_present,
-        "kagemusha_external_release_status": status,
-        "kagemusha_external_release_verified": exact_verified,
-        "kagemusha_manifest_directory_inventory_sha256": (
-            external.manifest_directory_inventory_sha256 if external else None
-        ),
-        "kagemusha_qualification_seal_sha256": (
-            external.qualification_seal_sha256 if external else None
-        ),
-    }
-
-
-def _deploy_authority_subject(
-    admission: AdmissionPlan,
-    bundle: BundlePlan,
-    sources: SourcePlan,
-    *,
-    kagemusha_exact_binary_config_verified: bool = False,
-) -> dict[str, object]:
-    """Build the stable digest-only subject shared by every lease phase."""
-
-    return {
-        "admission": {
-            "archive_sha256": admission.archive_sha256,
-            "artifact_handoff_sha256": admission.artifact_handoff_sha256,
-            "boi_qualified_inventory_sha256": (
-                admission.boi_qualified_inventory_sha256
-            ),
-            "receipt_id": admission.receipt_id,
-            "release_manifest_sha256": admission.release_manifest_sha256,
-            "reset_manifest_sha256": admission.reset_manifest_sha256,
-        },
-        "bundle": {
-            "kagemusha": _kagemusha_authority_subject(
-                bundle,
-                exact_binary_config_verified=(
-                    kagemusha_exact_binary_config_verified
-                ),
-            ),
-            "manifest_sha256": bundle.manifest_sha256,
-            "peer_config_sha256": {
-                peer.slug: peer.config_sha256 for peer in bundle.peers
-            },
-        },
-        "contracts": {
-            "complete_source": COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
-            "run_assignment": DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
-        },
-        "lease": {
-            "authorization": DEPLOY_AUTHORIZATION_LEASE_CONTRACT,
-            "result_binding": DEPLOY_RESULT_BINDING_CONTRACT,
-        },
-        "source": {
-            "cargo_lock_sha256": admission.cargo_lock_sha256,
-            "commit": admission.source_commit,
-            "dpn_validator_release_commit": (
-                admission.dpn_validator_release_commit
-            ),
-            "workspace_source_manifest_sha256": (
-                admission.workspace_source_manifest_sha256
-            ),
-        },
-        "runtime": {
-            "binary_sha256": sources.binary_sha256,
-            "restart_generation": admission.restart_generation,
-            "supervisor_sha256": sources.supervisor_sha256,
-        },
-    }
-
-
-def _deploy_authority_artifacts(
-    admission: AdmissionPlan,
-    bundle: BundlePlan,
-    sources: SourcePlan,
-) -> tuple[taira_authority_client.Artifact, ...]:
-    artifacts = [
-        taira_authority_client.Artifact(
-            "admission/archive",
-            admission.archive,
-            maximum=admission.archive_state.size,
-        ),
-        taira_authority_client.Artifact(
-            "qualified/handoff-inventory-v1.json",
-            admission.boi_qualified_handoff.root
-            / boi_handoff.QUALIFIED_HANDOFF_MANIFEST,
-            maximum=boi_handoff.MAX_HANDOFF_MANIFEST_BYTES,
-        ),
-        taira_authority_client.Artifact(
-            "runtime/iroha3d", sources.binary, maximum=MAX_BINARY_BYTES
-        ),
-        taira_authority_client.Artifact(
-            "runtime/supervisor", sources.supervisor, maximum=4 * 1024 * 1024
-        ),
-        taira_authority_client.Artifact(
-            "bundle/reset-manifest.json",
-            bundle.root / "reset-manifest.json",
-            maximum=MAX_MANIFEST_BYTES,
-        ),
-    ]
-    artifacts.extend(
-        taira_authority_client.Artifact(
-            f"admission/authority/{relative}",
-            admission.authority_dir / relative,
-            maximum=MAX_MANIFEST_BYTES,
-        )
-        for relative, _state in admission.authority_state
-    )
-    artifacts.extend(
-        taira_authority_client.Artifact(
-            f"bundle/config/{peer.slug}", peer.config, maximum=MAX_CONFIG_BYTES
-        )
-        for peer in bundle.peers
-    )
-    artifacts.extend(_kagemusha_authority_artifacts(bundle))
-    return tuple(artifacts)
+_deploy_result_sha256 = _DEPLOY_AUTHORITY.result_sha256
 
 
 def _authorize_deploy_lease(
@@ -5311,7 +4567,7 @@ def _authorize_deploy_lease(
                 admission,
                 bundle,
                 sources,
-                kagemusha_exact_binary_config_verified=(
+                exact_binary_config_verified=(
                     kagemusha_exact_binary_config_verified
                 ),
             ),
@@ -5322,21 +4578,6 @@ def _authorize_deploy_lease(
         raise DeploymentError(
             f"deploy-issuance authority refused the exact deployment: {error}"
         ) from error
-
-
-def _deploy_result_sha256(
-    outcome: str, result: dict[str, object]
-) -> str:
-    """Digest the exact terminal result without creating a circular sidecar."""
-
-    payload = {
-        "outcome": outcome,
-        "result": result,
-        "schema": DEPLOY_RESULT_BINDING_CONTRACT,
-    }
-    return hashlib.sha256(
-        taira_authority_client.canonical_json_bytes(payload)
-    ).hexdigest()
 
 
 def _finalize_deploy_lease(
@@ -5394,15 +4635,13 @@ def _execute_after_provisioned_authority_contracts(
     capture_options: dict[str, bool] = {
         "allow_absent_child": args.allow_absent_old_child,
     }
-    if getattr(args, "allow_framework_python_argv0_rewrite", False):
-        capture_options["allow_framework_python_argv0_rewrite"] = True
     if not args.apply:
         kagemusha_exact_binary_config_verified = (
             validate_dry_run_kagemusha_exact_config(sources, bundle)
         )
         old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_archive_unchanged(admission)
-        require_kagemusha_external_release_unchanged(
+        require_mutable_bundle_identities(
             bundle,
             phase="immediately before dry-run authority",
         )
@@ -5415,7 +4654,7 @@ def _execute_after_provisioned_authority_contracts(
                 kagemusha_exact_binary_config_verified
             ),
         )
-        require_kagemusha_external_release_unchanged(
+        require_mutable_bundle_identities(
             bundle,
             phase="immediately after dry-run authority",
         )
@@ -5477,6 +4716,10 @@ def _execute_after_provisioned_authority_contracts(
         }
         report.update(kagemusha_fields)
         return report
+    # This refusal deliberately precedes the deployment lock and replay-ledger
+    # consumption: a cohort without receipt-signer-bound lifecycle identity may
+    # not begin even a recoverable apply transaction.
+    require_authenticated_lifecycle_node_ids(bundle)
     with exclusive_deployment_lock():
         locked_admission = verify_deployment_admission(args)
         if locked_admission != admission:

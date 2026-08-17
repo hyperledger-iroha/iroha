@@ -2120,28 +2120,27 @@
             "ingress drain must use the gate-bound checked selector",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(sender))",
+            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+            "fn prepare_current_certified_serve_pre_admission(",
+            "|| !ownership.matches_semantic_origin(Some(sender))",
             "|| false",
-            "exact Serve ingress must validate complete transport ownership",
+            "shared current Serve classification must bind transport ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+            "fn authorize_current_certified_serve_pre_dequeue<",
+            "return ProductionCurrentCertifiedServePreparationV1::Retain;",
+            "return ProductionCurrentCertifiedServePreparationV1::Prepared(\n"
+            "                    ProductionPreparedCertifiedServeV1::Service(String::new()),\n"
+            "                );",
+            "shared current Serve authorization must stage a negative or reserve/coalesce",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
             "fn drain_v2_ingress(",
-            "Err(CertifiedServePrepareError::Backpressure) => {\n"
-            "                        // `prepare_certified_request` installs the off-queue debt",
-            "Err(CertifiedServePrepareError::Backpressure) => {\n"
-            "                        return true;\n"
-            "                        // `prepare_certified_request` installs the off-queue debt",
-            "exact Serve ingress must validate complete transport ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "Some(ProductionPreparedCertifiedServeV1::Admitted(admission));",
-            "drop(admission);",
-            "exact Serve ingress must validate complete transport ownership",
+            "prepared_serve = Some(prepared);",
+            "drop(prepared);",
+            "exact Serve ingress must delegate authentication and durable preparation",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",

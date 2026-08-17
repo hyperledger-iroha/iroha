@@ -656,6 +656,86 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
+}
+type JniByteArray = jni::sys::jbyteArray;
+type JniObjectArray = jni::sys::jobjectArray;
+type JniBoolean = jni::sys::jboolean;
+type JniLong = jni::sys::jlong;
+
+macro_rules! kagemusha_jni_argument_type {
+    (bytes) => { jni::objects::JByteArray<'_> };
+    (objects) => { jni::objects::JObjectArray<'_> };
+    (longs) => { jni::objects::JLongArray<'_> };
+    (int) => { jni::sys::jint };
+    (long) => { jni::sys::jlong };
+}
+
+/// Generates both JNI namespace exports for each typed Kagemusha delegate.
+macro_rules! kagemusha_sdk_android_forwarders {
+    (
+        $(
+            $(#[$attribute:meta])*
+            $method:ident { $($argument:ident $argument_type:ident),* $(,)? }
+                -> $return_type:ty = $delegate:path $(, $extra:expr)*;
+        )*
+    ) => {
+        $(
+            #[allow(non_snake_case)]
+            mod $method {
+                use super::*;
+
+                $(#[$attribute])*
+                #[unsafe(export_name = concat!(
+                    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_",
+                    stringify!($method)
+                ))]
+                pub unsafe extern "system" fn sdk(
+                    mut env: jni::JNIEnv<'_>,
+                    _class: jni::objects::JClass<'_>,
+                    $($argument: kagemusha_jni_argument_type!($argument_type)),*
+                ) -> $return_type {
+                    $delegate(&mut env $(, $argument)* $(, $extra)*)
+                }
+
+                $(#[$attribute])*
+                #[unsafe(export_name = concat!(
+                    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_",
+                    stringify!($method)
+                ))]
+                pub unsafe extern "system" fn android(
+                    mut env: jni::JNIEnv<'_>,
+                    _class: jni::objects::JClass<'_>,
+                    $($argument: kagemusha_jni_argument_type!($argument_type)),*
+                ) -> $return_type {
+                    $delegate(&mut env $(, $argument)* $(, $extra)*)
+                }
+            }
+        )*
+    };
+}
+
+type KagemushaUnaryLifecycleBoundaryV4 =
+    unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
+
+pub(super) fn java_native_kagemusha_unary_lifecycle_v4(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    label: &str,
+    request_max_bytes: usize,
+    boundary: KagemushaUnaryLifecycleBoundaryV4,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_lifecycle_archive_v4(
+        env,
+        request,
+        label,
+        request_max_bytes,
+        |request_ptr, request_len, output, output_len| unsafe {
+            boundary(request_ptr, request_len, output, output_len)
+        },
+    )
+}
+
+jni_sdk_android_pairs! {
 android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBridgeAbiVersion();
 sdk:
 #[unsafe(no_mangle)]
@@ -674,947 +754,151 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jboolean {
     java_native_kagemusha_pasta_cycle_v4_backend_available()
 }
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactBeginV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactBeginV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    manifest_norito: jni::objects::JByteArray<'_>,
-    manifest_sha256: jni::objects::JByteArray<'_>,
-    artifact_sha256: jni::objects::JByteArray<'_>,
-) -> jni::sys::jlong {
-    java_native_kagemusha_artifact_begin_v4(
-        &mut env,
-        manifest_norito,
-        manifest_sha256,
-        artifact_sha256,
-    )
 }
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactWriteV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactWriteV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-    chunk: jni::objects::JByteArray<'_>,
-) {
-    java_native_kagemusha_artifact_write_v4(&mut env, handle, chunk);
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactFinalizeV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactFinalizeV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-) {
-    java_native_kagemusha_artifact_finish_v4(&mut env, handle, false);
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactCancelV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactCancelV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-) {
-    java_native_kagemusha_artifact_finish_v4(&mut env, handle, true);
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetInstallV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetInstallV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    manifest_norito: jni::objects::JByteArray<'_>,
-    manifest_sha256: jni::objects::JByteArray<'_>,
-    trusted_policy_norito: jni::objects::JByteArray<'_>,
-    release_attestation_norito: jni::objects::JByteArray<'_>,
-    benchmark_evidence: jni::objects::JByteArray<'_>,
-    cryptographic_review: jni::objects::JByteArray<'_>,
-    promotion_record_norito: jni::objects::JByteArray<'_>,
-    handles: jni::objects::JLongArray<'_>,
-) {
-    java_native_kagemusha_artifact_set_install_v4(
-        &mut env,
-        manifest_norito,
-        manifest_sha256,
-        trusted_policy_norito,
-        release_attestation_norito,
-        benchmark_evidence,
-        cryptographic_review,
-        promotion_record_norito,
-        handles,
-    );
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetIsInstalledV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetIsInstalledV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    manifest_norito: jni::objects::JByteArray<'_>,
-    manifest_sha256: jni::objects::JByteArray<'_>,
-) -> jni::sys::jboolean {
-    java_native_kagemusha_artifact_set_is_installed_v4(&mut env, manifest_norito, manifest_sha256)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeInstalledManifestSha256V4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeInstalledManifestSha256V4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_installed_manifest_sha256_v4(&mut env)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildArtifactBindingV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildArtifactBindingV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    manifest_norito: jni::objects::JByteArray<'_>,
-    manifest_sha256: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_artifact_binding_v4(&mut env, manifest_norito, manifest_sha256)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetUninstallV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetUninstallV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    manifest_sha256: jni::objects::JByteArray<'_>,
-) {
-    java_native_kagemusha_artifact_set_uninstall_v4(&mut env, manifest_sha256);
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeInitSpendV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeInitSpendV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request_norito,
+
+kagemusha_sdk_android_forwarders! {
+    nativeArtifactBeginV4 { manifest_norito bytes, manifest_sha256 bytes, artifact_sha256 bytes } -> JniLong = java_native_kagemusha_artifact_begin_v4;
+    nativeArtifactWriteV4 { handle long, chunk bytes } -> () = java_native_kagemusha_artifact_write_v4;
+    nativeArtifactFinalizeV4 { handle long } -> () = java_native_kagemusha_artifact_finish_v4,
+        false;
+    nativeArtifactCancelV4 { handle long } -> () = java_native_kagemusha_artifact_finish_v4,
+        true;
+    nativeArtifactSetInstallV4 {
+        manifest_norito bytes, manifest_sha256 bytes, trusted_policy_norito bytes, release_attestation_norito bytes,
+        benchmark_evidence bytes, cryptographic_review bytes, promotion_record_norito bytes, handles longs
+    } -> () = java_native_kagemusha_artifact_set_install_v4;
+    nativeArtifactSetIsInstalledV4 { manifest_norito bytes, manifest_sha256 bytes } -> JniBoolean = java_native_kagemusha_artifact_set_is_installed_v4;
+    nativeInstalledManifestSha256V4 {  } -> JniByteArray = java_native_kagemusha_installed_manifest_sha256_v4;
+    nativeBuildArtifactBindingV4 { manifest_norito bytes, manifest_sha256 bytes } -> JniByteArray = java_native_kagemusha_build_artifact_binding_v4;
+    nativeArtifactSetUninstallV4 { manifest_sha256 bytes } -> () = java_native_kagemusha_artifact_set_uninstall_v4;
+    nativeInitSpendV4 { request_norito bytes } -> JniByteArray = java_native_kagemusha_unary_lifecycle_v4,
         "V4 init spend",
         KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_init_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeAppendSpendV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeAppendSpendV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-    recipient_request_norito: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_append_spend_v4(
-        &mut env,
-        request_norito,
-        recipient_request_norito,
-        verified_at_ms,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifySpendV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifySpendV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request_norito,
+        connect_norito_kagemusha_recursive_spend_init_v4;
+    nativeAppendSpendV4 {
+        request_norito bytes, recipient_request_norito bytes, verified_at_ms long
+    } -> JniByteArray = java_native_kagemusha_append_spend_v4;
+    nativeVerifySpendV4 { request_norito bytes } -> JniByteArray = java_native_kagemusha_unary_lifecycle_v4,
         "V4 verify spend",
         KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_verify_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request_norito,
+        connect_norito_kagemusha_recursive_spend_verify_v4;
+    nativeBuildRedeemV4 { request_norito bytes } -> JniByteArray = java_native_kagemusha_unary_lifecycle_v4,
         "V4 build redeem",
         KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_redeem_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
+        connect_norito_kagemusha_recursive_spend_redeem_v4;
+    #[allow(clippy::too_many_arguments)]
+    nativePrepareRecipientRequestV2 {
+        network_id bytes, chain_discriminant int, asset bytes, atomic_units bytes,
+        scale int, recipient bytes, receiver_device_id bytes, receiver_public_key bytes,
+        request_id bytes, issued_at_ms long, expires_at_ms long, spend_key bytes,
+        rho bytes, diversifier bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_recipient_request_v2;
+    nativeCreateRecipientRequestV2 { payload bytes, signature bytes } -> JniByteArray = java_native_kagemusha_create_recipient_request_v2;
+    nativeVerifyRecipientRequestV2 { request bytes, verified_at_ms long } -> JniByteArray = java_native_kagemusha_verify_recipient_request_v2;
+    nativeCreateRecipientLineageQueryV2 {
+        network_id bytes, chain_discriminant int, recipient bytes, receiver_device_id bytes,
+        asset bytes, trusted_checkpoint_height long
+    } -> JniByteArray = java_native_kagemusha_create_recipient_lineage_query_v2;
+    #[allow(clippy::too_many_arguments)]
+    nativeVerifyRecipientRegistrationLineageV2 {
+        request bytes, lineage bytes, verified_at_ms long, trusted_checkpoint_height long,
+        trusted_checkpoint_context_id bytes
+    } -> JniObjectArray = java_native_kagemusha_verify_recipient_registration_lineage_v2;
+    nativeCreateRecipientReceiveOfferV2 {
+        request bytes, lineage bytes, publisher_checkpoint_envelope bytes
+    } -> JniByteArray = java_native_kagemusha_create_recipient_receive_offer_v2;
+    nativeProjectRecipientReceiveOfferV2 { offer bytes } -> JniObjectArray = java_native_kagemusha_project_recipient_receive_offer_v2;
+    nativeVerifyRecipientReceiveOfferV2 {
+        offer bytes, verified_at_ms long, trusted_checkpoint_height long, trusted_checkpoint_context_id bytes
+    } -> JniObjectArray = java_native_kagemusha_verify_recipient_receive_offer_v2;
+    nativeBuildOutputMembershipFrontierV4 {
+        leaf_index int, flattened_siblings bytes, directions bytes, root bytes
+    } -> JniByteArray = java_native_kagemusha_build_output_membership_frontier_v4;
+    nativeDeriveOutputMembershipPathsV4 {
+        frontier bytes, recipient_commitment bytes, change_commitment bytes
+    } -> JniObjectArray = java_native_kagemusha_derive_output_membership_paths_v4;
+    nativeValidateSpendableBranchV4 {
+        bundle bytes, provenance bytes, membership_witness bytes, opening bytes,
+        block_height long
+    } -> JniByteArray = java_native_kagemusha_validate_spendable_branch_v4;
+    nativeBuildOutputMembershipPathsV4 {
+        initial_root bytes, final_root bytes, recipient_fields objects, change_fields objects,
+        dummy_fields objects
+    } -> JniByteArray = java_native_kagemusha_build_output_membership_paths_v4;
+    nativeBuildInitRequestV4 {
+        anchor bytes, proof bytes, roster bytes, opening bytes,
+        output_membership bytes
+    } -> JniByteArray = java_native_kagemusha_build_init_request_v4;
+    nativeBuildTopUpProvenanceV4 {
+        bundle bytes, roster bytes, anchors objects, finality_proofs objects,
+        block_height long
+    } -> JniByteArray = java_native_kagemusha_build_topup_provenance_v4;
+    nativeValidateTopUpProvenanceV4 { bundle bytes, provenance bytes, block_height long } -> JniByteArray = java_native_kagemusha_validate_topup_provenance_v4;
+    #[allow(clippy::too_many_arguments)]
+    nativeBuildAppendRequestV4 {
+        bundles objects, topup_provenances objects, openings objects, witnesses objects,
+        change_opening bytes, output_membership bytes, verifier_commitment bytes, operation_id bytes,
+        block_height long
+    } -> JniByteArray = java_native_kagemusha_build_append_request_v4;
+    #[allow(clippy::too_many_arguments)]
+    nativeBuildVerifyRequestV4 {
+        bundle bytes, recipient_request bytes, topup_provenance bytes, maximum_hops int,
+        block_height long, verified_at_ms long
+    } -> JniByteArray = java_native_kagemusha_build_verify_request_v4,
+        JavaKagemushaArtifactRegistryV4::Production;
+    #[allow(clippy::too_many_arguments)]
+    nativeBuildRedeemRequestV4 {
+        bundle bytes, topup_provenance bytes, opening bytes, membership_witness bytes,
+        recipient bytes, chain_discriminant int, atomic_units bytes, scale int,
+        change_opening bytes, change_output_membership bytes, verifier_commitment bytes, operation_id bytes,
+        block_height long
+    } -> JniByteArray = java_native_kagemusha_build_redeem_request_v4;
+    nativeProjectPeerPaymentV4 { payment bytes } -> JniObjectArray = java_native_kagemusha_project_peer_payment_v4;
+    nativeProjectInitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_init_result_v4;
+    nativeProjectSplitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_split_result_v4;
+    nativeProjectVerifyResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_verify_result_v4;
+    nativeProjectRedeemBuildResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_redeem_build_result_v4;
+    nativePrepareAcknowledgementV2 { request bytes, payment bytes, accepted_at_ms long } -> JniObjectArray = java_native_kagemusha_prepare_acknowledgement_v2;
+    nativeCreateAcknowledgementV2 { payload bytes, signature bytes, request bytes, payment bytes } -> JniByteArray = java_native_kagemusha_create_acknowledgement_v2;
+    nativeVerifyAcknowledgementV2 { acknowledgement bytes, request bytes, payment bytes } -> JniObjectArray = java_native_kagemusha_verify_acknowledgement_v2;
+    nativeProjectReadinessV4 { readiness bytes } -> JniObjectArray = java_native_kagemusha_project_readiness_v4;
+    nativeProjectAuthenticatedArtifactSetV4 { artifact_set bytes } -> JniObjectArray = java_native_kagemusha_project_authenticated_artifact_set_v4;
+    nativeProjectActiveVerifierV2 { verifier bytes } -> JniObjectArray = java_native_kagemusha_project_active_verifier_v2;
+    #[allow(clippy::too_many_arguments)]
+    nativePrepareAuthorizationV2 {
+        authority bytes, chain_discriminant int, device_id bytes, asset_definition_id bytes,
+        operation_id bytes, issued_at_ms long, expires_at_ms long, nonce bytes,
+        payload_digest bytes, registration_hash bytes, hardware_assertion_platform bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_authorization_v2;
+    nativeFinalizeHardwareAuthorizationV2 {
+        preparation bytes, authenticator_data bytes, signature_der bytes
+    } -> JniObjectArray = java_native_kagemusha_finalize_hardware_authorization_v2;
+    nativeFinalizeIosAppAttestAuthorizationV2 { preparation bytes, assertion_object bytes } -> JniObjectArray = java_native_kagemusha_finalize_ios_app_attest_authorization_v2;
+    nativeFinalizeTopUpV4 { unsigned bytes, authorization bytes } -> JniByteArray = java_native_kagemusha_finalize_top_up_v4;
+    nativeFinalizeRedeemV4 { build_result bytes, authorization bytes } -> JniObjectArray = java_native_kagemusha_finalize_redeem_v4;
+    #[allow(clippy::too_many_arguments)]
+    nativePrepareTopUpV4 {
+        network_id bytes, chain_discriminant int, asset_definition bytes, payer bytes,
+        atomic_units bytes, scale int, operation_id bytes, spend_key bytes,
+        rho bytes, diversifier bytes, leaf_index int, flattened_siblings bytes,
+        directions bytes, root bytes, shield_verifier_commitment bytes, artifact_binding bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v4;
+    nativeProjectOperationStatusV4 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v4;
+    nativeBranchClaimsConflictV2 { left bytes, right bytes } -> JniBoolean = java_native_kagemusha_branch_claims_conflict_v2;
+    #[allow(clippy::too_many_arguments)]
+    nativePrepareRedemptionChangeV4 {
+        bundle bytes, input_opening bytes, atomic_units bytes, scale int,
+        operation_id bytes, entropy bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_redemption_change_v4;
+    #[allow(clippy::too_many_arguments)]
+    nativePreparePeerSplitChangeV4 {
+        bundles objects, input_openings objects, recipient_request bytes, atomic_units bytes,
+        scale int, operation_id bytes, entropy bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_peer_split_change_v4;
+    nativePrepareNoteOpeningV2 { spend_key bytes, rho bytes, diversifier bytes } -> JniByteArray = java_native_kagemusha_prepare_note_opening_v2;
+    nativeProjectRecipientRequestV2 { request bytes } -> JniObjectArray = java_native_kagemusha_project_recipient_request_v2;
 }
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    network_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    asset: jni::objects::JByteArray<'_>,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    recipient: jni::objects::JByteArray<'_>,
-    receiver_device_id: jni::objects::JByteArray<'_>,
-    receiver_public_key: jni::objects::JByteArray<'_>,
-    request_id: jni::objects::JByteArray<'_>,
-    issued_at_ms: jni::sys::jlong,
-    expires_at_ms: jni::sys::jlong,
-    spend_key: jni::objects::JByteArray<'_>,
-    rho: jni::objects::JByteArray<'_>,
-    diversifier: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_recipient_request_v2(
-        &mut env,
-        network_id,
-        chain_discriminant,
-        asset,
-        atomic_units,
-        scale,
-        recipient,
-        receiver_device_id,
-        receiver_public_key,
-        request_id,
-        issued_at_ms,
-        expires_at_ms,
-        spend_key,
-        rho,
-        diversifier,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientRequestV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientRequestV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    payload: jni::objects::JByteArray<'_>,
-    signature: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_create_recipient_request_v2(&mut env, payload, signature)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRequestV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRequestV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_verify_recipient_request_v2(&mut env, request, verified_at_ms)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    network_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    recipient: jni::objects::JByteArray<'_>,
-    receiver_device_id: jni::objects::JByteArray<'_>,
-    asset: jni::objects::JByteArray<'_>,
-    trusted_checkpoint_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_create_recipient_lineage_query_v2(
-        &mut env,
-        network_id,
-        chain_discriminant,
-        recipient,
-        receiver_device_id,
-        asset,
-        trusted_checkpoint_height,
-    )
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    lineage: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_verify_recipient_registration_lineage_v2(
-        &mut env,
-        request,
-        lineage,
-        verified_at_ms,
-        trusted_checkpoint_height,
-        trusted_checkpoint_context_id,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientReceiveOfferV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientReceiveOfferV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    lineage: jni::objects::JByteArray<'_>,
-    publisher_checkpoint_envelope: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_create_recipient_receive_offer_v2(
-        &mut env,
-        request,
-        lineage,
-        publisher_checkpoint_envelope,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientReceiveOfferV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientReceiveOfferV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    offer: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_recipient_receive_offer_v2(&mut env, offer)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientReceiveOfferV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientReceiveOfferV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    offer: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_verify_recipient_receive_offer_v2(
-        &mut env,
-        offer,
-        verified_at_ms,
-        trusted_checkpoint_height,
-        trusted_checkpoint_context_id,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    leaf_index: jni::sys::jint,
-    flattened_siblings: jni::objects::JByteArray<'_>,
-    directions: jni::objects::JByteArray<'_>,
-    root: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_output_membership_frontier_v4(
-        &mut env,
-        leaf_index,
-        flattened_siblings,
-        directions,
-        root,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    frontier: jni::objects::JByteArray<'_>,
-    recipient_commitment: jni::objects::JByteArray<'_>,
-    change_commitment: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_derive_output_membership_paths_v4(
-        &mut env,
-        frontier,
-        recipient_commitment,
-        change_commitment,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    provenance: jni::objects::JByteArray<'_>,
-    membership_witness: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_validate_spendable_branch_v4(
-        &mut env,
-        bundle,
-        provenance,
-        membership_witness,
-        opening,
-        block_height,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipPathsV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipPathsV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    initial_root: jni::objects::JByteArray<'_>,
-    final_root: jni::objects::JByteArray<'_>,
-    recipient_fields: jni::objects::JObjectArray<'_>,
-    change_fields: jni::objects::JObjectArray<'_>,
-    dummy_fields: jni::objects::JObjectArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_output_membership_paths_v4(
-        &mut env,
-        initial_root,
-        final_root,
-        recipient_fields,
-        change_fields,
-        dummy_fields,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildInitRequestV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildInitRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    anchor: jni::objects::JByteArray<'_>,
-    proof: jni::objects::JByteArray<'_>,
-    roster: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    output_membership: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_init_request_v4(
-        &mut env,
-        anchor,
-        proof,
-        roster,
-        opening,
-        output_membership,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    roster: jni::objects::JByteArray<'_>,
-    anchors: jni::objects::JObjectArray<'_>,
-    finality_proofs: jni::objects::JObjectArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_topup_provenance_v4(
-        &mut env,
-        bundle,
-        roster,
-        anchors,
-        finality_proofs,
-        block_height,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    provenance: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_validate_topup_provenance_v4(&mut env, bundle, provenance, block_height)
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundles: jni::objects::JObjectArray<'_>,
-    topup_provenances: jni::objects::JObjectArray<'_>,
-    openings: jni::objects::JObjectArray<'_>,
-    witnesses: jni::objects::JObjectArray<'_>,
-    change_opening: jni::objects::JByteArray<'_>,
-    output_membership: jni::objects::JByteArray<'_>,
-    verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_append_request_v4(
-        &mut env,
-        bundles,
-        topup_provenances,
-        openings,
-        witnesses,
-        change_opening,
-        output_membership,
-        verifier_commitment,
-        operation_id,
-        block_height,
-    )
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildVerifyRequestV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildVerifyRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    recipient_request: jni::objects::JByteArray<'_>,
-    topup_provenance: jni::objects::JByteArray<'_>,
-    maximum_hops: jni::sys::jint,
-    block_height: jni::sys::jlong,
-    verified_at_ms: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_verify_request_v4(
-        &mut env,
-        bundle,
-        recipient_request,
-        topup_provenance,
-        maximum_hops,
-        block_height,
-        verified_at_ms,
-        JavaKagemushaArtifactRegistryV4::Production,
-    )
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemRequestV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    topup_provenance: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    membership_witness: jni::objects::JByteArray<'_>,
-    recipient: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    change_opening: jni::objects::JByteArray<'_>,
-    change_output_membership: jni::objects::JByteArray<'_>,
-    verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_build_redeem_request_v4(
-        &mut env,
-        bundle,
-        topup_provenance,
-        opening,
-        membership_witness,
-        recipient,
-        chain_discriminant,
-        atomic_units,
-        scale,
-        change_opening,
-        change_output_membership,
-        verifier_commitment,
-        operation_id,
-        block_height,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectPeerPaymentV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectPeerPaymentV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    payment: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_peer_payment_v4(&mut env, payment)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_init_result_v4(&mut env, result)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectSplitResultV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectSplitResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_split_result_v4(&mut env, result)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectVerifyResultV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectVerifyResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_verify_result_v4(&mut env, result)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRedeemBuildResultV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRedeemBuildResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_redeem_build_result_v4(&mut env, result)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareAcknowledgementV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareAcknowledgementV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    payment: jni::objects::JByteArray<'_>,
-    accepted_at_ms: jni::sys::jlong,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_acknowledgement_v2(&mut env, request, payment, accepted_at_ms)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAcknowledgementV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAcknowledgementV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    payload: jni::objects::JByteArray<'_>,
-    signature: jni::objects::JByteArray<'_>,
-    request: jni::objects::JByteArray<'_>,
-    payment: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_create_acknowledgement_v2(&mut env, payload, signature, request, payment)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyAcknowledgementV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyAcknowledgementV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    acknowledgement: jni::objects::JByteArray<'_>,
-    request: jni::objects::JByteArray<'_>,
-    payment: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_verify_acknowledgement_v2(&mut env, acknowledgement, request, payment)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectReadinessV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectReadinessV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    readiness: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_readiness_v4(&mut env, readiness)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectAuthenticatedArtifactSetV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectAuthenticatedArtifactSetV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    artifact_set: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_authenticated_artifact_set_v4(&mut env, artifact_set)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectActiveVerifierV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectActiveVerifierV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    verifier: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_active_verifier_v2(&mut env, verifier)
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareAuthorizationV2();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareAuthorizationV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    authority: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    device_id: jni::objects::JByteArray<'_>,
-    asset_definition_id: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    issued_at_ms: jni::sys::jlong,
-    expires_at_ms: jni::sys::jlong,
-    nonce: jni::objects::JByteArray<'_>,
-    payload_digest: jni::objects::JByteArray<'_>,
-    registration_hash: jni::objects::JByteArray<'_>,
-    hardware_assertion_platform: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_authorization_v2(
-        &mut env,
-        authority,
-        chain_discriminant,
-        device_id,
-        asset_definition_id,
-        operation_id,
-        issued_at_ms,
-        expires_at_ms,
-        nonce,
-        payload_digest,
-        registration_hash,
-        hardware_assertion_platform,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    preparation: jni::objects::JByteArray<'_>,
-    authenticator_data: jni::objects::JByteArray<'_>,
-    signature_der: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_finalize_hardware_authorization_v2(
-        &mut env,
-        preparation,
-        authenticator_data,
-        signature_der,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    preparation: jni::objects::JByteArray<'_>,
-    assertion_object: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
-        &mut env,
-        preparation,
-        assertion_object,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeTopUpV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeTopUpV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    unsigned: jni::objects::JByteArray<'_>,
-    authorization: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_finalize_top_up_v4(&mut env, unsigned, authorization)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeRedeemV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeRedeemV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    build_result: jni::objects::JByteArray<'_>,
-    authorization: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_finalize_redeem_v4(&mut env, build_result, authorization)
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    network_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    asset_definition: jni::objects::JByteArray<'_>,
-    payer: jni::objects::JByteArray<'_>,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    operation_id: jni::objects::JByteArray<'_>,
-    spend_key: jni::objects::JByteArray<'_>,
-    rho: jni::objects::JByteArray<'_>,
-    diversifier: jni::objects::JByteArray<'_>,
-    leaf_index: jni::sys::jint,
-    flattened_siblings: jni::objects::JByteArray<'_>,
-    directions: jni::objects::JByteArray<'_>,
-    root: jni::objects::JByteArray<'_>,
-    shield_verifier_commitment: jni::objects::JByteArray<'_>,
-    artifact_binding: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_top_up_v4(
-        &mut env,
-        network_id,
-        chain_discriminant,
-        asset_definition,
-        payer,
-        atomic_units,
-        scale,
-        operation_id,
-        spend_key,
-        rho,
-        diversifier,
-        leaf_index,
-        flattened_siblings,
-        directions,
-        root,
-        shield_verifier_commitment,
-        artifact_binding,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectOperationStatusV4();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectOperationStatusV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    status: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_operation_status_v4(&mut env, status)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBranchClaimsConflictV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBranchClaimsConflictV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    left: jni::objects::JByteArray<'_>,
-    right: jni::objects::JByteArray<'_>,
-) -> jni::sys::jboolean {
-    java_native_kagemusha_branch_claims_conflict_v2(&mut env, left, right)
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    input_opening: jni::objects::JByteArray<'_>,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    operation_id: jni::objects::JByteArray<'_>,
-    entropy: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_redemption_change_v4(
-        &mut env,
-        bundle,
-        input_opening,
-        atomic_units,
-        scale,
-        operation_id,
-        entropy,
-    )
-}
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4();
-sdk:
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundles: jni::objects::JObjectArray<'_>,
-    input_openings: jni::objects::JObjectArray<'_>,
-    recipient_request: jni::objects::JByteArray<'_>,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    operation_id: jni::objects::JByteArray<'_>,
-    entropy: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_prepare_peer_split_change_v4(
-        &mut env,
-        bundles,
-        input_openings,
-        recipient_request,
-        atomic_units,
-        scale,
-        operation_id,
-        entropy,
-    )
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareNoteOpeningV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareNoteOpeningV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    spend_key: jni::objects::JByteArray<'_>,
-    rho: jni::objects::JByteArray<'_>,
-    diversifier: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_prepare_note_opening_v2(&mut env, spend_key, rho, diversifier)
-}
-android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientRequestV2();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientRequestV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_recipient_request_v2(&mut env, request)
-}
-}
+
 pub(super) fn ensure_min_array_length(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,

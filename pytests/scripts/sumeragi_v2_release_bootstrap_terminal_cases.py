@@ -436,6 +436,7 @@ def test_terminal_receipt_rejects_g12_seed_soak_root_alias(
         "--expected-receipt-validator-sha256",
         "--expected-receipt-validator-support-sha256",
         "--expected-runtime-helper-sha256",
+        "--expected-runtime-helper-cli-sha256",
         "--expected-runner-tool-manifest-sha256",
         "--expected-bash-sha256",
         "--expected-ssh-allowed-signers-sha256",

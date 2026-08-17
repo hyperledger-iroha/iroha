@@ -65877,32 +65877,7 @@ self.admitted_sidecar_chunks.clear();
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get("V2LaneWorkLimits::new"),
-        """
-Self {
-    session_capacity,
-    body_buckets_per_session,
-    effect_capacity,
-    relay_capacity,
-    merge_capacity,
-    native_request_capacity,
-    reply_source_capacity,
-    merge_share_frame_capacity,
-    historical_recovery_response_frame_capacity,
-    authenticated_merge_qc_capacity,
-    merge_leader_body_frame_headroom_bytes,
-    autonomous_carrier_headroom_bytes,
-    autonomous_producer_recheck,
-    historical_recovery_retry_floor,
-    historical_recovery_retry_ceiling,
-    historical_recovery_stuck_attempts,
-    historical_recovery_retry_tier_attempts,
-    historical_recovery_max_retry_tier,
-    sidecar_service_burst,
-    merge_sidecar_limits,
-    merge_signing_guard_limits,
-    native_amx_signing_guard_limits,
-}
-""",
+        _PRODUCTION_LANE_LIMITS_CONSTRUCTOR_TOKENS,
         "lane limits must retain the exact configured reply-source geometry",
         errors,
     )
@@ -67317,23 +67292,8 @@ let scan_limit = lane_work.effect_count();
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
-        """
-match dispatch_lane_work_effect(services, next_effect)? {
-    LaneWorkEffectDispatch::Complete => {
-        dispatched = dispatched.saturating_add(1);
-    }
-    LaneWorkEffectDispatch::SourceRetained(effect) => {
-        if !lane_work.requeue_effect(effect) {
-            return Err(V2RunnerError::Service(
-                "lane-work scheduler could not retain a source-backpressured sidecar effect"
-                    .to_owned(),
-            ));
-        }
-    }
-}
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
-""",
-        "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
+        _PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS,
+        "runner lane dispatch must release catalog-retained delivery slots, requeue other source-retained handoffs, then apply writer receipts",
         errors,
     )
     _require_rust_token_sequence(
@@ -67831,7 +67791,9 @@ fn target_reservation(
     semantic_target: &PeerId,
     class: ExactOutputClass,
 ) -> ExactTargetReservation {
-    let kind = if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
+    let kind = if class == ExactOutputClass::Safety && self.is_global_pacemaker_fanout() {
+        ExactTargetReservationKind::Pacemaker
+    } else if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
         ExactTargetReservationKind::SidecarTopologyProgress
     } else if self.retryable_certified_sidecar_responder_control_target()
         == Some(semantic_target)
@@ -67847,9 +67809,9 @@ fn target_reservation(
     }
 }
 """,
-        "reservation identity must isolate requester-owned topology progress and "
-        "retryable responder control from reliable reply-source ownership for "
-        "the same frozen target",
+        "reservation identity must isolate pacemaker, requester-owned topology "
+        "progress, and retryable responder control from reliable reply-source "
+        "ownership for the same frozen target",
         errors,
     )
     _require_rust_token_sequence(
@@ -68254,6 +68216,11 @@ let reserved_target_classes = frozen_semantic_targets
             .into_iter()
             .chain([ExactTargetReservation {
                 semantic_target: semantic_target.clone(),
+                class: ExactOutputClass::Safety,
+                kind: ExactTargetReservationKind::Pacemaker,
+            }])
+            .chain([ExactTargetReservation {
+                semantic_target: semantic_target.clone(),
                 class: ExactOutputClass::Lane,
                 kind: ExactTargetReservationKind::SidecarTopologyProgress,
             }])
@@ -68277,8 +68244,8 @@ let ownership_unit_capacity = shared_ownership_unit_capacity
     .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
 """,
         "corridor construction reserves one ownership unit for every frozen "
-        "validator/class pair plus independent topology-progress and retryable "
-        "reply-control units",
+        "validator/class pair plus independent pacemaker, topology-progress, "
+        "and retryable reply-control units",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -68342,6 +68309,13 @@ added_shared_units = added_shared_units
         worker_path,
         reservation_items.get("PendingExactOutput::capacity_available_for"),
         """
+if self
+    .fanouts
+    .iter()
+    .any(|pending| pending.can_coalesce_exact_topology_retry(fanout))
+{
+    return Ok(true);
+}
 if let Some(pending) = self
     .fanouts
     .iter()
@@ -68357,7 +68331,7 @@ if let Some(pending) = self
 }
 self.ownership_capacity_available(&fanout.admission_reservation_counts()?)
 """,
-        "capacity preflight must enforce route-source geometry before charging only newly appended source ownership",
+        "capacity preflight must reuse identical topology ownership, otherwise enforce route-source geometry before charging only newly appended source ownership",
         errors,
     )
     _require_rust_token_sequence(
@@ -68396,6 +68370,13 @@ if self
 if self
     .fanouts
     .iter()
+    .any(|pending| pending.can_coalesce_exact_topology_retry(fanout))
+{
+    return Ok(true);
+}
+if self
+    .fanouts
+    .iter()
     .any(|pending| pending.can_coalesce_retry(fanout))
 {
     return self.capacity_available_for(fanout);
@@ -68406,8 +68387,9 @@ if self.retains_retryable_sidecar_responder_control_for(fanout) {
 self.capacity_available_for(fanout)
 """,
         "lane-effect preflight must validate geometry, preflight a safely "
-        "replaceable responder control, retain a distinct duplicate at lane "
-        "ownership, and otherwise charge reservation capacity",
+        "replaceable responder control, reuse identical topology ownership, "
+        "retain a distinct reply duplicate at lane ownership, and otherwise "
+        "charge reservation capacity",
         errors,
     )
     _require_rust_token_sequence(
@@ -68481,14 +68463,22 @@ if self
             }
         });
 }
+if self
+    .fanouts
+    .iter()
+    .any(|pending| pending.can_coalesce_exact_topology_retry(&fanout))
+{
+    return Ok(ExactFanoutOwnership::Owned);
+}
 if let Some(index) = self
     .fanouts
     .iter()
     .position(|pending| pending.can_coalesce_retry(&fanout))
 {
 """,
-        "worker exact output must retire a safely stranded responder control "
-        "before coalescing an exact authenticated retry",
+        "worker exact output must retire a safely stranded responder control, "
+        "then coalesce identical topology ownership before an authenticated "
+        "reply retry",
         errors,
     )
     _require_rust_token_sequence(
@@ -70228,7 +70218,7 @@ assert_eq!(
     )
 
     expected_exact_output_runner_items = {
-        "drain_v2_ingress", "rollover_finalized_height_outputs",
+        "drain_v2_ingress", "authorize_decided_lane_recovery_drain", "rollover_finalized_height_outputs",
         "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
         "drain_finalized_lane_work_output",
         "dispatch_lane_work_effect",
@@ -70266,6 +70256,8 @@ assert_eq!(
                     f"{observed_sha256}"
                 )
     expected_ordinary_ingress_items = {
+        "prepare_current_certified_serve_pre_admission",
+        "authorize_current_certified_serve_pre_dequeue",
         "consume_prepared_dequeued_v2_ingress",
     }
     observed_ordinary_ingress_items = set(
@@ -70294,9 +70286,9 @@ assert_eq!(
             (),
             f"exact-output ordinary-ingress {item_name} owner",
             errors,
-            expected_attributes=(
-                "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
-            ),
+            expected_attributes=("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",)
+            if item_name == "consume_prepared_dequeued_v2_ingress"
+            else (),
         )
         _require_rust_item_token_sha256(
             ordinary_ingress_consumer_path,
@@ -70308,6 +70300,8 @@ assert_eq!(
     ordinary_ingress_consumer = ordinary_ingress_items.get(
         "consume_prepared_dequeued_v2_ingress"
     )
+    current_serve_pre_admission = ordinary_ingress_items.get("prepare_current_certified_serve_pre_admission")
+    current_serve_authorization = ordinary_ingress_items.get("authorize_current_certified_serve_pre_dequeue")
     _require_rust_token_sequence(
         lifecycle_runner_path,
         lifecycle_runner_items["ordinary_finalize"],
@@ -70496,98 +70490,94 @@ let Some((inbound, dequeue_disposition)) = receiver
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
-let Some(sender) = inbound.sender() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its authenticated sender".to_owned(),
-    ));
-    return true;
-};
-let Some(authenticated_via) = inbound.via() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its authenticated source".to_owned(),
-    ));
-    return true;
-};
-let Some(reply_routes) = inbound.reply_routes() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its reply capability".to_owned(),
-    ));
-    return true;
-};
-let Some(ingress_ownership) = inbound.ingress_ownership() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its ownership evidence".to_owned(),
-    ));
-    return true;
-};
-if reply_routes.semantic_target() != sender
-    || !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(inbound.message())
-    || !ingress_ownership.matches_semantic_origin(Some(sender))
-    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-{
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress changed its transport ownership"
-            .to_owned(),
-    ));
-    return true;
-}
-let authenticated = match executor
-    .authenticate_certified_body_request(request.clone(), sender)
-{
-        Ok(authenticated) => authenticated,
-        Err(error) => {
-            prepared_serve = Some(
-                match services.stage_certified_serve_rejection(
-                    HashOf::new(request),
-                    CertifiedServeNegativeOutcome::InvalidCertificate,
-                ) {
-                    Ok(()) => {
-                        ProductionPreparedCertifiedServeV1::Rejected(error.to_string())
-                    }
-                    Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                },
-            );
-            return true;
-        }
-    };
-if superseded_by_decision {
-    let decided = terminal_subject.expect(
-        "Decision supersession requires the durable exact terminal subject",
-    );
-    prepared_serve = Some(
-        match services.stage_certified_serve_rejection(
-            authenticated.request_hash(),
-            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-        ) {
-            Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(
-                "certified body request was superseded by durable Decision"
-                    .to_owned(),
-            ),
-            Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-        },
-    );
-    return true;
-}
-match services.prepare_certified_request(authenticated_via, authenticated) {
-    Ok(admission) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Admitted(admission));
+let prepared = ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+    inbound,
+    executor.context().height,
+    terminal_subject,
+    |request, sender| {
+        executor
+            .authenticate_certified_body_request(request, sender)
+            .map_err(|error| error.to_string())
+    },
+);
+match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
+    prepared,
+    services,
+) {
+    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
+        prepared,
+    ) => {
+        prepared_serve = Some(prepared);
         true
     }
-    Err(CertifiedServePrepareError::Backpressure) => {
+    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
         false
-    }
-    Err(CertifiedServePrepareError::Rejected(reason)) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Rejected(reason));
-        true
-    }
-    Err(CertifiedServePrepareError::Service(reason)) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(reason));
-        true
     }
 }
 """,
-        "exact Serve ingress must validate complete transport ownership, durably stage invalid or Decision-superseded negative outcomes, and reserve or coalesce before the selected head drains",
+        "exact Serve ingress must delegate authentication and durable preparation before the selected head drains",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ordinary_ingress_consumer_path,
+        current_serve_pre_admission,
+        """
+if reply_routes.semantic_target() != sender
+    || !ownership.validate_exact()
+    || !ownership.matches_message(inbound.message())
+    || !ownership.matches_semantic_origin(Some(sender))
+    || !ownership.matches_reply_routes(Some(reply_routes))
+{
+    return CurrentCertifiedServePreAdmissionV1::Service(
+        "current certified-body ingress changed its transport ownership".to_owned(),
+    );
+}
+let authenticated = match authenticate(request.clone(), sender) {
+    Ok(authenticated) => authenticated,
+    Err(reason) => {
+        return CurrentCertifiedServePreAdmissionV1::Negative {
+            request_hash: HashOf::new(request),
+            outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
+            reason,
+        };
+    }
+};
+if certified_body_request_is_superseded_after_decision(request, terminal_subject, active_height)
+{
+    let decided = terminal_subject
+        .expect("Decision supersession requires the durable exact terminal subject");
+    return CurrentCertifiedServePreAdmissionV1::Negative {
+        request_hash: authenticated.request_hash(),
+        outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+        reason: "certified body request was superseded by durable Decision".to_owned(),
+    };
+}
+""",
+        "shared current Serve classification must bind transport ownership, invalid certificates, and Decision supersession",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ordinary_ingress_consumer_path,
+        current_serve_authorization,
+        """
+CurrentCertifiedServePreAdmissionV1::Negative {
+    request_hash,
+    outcome,
+    reason,
+} => match authorizer.stage_negative(request_hash, outcome) {
+    Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(reason),
+    Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
+},
+CurrentCertifiedServePreAdmissionV1::Authenticated {
+    authenticated_via,
+    request,
+} => match authorizer.prepare_exact(&authenticated_via, request) {
+    Ok(admission) => ProductionPreparedCertifiedServeV1::Admitted(admission),
+    Err(CertifiedServePrepareError::Backpressure) => {
+        return ProductionCurrentCertifiedServePreparationV1::Retain;
+    }
+""",
+        "shared current Serve authorization must stage a negative or reserve/coalesce before dequeue and retain on capacity backpressure",
         errors,
     )
     _require_rust_token_sequence(
@@ -70813,6 +70803,9 @@ for _ in 0..scan_limit {
     {
         let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
         drop(effect);
+        if next_effect.retries_from_native_catalog_after_source_retention() {
+            continue;
+        }
         if !lane_work.requeue_effect(next_effect) {
             return Err(V2RunnerError::Service(
                 "lane-work scheduler could not restore a reserved effect".to_owned(),
@@ -70821,31 +70814,15 @@ for _ in 0..scan_limit {
         continue;
     }
 """,
-        "lane scheduler must scan past unserviceable heads without losing ownership",
+        "lane scheduler must release catalog-retained delivery slots and scan past other unserviceable heads without losing ownership",
         errors,
     )
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("dispatch_lane_work_effects_with_progress"),
-        """
-let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-drop(effect);
-match dispatch_lane_work_effect(services, next_effect)? {
-    LaneWorkEffectDispatch::Complete => {
-        dispatched = dispatched.saturating_add(1);
-    }
-    LaneWorkEffectDispatch::SourceRetained(effect) => {
-        if !lane_work.requeue_effect(effect) {
-            return Err(V2RunnerError::Service(
-                "lane-work scheduler could not retain a source-backpressured sidecar effect"
-                    .to_owned(),
-            ));
-        }
-    }
-}
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
-""",
-        "lane scheduler must dispatch only after exact reservation preflight and requeue any source-retained handoff before applying receipts",
+        "let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;\n"
+        "drop(effect);\n" + _PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS,
+        "lane scheduler must dispatch only after exact reservation preflight, release catalog-retained delivery slots, and requeue other source-retained handoffs before applying receipts",
         errors,
     )
     _require_rust_token_sequence(

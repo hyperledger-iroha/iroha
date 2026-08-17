@@ -17,7 +17,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "3e00fb93a6bd95b2d6c4818c97384160fe40de5aef5b6486e76bb0e241abc01e"
     ),
     "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
-        "ab94a69668a30f2e4ba63935fd38770114cb72d0e3440bfd88e7e8e8a187d31c"
+        "efa8a4c8549dcb10367b3352069cb78742f53fff5f763dcb424464954b98247b"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
         "9be38068b2861daa6040cf38bc5d6bed182369a67ae16c709eee25eba028d7d3"
@@ -974,13 +974,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "d215faabee519a4659e724ec6250526da826672168897c4e3c271b0a565f5c46"
+        "272bb149355cd0bf8429b0d0208381b162220d2d2cfaec13708ab7ceb1529e11"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "8b4d6456a97ccf94a27e423201948715f86b3462b38a6b9b6eee623a7f6fc4b8"
+        "08975bc7d7421c26ee3ab23892003d6938e4d61faba159a32932e081d0006b8c"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "c20bc4f803a026873b1508c11b1540dacc6f402e766bdd800f1b552981600891"
+        "1f8d40157775db4b4a6972801cd8022d059c048a3c21813c372a47664825cb04"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"

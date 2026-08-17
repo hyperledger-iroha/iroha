@@ -136,8 +136,7 @@ fn rejects_zero_operation_registry_byte_limit() {
 }
 #[test]
 fn rejects_operation_registry_byte_limit_below_one_entry() {
-    let minimum =
-        defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
+    let minimum = defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
     assert!(
         minimum > 1,
         "accounted entry size must have a positive predecessor"

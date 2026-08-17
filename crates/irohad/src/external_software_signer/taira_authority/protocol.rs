@@ -364,6 +364,15 @@ pub(super) struct RunAssignmentV1 {
     pub run_id: [u8; 32],
     pub subject_sha256: [u8; 32],
     pub artifact_manifest_sha256: [u8; 32],
+    /// Administrator-pinned digest of the installed native-evidence controller.
+    /// Present only for [`TairaAuthorityRoleV1::NativeEvidence`].
+    pub controller_digest: Option<[u8; 32]>,
+    /// Administrator-pinned host identity for the native-evidence controller.
+    pub controller_host_id: Option<String>,
+    /// Administrator-pinned installation identity for the native-evidence controller.
+    pub controller_installation_id: Option<String>,
+    /// Administrator-issued fresh nonce for the native-evidence run.
+    pub run_nonce: Option<[u8; 32]>,
     pub issued_at_unix_millis: u64,
     pub not_before_unix_millis: u64,
     pub expires_at_unix_millis: u64,
@@ -376,6 +385,28 @@ pub(super) struct RunAssignmentV1 {
 pub(super) struct StoredRunAssignmentV1 {
     pub assignment: RunAssignmentV1,
     pub assignment_json: Vec<u8>,
+    pub signing_payload: Vec<u8>,
+    pub receipt: SoftwareSignerSignatureReceiptV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct StoredPublicSoakObservationBindingInputV1 {
+    pub operation_id: [u8; 32],
+    pub replay_binding: TairaAuthorityPublicBindingV1,
+    pub replay_binding_sha256: [u8; 32],
+    pub observation_binding: TairaAuthorityPublicBindingV1,
+    pub observation_binding_sha256: [u8; 32],
+    pub signing_payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct StoredPublicSoakObservationBindingAnchorV1 {
+    pub operation_id: [u8; 32],
+    pub replay_binding: TairaAuthorityPublicBindingV1,
+    pub replay_binding_sha256: [u8; 32],
+    pub observation_binding: TairaAuthorityPublicBindingV1,
+    pub observation_binding_sha256: [u8; 32],
+    pub previous_audit_head: [u8; 32],
     pub signing_payload: Vec<u8>,
     pub receipt: SoftwareSignerSignatureReceiptV1,
 }
@@ -409,6 +440,24 @@ pub(super) struct StoredAuthorizationV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct StoredDeploymentFinalizationInputV1 {
+    pub operation_id: [u8; 32],
+    pub run_id: [u8; 32],
+    pub apply_request_sha256: [u8; 32],
+    pub finalization_request_sha256: [u8; 32],
+    pub finalization_request_json: Vec<u8>,
+    pub subject_sha256: [u8; 32],
+    pub artifact_manifest_sha256: [u8; 32],
+    pub outcome: String,
+    pub result_sha256: [u8; 32],
+    pub finalized_at_unix_millis: u64,
+    pub binding: TairaAuthorityPublicBindingV1,
+    pub binding_sha256: [u8; 32],
+    pub previous_audit_sequence: u64,
+    pub previous_audit_head: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct StoredDeploymentFinalizationV1 {
     pub operation_id: [u8; 32],
     pub apply_request_sha256: [u8; 32],
@@ -416,8 +465,12 @@ pub(super) struct StoredDeploymentFinalizationV1 {
     pub outcome: String,
     pub result_sha256: [u8; 32],
     pub finalized_at_unix_millis: u64,
-    pub signing_payload: Vec<u8>,
-    pub receipt: SoftwareSignerSignatureReceiptV1,
+    pub authority_envelope_json: Vec<u8>,
+    pub durable_receipt_json: Vec<u8>,
+    pub decision_signing_payload: Vec<u8>,
+    pub decision_receipt: SoftwareSignerSignatureReceiptV1,
+    pub receipt_signing_payload: Vec<u8>,
+    pub durable_receipt: SoftwareSignerSignatureReceiptV1,
     pub result_json: Vec<u8>,
 }
 

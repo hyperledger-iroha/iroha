@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard the typed Iroha CLI source compaction against its index preimages."""
+"""Guard typed Iroha CLI compaction against authenticated donor blobs."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ MINIMUM_RUST_LINE_REDUCTION = 1_500
 @dataclass(frozen=True)
 class SourcePin:
     path: Path
-    index_blob: str
+    preimage_blob: str
     line_ceiling: int
 
 
@@ -322,14 +322,12 @@ class IrohaCliTypedCompactionSourceTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.current = {pin.path: (ROOT / pin.path).read_text() for pin in PINS}
         cls.indexed = {
-            pin.path: _git("show", f":{pin.path.as_posix()}") for pin in PINS
+            pin.path: _git("cat-file", "blob", pin.preimage_blob) for pin in PINS
         }
 
-    def test_index_preimages_and_typed_expansions_are_exact(self) -> None:
+    def test_authenticated_preimages_and_typed_expansions_are_exact(self) -> None:
         for pin in PINS:
-            self.assertEqual(
-                _git("rev-parse", f":{pin.path.as_posix()}").strip(), pin.index_blob
-            )
+            self.assertEqual(_git("cat-file", "-t", pin.preimage_blob).strip(), "blob")
         _validate(self.current, self.indexed)
 
     def test_test_name_mutation_is_rejected(self) -> None:

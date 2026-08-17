@@ -265,6 +265,13 @@ def close_handoff(
         raise QualificationHandoffError(
             "qualification receipt is not bound to the exact source identity and handoff"
         )
+    try:
+        rollout_admission._receipt_signers(
+            receipt_value.get("receipt_signers"),
+            "qualification receipt signer map",
+        )
+    except rollout_admission.TairaRolloutAdmissionError as error:
+        raise QualificationHandoffError(str(error)) from error
     privacy_candidate = privacy_value.get("candidate")
     if (
         privacy_value.get("schema") != privacy_evidence.RECEIPT_SCHEMA

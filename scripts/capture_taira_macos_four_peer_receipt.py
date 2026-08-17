@@ -472,6 +472,7 @@ def _receipt(
     issued_at: int,
 ) -> dict[str, object]:
     config_digests = {peer.slug: peer.config_sha256 for peer in bundle.peers}
+    receipt_signers = deploy.receipt_signer_public_map(bundle.receipt_signers)
     body: dict[str, object] = {
         "artifact_handoff_sha256": artifact_handoff_sha256,
         "end": {"block_hash": end.block_hash, "height": end.height},
@@ -482,8 +483,9 @@ def _receipt(
             {
                 "final_block_hash": end.block_hash,
                 "final_height": end.height,
-                "label": peer.label,
+                "label": peer.slug,
                 "number": peer.number,
+                "receipt_signer_node_id": receipt_signers[peer.slug]["node_id"],
                 "restart_proof": "passed",
                 "source_commit": source.commit,
                 "validator_binary_sha256": binary_sha256,
@@ -492,6 +494,7 @@ def _receipt(
             for peer in bundle.peers
         ],
         "platform": {"arch": "arm64", "os": "macos"},
+        "receipt_signers": receipt_signers,
         "reset_manifest_sha256": bundle.manifest_sha256,
         "restart_generation": restart_generation,
         "schema": admission.MACOS_RECEIPT_SCHEMA,

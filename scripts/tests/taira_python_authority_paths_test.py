@@ -644,7 +644,7 @@ def test_qualification_positive_issuance_and_historical_verification(
         for _label, mutated in _scalar_mutations(original):
             path.chmod(0o600)
             path.write_bytes(_canonical(mutated))
-            with pytest.raises(qualification.BoiHandoffError):
+            with pytest.raises(qualification.QualificationHandoffError):
                 qualification_fixture._verify_qualified(
                     fixture, monkeypatch
                 )
@@ -982,7 +982,7 @@ def test_all_seven_public_boundaries_fail_before_untrusted_input(
         ),
         (
             "qualification",
-            lambda: qualification.assemble_boi_handoff(
+            lambda: qualification.assemble_qualification_handoff(
                 Path("/attacker"),
                 Path("/attacker-output"),
                 object(),  # type: ignore[arg-type]
@@ -997,7 +997,7 @@ def test_all_seven_public_boundaries_fail_before_untrusted_input(
                 release_manifest_verifier_path=Path("/attacker-verifier"),
                 trusted_release_manifest_verifier_sha256="bad",
             ),
-            qualification.BoiHandoffError,
+            qualification.QualificationHandoffError,
         ),
         (
             "deploy-issuance",

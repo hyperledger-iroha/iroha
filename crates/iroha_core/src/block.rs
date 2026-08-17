@@ -24682,7 +24682,12 @@ mod commit {
                 "entry_hash".to_owned(),
                 source_tx_commitment.as_ref().to_vec(),
             );
-            fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT test batch");
+            fastpq_prover::bind_axt_batch_with_committed_amount(
+                &mut batch,
+                &binding,
+                committed_amount,
+            )
+            .expect("bind AXT test batch");
             let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
                 .expect("FASTPQ prover")
                 .prove(&batch)
@@ -24730,6 +24735,58 @@ mod commit {
             proof.payload =
                 norito::to_bytes(&envelope).expect("encode commitment-bound proof envelope");
             (proof, commitment)
+        }
+        fn hidden_amount_fixture(
+            dsid: u64,
+            manifest_root: u8,
+            proof_seed: &[u8],
+        ) -> (State, AxtEnvelopeRecord) {
+            let mut state = axt_validation_state();
+            let dsid = DataSpaceId::new(dsid);
+            let lane = LaneId::new(1);
+            let manifest_root = [manifest_root; 32];
+            state.set_axt_policy(
+                dsid,
+                AxtPolicyEntry {
+                    manifest_root,
+                    target_lane: lane,
+                    active_handle_era: 1,
+                    next_handle_counter: 1,
+                    current_slot: 0,
+                },
+            );
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let (proof, commitment) =
+                proof_blob_for_with_authenticated_amount(dsid, manifest_root, proof_seed, 12, 5);
+            let mut handle = sample_handle(binding, lane, dsid, 5, manifest_root);
+            handle.intent.op.amount = None;
+            handle.amount = None;
+            handle.amount_commitment = Some(commitment);
+            handle.proof = Some(proof);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: Vec::new(),
+                handles: vec![handle],
+                commit_height: 1,
+            };
+            (state, envelope)
         }
         fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
             let mut payload = Vec::new();
@@ -25477,53 +25534,7 @@ mod commit {
         }
         #[test]
         fn axt_validation_accepts_authenticated_hidden_amount() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(17);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x31; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let (proof, commitment) = proof_blob_for_with_authenticated_amount(
-                dsid,
-                policy.manifest_root,
-                b"authenticated-hidden-amount",
-                12,
-                5,
-            );
-            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
-            handle.amount_commitment = Some(commitment);
-            handle.proof = Some(proof);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: Vec::new(),
-                handles: vec![handle],
-                commit_height: 1,
-            };
+            let (state, envelope) = hidden_amount_fixture(17, 0x31, b"authenticated-hidden-amount");
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
@@ -25531,122 +25542,46 @@ mod commit {
                 .expect("authenticated hidden amount must pass block admission");
         }
         #[test]
-        fn axt_validation_rejects_two_copy_attacker_amount_commitment() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(18);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x32; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let forged_commitment = [0xA5; 32];
-            let proof = proof_blob_for_with_amount(
-                dsid,
-                policy.manifest_root,
-                b"forged-hidden-amount",
-                12,
-                Some(5),
-                Some(forged_commitment),
+        fn axt_validation_rejects_mutated_proof_amount_with_recomputed_commitment() {
+            let (state, mut envelope) = hidden_amount_fixture(18, 0x32, b"mutated-hidden-amount");
+            let handle = &mut envelope.handles[0];
+            let proof = handle
+                .proof
+                .as_mut()
+                .expect("fixture has an embedded proof");
+            let mut proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+                .expect("decode authenticated amount proof");
+            let forged_amount = Quantity::from(7_u64);
+            proof_envelope.committed_amount = Some(7);
+            proof_envelope.amount_commitment = None;
+            proof.payload = norito::to_bytes(&proof_envelope).expect("encode mutated amount proof");
+            let forged_commitment = ivm::axt::derive_amount_commitment(
+                proof_envelope.dsid,
+                &forged_amount,
+                Some(proof.payload.as_slice()),
             );
-            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            proof_envelope.amount_commitment = Some(forged_commitment);
+            proof.payload = norito::to_bytes(&proof_envelope)
+                .expect("encode mutated proof with recomputed commitment");
             handle.amount_commitment = Some(forged_commitment);
-            handle.proof = Some(proof);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: Vec::new(),
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                error,
+            expect_axt_envelope_error(
+                &state,
+                envelope,
                 AxtRejectReason::Proof,
-                "amount commitment does not bind",
+                "committed_amount does not match proof-bound batch metadata",
             );
         }
         #[test]
         fn axt_validation_rejects_stale_fragment_commitment() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(19);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x33; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let (proof, mut commitment) = proof_blob_for_with_authenticated_amount(
-                dsid,
-                policy.manifest_root,
-                b"stale-fragment-commitment",
-                12,
-                5,
-            );
-            commitment[0] ^= 0x01;
-            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
-            handle.amount_commitment = Some(commitment);
-            handle.proof = Some(proof);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: Vec::new(),
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                error,
+            let (state, mut envelope) =
+                hidden_amount_fixture(19, 0x33, b"stale-fragment-commitment");
+            envelope.handles[0]
+                .amount_commitment
+                .as_mut()
+                .expect("fixture has an amount commitment")[0] ^= 0x01;
+            expect_axt_envelope_error(
+                &state,
+                envelope,
                 AxtRejectReason::Budget,
                 "handle amount commitment does not match",
             );

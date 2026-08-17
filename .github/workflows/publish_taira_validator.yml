@@ -1071,7 +1071,32 @@ jobs:
           /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" <<'PY'
           import json,sys
           before,after=(json.load(open(path,encoding="ascii")) for path in sys.argv[1:])
+          exact_int=lambda value: isinstance(value,int) and not isinstance(value,bool)
+          sha=lambda value: isinstance(value,str) and len(value)==64 and value==value.lower() and value!="0"*64 and all(character in "0123456789abcdef" for character in value)
           if before.get("applied") is not False or after.get("applied") is not True or before.get("admission_receipt_id") != after.get("admission_receipt_id"): raise SystemExit("deployment preflight/apply contract failed")
+          expected={"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0","network_id":"hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94","network_name":"taira","peer_count":4,"protocol_version":4,"restart_proof":"passed"}
+          if any(type(after.get(key)) is not type(value) or after.get(key)!=value for key,value in expected.items()): raise SystemExit("deployment identity contract failed")
+          if not exact_int(after.get("deployment_completed_at_unix_ms")) or after["deployment_completed_at_unix_ms"]<=0: raise SystemExit("deployment completion time is invalid")
+          if not exact_int(after.get("start_height")) or not exact_int(after.get("end_height")) or after["start_height"]<1 or after["end_height"]<=after["start_height"]: raise SystemExit("deployment height proof is invalid")
+          if any(not sha(after.get(field)) for field in ("binary_sha256","config_set_sha256","end_block_hash","signed_genesis_sha256","supervisor_sha256","topology_sha256")): raise SystemExit("deployment artifact identity is invalid")
+          if int(after["end_block_hash"][-2:],16)&1==0: raise SystemExit("deployment end block hash is invalid")
+          genesis=after.get("genesis_block_hash")
+          if not sha(genesis) or int(genesis[-2:],16)&1==0: raise SystemExit("deployment genesis hash is invalid")
+          signers=after.get("receipt_signers")
+          slugs=tuple(f"taira-validator-{index}" for index in range(1,5))
+          fields={"binary_stat_seal","config_sha256","lifecycle_binding_sha256","node_id","public_key","runtime_binding_sha256"}
+          if not isinstance(signers,dict) or tuple(signers)!=slugs or any(not isinstance(signers[slug],dict) or set(signers[slug])!=fields for slug in slugs): raise SystemExit("deployment receipt signer set is invalid")
+          nodes=set(); keys=set()
+          for slug in slugs:
+              row=signers[slug]; seal=row["binary_stat_seal"]; node=row["node_id"]; key=row["public_key"]
+              if any(not sha(row[field]) for field in ("config_sha256","lifecycle_binding_sha256","runtime_binding_sha256")): raise SystemExit("deployment receipt signer binding is invalid")
+              if not isinstance(seal,list) or len(seal)!=5 or any(not exact_int(value) or value<0 for value in seal) or seal[2]<=0: raise SystemExit("deployment receipt signer binary seal is invalid")
+              if not isinstance(node,str) or not node.startswith("taira-node:receipt-signer:secp256k1:sha256:") or not sha(node.rsplit(":",1)[-1]): raise SystemExit("deployment receipt signer node ID is invalid")
+              if not isinstance(key,dict) or set(key)!={"algorithm","payload_hex"} or key.get("algorithm")!="secp256k1": raise SystemExit("deployment receipt signer public key is invalid")
+              payload=key.get("payload_hex")
+              if not isinstance(payload,str) or len(payload)!=66 or payload[:2] not in {"02","03"} or payload!=payload.lower() or any(character not in "0123456789abcdef" for character in payload): raise SystemExit("deployment receipt signer public key is invalid")
+              if node in nodes or payload in keys: raise SystemExit("deployment receipt signer identities alias")
+              nodes.add(node); keys.add(payload)
           PY
       - name: Require exact-four advancement and the controller-owned privacy cutover record
         shell: bash
@@ -1207,6 +1232,15 @@ jobs:
           test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"
           test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
 
+          candidate_prerequisite="$TAIRA_PUBLISH_HANDOFF_ROOT/public-soak-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          publication_prerequisite="$TAIRA_PUBLISH_HANDOFF_ROOT/public-soak-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$candidate_prerequisite"
+          test ! -e "$publication_prerequisite"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" \
+            build-public-soak-candidate -- \
+              --candidate-root "$candidate" \
+              --output "$candidate_prerequisite"
+
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" \
             publish-rollout -- \
               --candidate-root "$candidate" \
@@ -1248,12 +1282,50 @@ jobs:
               ):
                   raise SystemExit(f"publication handoff file identity differs: {path.name}")
           PY
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" \
+            build-public-soak-publication -- \
+              --candidate-root "$candidate" \
+              --candidate-handoff "$candidate_prerequisite/public-soak-prerequisite-v1.json" \
+              --publication-root "$final" \
+              --output "$publication_prerequisite"
+          /usr/bin/python3 -I -S - "$candidate_prerequisite" "$publication_prerequisite" <<'PY'
+          import stat
+          import sys
+          from pathlib import Path
+
+          expected = {
+              "handoff-inventory-v1.json",
+              "public-soak-prerequisite-v1.json",
+          }
+          for root_value in sys.argv[1:]:
+              root = Path(root_value)
+              root_info = root.lstat()
+              if (
+                  not stat.S_ISDIR(root_info.st_mode)
+                  or stat.S_IMODE(root_info.st_mode) != 0o555
+                  or {path.name for path in root.iterdir()} != expected
+              ):
+                  raise SystemExit("public-soak prerequisite handoff identity differs")
+              for path in root.iterdir():
+                  info = path.lstat()
+                  if (
+                      not stat.S_ISREG(info.st_mode)
+                      or info.st_nlink != 1
+                      or stat.S_IMODE(info.st_mode) != 0o444
+                  ):
+                      raise SystemExit(
+                          f"public-soak prerequisite file identity differs: {path.name}"
+                      )
+          PY
           printf 'receipt_id=%s\n' "$receipt_id" >>"$GITHUB_OUTPUT"
 
-      - name: Upload the exact root-closed publication handoff
+      - name: Upload the exact root-closed publication and public-soak handoffs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: taira-publication-receipt-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/publication-receipt-${{ steps.publish.outputs.receipt_id }}/
+          path: |
+            ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/publication-receipt-${{ steps.publish.outputs.receipt_id }}/
+            ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/public-soak-candidate-${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/public-soak-publication-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 30

@@ -1,20 +1,31 @@
 //! Focused authority protocol, durable-state, and service tests.
 
-use super::super::SoftwareSignerWrappingKeyV1;
+mod public_soak_native_tests;
+mod privacy_protocol_origin_service_tests;
+mod qualification_service_tests;
+
+use super::super::{
+    SoftwareSignerKeyAlgorithmV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
+    SoftwareSignerWrappingKeyV1,
+};
 use super::{
     TairaAuthorityClientV1, TairaAuthorityEndpointPolicyV1, TairaAuthorityInstallationV1,
-    TairaAuthorityProvisioningV1, TairaAuthorityRoleV1, TairaAuthorityServerV1,
-    TairaAuthorityServiceV1,
+    TairaAuthorityProvisioningV1, TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1,
+    TairaAuthorityServerV1, TairaAuthorityServiceV1,
     protocol::{
         AuthorityAdminCommandV1, AuthorityAdminRequestV1, AuthorityFrameV1, AuthorizeRequestV1,
         FRAME_ADMIN_REQUEST_V1, FRAME_ADMIN_RESPONSE_V1, FRAME_AUTHORIZE_REQUEST_V1,
         FRAME_QUALIFY_REQUEST_V1, FRAME_QUALIFY_RESPONSE_V1, OperationResponseV1,
         OperationStatusV1, QualifyRequestV1, QualifyResponseV1, ReplayConsumptionV1,
-        TAIRA_AUTHORITY_MAX_FRAME_BYTES_V1, TAIRA_AUTHORITY_PROTOCOL_MAGIC_V1,
-        TAIRA_AUTHORITY_PROTOCOL_VERSION_V1, decode_body, decode_frame, encode_frame,
-        qualify_response_digest,
+        StoredAuthorizationV1, StoredPublicSoakObservationBindingAnchorV1,
+        StoredPublicSoakObservationBindingInputV1, TAIRA_AUTHORITY_MAX_FRAME_BYTES_V1,
+        TAIRA_AUTHORITY_PROTOCOL_MAGIC_V1, TAIRA_AUTHORITY_PROTOCOL_VERSION_V1, decode_body,
+        decode_frame, encode_frame, qualify_response_digest,
     },
-    service::{TairaAuthorityErrorV1, digest_parts_sha256},
+    service::{
+        GenericAuthorizationCrashPhaseV1, PublicSoakBindingCrashPhaseV1, TairaAuthorityErrorV1,
+        digest_parts_sha256,
+    },
     store::{PersistOutcomeV1, load_canonical_records, persist_canonical_once},
     transport::serve_one_for_test,
     validate_taira_authority_installations_v1, validate_taira_authority_registry_v1,
@@ -40,6 +51,11 @@ const TEST_WRAPPING_KEY_V1: [u8; 32] = [0xA7; 32];
 const TEST_NOW_MILLIS_V1: u64 = 1_900_000_000_000;
 const RUN_ID_DOMAIN_V1: &[u8] = b"iroha:taira:authority-run-id:v1\0";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"iroha:taira:authority-operation-id:v1\0";
+const TEST_NATIVE_CONTROLLER_DIGEST_V1: [u8; 32] = [0xC1; 32];
+const TEST_NATIVE_RUN_NONCE_V1: [u8; 32] = [0xA5; 32];
+const TEST_NATIVE_CONTROLLER_HOST_ID_V1: &str = "native-evidence-host-test-v1";
+const TEST_NATIVE_CONTROLLER_INSTALLATION_ID_V1: &str =
+    "native-evidence-controller-installation-test-v1";
 
 fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(TEST_WRAPPING_KEY_V1).expect("fixture wrapping key")
@@ -54,8 +70,8 @@ fn provisioning(role: TairaAuthorityRoleV1) -> TairaAuthorityProvisioningV1 {
     let service_uid = rustix::process::geteuid().as_raw();
     TairaAuthorityProvisioningV1 {
         role,
-        service_id: format!("taira-authority-{}-test-v1", role.as_str()),
-        administrator_id: format!("taira-authority-{}-administrator-test-v1", role.as_str()),
+        service_id: format!("taira-authority-{}-fixture-v1", role.as_str()),
+        administrator_id: format!("taira-authority-{}-administrator-fixture-v1", role.as_str()),
         service_uid,
         client_uid: service_uid.checked_add(1).expect("fixture client UID"),
         administrator_uid: service_uid
@@ -106,10 +122,14 @@ struct ClientRequestFixtureV1 {
 
 impl ClientRequestFixtureV1 {
     fn new(role: TairaAuthorityRoleV1, case: &str, artifacts: &[(&str, &[u8])]) -> Self {
-        let mut subject = Map::new();
-        subject.insert("case".into(), Value::from(case));
-        subject.insert("schema_version".into(), Value::from(1_u64));
-        let subject = Value::Object(subject);
+        let subject = if role == TairaAuthorityRoleV1::RolloutObservation {
+            super::rollout_observation::tests::valid_subject_for_case(case)
+        } else {
+            let mut subject = Map::new();
+            subject.insert("case".into(), Value::from(case));
+            subject.insert("schema_version".into(), Value::from(1_u64));
+            Value::Object(subject)
+        };
         let manifest = Value::Array(
             artifacts
                 .iter()
@@ -127,6 +147,14 @@ impl ClientRequestFixtureV1 {
                 })
                 .collect(),
         );
+        Self::from_subject_and_manifest(role, subject, manifest)
+    }
+
+    fn from_subject_and_manifest(
+        role: TairaAuthorityRoleV1,
+        subject: Value,
+        manifest: Value,
+    ) -> Self {
         let subject_sha256: [u8; 32] = Sha256::digest(canonical_json_core(&subject)).into();
         let manifest_sha256: [u8; 32] = Sha256::digest(canonical_json_core(&manifest)).into();
         let run_id = digest_parts_sha256(
@@ -203,6 +231,24 @@ impl ClientRequestFixtureV1 {
             "artifact_manifest_sha256".into(),
             Value::from(hex::encode(self.manifest_sha256)),
         );
+        if self.role == TairaAuthorityRoleV1::NativeEvidence {
+            assignment.insert(
+                "controller_host_id".into(),
+                Value::from(TEST_NATIVE_CONTROLLER_HOST_ID_V1),
+            );
+            assignment.insert(
+                "controller_installation_id".into(),
+                Value::from(TEST_NATIVE_CONTROLLER_INSTALLATION_ID_V1),
+            );
+            assignment.insert(
+                "controller_digest".into(),
+                Value::from(hex::encode(TEST_NATIVE_CONTROLLER_DIGEST_V1)),
+            );
+            assignment.insert(
+                "run_nonce".into(),
+                Value::from(hex::encode(TEST_NATIVE_RUN_NONCE_V1)),
+            );
+        }
         assignment.insert("expires_at_unix_millis".into(), Value::from(expires_at));
         assignment.insert("issued_at_unix_millis".into(), Value::from(issued_at));
         assignment.insert(
@@ -257,6 +303,9 @@ fn create_artifact(parent: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         .expect("create fixture artifact");
     file.write_all(bytes).expect("write fixture artifact");
     file.sync_all().expect("sync fixture artifact");
+    drop(file);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
+        .expect("make fixture artifact immutable");
     path
 }
 
@@ -283,7 +332,7 @@ fn authorize(
     service.authorize_json(
         request_json,
         descriptors,
-        rustix::process::geteuid().as_raw(),
+        service.public_binding()?.signer.client_uid,
         now,
     )
 }
@@ -341,6 +390,71 @@ fn state_directory(parent: &Path) -> PathBuf {
     parent.join("authority-state")
 }
 
+fn public_soak_anchor_state_directory(parent: &Path) -> PathBuf {
+    parent.join("public-soak-replay-anchor-state")
+}
+
+fn independent_public_soak_observation_binding(parent: &Path) -> TairaAuthorityPublicBindingV1 {
+    let observation = TairaAuthorityServiceV1::provision(
+        parent.join("public-soak-observation-anchor-state"),
+        provisioning(TairaAuthorityRoleV1::PublicSoakObservation),
+        wrapping_key(),
+    )
+    .expect("provision observation anchor fixture");
+    let mut binding = observation
+        .public_binding()
+        .expect("observation anchor binding");
+    let effective_uid = rustix::process::geteuid().as_raw();
+    binding.signer.service_uid = effective_uid
+        .checked_add(10)
+        .expect("observation service UID fixture");
+    binding.signer.client_uid = effective_uid
+        .checked_add(11)
+        .expect("observation client UID fixture");
+    binding.signer.administrator_uid = effective_uid
+        .checked_add(12)
+        .expect("observation administrator UID fixture");
+    binding
+        .validate()
+        .expect("synthetic independently owned observation binding");
+    binding
+}
+
+fn provision_public_soak_anchor_fixture(
+    parent: &Path,
+) -> (
+    TairaAuthorityServiceV1,
+    StoredPublicSoakObservationBindingInputV1,
+    StoredPublicSoakObservationBindingAnchorV1,
+) {
+    let observation_binding = independent_public_soak_observation_binding(parent);
+    let state = public_soak_anchor_state_directory(parent);
+    let service = TairaAuthorityServiceV1::provision_with_public_soak_observation_binding(
+        &state,
+        provisioning(TairaAuthorityRoleV1::PublicSoakReplayAdmission),
+        wrapping_key(),
+        observation_binding,
+    )
+    .expect("provision replay anchor fixture");
+    let inputs: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingInputV1> =
+        load_canonical_records(&state.join("public-soak-observation-binding-input-v1"))
+            .expect("load observation binding write-ahead input");
+    let anchors: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingAnchorV1> =
+        load_canonical_records(&state.join("public-soak-observation-binding-v1"))
+            .expect("load signed observation binding anchor");
+    let [input] = inputs
+        .into_values()
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one observation binding write-ahead input");
+    let [anchor] = anchors
+        .into_values()
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one signed observation binding anchor");
+    (service, input, anchor)
+}
+
 fn record_path(directory: &Path, key: [u8; 32]) -> PathBuf {
     directory.join(format!("{}.norito", hex::encode(key)))
 }
@@ -370,9 +484,9 @@ fn registry_provisioning(
         .expect("fixture UID range");
     TairaAuthorityProvisioningV1 {
         role,
-        service_id: format!("taira-authority-{}-registry-test-v1", role.as_str()),
+        service_id: format!("taira-authority-{}-registry-fixture-v1", role.as_str()),
         administrator_id: format!(
-            "taira-authority-{}-registry-administrator-test-v1",
+            "taira-authority-{}-registry-administrator-fixture-v1",
             role.as_str()
         ),
         service_uid: if role == TairaAuthorityRoleV1::Qualification {
@@ -413,7 +527,7 @@ fn provision_eight_role_harness(
             TairaAuthorityRoleV1::PrivacyGovernance => {
                 let retained = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
                     .expect("retained genesis fixture key");
-                TairaAuthorityServiceV1::provision_with_retained_genesis_key(
+                TairaAuthorityServiceV1::provision_with_retained_genesis_key_for_test(
                     &state,
                     provisioning,
                     registry_wrapping_key(ordinal),
@@ -429,14 +543,14 @@ fn provision_eight_role_harness(
                             .then_some(binding)
                     })
                     .expect("independent public-soak observation binding");
-                TairaAuthorityServiceV1::provision_with_public_soak_observation_binding(
+                TairaAuthorityServiceV1::provision_with_public_soak_observation_binding_for_test(
                     &state,
                     provisioning,
                     registry_wrapping_key(ordinal),
                     observation,
                 )
             }
-            _ => TairaAuthorityServiceV1::provision(
+            _ => TairaAuthorityServiceV1::provision_for_test(
                 &state,
                 provisioning,
                 registry_wrapping_key(ordinal),
@@ -809,7 +923,11 @@ fn provision_assign_authorize_retry_verify_and_recover() {
         .verify_json(
             &verification_json(&fixture, &fresh),
             read_only_descriptors(&[&artifact]),
-            rustix::process::geteuid().as_raw(),
+            service
+                .public_binding()
+                .expect("verification binding")
+                .signer
+                .client_uid,
         )
         .expect("historical verification");
     assert_eq!(verified.status, OperationStatusV1::Ok);
@@ -852,6 +970,161 @@ fn provision_assign_authorize_retry_verify_and_recover() {
         recovered.provenance().expect("recovered provenance"),
         audit_after_fresh
     );
+}
+
+#[test]
+fn generic_authorization_recovers_each_durable_crash_boundary_after_run_expiry() {
+    for (case, phase) in [
+        (
+            "crash-after-consumption-persistence",
+            GenericAuthorizationCrashPhaseV1::AfterConsumptionPersistence,
+        ),
+        (
+            "crash-after-envelope-signer-commit",
+            GenericAuthorizationCrashPhaseV1::AfterEnvelopeSignerCommit,
+        ),
+        (
+            "crash-after-durable-receipt-signer-commit",
+            GenericAuthorizationCrashPhaseV1::AfterDurableReceiptSignerCommit,
+        ),
+    ] {
+        let parent = temporary_parent();
+        let fixture =
+            ClientRequestFixtureV1::new(TairaAuthorityRoleV1::RolloutObservation, case, &[]);
+        let service = provision(parent.path(), fixture.role);
+        assign_active_run(&service, &fixture);
+        service
+            .inject_generic_authorization_crash_for_test(phase)
+            .expect("configure isolated crash phase");
+        assert_eq!(
+            authorize(
+                &service,
+                &fixture.request_json(),
+                Vec::new(),
+                TEST_NOW_MILLIS_V1,
+            ),
+            Err(TairaAuthorityErrorV1::State),
+            "generic authorization did not stop at {phase:?}"
+        );
+        let audit_at_crash = service.provenance().expect("crash-boundary provenance");
+        assert_eq!(
+            parse_json(
+                &service
+                    .status_json()
+                    .expect("status during incomplete authorization")
+            )["status"],
+            Value::from("ready"),
+            "status must remain available during {phase:?}"
+        );
+        let blocked_assignment = ClientRequestFixtureV1::new(
+            TairaAuthorityRoleV1::RolloutObservation,
+            &format!("{case}-blocked-assignment"),
+            &[],
+        );
+        assert_eq!(
+            service.assign_run_json(
+                &blocked_assignment.assignment_json(
+                    &service,
+                    TEST_NOW_MILLIS_V1 - 10,
+                    TEST_NOW_MILLIS_V1 - 1,
+                    TEST_NOW_MILLIS_V1 + 60_000,
+                ),
+                TEST_NOW_MILLIS_V1,
+            ),
+            Err(TairaAuthorityErrorV1::Conflict),
+            "assign-run appended across incomplete authorization at {phase:?}"
+        );
+        assert_eq!(
+            service.administer(
+                AuthorityAdminCommandV1::Revoke {
+                    operation_id: digest_parts_sha256(
+                        b"iroha:taira:test-incomplete-revoke:v1\0",
+                        &[case.as_bytes()],
+                    ),
+                    expected_audit_head: audit_at_crash.audit_head,
+                    expected_key_revision: service
+                        .public_binding()
+                        .expect("incomplete revoke binding")
+                        .signer
+                        .key_revision,
+                    reason_digest: [0xE7; 32],
+                },
+                TEST_NOW_MILLIS_V1,
+            ),
+            Err(TairaAuthorityErrorV1::Conflict),
+            "revoke appended across incomplete authorization at {phase:?}"
+        );
+        assert_eq!(
+            service.provenance().expect("blocked admin provenance"),
+            audit_at_crash,
+            "blocked admin command changed the audit head at {phase:?}"
+        );
+        drop(service);
+
+        let recovered =
+            TairaAuthorityServiceV1::open(state_directory(parent.path()), wrapping_key())
+                .expect("recover authority after injected crash");
+        let completed = authorize(
+            &recovered,
+            &fixture.request_json(),
+            Vec::new(),
+            TEST_NOW_MILLIS_V1 + 60_001,
+        )
+        .expect("complete persisted admission after original assignment expiry");
+        assert_eq!(completed.status, OperationStatusV1::Ok);
+        assert_eq!(result_status(&completed), "authorized");
+        let envelope = sidecar_bytes(&completed, "authority_envelope");
+        let receipt = sidecar_bytes(&completed, "durable_receipt");
+        let audit_after_completion = recovered
+            .provenance()
+            .expect("completed recovery provenance");
+        let stored: BTreeMap<[u8; 32], StoredAuthorizationV1> =
+            load_canonical_records(&state_directory(parent.path()).join("authority-receipts-v1"))
+                .expect("load recovered generic authorization");
+        let stored = stored
+            .get(&fixture.operation_id)
+            .expect("recovered generic authorization record");
+        assert_eq!(
+            stored.durable_receipt.commit_sequence,
+            stored.envelope_receipt.commit_sequence + 1,
+            "generic signer commits were not adjacent after {phase:?}"
+        );
+
+        let exact_retry = authorize(
+            &recovered,
+            &fixture.request_json(),
+            Vec::new(),
+            TEST_NOW_MILLIS_V1 + 60_002,
+        )
+        .expect("retry completed recovered authorization");
+        assert_eq!(exact_retry.status, OperationStatusV1::Replayed);
+        assert_eq!(sidecar_bytes(&exact_retry, "authority_envelope"), envelope);
+        assert_eq!(sidecar_bytes(&exact_retry, "durable_receipt"), receipt);
+        assert_eq!(
+            recovered.provenance().expect("exact retry provenance"),
+            audit_after_completion,
+            "exact retry appended an audit record after {phase:?}"
+        );
+
+        let conflict_path = create_artifact(parent.path(), "conflicting-reuse.bin", b"conflict");
+        let conflicting = ClientRequestFixtureV1::new(
+            TairaAuthorityRoleV1::RolloutObservation,
+            case,
+            &[("conflicting-reuse.bin", b"conflict")],
+        );
+        assert_eq!(conflicting.run_id, fixture.run_id);
+        assert_ne!(conflicting.operation_id, fixture.operation_id);
+        assert_eq!(
+            authorize(
+                &recovered,
+                &conflicting.request_json(),
+                read_only_descriptors(&[&conflict_path]),
+                TEST_NOW_MILLIS_V1 + 60_003,
+            ),
+            Err(TairaAuthorityErrorV1::Conflict),
+            "conflicting replay was accepted after {phase:?}"
+        );
+    }
 }
 
 #[test]
@@ -979,6 +1252,290 @@ fn assignment_conflicts_and_run_windows_fail_closed() {
 }
 
 #[test]
+fn native_assignment_authenticates_controller_identity_and_unique_run_nonce() {
+    let parent = temporary_parent();
+    let service = provision(parent.path(), TairaAuthorityRoleV1::NativeEvidence);
+    let fixture = ClientRequestFixtureV1::new(
+        TairaAuthorityRoleV1::NativeEvidence,
+        "native-controller-assignment",
+        &[],
+    );
+    let assignment = fixture.assignment_json(
+        &service,
+        TEST_NOW_MILLIS_V1 - 10,
+        TEST_NOW_MILLIS_V1 - 1,
+        TEST_NOW_MILLIS_V1 + 60_000,
+    );
+    let assigned = service
+        .assign_run_json(&assignment, TEST_NOW_MILLIS_V1)
+        .expect("assign native controller-bound run");
+    assert_eq!(assigned.status, OperationStatusV1::Ok);
+    let assigned_result = parse_json(&assigned.result_json);
+    let signed_assignment = assigned_result
+        .get("assignment")
+        .and_then(Value::as_object)
+        .expect("signed native assignment");
+    assert_eq!(
+        signed_assignment.get("controller_digest"),
+        Some(&Value::from(hex::encode(TEST_NATIVE_CONTROLLER_DIGEST_V1)))
+    );
+    assert_eq!(
+        signed_assignment.get("controller_host_id"),
+        Some(&Value::from(TEST_NATIVE_CONTROLLER_HOST_ID_V1))
+    );
+    assert_eq!(
+        signed_assignment.get("controller_installation_id"),
+        Some(&Value::from(TEST_NATIVE_CONTROLLER_INSTALLATION_ID_V1))
+    );
+    assert_eq!(
+        signed_assignment.get("run_nonce"),
+        Some(&Value::from(hex::encode(TEST_NATIVE_RUN_NONCE_V1)))
+    );
+    assert_eq!(
+        service
+            .assign_run_json(&assignment, TEST_NOW_MILLIS_V1)
+            .expect("retry exact native assignment")
+            .status,
+        OperationStatusV1::Replayed
+    );
+
+    let second = ClientRequestFixtureV1::new(
+        TairaAuthorityRoleV1::NativeEvidence,
+        "native-controller-assignment-second-run",
+        &[],
+    );
+    assert_eq!(
+        service.assign_run_json(
+            &second.assignment_json(
+                &service,
+                TEST_NOW_MILLIS_V1 - 10,
+                TEST_NOW_MILLIS_V1 - 1,
+                TEST_NOW_MILLIS_V1 + 60_000,
+            ),
+            TEST_NOW_MILLIS_V1,
+        ),
+        Err(TairaAuthorityErrorV1::Conflict)
+    );
+
+    let reject_field = |field: &str, replacement: Option<Value>| {
+        let parent = temporary_parent();
+        let service = provision(parent.path(), TairaAuthorityRoleV1::NativeEvidence);
+        let fixture = ClientRequestFixtureV1::new(
+            TairaAuthorityRoleV1::NativeEvidence,
+            "invalid-native-controller-assignment",
+            &[],
+        );
+        let mut assignment = parse_json(&fixture.assignment_json(
+            &service,
+            TEST_NOW_MILLIS_V1 - 10,
+            TEST_NOW_MILLIS_V1 - 1,
+            TEST_NOW_MILLIS_V1 + 60_000,
+        ));
+        let assignment = assignment
+            .as_object_mut()
+            .expect("native assignment object");
+        if let Some(replacement) = replacement {
+            assignment.insert(field.to_owned(), replacement);
+        } else {
+            assignment.remove(field);
+        }
+        assert_eq!(
+            service.assign_run_json(
+                &canonical_json_line(&Value::Object(assignment.clone())),
+                TEST_NOW_MILLIS_V1,
+            ),
+            Err(TairaAuthorityErrorV1::Rejected),
+            "invalid native assignment field was accepted: {field}"
+        );
+    };
+    for field in [
+        "controller_digest",
+        "controller_host_id",
+        "controller_installation_id",
+        "run_nonce",
+    ] {
+        reject_field(field, None);
+    }
+    reject_field("controller_digest", Some(Value::from("00".repeat(32))));
+    reject_field("controller_host_id", Some(Value::from("Uppercase-host")));
+    reject_field(
+        "controller_installation_id",
+        Some(Value::from("installation/with/path")),
+    );
+    reject_field("run_nonce", Some(Value::from("00".repeat(32))));
+
+    let other_parent = temporary_parent();
+    let other_service = provision(
+        other_parent.path(),
+        TairaAuthorityRoleV1::RolloutObservation,
+    );
+    let other = ClientRequestFixtureV1::new(
+        TairaAuthorityRoleV1::RolloutObservation,
+        "foreign-controller-binding",
+        &[],
+    );
+    let mut other_assignment = parse_json(&other.assignment_json(
+        &other_service,
+        TEST_NOW_MILLIS_V1 - 10,
+        TEST_NOW_MILLIS_V1 - 1,
+        TEST_NOW_MILLIS_V1 + 60_000,
+    ));
+    other_assignment
+        .as_object_mut()
+        .expect("other assignment object")
+        .insert(
+            "controller_digest".into(),
+            Value::from(hex::encode(TEST_NATIVE_CONTROLLER_DIGEST_V1)),
+        );
+    assert_eq!(
+        other_service.assign_run_json(&canonical_json_line(&other_assignment), TEST_NOW_MILLIS_V1,),
+        Err(TairaAuthorityErrorV1::Rejected)
+    );
+}
+
+fn mutate_object_path(value: &mut Value, path: &[&str]) {
+    let (leaf, parents) = path.split_last().expect("nonempty mutation path");
+    let mut current = value;
+    for field in parents {
+        current = current
+            .as_object_mut()
+            .and_then(|object| object.get_mut(*field))
+            .expect("mutation parent field");
+    }
+    let value = current
+        .as_object_mut()
+        .and_then(|object| object.get_mut(*leaf))
+        .expect("mutation leaf field");
+    let replacement = if let Some(text) = value.as_str() {
+        Value::from(format!("{text}-mutated"))
+    } else if let Some(number) = value.as_u64() {
+        Value::from(number.checked_add(1).expect("fixture integer mutation"))
+    } else {
+        panic!("unsupported mutation scalar at {path:?}");
+    };
+    *value = replacement;
+}
+
+#[test]
+fn native_signed_sidecars_bind_controller_claims_and_exact_generic_receipt() {
+    let parent = temporary_parent();
+    let native = super::native_evidence::tests::authority_service_fixture();
+    let fixture = ClientRequestFixtureV1::from_subject_and_manifest(
+        TairaAuthorityRoleV1::NativeEvidence,
+        native.subject.clone(),
+        native.manifest.clone(),
+    );
+    let service = provision(parent.path(), TairaAuthorityRoleV1::NativeEvidence);
+    assign_active_run(&service, &fixture);
+    let paths = native
+        .paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    authorize(
+        &service,
+        &fixture.request_json(),
+        read_only_descriptors(&paths),
+        TEST_NOW_MILLIS_V1,
+    )
+    .expect("authorize native sidecar fixture");
+
+    let records: BTreeMap<[u8; 32], StoredAuthorizationV1> =
+        load_canonical_records(&state_directory(parent.path()).join("authority-receipts-v1"))
+            .expect("load native authorization record");
+    let stored = records
+        .get(&fixture.operation_id)
+        .expect("native authorization record");
+    service
+        .verify_stored_authorization_for_test(stored)
+        .expect("valid native signed sidecars");
+
+    let envelope = parse_json(&stored.authority_envelope_json);
+    let claims = envelope
+        .get("claims")
+        .and_then(Value::as_object)
+        .expect("native envelope claims");
+    assert_eq!(
+        claims.get("controller_digest"),
+        Some(&Value::from(hex::encode(TEST_NATIVE_CONTROLLER_DIGEST_V1)))
+    );
+    assert_eq!(
+        claims.get("controller_host_id"),
+        Some(&Value::from(TEST_NATIVE_CONTROLLER_HOST_ID_V1))
+    );
+    assert_eq!(
+        claims.get("controller_installation_id"),
+        Some(&Value::from(TEST_NATIVE_CONTROLLER_INSTALLATION_ID_V1))
+    );
+    assert_eq!(
+        claims.get("run_nonce"),
+        Some(&Value::from(hex::encode(TEST_NATIVE_RUN_NONCE_V1)))
+    );
+
+    for field in [
+        "controller_digest",
+        "controller_host_id",
+        "controller_installation_id",
+        "run_nonce",
+    ] {
+        let mut mutated = stored.clone();
+        let mut envelope = parse_json(&mutated.authority_envelope_json);
+        mutate_object_path(&mut envelope, &["claims", field]);
+        mutated.authority_envelope_json = canonical_json_line(&envelope);
+        assert_eq!(
+            service.verify_stored_authorization_for_test(&mutated),
+            Err(TairaAuthorityErrorV1::State),
+            "mutated native envelope claim was accepted: {field}"
+        );
+    }
+
+    let receipt_fields: &[&[&str]] = &[
+        &["schema"],
+        &["schema_version"],
+        &["role"],
+        &["signature_algorithm"],
+        &["binding_sha256"],
+        &["signature"],
+        &["audit_sequence"],
+        &["audit_head"],
+        &["claims", "schema"],
+        &["claims", "role"],
+        &["claims", "decision"],
+        &["claims", "replay_namespace"],
+        &["claims", "operation_id"],
+        &["claims", "run_id"],
+        &["claims", "subject_sha256"],
+        &["claims", "authority_envelope_sha256"],
+        &["claims", "admitted_at_unix_millis"],
+        &["claims", "authority_audit_sequence"],
+        &["claims", "authority_audit_head"],
+    ];
+    for path in receipt_fields {
+        let mut mutated = stored.clone();
+        let mut receipt = parse_json(&mutated.durable_receipt_json);
+        mutate_object_path(&mut receipt, path);
+        mutated.durable_receipt_json = canonical_json_line(&receipt);
+        assert_eq!(
+            service.verify_stored_authorization_for_test(&mutated),
+            Err(TairaAuthorityErrorV1::State),
+            "mutated generic durable receipt field was accepted: {path:?}"
+        );
+    }
+
+    let mut mutated = stored.clone();
+    let mut receipt = parse_json(&mutated.durable_receipt_json);
+    receipt
+        .as_object_mut()
+        .expect("generic durable receipt object")
+        .insert("unexpected".into(), Value::from(true));
+    mutated.durable_receipt_json = canonical_json_line(&receipt);
+    assert_eq!(
+        service.verify_stored_authorization_for_test(&mutated),
+        Err(TairaAuthorityErrorV1::State)
+    );
+}
+
+#[test]
 fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);
@@ -1020,6 +1577,8 @@ fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
     );
 
     let writable_path = create_artifact(parent.path(), "writable.bin", b"writable");
+    fs::set_permissions(&writable_path, fs::Permissions::from_mode(0o600))
+        .expect("make writable descriptor fixture writable");
     let writable = ClientRequestFixtureV1::new(
         TairaAuthorityRoleV1::RolloutObservation,
         "writable-descriptor",
@@ -1067,6 +1626,8 @@ fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
         &[("drift.bin", b"trusted")],
     );
     assign_active_run(&service, &drift);
+    fs::set_permissions(&drift_path, fs::Permissions::from_mode(0o600))
+        .expect("make drift fixture writable");
     let mut mutator = OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -1075,6 +1636,8 @@ fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
     mutator.write_all(b"changed").expect("mutate artifact");
     mutator.sync_all().expect("sync artifact mutation");
     drop(mutator);
+    fs::set_permissions(&drift_path, fs::Permissions::from_mode(0o400))
+        .expect("restore immutable drift fixture mode");
     assert_eq!(
         authorize(
             &service,
@@ -1092,17 +1655,45 @@ fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
         &[("uid.bin", b"uid")],
     );
     assign_active_run(&service, &uid);
-    let effective_uid = rustix::process::geteuid().as_raw();
-    if effective_uid != 0 {
-        assert_eq!(
-            service.authorize_json(
-                &uid.request_json(),
-                read_only_descriptors(&[&uid_path]),
-                effective_uid.checked_add(1).expect("distinct fixture UID"),
-                TEST_NOW_MILLIS_V1,
-            ),
-            Err(TairaAuthorityErrorV1::Rejected)
-        );
+    let wrong_uid = service
+        .public_binding()
+        .expect("peer UID binding")
+        .signer
+        .client_uid
+        .checked_add(1)
+        .expect("distinct fixture UID");
+    assert_eq!(
+        service.authorize_json(
+            &uid.request_json(),
+            read_only_descriptors(&[&uid_path]),
+            wrong_uid,
+            TEST_NOW_MILLIS_V1,
+        ),
+        Err(TairaAuthorityErrorV1::Rejected)
+    );
+}
+
+#[test]
+fn artifact_immutability_requires_root_or_service_ownership_and_no_write_bits() {
+    let service_uid = 48_001;
+    let client_uid = 48_002;
+    assert!(artifact_is_authority_immutable(0, 0o400, service_uid));
+    assert!(artifact_is_authority_immutable(
+        service_uid,
+        0o440,
+        service_uid
+    ));
+    assert!(!artifact_is_authority_immutable(
+        client_uid,
+        0o400,
+        service_uid
+    ));
+    for mode in [0o600, 0o420, 0o402] {
+        assert!(!artifact_is_authority_immutable(
+            service_uid,
+            mode,
+            service_uid
+        ));
     }
 }
 
@@ -1114,6 +1705,561 @@ fn replay_record(case: u8) -> ReplayConsumptionV1 {
         subject_sha256: [case.wrapping_add(3); 32],
         artifact_manifest_sha256: [case.wrapping_add(4); 32],
         consumed_at_unix_millis: TEST_NOW_MILLIS_V1 + u64::from(case),
+    }
+}
+
+#[test]
+fn public_soak_binding_anchor_is_write_ahead_signed_and_open_stable() {
+    let parent = temporary_parent();
+    let state = public_soak_anchor_state_directory(parent.path());
+    let (service, input, anchor) = provision_public_soak_anchor_fixture(parent.path());
+    assert_eq!(input.operation_id, anchor.operation_id);
+    assert_eq!(input.replay_binding, anchor.replay_binding);
+    assert_eq!(input.observation_binding, anchor.observation_binding);
+    assert_eq!(input.signing_payload, anchor.signing_payload);
+    assert_eq!(anchor.receipt.commit_sequence, 2);
+    assert_eq!(
+        anchor.previous_audit_head,
+        input.replay_binding.signer.audit_genesis_digest
+    );
+
+    let provisioned = service.provenance().expect("provisioned anchor provenance");
+    assert_eq!(provisioned.audit_sequence, 2);
+    service
+        .ensure_public_soak_observation_binding_anchor_for_test()
+        .expect("exact anchor retry");
+    assert_eq!(
+        service.provenance().expect("retried anchor provenance"),
+        provisioned,
+        "an exact anchor retry must not append"
+    );
+    drop(service);
+
+    let reopened = TairaAuthorityServiceV1::open(&state, wrapping_key())
+        .expect("open signed observation binding anchor");
+    assert_eq!(
+        reopened.provenance().expect("reopened anchor provenance"),
+        provisioned,
+        "open must verify the persisted anchor without signing"
+    );
+    let reopened_inputs: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingInputV1> =
+        load_canonical_records(&state.join("public-soak-observation-binding-input-v1"))
+            .expect("reload observation binding input");
+    let reopened_anchors: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingAnchorV1> =
+        load_canonical_records(&state.join("public-soak-observation-binding-v1"))
+            .expect("reload observation binding anchor");
+    assert_eq!(
+        reopened_inputs,
+        BTreeMap::from([(input.operation_id, input)])
+    );
+    assert_eq!(
+        reopened_anchors,
+        BTreeMap::from([(anchor.operation_id, anchor)])
+    );
+}
+
+#[test]
+fn public_soak_binding_anchor_recovers_both_write_ahead_crash_phases() {
+    for phase in [
+        PublicSoakBindingCrashPhaseV1::AfterInputPersistence,
+        PublicSoakBindingCrashPhaseV1::AfterSignerCommit,
+    ] {
+        let parent = temporary_parent();
+        let state = public_soak_anchor_state_directory(parent.path());
+        let observation_binding = independent_public_soak_observation_binding(parent.path());
+        assert!(matches!(
+            TairaAuthorityServiceV1::provision_with_public_soak_observation_binding_crash_for_test(
+                &state,
+                provisioning(TairaAuthorityRoleV1::PublicSoakReplayAdmission),
+                wrapping_key(),
+                observation_binding,
+                phase,
+            ),
+            Err(TairaAuthorityErrorV1::State)
+        ));
+        let inputs: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingInputV1> =
+            load_canonical_records(&state.join("public-soak-observation-binding-input-v1"))
+                .expect("load crash-persisted binding input");
+        assert_eq!(inputs.len(), 1);
+        let anchors: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingAnchorV1> =
+            load_canonical_records(&state.join("public-soak-observation-binding-v1"))
+                .expect("load absent crash anchor directory");
+        assert!(anchors.is_empty());
+        let committed_audit_path = audit_record_path(&state, 2);
+        let committed_audit_before_open =
+            if phase == PublicSoakBindingCrashPhaseV1::AfterSignerCommit {
+                Some(fs::read(&committed_audit_path).expect("read exact pre-crash signer commit"))
+            } else {
+                assert!(!committed_audit_path.exists());
+                None
+            };
+
+        let recovered = TairaAuthorityServiceV1::open(&state, wrapping_key())
+            .expect("recover observation binding anchor from write-ahead input");
+        let recovered_provenance = recovered
+            .provenance()
+            .expect("recovered binding anchor provenance");
+        assert_eq!(recovered_provenance.audit_sequence, 2);
+        if let Some(committed_audit_before_open) = committed_audit_before_open {
+            assert_eq!(
+                fs::read(&committed_audit_path).expect("read recovered exact signer commit"),
+                committed_audit_before_open,
+                "recovery after the signer commit must replay it without mutation"
+            );
+        }
+        let anchor_path = state.join("public-soak-observation-binding-v1");
+        let recovered_anchors: BTreeMap<[u8; 32], StoredPublicSoakObservationBindingAnchorV1> =
+            load_canonical_records(&anchor_path).expect("load recovered binding anchor");
+        assert_eq!(recovered_anchors.len(), 1);
+        let recovered_anchor_bytes = fs::read(record_path(
+            &anchor_path,
+            recovered_anchors
+                .values()
+                .next()
+                .expect("recovered binding anchor")
+                .operation_id,
+        ))
+        .expect("read recovered binding anchor bytes");
+        recovered
+            .ensure_public_soak_observation_binding_anchor_for_test()
+            .expect("exact recovered anchor retry");
+        assert_eq!(
+            recovered
+                .provenance()
+                .expect("exact recovered anchor retry provenance"),
+            recovered_provenance
+        );
+        drop(recovered);
+
+        let reopened = TairaAuthorityServiceV1::open(&state, wrapping_key())
+            .expect("reopen recovered binding anchor");
+        assert_eq!(
+            reopened
+                .provenance()
+                .expect("reopened recovered anchor provenance"),
+            recovered_provenance
+        );
+        assert_eq!(
+            fs::read(record_path(
+                &anchor_path,
+                recovered_anchors
+                    .values()
+                    .next()
+                    .expect("stable recovered binding anchor")
+                    .operation_id,
+            ))
+            .expect("reread recovered binding anchor bytes"),
+            recovered_anchor_bytes,
+            "subsequent opens must preserve byte-identical anchor state"
+        );
+    }
+}
+
+#[test]
+fn public_soak_binding_anchor_rejects_full_binding_and_receipt_mutations() {
+    let parent = temporary_parent();
+    let (service, input, anchor) = provision_public_soak_anchor_fixture(parent.path());
+
+    macro_rules! reject_input_mutation {
+        ($label:literal, $mutation:expr) => {{
+            let mut mutated = input.clone();
+            ($mutation)(&mut mutated);
+            assert!(
+                service
+                    .verify_public_soak_observation_binding_anchor_for_test(&mutated, &anchor)
+                    .is_err(),
+                "write-ahead input mutation was accepted: {}",
+                $label
+            );
+        }};
+    }
+    reject_input_mutation!(
+        "operation_id",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.operation_id[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay outer magic",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.magic[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay outer version",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.version += 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay outer role",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.role = TairaAuthorityRoleV1::PublicSoakObservation;
+        }
+    );
+    reject_input_mutation!(
+        "replay signer magic",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.magic[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay signer version",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.version += 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay handle",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.handle.push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "replay service identity",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value
+                .replay_binding
+                .signer
+                .service_id
+                .push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "replay administrator identity",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value
+                .replay_binding
+                .signer
+                .administrator_id
+                .push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "replay service UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.service_uid += 100;
+        }
+    );
+    reject_input_mutation!(
+        "replay client UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.client_uid += 101;
+        }
+    );
+    reject_input_mutation!(
+        "replay administrator UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.administrator_uid += 102;
+        }
+    );
+    reject_input_mutation!(
+        "replay signer role",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.role = SoftwareSignerRoleV1::EvidenceViewer;
+        }
+    );
+    reject_input_mutation!(
+        "replay purpose binding",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            let SoftwareSignerPurposeBindingV1::TairaAuthority { role } =
+                &mut value.replay_binding.signer.purpose_binding
+            else {
+                unreachable!("Taira fixture purpose binding")
+            };
+            role.push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "replay signing domain",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.domain.push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "replay key algorithm",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.key_algorithm = SoftwareSignerKeyAlgorithmV1::MlDsa;
+        }
+    );
+    reject_input_mutation!(
+        "replay key revision",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.key_revision += 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay policy revision",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.policy_revision += 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay policy digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.policy_digest[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay public key",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.public_key =
+                KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                    .expect("replacement public key")
+                    .public_key()
+                    .clone();
+        }
+    );
+    reject_input_mutation!(
+        "replay public key digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.public_key_digest[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay audit genesis",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.audit_genesis_digest[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay maximum request bytes",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding.signer.max_request_bytes -= 1;
+        }
+    );
+    reject_input_mutation!(
+        "observation service identity",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value
+                .observation_binding
+                .signer
+                .service_id
+                .push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "observation administrator identity",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value
+                .observation_binding
+                .signer
+                .administrator_id
+                .push_str("-substituted");
+        }
+    );
+    reject_input_mutation!(
+        "observation service UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.service_uid += 100;
+        }
+    );
+    reject_input_mutation!(
+        "observation client UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.client_uid += 101;
+        }
+    );
+    reject_input_mutation!(
+        "observation administrator UID",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.administrator_uid += 102;
+        }
+    );
+    reject_input_mutation!(
+        "observation key revision",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.key_revision += 1;
+        }
+    );
+    reject_input_mutation!(
+        "observation policy revision",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.policy_revision += 1;
+        }
+    );
+    reject_input_mutation!(
+        "observation policy digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.policy_digest[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "observation public key digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding.signer.public_key_digest[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "replay binding digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.replay_binding_sha256[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "observation binding digest",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.observation_binding_sha256[0] ^= 1;
+        }
+    );
+    reject_input_mutation!(
+        "signing payload",
+        |value: &mut StoredPublicSoakObservationBindingInputV1| {
+            value.signing_payload[0] ^= 1;
+        }
+    );
+
+    macro_rules! reject_anchor_mutation {
+        ($label:literal, $mutation:expr) => {{
+            let mut mutated = anchor.clone();
+            ($mutation)(&mut mutated);
+            assert!(
+                service
+                    .verify_public_soak_observation_binding_anchor_for_test(&input, &mutated)
+                    .is_err(),
+                "signed anchor mutation was accepted: {}",
+                $label
+            );
+        }};
+    }
+    reject_anchor_mutation!(
+        "operation ID",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.operation_id[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "replay binding",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.replay_binding.signer.policy_revision += 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "replay binding digest",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.replay_binding_sha256[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "observation binding",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.observation_binding.signer.policy_digest[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "observation binding digest",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.observation_binding_sha256[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "audit predecessor",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.previous_audit_head[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "signing payload",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.signing_payload[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt operation",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.operation_id[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt request digest",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.request_digest[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt payload digest",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.payload_digest[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt payload length",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.payload_length += 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt signature",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.signature[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt sequence",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.commit_sequence += 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt audit head",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.commit_audit_head[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt replay status",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.replayed = !value.receipt.replayed;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt provenance",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.provenance.audit_head[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt response digest",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.response_digest[0] ^= 1;
+        }
+    );
+    reject_anchor_mutation!(
+        "receipt response attestation",
+        |value: &mut StoredPublicSoakObservationBindingAnchorV1| {
+            value.receipt.response_attestation[0] ^= 1;
+        }
+    );
+}
+
+#[test]
+fn public_soak_binding_anchor_open_rejects_policy_substitution() {
+    for mutate_input in [true, false] {
+        let parent = temporary_parent();
+        let state = public_soak_anchor_state_directory(parent.path());
+        let (service, input, anchor) = provision_public_soak_anchor_fixture(parent.path());
+        drop(service);
+        if mutate_input {
+            let directory = state.join("public-soak-observation-binding-input-v1");
+            fs::remove_file(record_path(&directory, input.operation_id))
+                .expect("remove valid binding input");
+            let mut substituted = input.clone();
+            substituted.observation_binding.signer.policy_revision += 1;
+            persist_canonical_once(&directory, input.operation_id, &substituted)
+                .expect("persist substituted binding input");
+        } else {
+            let directory = state.join("public-soak-observation-binding-v1");
+            fs::remove_file(record_path(&directory, anchor.operation_id))
+                .expect("remove valid signed anchor");
+            let mut substituted = anchor.clone();
+            substituted.replay_binding.signer.policy_digest[0] ^= 1;
+            persist_canonical_once(&directory, anchor.operation_id, &substituted)
+                .expect("persist substituted signed anchor");
+        }
+        assert!(matches!(
+            TairaAuthorityServiceV1::open(&state, wrapping_key()),
+            Err(TairaAuthorityErrorV1::State)
+        ));
     }
 }
 
@@ -1346,7 +2492,11 @@ fn rotation_invalidates_old_policy_and_revocation_survives_recovery() {
         .verify_json(
             &verification_json(&fixture, &old_authorization),
             read_only_descriptors(&[&artifact]),
-            rustix::process::geteuid().as_raw(),
+            service
+                .public_binding()
+                .expect("historical verification binding")
+                .signer
+                .client_uid,
         )
         .expect("verify predecessor receipt after rotation");
     assert_eq!(historical.status, OperationStatusV1::Ok);
@@ -1608,3 +2758,5 @@ fn deploy_dry_run_does_not_consume_and_apply_and_finalize_are_once_only() {
         final_receipt
     );
 }
+
+include!("tests/privacy_governance_tests.rs");

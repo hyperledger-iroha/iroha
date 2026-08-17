@@ -57,13 +57,6 @@ pub const OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.top
 /// Stable public Norito schema name for the first-release Torii redemption request.
 pub const OFFLINE_REDEEM_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.redeem.request";
 include!("device_attestation_constants.rs");
-/// Legacy App Attest assertion authenticator-data size (RP hash, flags, counter).
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1: usize = 37;
-/// Minimum App Attest assertion authenticator-data size.
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1: usize =
-    KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1;
-/// Maximum App Attest assertion authenticator-data size, including iOS 27 extensions.
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1: usize = 4 * 1024;
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed confidential Merkle-tree depth shared by top-up, spend, and redemption.
@@ -974,7 +967,7 @@ pub struct OfflineDeviceAttestationPolicy {
     /// entry exists in `ios_apps`.
     ///
     /// iOS App Attest is disabled when this is false; there is no implicit app
-    /// identity or legacy-authData fallback.
+    /// identity fallback.
     pub require_ios_app_policy: bool,
     /// Explicitly enables Android registration when a matching entry exists in `android_apps`.
     ///
@@ -1009,8 +1002,6 @@ pub struct OfflineIosAppAttestationPolicy {
     pub allowed_validation_categories: Vec<u32>,
     /// Allowed application bundle versions from extension-bearing App Attest data.
     pub allowed_bundle_versions: Vec<String>,
-    /// Whether legacy App Attest attestation and assertion authData without extensions remains accepted.
-    pub allow_legacy_auth_data_without_extensions: bool,
 }
 /// Allowed Android `KeyMint` app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -2278,13 +2269,7 @@ impl KagemushaRequestAuthorizationV2 {
                 if (KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1
                     ..=KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1)
                     .contains(&assertion.authenticator_data.len())
-                    && assertion.authenticator_data[32] & !0x80 == 0
-                    && ((assertion.authenticator_data[32] & 0x80 == 0
-                        && assertion.authenticator_data.len()
-                            == KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)
-                        || (assertion.authenticator_data[32] & 0x80 != 0
-                            && assertion.authenticator_data.len()
-                                > KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)) =>
+                    && assertion.authenticator_data[32] == 0x80 =>
             {
                 assertion.signature.validate()
             }
@@ -4936,7 +4921,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 environment: "production".to_owned(),
                 allowed_validation_categories: vec![1, 10],
                 allowed_bundle_versions: vec!["1.0".to_owned()],
-                allow_legacy_auth_data_without_extensions: false,
             }],
             android_apps: vec![OfflineAndroidAppAttestationPolicy {
                 package_name: "com.example.wire".to_owned(),

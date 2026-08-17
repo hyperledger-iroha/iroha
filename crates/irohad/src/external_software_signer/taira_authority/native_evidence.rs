@@ -12,10 +12,16 @@ use norito::{
     json::{Map, Value},
 };
 use sha2::{Digest as _, Sha256};
+use sorafs_car::bundle_archive::{
+    BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES, BUNDLE_ARCHIVE_PROTOCOL_MAX_DECODED_BYTES,
+    BUNDLE_ARCHIVE_PROTOCOL_MAX_ENTRIES, BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES,
+    BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES, BundleArchiveEntryKind, BundleArchiveLimits,
+    visit_gzip_ustar,
+};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
-    io::{Read as _, Seek as _, SeekFrom},
+    io::{self, Read, Seek as _, SeekFrom},
 };
 
 const SUBJECT_SCHEMA_V1: &str = "iroha.taira.exact12_release_authority";
@@ -479,12 +485,10 @@ pub(super) fn validate_native_evidence_v1(
         == Some("taira-rollout-tar-gzip-v1");
     validate_manifest_shape(manifest, artifacts.len(), archive_mode)?;
     if archive_mode {
-        // The Python subject builder verifies every archive member, including
-        // type, path, size, and digest.  There is no reusable gzip/tar reader
-        // in this crate, so accepting only the outer descriptor would weaken
-        // that contract.  Check the exact outer binding and then fail closed.
+        // Authenticate the outer archive binding before reading the larger
+        // descriptor. Member identities are checked after all standalone
+        // evidence descriptors have passed the shared semantic validator.
         validate_release_subject(release_subject, manifest, workspace_source_sha256)?;
-        return rejected();
     }
     let evidence = validate_evidence_rows(subject, manifest)?;
 
@@ -605,8 +609,158 @@ pub(super) fn validate_native_evidence_v1(
         &evidence,
     )?;
     validate_release_subject(release_subject, manifest, workspace_source_sha256)?;
+    if archive_mode {
+        validate_archive_evidence(release_subject, &evidence, manifest, artifacts)?;
+    }
 
     Ok(Value::Object(Map::new()))
+}
+
+fn validate_archive_evidence(
+    release_subject: &Value,
+    evidence: &[(String, [u8; 32], u64)],
+    manifest: &[TairaAuthorityArtifactManifestEntryV1],
+    artifacts: &mut [File],
+) -> Result<(), TairaAuthorityErrorV1> {
+    let subject = exact_object(release_subject, &["kind", "name", "sha256", "size"])?;
+    if required_str(subject, "kind")? != "taira-rollout-tar-gzip-v1" {
+        return rejected();
+    }
+    let archive_name = required_str(subject, "name")?;
+    let prefix = archive_name
+        .strip_suffix(".tar.gz")
+        .filter(|prefix| !prefix.is_empty())
+        .ok_or(TairaAuthorityErrorV1::Rejected)?;
+    let archive_index = manifest
+        .iter()
+        .position(|entry| entry.name == "subject/release-archive")
+        .ok_or(TairaAuthorityErrorV1::Rejected)?;
+    let archive = &manifest[archive_index];
+    if archive.size > BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES
+        || archive.sha256 != required_digest(subject, "sha256")?
+        || archive.size != required_u64(subject, "size")?
+    {
+        return rejected();
+    }
+
+    let mut expected = BTreeMap::new();
+    for ((symbolic_name, relative_path), (observed_name, digest, size)) in
+        EVIDENCE_ROWS_V1.iter().zip(evidence)
+    {
+        if symbolic_name != observed_name {
+            return rejected();
+        }
+        let archive_path = format!("{prefix}/{relative_path}");
+        if expected.insert(archive_path, (*digest, *size)).is_some() {
+            return rejected();
+        }
+    }
+
+    let archive_file = artifacts
+        .get_mut(archive_index)
+        .ok_or(TairaAuthorityErrorV1::Rejected)?;
+    archive_file
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+    let mut authenticated_reader = AuthenticatedArchiveReaderV1::new(archive_file);
+    let limits = BundleArchiveLimits {
+        max_compressed_bytes: BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES,
+        max_decoded_bytes: BUNDLE_ARCHIVE_PROTOCOL_MAX_DECODED_BYTES,
+        max_entries: BUNDLE_ARCHIVE_PROTOCOL_MAX_ENTRIES,
+        max_file_bytes: BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES,
+        max_total_file_bytes: BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES,
+    };
+    let mut verified = BTreeSet::new();
+    let summary = visit_gzip_ustar(&mut authenticated_reader, limits, |entry, payload| {
+        let components = entry.path_components();
+        if components.first().map(String::as_str) != Some(prefix) {
+            return Err(invalid_archive_member());
+        }
+        if components.len() == 1 {
+            if entry.kind() != BundleArchiveEntryKind::Directory {
+                return Err(invalid_archive_member());
+            }
+            return io::copy(payload, &mut io::sink()).map(|_| ());
+        }
+        if let Some((expected_digest, expected_size)) = expected.get(entry.path()) {
+            if entry.kind() != BundleArchiveEntryKind::File || entry.size() != *expected_size {
+                return Err(invalid_archive_member());
+            }
+            let (observed_digest, observed_size) = hash_archive_member(payload)?;
+            if observed_size != *expected_size
+                || observed_digest != *expected_digest
+                || !verified.insert(entry.path().to_owned())
+            {
+                return Err(invalid_archive_member());
+            }
+        } else {
+            io::copy(payload, &mut io::sink())?;
+        }
+        Ok(())
+    })
+    .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+    if summary.compressed_bytes() != archive.size
+        || authenticated_reader.bytes_read != archive.size
+        || authenticated_reader.finalize() != archive.sha256
+        || verified.len() != expected.len()
+        || expected.keys().any(|path| !verified.contains(path))
+    {
+        return rejected();
+    }
+    Ok(())
+}
+
+struct AuthenticatedArchiveReaderV1<R> {
+    inner: R,
+    digest: Sha256,
+    bytes_read: u64,
+}
+
+impl<R> AuthenticatedArchiveReaderV1<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            digest: Sha256::new(),
+            bytes_read: 0,
+        }
+    }
+
+    fn finalize(&self) -> [u8; 32] {
+        self.digest.clone().finalize().into()
+    }
+}
+
+impl<R: Read> Read for AuthenticatedArchiveReaderV1<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        self.bytes_read = self
+            .bytes_read
+            .checked_add(count as u64)
+            .ok_or_else(invalid_archive_member)?;
+        self.digest.update(&buffer[..count]);
+        Ok(count)
+    }
+}
+
+fn hash_archive_member(reader: &mut dyn Read) -> io::Result<([u8; 32], u64)> {
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(invalid_archive_member)?;
+        digest.update(&buffer[..count]);
+    }
+    Ok((digest.finalize().into(), size))
+}
+
+fn invalid_archive_member() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "archive member was rejected")
 }
 
 fn validate_manifest_shape(
@@ -1481,9 +1635,16 @@ fn base64_value(byte: u8) -> Option<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
-    use std::{fs, path::PathBuf};
+    use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf};
+
+    pub(crate) struct AuthorityServiceFixtureV1 {
+        pub(crate) _directory: tempfile::TempDir,
+        pub(crate) subject: Value,
+        pub(crate) manifest: Value,
+        pub(crate) paths: Vec<PathBuf>,
+    }
 
     struct Fixture {
         _directory: tempfile::TempDir,
@@ -1535,21 +1696,52 @@ mod tests {
         }
 
         fn use_archive_subject(&mut self) {
-            let bytes = b"test archive bytes\n";
+            let prefix = "taira-test";
+            let payloads = MANIFEST_NAMES_V1
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    (
+                        format!("{prefix}/{}", name.strip_prefix("evidence/").unwrap()),
+                        fs::read(&self.paths[index]).expect("read archive fixture member"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let files = payloads
+                .iter()
+                .map(|(path, payload)| {
+                    sorafs_car::bundle_archive::BundleArchiveFile::new(path, 0o644, payload)
+                })
+                .collect::<Vec<_>>();
+            let bytes = sorafs_car::bundle_archive::write_gzip_ustar(Vec::new(), &files)
+                .expect("encode canonical fixture archive");
+            self.install_archive("taira-test.tar.gz", &bytes);
+        }
+
+        fn install_archive(&mut self, name: &str, bytes: &[u8]) {
             let path = self._directory.path().join("taira-test.tar.gz");
             fs::write(&path, bytes).expect("write archive fixture");
-            self.manifest.push(TairaAuthorityArtifactManifestEntryV1 {
-                ordinal: u16::try_from(self.manifest.len()).expect("manifest ordinal"),
-                name: "subject/release-archive".to_owned(),
-                size: bytes.len() as u64,
-                sha256: sha256(bytes),
-            });
-            self.artifacts
-                .push(File::open(&path).expect("open archive fixture"));
-            self.paths.push(path);
+            if let Some(index) = self
+                .manifest
+                .iter()
+                .position(|entry| entry.name == "subject/release-archive")
+            {
+                self.manifest[index].size = bytes.len() as u64;
+                self.manifest[index].sha256 = sha256(bytes);
+            } else {
+                self.manifest.push(TairaAuthorityArtifactManifestEntryV1 {
+                    ordinal: u16::try_from(self.manifest.len()).expect("manifest ordinal"),
+                    name: "subject/release-archive".to_owned(),
+                    size: bytes.len() as u64,
+                    sha256: sha256(bytes),
+                });
+                self.artifacts
+                    .push(File::open(&path).expect("open archive fixture"));
+                self.paths.push(path);
+            }
             let release = object([
                 ("kind", Value::from("taira-rollout-tar-gzip-v1")),
-                ("name", Value::from("taira-test.tar.gz")),
+                ("name", Value::from(name)),
                 ("sha256", Value::from(hex::encode(sha256(bytes)))),
                 ("size", Value::from(bytes.len() as u64)),
             ]);
@@ -1561,13 +1753,127 @@ mod tests {
     }
 
     #[test]
-    fn accepts_exact_image_subject_and_fails_closed_for_archive() {
+    fn accepts_exact_image_and_canonical_archive_subjects() {
         let mut image = fixture();
         assert_eq!(image.validate().unwrap(), Value::Object(Map::new()));
 
         let mut archive = fixture();
         archive.use_archive_subject();
-        assert_eq!(archive.validate(), Err(TairaAuthorityErrorV1::Rejected));
+        assert_eq!(archive.validate().unwrap(), Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn archive_rejects_every_mutated_or_omitted_evidence_member() {
+        for index in 0..MANIFEST_NAMES_V1.len() {
+            let mut mutated = fixture();
+            let mut members = archive_members(&mutated);
+            members[index].1.push(0xa5);
+            let bytes = canonical_archive(&members);
+            mutated.install_archive("taira-test.tar.gz", &bytes);
+            assert_eq!(
+                mutated.validate(),
+                Err(TairaAuthorityErrorV1::Rejected),
+                "mutated archive evidence member {index}"
+            );
+
+            let mut omitted = fixture();
+            let mut members = archive_members(&omitted);
+            members.remove(index);
+            let bytes = canonical_archive(&members);
+            omitted.install_archive("taira-test.tar.gz", &bytes);
+            assert_eq!(
+                omitted.validate(),
+                Err(TairaAuthorityErrorV1::Rejected),
+                "omitted archive evidence member {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_rejects_outside_prefix_and_descriptor_drift() {
+        let mut outside = fixture();
+        let mut members = archive_members(&outside);
+        members.push(("aaa/outside-prefix".to_owned(), b"outside".to_vec()));
+        let bytes = canonical_archive(&members);
+        outside.install_archive("taira-test.tar.gz", &bytes);
+        assert_eq!(outside.validate(), Err(TairaAuthorityErrorV1::Rejected));
+
+        let mut descriptor = fixture();
+        descriptor.use_archive_subject();
+        let archive_index = descriptor
+            .manifest
+            .iter()
+            .position(|entry| entry.name == "subject/release-archive")
+            .unwrap();
+        descriptor.manifest[archive_index].sha256[0] ^= 0x80;
+        assert_eq!(descriptor.validate(), Err(TairaAuthorityErrorV1::Rejected));
+
+        let mut bytes = fixture();
+        bytes.use_archive_subject();
+        let archive_index = bytes
+            .manifest
+            .iter()
+            .position(|entry| entry.name == "subject/release-archive")
+            .unwrap();
+        fs::write(&bytes.paths[archive_index], b"post-manifest mutation")
+            .expect("mutate archive descriptor");
+        assert_eq!(bytes.validate(), Err(TairaAuthorityErrorV1::Rejected));
+    }
+
+    #[test]
+    fn archive_rejects_nonregular_duplicate_reordered_and_oversized_entries() {
+        let source = fixture();
+        let mut normal = archive_members(&source)
+            .into_iter()
+            .map(|(path, payload)| RawArchiveEntry {
+                path,
+                kind: b'0',
+                payload,
+                declared_size: None,
+            })
+            .collect::<Vec<_>>();
+        normal.sort_by(|left, right| left.path.cmp(&right.path));
+
+        // Prove the hostile-archive encoder itself produces a reader-accepted
+        // canonical stream before individual policy mutations are applied.
+        let mut control = fixture();
+        control.install_archive("taira-test.tar.gz", &stored_gzip(&raw_ustar(&normal)));
+        assert_eq!(control.validate().unwrap(), Value::Object(Map::new()));
+
+        let mut expected_directory = normal.clone();
+        expected_directory[0].kind = b'5';
+        expected_directory[0].payload.clear();
+        expected_directory[0].declared_size = Some(0);
+        assert_raw_archive_rejected(&expected_directory);
+
+        let mut nonregular = normal.clone();
+        nonregular.push(RawArchiveEntry {
+            path: "taira-test/zz-link".to_owned(),
+            kind: b'2',
+            payload: Vec::new(),
+            declared_size: Some(0),
+        });
+        nonregular.sort_by(|left, right| left.path.cmp(&right.path));
+        assert_raw_archive_rejected(&nonregular);
+
+        let mut duplicate = normal.clone();
+        let repeated = duplicate[0].clone();
+        duplicate.insert(1, repeated);
+        assert_raw_archive_rejected(&duplicate);
+
+        let mut reordered = normal.clone();
+        reordered.swap(0, 1);
+        assert_raw_archive_rejected(&reordered);
+
+        let mut oversized = normal;
+        oversized.push(RawArchiveEntry {
+            path: "taira-test/zz-oversized".to_owned(),
+            kind: b'0',
+            payload: Vec::new(),
+            declared_size: Some(BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES + 1),
+        });
+        oversized.sort_by(|left, right| left.path.cmp(&right.path));
+        assert_raw_archive_rejected(&oversized);
     }
 
     #[test]
@@ -1695,7 +2001,7 @@ mod tests {
         let cargo = b"fixture Cargo.lock\n".to_vec();
         let runner = b"fixture runner\n".to_vec();
         let validator = b"fixture validator\n".to_vec();
-        let matrix = include_bytes!("../../../../../../fixtures/privacy/exact12_v1.tsv").to_vec();
+        let matrix = include_bytes!("../../../../../fixtures/privacy/exact12_v1.tsv").to_vec();
 
         let expectations = expectations_fixture();
         let stages = PrivacyReleaseStageArtifactsV1 {
@@ -1901,6 +2207,39 @@ mod tests {
         }
     }
 
+    pub(crate) fn authority_service_fixture() -> AuthorityServiceFixtureV1 {
+        let Fixture {
+            _directory,
+            subject,
+            manifest,
+            artifacts: _,
+            paths,
+        } = fixture();
+        for path in &paths {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o400))
+                .expect("make authority-service fixture immutable");
+        }
+        let manifest = Value::Array(
+            manifest
+                .into_iter()
+                .map(|entry| {
+                    object([
+                        ("name", Value::from(entry.name)),
+                        ("ordinal", Value::from(u64::from(entry.ordinal))),
+                        ("sha256", Value::from(hex::encode(entry.sha256))),
+                        ("size", Value::from(entry.size)),
+                    ])
+                })
+                .collect(),
+        );
+        AuthorityServiceFixtureV1 {
+            _directory,
+            subject,
+            manifest,
+            paths,
+        }
+    }
+
     fn expectations_fixture() -> PrivacyReleaseExpectationsV1 {
         let mut stages = Vec::with_capacity(STAGE_COUNT_V1);
         for (protocol_index, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
@@ -2066,6 +2405,123 @@ mod tests {
         let mut json = norito::json::to_json_pretty(value).expect("encode fixture JSON");
         json.push('\n');
         json.into_bytes()
+    }
+
+    fn archive_members(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
+        MANIFEST_NAMES_V1
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    format!(
+                        "taira-test/{}",
+                        name.strip_prefix("evidence/").expect("evidence prefix")
+                    ),
+                    fs::read(&fixture.paths[index]).expect("read archive member fixture"),
+                )
+            })
+            .collect()
+    }
+
+    fn canonical_archive(members: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let files = members
+            .iter()
+            .map(|(path, payload)| {
+                sorafs_car::bundle_archive::BundleArchiveFile::new(path, 0o644, payload)
+            })
+            .collect::<Vec<_>>();
+        sorafs_car::bundle_archive::write_gzip_ustar(Vec::new(), &files)
+            .expect("encode canonical archive fixture")
+    }
+
+    #[derive(Clone)]
+    struct RawArchiveEntry {
+        path: String,
+        kind: u8,
+        payload: Vec<u8>,
+        declared_size: Option<u64>,
+    }
+
+    fn assert_raw_archive_rejected(entries: &[RawArchiveEntry]) {
+        let decoded = raw_ustar(entries);
+        let archive = stored_gzip(&decoded);
+        let mut fixture = fixture();
+        fixture.install_archive("taira-test.tar.gz", &archive);
+        assert_eq!(fixture.validate(), Err(TairaAuthorityErrorV1::Rejected));
+    }
+
+    fn raw_ustar(entries: &[RawArchiveEntry]) -> Vec<u8> {
+        const BLOCK: usize = 512;
+        let mut archive = Vec::new();
+        for entry in entries {
+            assert!(entry.path.len() <= 100);
+            let declared_size = entry.declared_size.unwrap_or(entry.payload.len() as u64);
+            let mut header = [0_u8; BLOCK];
+            header[..entry.path.len()].copy_from_slice(entry.path.as_bytes());
+            write_test_octal(
+                &mut header[100..108],
+                if entry.kind == b'5' { 0o755 } else { 0o644 },
+            );
+            write_test_octal(&mut header[108..116], 0);
+            write_test_octal(&mut header[116..124], 0);
+            write_test_octal(&mut header[124..136], declared_size);
+            write_test_octal(&mut header[136..148], 0);
+            header[156] = entry.kind;
+            header[257..263].copy_from_slice(b"ustar\0");
+            header[263..265].copy_from_slice(b"00");
+            write_test_octal(&mut header[329..337], 0);
+            write_test_octal(&mut header[337..345], 0);
+            header[148..156].fill(b' ');
+            let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
+            let rendered = format!("{checksum:06o}\0 ");
+            header[148..156].copy_from_slice(rendered.as_bytes());
+            archive.extend_from_slice(&header);
+            if entry.kind == b'0' {
+                archive.extend_from_slice(&entry.payload);
+                let padding = (BLOCK - entry.payload.len() % BLOCK) % BLOCK;
+                archive.resize(archive.len() + padding, 0);
+            }
+        }
+        archive.resize(archive.len() + BLOCK * 2, 0);
+        archive
+    }
+
+    fn write_test_octal(field: &mut [u8], value: u64) {
+        let digits = field.len() - 1;
+        let rendered = format!("{value:0digits$o}");
+        assert_eq!(rendered.len(), digits);
+        field[..digits].copy_from_slice(rendered.as_bytes());
+        field[digits] = 0;
+    }
+
+    fn stored_gzip(decoded: &[u8]) -> Vec<u8> {
+        let mut gzip = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let block_count = decoded.len().div_ceil(u16::MAX as usize);
+        for (index, chunk) in decoded.chunks(u16::MAX as usize).enumerate() {
+            gzip.push(u8::from(index + 1 == block_count));
+            let length = u16::try_from(chunk.len()).expect("stored DEFLATE block length");
+            gzip.extend_from_slice(&length.to_le_bytes());
+            gzip.extend_from_slice(&(!length).to_le_bytes());
+            gzip.extend_from_slice(chunk);
+        }
+        gzip.extend_from_slice(&crc32(decoded).to_le_bytes());
+        gzip.extend_from_slice(&(decoded.len() as u32).to_le_bytes());
+        gzip
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 0 {
+                    crc >> 1
+                } else {
+                    (crc >> 1) ^ 0xedb8_8320
+                };
+            }
+        }
+        !crc
     }
 
     fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {

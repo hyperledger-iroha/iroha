@@ -162,6 +162,126 @@ fn assert_source_counts(source: &str, expected: &[(&str, usize)]) {
         assert_eq!(source.matches(needle).count(), *count, "count for {needle}");
     }
 }
+const SOURCE_CONTRACT_GROUPS_V1: &[u8] = include_bytes!("tests/source_contract_groups_v1.json");
+const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = 40_117;
+const SOURCE_CONTRACT_GROUPS_V1_SHA256: [u8; 32] = [
+    0x10, 0x2c, 0xa2, 0xe2, 0x07, 0xe0, 0x56, 0x0f, 0x7c, 0x67, 0x9a, 0x7a, 0x53, 0x45, 0xf8, 0x2a,
+    0x22, 0x04, 0xf7, 0x00, 0x79, 0xc0, 0x90, 0x86, 0xdd, 0x03, 0x6d, 0x97, 0x48, 0x99, 0x63, 0xd5,
+];
+#[derive(Debug, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceContractGroupFileV1 {
+    schema: String,
+    preimage: SourceContractGroupPreimageV1,
+    groups: Vec<SourceContractGroupV1>,
+}
+#[derive(Debug, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceContractGroupPreimageV1 {
+    tests_rs: String,
+    commitment_mask_rs: String,
+    runtime_rs: String,
+}
+#[derive(Debug, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceContractGroupV1 {
+    id: String,
+    kind: String,
+    needles: Vec<String>,
+    counts: Vec<usize>,
+}
+fn load_source_contract_groups_v1() -> SourceContractGroupFileV1 {
+    assert_eq!(
+        SOURCE_CONTRACT_GROUPS_V1.len(),
+        SOURCE_CONTRACT_GROUPS_V1_LEN
+    );
+    let digest: [u8; 32] = Sha256::digest(SOURCE_CONTRACT_GROUPS_V1).into();
+    assert_eq!(digest, SOURCE_CONTRACT_GROUPS_V1_SHA256);
+    let fixture: SourceContractGroupFileV1 = norito::json::from_slice(SOURCE_CONTRACT_GROUPS_V1)
+        .expect("decode strict FCMP source-contract groups");
+    assert_eq!(fixture.schema, "iroha_core.fcmp_source_contract_groups.v1");
+    assert_eq!(
+        fixture.preimage.tests_rs,
+        "4b6267d86f7bd45203188e665215c83eaa58b5f7"
+    );
+    assert_eq!(
+        fixture.preimage.commitment_mask_rs,
+        "cf118c236e6fc1fb88b70a7dcb6c66189e27c23a"
+    );
+    assert_eq!(
+        fixture.preimage.runtime_rs,
+        "e81723d0b934b2295c2ed6fd198aab880867c61c"
+    );
+    assert_eq!(fixture.groups.len(), 76);
+    let mut ids = std::collections::BTreeSet::new();
+    for group in &fixture.groups {
+        assert!(
+            ids.insert(group.id.as_str()),
+            "duplicate group {}",
+            group.id
+        );
+        assert!(!group.needles.is_empty(), "empty group {}", group.id);
+        assert!(
+            group.needles.iter().all(|needle| !needle.is_empty()),
+            "empty needle in {}",
+            group.id
+        );
+        match group.kind.as_str() {
+            "counts" => assert_eq!(group.counts.len(), group.needles.len(), "{}", group.id),
+            "contains" | "excludes" | "order" => {
+                assert!(group.counts.is_empty(), "unexpected counts in {}", group.id);
+            }
+            _ => panic!("unknown source-contract kind in {}", group.id),
+        }
+    }
+    fixture
+}
+static SOURCE_CONTRACT_GROUPS: std::sync::LazyLock<SourceContractGroupFileV1> =
+    std::sync::LazyLock::new(load_source_contract_groups_v1);
+fn assert_source_contract_group(id: &str, source: &str) {
+    let group = SOURCE_CONTRACT_GROUPS
+        .groups
+        .iter()
+        .find(|group| group.id == id)
+        .unwrap_or_else(|| panic!("missing source-contract group {id}"));
+    match group.kind.as_str() {
+        "contains" => {
+            for needle in &group.needles {
+                assert!(source.contains(needle), "{id}: missing {needle}");
+            }
+        }
+        "excludes" => {
+            for needle in &group.needles {
+                assert!(!source.contains(needle), "{id}: retained {needle}");
+            }
+        }
+        "order" => {
+            let positions = group
+                .needles
+                .iter()
+                .map(|needle| {
+                    source
+                        .find(needle)
+                        .unwrap_or_else(|| panic!("{id}: missing ordered source {needle}"))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{id}: source order changed"
+            );
+        }
+        "counts" => {
+            for (needle, count) in group.needles.iter().zip(&group.counts) {
+                assert_eq!(
+                    source.matches(needle).count(),
+                    *count,
+                    "{id}: count for {needle}"
+                );
+            }
+        }
+        _ => unreachable!("source-contract kinds are validated at load"),
+    }
+}
 #[derive(Clone, Copy)]
 enum SourcePoint<'a> {
     First(&'a str),
@@ -1073,30 +1193,13 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
         "pub(crate) fn fcmp_release_fixture_v1(",
         "/// Build a maximum-shape fixture whose first canonical branch",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/00",
         release_fixture,
-        &[
-            "prover_secret_selene_x_v1(&current_selene)?",
-            "prover_secret_helios_x_v1(",
-            "encode_secret_helioselene_scalar_v1(child.expose_ref())",
-            "encode_secret_field25519_scalar_v1(child.expose_ref())",
-            "prover_secret_hash_helios_v1(core::slice::from_ref(",
-            "prover_secret_hash_selene_v1(core::slice::from_ref(child.expose_ref()))?",
-            "push_fcmp_fixture_secret_branch_v1(",
-            "fcmp_fixture_secret_helios_encoding_v1(",
-            ".expose_public_copy_v1()",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/01",
         release_fixture,
-        &[
-            ".expose_ref()\n                .x()",
-            "branches.push(vec![",
-            "Some(hash_helios(&[child])?)",
-            "let mut next_selene = hash_selene(&[child])?",
-            "current_helios\n                .ok_or",
-            ".expose_copy()\n            .encode()",
-        ],
     );
     assert_source_counts(release_fixture, &[(".expose_public_copy_v1()", 1)]);
     let x_helpers = source_section(
@@ -1105,31 +1208,18 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
         "fn push_fcmp_fixture_secret_branch_v1(",
     );
     assert_source_counts(x_helpers, &[(".secret_x_owner_v1()", 2)]);
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/02",
         x_helpers,
-        &[".secret_coordinates_v1()", "ProverSecretCopyValueV1::new("],
     );
     let branch_insertion = source_section(
         source,
         "fn push_fcmp_fixture_secret_branch_v1(",
         "fn fcmp_fixture_secret_helios_encoding_v1(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/03",
         branch_insertion,
-        &[
-            "mut encoded: SecretEncodedScalarV1",
-            "let branches_capacity = branches.capacity()",
-            "let outer_preflight = require_preallocated_push(",
-            "let mut branch = zeroizing_exact_secret_buffer_v1::<[u8; 32]>(1)?",
-            "let branch_capacity = branch.capacity()",
-            "let inner_preflight = require_preallocated_push(",
-            "let branch_index = branches.len()",
-            "branches.push(core::mem::take(&mut *branch))",
-            "let final_branch = &mut branches[branch_index]",
-            "final_branch.push([0; 32])",
-            "let destination = final_branch.len() - 1",
-            "core::mem::swap(&mut final_branch[destination], encoded.as_mut())",
-        ],
     );
     let transfer = branch_insertion
         .find("core::mem::swap(&mut final_branch[destination], encoded.as_mut())")
@@ -1138,69 +1228,39 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
         .rfind("drop(encoded);")
         .expect("final source-owner clear");
     assert!(transfer < final_drop);
-    assert_source_counts(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/04",
         branch_insertion,
-        &[
-            ("require_preallocated_push(", 2),
-            ("branches.push(", 1),
-            ("final_branch.push([0; 32])", 1),
-            ("core::mem::swap(", 1),
-            ("drop(encoded);", 3),
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/05",
         branch_insertion,
-        &[
-            "*encoded.as_ref()",
-            "encoded.expose_copy()",
-            "ProverSecretCopyValueV1::take",
-            "mut encoded: [u8; 32]",
-            "fn push_fcmp_fixture_secret_branch_scalar_v1(",
-            "callback",
-            "FnOnce",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/06",
         release_fixture,
-        &[
-            ("push_fcmp_fixture_secret_branch_v1(", 2),
-            ("encode_secret_helioselene_scalar_v1(child.expose_ref())", 1),
-            ("encode_secret_field25519_scalar_v1(child.expose_ref())", 1),
-        ],
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/07",
         release_fixture,
-        &[
-            "encode_secret_helioselene_scalar_v1(child.expose_ref())",
-            "encode_secret_field25519_scalar_v1(child.expose_ref())",
-        ],
     );
     let field = include_str!("../field.rs");
     for helper in [
         "fn encode_secret_field25519_scalar_v1",
         "fn encode_secret_helioselene_scalar_v1",
     ] {
-        assert_source_contains_all(
+        assert_source_contract_group(
+            "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/08",
             source_section(field, helper, "}"),
-            &[
-                "let integer = SecretU256V1(value.retrieve())",
-                "SecretEncodedScalarV1(SecretCopyValueV1::new(",
-            ],
         );
     }
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/09",
         source_section(
             field,
             "pub(super) fn secret_x_ref_v1(&self)",
             "/// Encode a private projective point",
         ),
-        &[
-            "self.z.invert()",
-            "BorrowedZeroizingCopySlot(&mut inverse)",
-            "SecretCycleScalarV1(SecretCopyValueV1::new(",
-            "self.x.mul_ref(inverse.as_ref())",
-            "drop(inverse);",
-        ],
     );
     assert!(!field.contains("pub(super) fn secret_x_v1(mut self)"));
     let secret_encoding = source_section(
@@ -1208,38 +1268,13 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
         "pub(super) fn secret_encode_v1(mut self)",
         "pub(super) fn secret_encode_ref_v1(&self)",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/10",
         secret_encoding,
-        &[
-            "BorrowedZeroizingCopySlot(&mut self)",
-            "BorrowedZeroizingCopySlot(&mut inverse)",
-            "let x = SecretCopyValueV1::new(",
-            "let y = SecretCopyValueV1::new(",
-            "let integer = SecretU256V1(x.as_ref().retrieve())",
-            "let y_integer = SecretU256V1(y.as_ref().retrieve())",
-            "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
-            "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
-            "Some(encoded)",
-        ],
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/11",
         secret_encoding,
-        &[
-            "BorrowedZeroizingCopySlot(&mut self)",
-            "point.as_ref().z.invert()",
-            "BorrowedZeroizingCopySlot(&mut inverse)",
-            "if !bool::from(is_some)",
-            "let x = SecretCopyValueV1::new(",
-            "let y = SecretCopyValueV1::new(",
-            "let integer = SecretU256V1(x.as_ref().retrieve())",
-            "SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))",
-            "let y_integer = SecretU256V1(y.as_ref().retrieve())",
-            "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
-            "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
-            "drop(inverse);",
-            "drop(point);",
-            "Some(encoded)",
-        ],
     );
     assert_source_excludes_all(secret_encoding, &["y.as_ref().is_odd_ref()"]);
 }
@@ -1370,106 +1405,38 @@ fn invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps(
     let (helios_arm, selene_arm) = helper
         .split_once("AdditionalBranch::ToSelene(values) => {")
         .expect("two concrete invalid-coordinate arms");
-    assert_source_order(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/00",
         helios_arm,
-        &[
-            "AdditionalBranch::ToHelios(values) => {",
-            "let destination = values",
-            "ProverSecretCopyValueV1::take(destination)",
-            "let difference =",
-            ".sub_ref(&HelioseleneField::ONE)",
-            "let mut replacement =",
-            "HelioseleneField::conditional_select(",
-            "difference.expose_ref().ct_is_zero()",
-            "drop(difference)",
-            "core::mem::swap(destination, &mut replacement.0)",
-            "drop(replacement)",
-            "drop(original)",
-        ],
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/01",
         selene_arm,
-        &[
-            "let destination = values",
-            "ProverSecretCopyValueV1::take(destination)",
-            "let difference =",
-            ".sub_ref(&Field25519::ONE)",
-            "let mut replacement =",
-            "Field25519::conditional_select(",
-            "difference.expose_ref().ct_is_zero()",
-            "drop(difference)",
-            "core::mem::swap(destination, &mut replacement.0)",
-            "drop(replacement)",
-            "drop(original)",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/02",
         helper,
-        &[
-            ("AdditionalBranch::ToHelios(values) => {", 1),
-            ("AdditionalBranch::ToSelene(values) => {", 1),
-            (".first_mut()", 2),
-            ("ProverSecretCopyValueV1::take(destination)", 2),
-            ("let difference =", 2),
-            ("let mut replacement =", 2),
-            ("ProverSecretCopyValueV1::new(", 4),
-            ("::conditional_select(", 2),
-            ("difference.expose_ref().ct_is_zero()", 2),
-            ("core::mem::swap(destination, &mut replacement.0)", 2),
-            ("drop(difference);", 2),
-            ("drop(replacement);", 2),
-            ("drop(original);", 2),
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/03",
         helper,
-        &[
-            "<T:",
-            "impl FnOnce",
-            "-> T",
-            "replacement(original",
-            ".expose_copy()",
-            "*destination =",
-            "fn expose_",
-            "fn as_",
-            "fn get_",
-            "fn into_",
-            ".get_copy()",
-            ".into_inner()",
-            "replacement.expose_ref()",
-            "impl Deref",
-            "trait ",
-            "callback",
-        ],
     );
     let fixture = source_section(
         source,
         "pub(crate) fn fcmp_release_invalid_path_fixture_v1(",
         "enum RootValues",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/04",
         fixture,
-        &[
-            "let first_branch = first_input",
-            ".additional_branches",
-            "replace_first_secret_coordinate_v1(first_branch)?",
-            "Ok((inputs, outputs, root))",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/05",
         fixture,
-        &[("replace_first_secret_coordinate_v1(first_branch)?", 1)],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/06",
         fixture,
-        &[
-            "AdditionalBranch::ToHelios",
-            "AdditionalBranch::ToSelene",
-            "::conditional_select(",
-            ".sub_ref(",
-            "FnOnce",
-            ".expose_copy()",
-        ],
     );
 }
 #[test]
@@ -1556,90 +1523,48 @@ fn fixture_leaf_coordinate_buffer_zeroizes_on_drop_and_unwind() {
 #[test]
 fn fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash() {
     let source = include_str!("../prover.rs");
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/00",
         source,
-        &[
-            "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
-            "fn prover_secret_leaf_coordinates_v1(",
-            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
-         fn with_fcmp_fixture_leaf_coordinate_owners_v1<T>(",
-        ],
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/01",
         source_section(
             source,
             "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
             "fn push_secret_scalar_v1<F: ProofScalar + Zeroize>(",
         ),
-        &[
-            "try_reserve_exact(exact_capacity)",
-            "values.capacity() < exact_capacity",
-            "Ok(Zeroizing::new(values))",
-        ],
     );
     let coordinate_scope = source_section(
         source,
         "fn prover_secret_leaf_coordinates_v1(",
         "fn with_fcmp_fixture_leaf_coordinate_owners_v1<T>(",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/02",
         coordinate_scope,
-        &[
-            "mut convert: impl FnMut(",
-            ") -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>",
-        ],
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/03",
         coordinate_scope,
-        &[
-            ".checked_mul(6)",
-            "zeroizing_exact_secret_buffer_v1::<Field25519>(padded_capacity)?",
-            "let coordinate_pair = convert(point)?",
-            "let (coordinate_x, coordinate_y) = coordinate_pair.component_refs()",
-            "push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_x)?",
-            "push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_y)?",
-            "leaf_coordinates.len() != populated_len",
-            "leaf_coordinates.resize(padded_capacity, Field25519::ZERO)",
-        ],
     );
     assert_source_counts(coordinate_scope, &[("push_borrowed_secret_scalar_v1(", 2)]);
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/04",
         coordinate_scope,
-        &[
-            ".components()",
-            "let (x, y) = edwards_to_wei25519",
-            "Result<(Field25519, Field25519)",
-            "ProverSecretCopyValueV1::new(convert(point)?)",
-            "coordinate_pair.expose_ref()",
-            "coordinate_pair.0",
-            "coordinate_pair.1",
-            "push_secret_scalar_v1(&mut leaf_coordinates",
-            "ProverSecretCopyValueV1::new(convert(&point)?)",
-            "Vec::with_capacity(6 * leaves.len())",
-            "leaf_coordinates.extend([x, y])",
-            "leaf_coordinates.push(",
-        ],
     );
     let release_fixture = source_section(
         source,
         "pub(crate) fn fcmp_release_fixture_v1(",
         "/// Build a maximum-shape fixture whose first canonical branch",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/05",
         release_fixture,
-        &[
-            "with_fcmp_fixture_leaf_coordinate_owners_v1(",
-            "secret_edwards_to_wei25519_v1",
-            "prover_secret_hash_selene_v1",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/06",
         release_fixture,
-        &[
-            "&leaves, edwards_to_wei25519, hash_selene",
-            "let mut leaf_coordinates = Vec::with_capacity",
-            "leaf_coordinates.extend([x, y])",
-        ],
     );
 }
 #[test]
@@ -1685,14 +1610,9 @@ fn private_output_identifier_callsites_use_only_borrowed_owned_insertion() {
         "fn push_owned_secret_output_id_v1(",
         "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "private_output_identifier_callsites_use_only_borrowed_owned_insertion/00",
         push,
-        &[
-            "value: FcmpSecretOutputIdV1",
-            "require_preallocated_push(values.len(), values.capacity())?",
-            "values.push(*value.as_ref())",
-            "drop(value)",
-        ],
     );
     assert_source_excludes_all(push, &["value: [u8; 32]", "value.expose_copy()"]);
     let constructor = source_section(
@@ -1700,18 +1620,13 @@ fn private_output_identifier_callsites_use_only_borrowed_owned_insertion() {
         "fn from_secret_byte_owners_v1(",
         "#[cfg(test)]\n    fn duplicate_for_test(&self)",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "private_output_identifier_callsites_use_only_borrowed_owned_insertion/01",
         constructor,
-        &[
-            "require_preallocated_push(leaf_ids.len(), leaf_ids.capacity())?",
-            "push_owned_secret_output_id_v1(&mut leaf_ids, leaf.secret_output_id_v1())?",
-            "let output_id = output.secret_output_id_v1()",
-            "ct_digest_slice_contains(&leaf_ids, output_id.as_ref())",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "private_output_identifier_callsites_use_only_borrowed_owned_insertion/02",
         constructor,
-        &["leaf.output_id()", "output.output_id()", "leaf_ids.push("],
     );
     let prove_once = source_section(
         source,
@@ -1724,25 +1639,18 @@ fn private_output_identifier_callsites_use_only_borrowed_owned_insertion() {
         "/// Prove a complete first-release FCMP++ statement in native Rust.",
     );
     for scope in [prove_once, preflight] {
-        assert_source_contains_all(
+        assert_source_contract_group(
+            "private_output_identifier_callsites_use_only_borrowed_owned_insertion/03",
             scope,
-            &[
-                "require_preallocated_push(spent_outputs.len(), spent_outputs.capacity())?",
-                "push_owned_secret_output_id_v1(",
-                "input.output.secret_output_id_v1()",
-            ],
         );
         assert_source_excludes_all(scope, &["spent_outputs.push(", "input.output.output_id()"]);
     }
     assert_source_counts(production, &[("input.output.secret_output_id_v1()", 2)]);
     assert_source_counts(production, &[("input.output.output_id()", 0)]);
     assert_source_counts(production, &[(".secret_output_id_v1()", 4)]);
-    assert_source_counts(
+    assert_source_contract_group(
+        "private_output_identifier_callsites_use_only_borrowed_owned_insertion/04",
         production,
-        &[
-            ("new_output_ids.push(output.output_id())", 2),
-            (".output_id()", 2),
-        ],
     );
 }
 #[test]
@@ -1813,72 +1721,39 @@ fn duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time() {
         "fn push_owned_prover_secret_digest_v1(",
         "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/00",
         owner_push,
-        &[
-            "value: ProverSecretCopyValueV1<[u8; 32]>",
-            "require_preallocated_push(values.len(), values.capacity())?",
-            "values.push(*value.expose_ref())",
-            "drop(value)",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/01",
         owner_push,
-        &["value: [u8; 32]", "value.expose_copy()", "values.reserve("],
     );
     let derivation = source_section(
         production,
         "fn prover_secret_key_image_id_v1(",
         "fn secret_edwards_product_v1(",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/02",
         derivation,
-        &[
-            "linking_bytes: &[u8; 32]",
-            "spend_x: &Scalar",
-            "prover_secret_decode_edwards_point_v1(linking_bytes)?",
-            "secret_edwards_product_v1(linking.expose_ref(), spend_x)",
-            "Ok(prover_secret_edwards_encoding_v1(&key_image))",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/03",
         derivation,
-        &[
-            "decode_edwards_point(",
-            "linking *",
-            ".compress().to_bytes()",
-            "spend_x: Scalar",
-            "-> Result<[u8; 32]",
-            "pub fn",
-        ],
     );
     let prove_once = source_section(
         production,
         "fn prove_fcmp_plus_plus_once_v1(",
         "fn retry_membership_prover<T>(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/04",
         prove_once,
-        &[
-            "push_owned_secret_output_id_v1(&mut spent_outputs",
-            "require_preallocated_push(derived_key_images.len(), derived_key_images.capacity())?",
-            "input.output.component_refs_v1().1",
-            "prover_secret_key_image_id_v1(linking_bytes, &input.spend_x)?",
-            "push_owned_prover_secret_digest_v1(&mut derived_key_images, key_image)?",
-            "ct_has_duplicate_digests(&spent_outputs)",
-            "ct_has_duplicate_digests(&derived_key_images)",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/05",
         prove_once,
-        &[
-            "input.output.components().1",
-            "decode_edwards_point(input.output",
-            "(linking * input.spend_x).compress().to_bytes()",
-            "derived_key_images.push(",
-            "derived_key_images.sort",
-            "HashSet",
-        ],
     );
     assert!(!production.contains(
         "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
@@ -2142,63 +2017,17 @@ fn assert_sal_scalar_encoding_owner_handoff_source() {
         "fn prove_fcmp_plus_plus_once_v1(",
         "fn retry_membership_prover<T>(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/00",
         prove_once,
-        &[
-            "let sal_y =",
-            "prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output)",
-            "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
-            "let sal_linking_bytes =",
-            "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
-            "let sal_spend_x_bytes =",
-            "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&input.spend_x)",
-            "let sal_rerandomization_blind_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
-            "&rerandomization.rerandomization_blind,\n        );",
-            "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
-            "sal_spend_x_bytes,",
-            "sal_y_bytes,",
-            "sal_linking_bytes,",
-            "sal_rerandomization_blind_bytes,",
-            "let sal = prove_fcmp_sal_with_checked_rng_v1(",
-            "drop(sal_witness)",
-            "prepared_inputs.push(PreparedInput {",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/01",
         prove_once,
-        &[
-            ("FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(", 4),
-            (
-                "FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
-                1,
-            ),
-            ("sal_spend_x_bytes,", 1),
-            ("sal_y_bytes,", 1),
-            ("sal_linking_bytes,", 1),
-            ("sal_rerandomization_blind_bytes,", 1),
-            ("prove_fcmp_sal_with_checked_rng_v1(", 1),
-            ("drop(sal_witness)", 1),
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/02",
         prove_once,
-        &[
-            ".expose_copy()",
-            "FcmpSalWitnessV1::new(",
-            "sal_y.expose_ref().to_bytes()",
-            "rerandomization.linking.to_bytes()",
-            "input.spend_x.to_bytes()",
-            "rerandomization.rerandomization_blind.to_bytes()",
-            "ProverSecretCopyValueV1::new(sal_y",
-            "FcmpSalSecretScalarEncodingV1(",
-            "drop(sal_linking_bytes)",
-            "drop(sal_spend_x_bytes)",
-            "drop(sal_y_bytes)",
-            "drop(sal_rerandomization_blind_bytes)",
-            "mem::take(&mut sal_linking_bytes)",
-            "FnOnce",
-            "callback",
-        ],
     );
 
     let sal_source = include_str!("../sal.rs");
@@ -2207,85 +2036,30 @@ fn assert_sal_scalar_encoding_owner_handoff_source() {
         "impl FcmpSalWitnessV1 {",
         "#[allow(clippy::too_many_arguments)]",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/03",
         constructor,
-        &[
-            "mut x: [u8; 32]",
-            "mut y: [u8; 32]",
-            "mut r_i: [u8; 32]",
-            "mut r_r_i: [u8; 32]",
-            "let x_bytes = FcmpSalSecretScalarEncodingV1::take(&mut x)",
-            "let y_bytes = FcmpSalSecretScalarEncodingV1::take(&mut y)",
-            "let r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_i)",
-            "let r_r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_r_i)",
-            "Self::from_secret_scalar_encoding_owners_v1(",
-            "pub(super) fn from_secret_scalar_encoding_owners_v1(",
-            "x_bytes: FcmpSalSecretScalarEncodingV1",
-            "y_bytes: FcmpSalSecretScalarEncodingV1",
-            "r_i_bytes: FcmpSalSecretScalarEncodingV1",
-            "r_r_i_bytes: FcmpSalSecretScalarEncodingV1",
-            "let mut x = secret_scalar_from_bytes_v1(x_bytes.0.expose_ref())?",
-            "let mut y = secret_scalar_from_bytes_v1(y_bytes.0.expose_ref())?",
-            "let mut r_i = secret_scalar_from_bytes_v1(r_i_bytes.0.expose_ref())?",
-            "let mut r_r_i = secret_scalar_from_bytes_v1(r_r_i_bytes.0.expose_ref())?",
-            "let mut witness = Self {",
-            "core::mem::swap(&mut witness.x, &mut x.0)",
-            "drop(x)",
-            "core::mem::swap(&mut witness.y, &mut y.0)",
-            "drop(y)",
-            "core::mem::swap(&mut witness.r_i, &mut r_i.0)",
-            "drop(r_i)",
-            "core::mem::swap(&mut witness.r_r_i, &mut r_r_i.0)",
-            "drop(r_r_i)",
-            "Ok(witness)",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/04",
         constructor,
-        &[
-            ("FcmpSalSecretScalarEncodingV1::take(&mut", 4),
-            ("secret_scalar_from_bytes_v1(", 4),
-            ("Scalar::ZERO", 4),
-            ("core::mem::swap(", 4),
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/05",
         constructor,
-        &[".expose_copy()", "Ok(Self {", "FnOnce", "callback", "Deref"],
     );
     let encoding_owner = source_section(
         sal_source,
         "pub(super) struct FcmpSalSecretScalarEncodingV1(",
         "// Generated by the pinned Monero",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/06",
         encoding_owner,
-        &[
-            "SalSecretCopyValueV1<[u8; 32]>",
-            "pub(super) fn from_scalar_ref_v1(scalar: &Scalar) -> Self",
-            "let mut encoded = scalar.to_bytes()",
-            "Self::take(&mut encoded)",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "assert_sal_scalar_encoding_owner_handoff_source/07",
         encoding_owner,
-        &[
-            "#[derive(",
-            "impl Clone",
-            "impl Copy",
-            "Deref",
-            "AsRef",
-            "Borrow",
-            "fn expose_",
-            "fn get",
-            "fn as_",
-            "fn with_",
-            "FnOnce",
-            "FnMut",
-            ") -> [u8; 32]",
-            ") -> Scalar",
-            "callback",
-        ],
     );
     assert_source_counts(encoding_owner, &[("impl ", 1)]);
     let sal_copy_owner = source_section(
@@ -2327,24 +2101,13 @@ fn sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor() {
         "fn prover_secret_edwards_scalar_sum_v1(",
         "struct ProverSecretPointV1<P: ProofPoint>",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor/00",
         sum,
-        &[
-            "left: &Scalar",
-            "right: &Scalar",
-            "let mut sum = left + right",
-            "ProverSecretCopyValueV1::take(&mut sum)",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor/01",
         sum,
-        &[
-            "*left",
-            "*right",
-            ".clone()",
-            ".to_owned()",
-            "Zeroizing::new(",
-        ],
     );
     assert_sal_scalar_encoding_owner_handoff_source();
 }
@@ -2360,52 +2123,17 @@ fn proof_input_coordinate_source_is_borrowed_owned_and_production_visible() {
         "struct ProverSecretEdwardsCoordinateOwnerV1 {",
         "fn secret_edwards_product_v1(",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/00",
         owners,
-        &[
-            "_coordinates: SecretCycleCoordinatesV1<Field25519>",
-            "padding: ProverSecretCopyValueV1<[Field25519; 2]>",
-            "bytes: &[u8; 32]",
-            "let coordinates = secret_edwards_to_wei25519_v1(bytes)?",
-            "let (coordinate_x, coordinate_y) = coordinates.component_refs()",
-            "ProverSecretCopyValueV1::new([*coordinate_x, *coordinate_y])",
-            "output_bytes: &[u8; 32]",
-            "linking_bytes: &[u8; 32]",
-            "commitment_bytes: &[u8; 32]",
-            "output: prover_secret_edwards_coordinate_owner_v1(output_bytes)?",
-            "linking: prover_secret_edwards_coordinate_owner_v1(linking_bytes)?",
-            "commitment: prover_secret_edwards_coordinate_owner_v1(commitment_bytes)?",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/01",
         owners,
-        &[
-            ("SecretCycleCoordinatesV1<Field25519>", 1),
-            ("ProverSecretCopyValueV1<[Field25519; 2]>", 1),
-            ("prover_secret_edwards_coordinate_owner_v1(", 4),
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/02",
         owners,
-        &[
-            "edwards_to_wei25519(*bytes)",
-            "bytes: [u8; 32]",
-            "ProverSecretCopyValueV1::new(secret_edwards_to_wei25519_v1",
-            "coordinates.expose_ref()",
-            "coordinates.0",
-            "coordinates.1",
-            ".expose_copy()",
-            "#[cfg(",
-            "pub struct ProverSecret",
-            "pub(super) struct ProverSecret",
-            "pub(crate) struct ProverSecret",
-            "pub fn prover_secret",
-            "pub(super) fn prover_secret",
-            "pub(crate) fn prover_secret",
-            "#[derive(Clone",
-            "impl Clone for ProverSecret",
-            "impl Copy for ProverSecret",
-        ],
     );
 
     let prove_once = source_section(
@@ -2413,74 +2141,22 @@ fn proof_input_coordinate_source_is_borrowed_owned_and_production_visible() {
         "fn prove_fcmp_plus_plus_once_v1(",
         "fn retry_membership_prover<T>(",
     );
-    assert_source_order(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/03",
         prove_once,
-        &[
-            "let (output_bytes, linking_bytes, commitment_bytes) = input.output.component_refs_v1()",
-            "let public = input.public_input()?",
-            "prepare_ed_blind(generator_t(), &rerandomization.output, true)?",
-            "prepare_ed_blind(generator_u(), &rerandomization.linking, true)?",
-            "prepare_ed_blind(generator_v(), &rerandomization.linking, true)?",
-            "prepare_ed_blind(generator_t(), &rerandomization.rerandomization_blind, false)?",
-            "prepare_ed_blind(ED25519_BASEPOINT_POINT, &rerandomization.commitment, true)?",
-            "prover_secret_output_coordinate_owners_v1(",
-            "let (input_blind_v_x, input_blind_v_y) = input_blind_v.coordinates.component_refs()",
-            "let input_blind_v_padding =\n            ProverSecretCopyValueV1::new([",
-            "let (output_blind_claim, output_variables) = c1_tape.append_claimed_point(",
-            "output_blind.coordinates.component_pair_ref()",
-            "output_coordinates.output.padding.expose_ref().as_slice()",
-            "output_coordinates.linking.padding.expose_ref().as_slice()",
-            "let (input_blind_v_divisor, _) = c1_tape.append_divisor(",
-            "let (input_blind_blind_claim, input_blind_v_variables) = c1_tape.append_claimed_point(",
-            "input_blind_blind.coordinates.component_pair_ref()",
-            "input_blind_v_padding.expose_ref().as_slice()",
-            "output_coordinates\n                .commitment\n                .padding",
-            "prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output)",
-            "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
-            "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
-            "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
-            "sal_y_bytes,",
-            "sal_linking_bytes,",
-            "drop(sal_witness)",
-            "prepared_inputs.push(PreparedInput {",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/04",
         prove_once,
-        &[
-            (
-                "let (output_bytes, linking_bytes, commitment_bytes) = input.output.component_refs_v1()",
-                1,
-            ),
-            ("prover_secret_output_coordinate_owners_v1(", 1),
-        ],
     );
     assert_source_counts(production, &[("input.public_input()?", 2)]);
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/05",
         prove_once,
-        &[
-            "input.output.components()",
-            "edwards_to_wei25519(output_bytes)",
-            "edwards_to_wei25519(linking_bytes)",
-            "edwards_to_wei25519(commitment_bytes)",
-            "let output_padding = Zeroizing::new(",
-            "let linking_padding = Zeroizing::new(",
-            "let commitment_padding = Zeroizing::new(",
-            "Zeroizing::new([input_blind_v.coordinates.0, input_blind_v.coordinates.1])",
-            "input_blind_v.coordinates.0",
-            "input_blind_v.coordinates.1",
-            "coordinates: *coordinates",
-            "&input_blind_v_padding[..]",
-            "drop(output_coordinates)",
-            "mem::take(&mut output_coordinates)",
-        ],
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/06",
         prove_once,
-        &[(
-            "let input_blind_v_padding =\n            ProverSecretCopyValueV1::new([",
-            1,
-        )],
     );
 
     let field_source = include_str!("../field.rs");
@@ -2489,37 +2165,17 @@ fn proof_input_coordinate_source_is_borrowed_owned_and_production_visible() {
         "pub(super) fn secret_edwards_to_wei25519_v1(",
         "pub(super) fn monero_varint(",
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/07",
         private_conversion,
-        &[
-            "bytes: &[u8; 32]",
-            "SecretCopyValueV1::new(CompressedEdwardsY(*bytes))",
-            ".decompress()",
-            "SecretCopyValueV1::new(point.as_ref().compress())",
-            "secret_invert_field25519_v1(denominator.as_ref())",
-            "let wei_x = SecretCopyValueV1::new(",
-            "let wei_y = SecretCopyValueV1::new(",
-            "Ok(SecretCycleCoordinatesV1::from_secret_coordinate_owners_v1(",
-            "wei_x, wei_y,",
-        ],
     );
     assert!(
         private_conversion
             .contains(") -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>")
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/08",
         private_conversion,
-        &[
-            "Result<(Field25519, Field25519)",
-            "Ok((",
-            "wei_x.expose_copy()",
-            "wei_y.expose_copy()",
-            "callback",
-            "FnOnce",
-            "FnMut",
-            "Deref",
-            "Clone",
-        ],
     );
     assert!(!production.contains(
         "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\

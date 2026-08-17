@@ -787,7 +787,8 @@ extension NoritoNativeBridge {
               let rawSignature,
               rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount),
               let authenticatorData,
-              (37...KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
+              (KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2...
+                  KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
                 .contains(Int(authenticatorDataLength)) else {
             throw NativeBridgeError.kagemushaProve
         }

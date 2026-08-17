@@ -2738,6 +2738,145 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 "must use only the shared pure drain predicate"
             )
 
+    serve_pre_admission = item(
+        "ordinary_consumer", "prepare_current_certified_serve_pre_admission"
+    )
+    require_order(
+        "ordinary_consumer",
+        serve_pre_admission,
+        "shared current Serve transport/authentication classifier",
+        (
+            "message.validate_version()",
+            "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
+            "request.round.height != active_height",
+            "inbound.sender()",
+            "inbound.via()",
+            "inbound.reply_routes()",
+            "inbound.ingress_ownership()",
+            "reply_routes.semantic_target() != sender",
+            "!ownership.validate_exact()",
+            "!ownership.matches_message(inbound.message())",
+            "!ownership.matches_semantic_origin(Some(sender))",
+            "!ownership.matches_reply_routes(Some(reply_routes))",
+            "authenticate(request.clone(), sender)",
+            "CertifiedServeNegativeOutcome::InvalidCertificate",
+            "certified_body_request_is_superseded_after_decision(",
+            "authenticated.request_hash()",
+            "CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided)",
+            "CurrentCertifiedServePreAdmissionV1::Authenticated",
+        ),
+    )
+    require_tokens(
+        "ordinary_consumer",
+        serve_pre_admission,
+        "shared current Serve closed pre-admission result",
+        (
+            "CurrentCertifiedServePreAdmissionV1::Authenticated",
+        ),
+    )
+    if serve_pre_admission is not None:
+        pre_admission_tokens = rust_code_tokens(serve_pre_admission.source)
+        for token, count in (
+            ("CurrentCertifiedServePreAdmissionV1::Service(", 9),
+            ("CurrentCertifiedServePreAdmissionV1::Negative", 2),
+        ):
+            observed = _token_sequence_count(
+                pre_admission_tokens, rust_code_tokens(token)
+            )
+            if observed != count:
+                errors.append(
+                    f"{paths['ordinary_consumer']}:{serve_pre_admission.line}: "
+                    f"shared current Serve classifier must contain {token!r} "
+                    f"exactly {count} time(s); found {observed}"
+                )
+    reject_tokens(
+        "ordinary_consumer",
+        serve_pre_admission,
+        "current Serve classifier owns no queue or service mutation",
+        (
+            "ProductionV2Services",
+            "stage_certified_serve_rejection(",
+            "prepare_certified_request(",
+            "try_recv",
+            "dequeue",
+        ),
+    )
+    serve_authorization = item(
+        "ordinary_consumer", "authorize_current_certified_serve_pre_dequeue"
+    )
+    require_order(
+        "ordinary_consumer",
+        serve_authorization,
+        "shared current Serve durable preparation before dequeue",
+        (
+            "CurrentCertifiedServePreAdmissionV1::Service(reason)",
+            "CurrentCertifiedServePreAdmissionV1::Negative",
+            "authorizer.stage_negative(request_hash, outcome)",
+            "CurrentCertifiedServePreAdmissionV1::Authenticated",
+            "authorizer.prepare_exact(&authenticated_via, request)",
+            "CertifiedServePrepareError::Backpressure",
+            "ProductionCurrentCertifiedServePreparationV1::Retain",
+            "CertifiedServePrepareError::Rejected(reason)",
+            "CertifiedServePrepareError::Service(reason)",
+            "ProductionCurrentCertifiedServePreparationV1::Prepared(prepared)",
+        ),
+    )
+    require_tokens(
+        "ordinary_consumer",
+        serve_authorization,
+        "shared current Serve admitted/rejected/service transfer",
+        (
+            "ProductionPreparedCertifiedServeV1::Admitted(admission)",
+        ),
+    )
+    if serve_authorization is not None:
+        authorization_tokens = rust_code_tokens(serve_authorization.source)
+        for token, count in (
+            ("ProductionPreparedCertifiedServeV1::Rejected(reason)", 2),
+            ("ProductionPreparedCertifiedServeV1::Service(reason)", 3),
+        ):
+            observed = _token_sequence_count(
+                authorization_tokens, rust_code_tokens(token)
+            )
+            if observed != count:
+                errors.append(
+                    f"{paths['ordinary_consumer']}:{serve_authorization.line}: "
+                    f"shared current Serve authorizer must contain {token!r} "
+                    f"exactly {count} time(s); found {observed}"
+                )
+    reject_tokens(
+        "ordinary_consumer",
+        serve_authorization,
+        "current Serve authorizer owns no physical queue mutation",
+        ("try_recv", "dequeue", "FairIngressTurnCut", "PreparedDequeuedV2IngressV1"),
+    )
+    production_authorizer_source = sources["ordinary_consumer"]
+    production_authorizer_start = production_authorizer_source.find(
+        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services"
+    )
+    production_authorizer_end = production_authorizer_source.find(
+        "/// Authenticate one current-height Certified-Serve carrier",
+        production_authorizer_start,
+    )
+    production_authorizer = (
+        production_authorizer_source[
+            production_authorizer_start:production_authorizer_end
+        ]
+        if production_authorizer_start >= 0
+        and production_authorizer_end > production_authorizer_start
+        else ""
+    )
+    for required in (
+        "type Admission = CertifiedServeAdmission;",
+        "self.stage_certified_serve_rejection(request_hash, outcome)",
+        "self.prepare_certified_request(authenticated_via, request)",
+    ):
+        if required not in production_authorizer:
+            errors.append(
+                f"{paths['ordinary_consumer']}: production current Serve "
+                f"authorizer omits {required!r}"
+            )
+
     serve = item("driver", "prepare_and_dequeue_current_certified_serve")
     require_order(
         "driver",
@@ -2745,10 +2884,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "stateful selected Serve fail-stop transaction",
         (
             "output_guard.begin_fail_stop_operation()",
+            "prepare_current_certified_serve_pre_admission(",
             "executor.authenticate_certified_body_request(",
-            "services.stage_certified_serve_rejection(",
-            "services.prepare_certified_request(",
-            "CertifiedServePrepareError::Backpressure",
+            "authorize_current_certified_serve_pre_dequeue(prepared, services)",
+            "ProductionCurrentCertifiedServePreparationV1::Retain",
             "operation.complete()",
             "drop(cut)",
             "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
@@ -2760,24 +2899,33 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_tokens(
         "driver",
         serve,
-        "selected Serve admitted/rejected reservation transfer",
+        "selected Serve shared prepared transfer",
         (
-            "ProductionPreparedCertifiedServeV1::Admitted(admission)",
-            "ProductionPreparedCertifiedServeV1::Rejected(error.to_string())",
+            """
+prepare_current_certified_serve_pre_admission(
+    cut.selected_occurrence().inbound(),
+    executor.context().height,
+    terminal_subject,
+    |request, sender| {
+        executor
+            .authenticate_certified_body_request(request, sender)
+            .map_err(|error| error.to_string())
+    },
+)
+""",
+            "ProductionCurrentCertifiedServePreparationV1::Prepared(prepared)",
             "drop(operation); drop(retained); drop(runner)",
         ),
     )
-    if serve is not None:
-        service_outcomes = _token_sequence_count(
-            rust_code_tokens(serve.source),
-            rust_code_tokens("ProductionPreparedCertifiedServeV1::Service(reason)"),
-        )
-        if service_outcomes != 4:
-            errors.append(
-                f"{paths['driver']}:{serve.line}: selected Serve transfer must "
-                "retain all four service-failure owners; "
-                f"found {service_outcomes}"
-            )
+    reject_tokens(
+        "driver",
+        serve,
+        "selected Serve delegates durable preparation to the shared owner",
+        (
+            "services.stage_certified_serve_rejection(",
+            "services.prepare_certified_request(",
+        ),
+    )
 
     token_source = sources["driver"]
     token_start = token_source.find(
@@ -3219,10 +3367,130 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         legacy_drain,
         "legacy and lifecycle ordinary ingress share one post-dequeue tail",
         (
+            "prepare_current_certified_serve_pre_admission(",
+            "executor.authenticate_certified_body_request(request, sender)",
+            "authorize_current_certified_serve_pre_dequeue(",
+            "ProductionCurrentCertifiedServePreparationV1::Retain",
             "PreparedDequeuedV2IngressV1::new(",
             "consume_prepared_dequeued_v2_ingress(",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
             "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        legacy_drain,
+        "ordinary drain delegates durable Serve preparation",
+        (
+            "services.stage_certified_serve_rejection(",
+            "services.prepare_certified_request(",
+        ),
+    )
+    require_tokens(
+        "runner",
+        legacy_drain,
+        "ordinary drain delegates the exact current Serve subject and authenticator",
+        (
+            """
+ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+    inbound,
+    executor.context().height,
+    terminal_subject,
+    |request, sender| {
+        executor
+            .authenticate_certified_body_request(request, sender)
+            .map_err(|error| error.to_string())
+    },
+)
+""",
+        ),
+    )
+    decided_pre_admission = item("runner", "prepare_decided_lane_recovery_ingress")
+    require_order(
+        "runner",
+        decided_pre_admission,
+        "terminal recovery shares the current Serve classifier",
+        (
+            "message.validate_version().is_err()",
+            "prepare_current_certified_serve_pre_admission(",
+            "request.round.height < active_height",
+            "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
+            "request.round.height > active_height",
+            "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
+            "prepare_current_certified_serve_pre_admission(",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        decided_pre_admission,
+        "terminal recovery delegates current Serve ownership classification",
+        (
+            "inbound.reply_routes()",
+            "inbound.ingress_ownership()",
+            "ownership.matches_message(",
+            "CertifiedServeNegativeOutcome::InvalidCertificate",
+            "CertifiedServeNegativeOutcome::SupersededByDurableDecision",
+        ),
+    )
+    if decided_pre_admission is not None:
+        terminal_call = rust_code_tokens(
+            """
+ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+    inbound,
+    active_height,
+    Some(decided_subject),
+    authenticate,
+)
+"""
+        )
+        observed = _token_sequence_count(
+            rust_code_tokens(decided_pre_admission.source), terminal_call
+        )
+        if observed != 2:
+            errors.append(
+                f"{paths['runner']}:{decided_pre_admission.line}: terminal "
+                "recovery must bind both invalid-version and current-height "
+                f"Serve classifiers to the durable Decision; found {observed}"
+            )
+    decided_authorization = item("runner", "authorize_decided_lane_recovery_drain")
+    require_order(
+        "runner",
+        decided_authorization,
+        "terminal recovery translates only the shared durable preparation",
+        (
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe(prepared)",
+            "authorize_current_certified_serve_pre_dequeue(",
+            "ProductionCurrentCertifiedServePreparationV1::Retain",
+            "DecidedLaneRecoveryDrainDecision::Retain",
+            "ProductionPreparedCertifiedServeV1::Admitted",
+            "DecidedLaneRecoveryCurrentDrain::Admitted(admission)",
+            "ProductionPreparedCertifiedServeV1::Rejected",
+            "DecidedLaneRecoveryCurrentDrain::Rejected(reason)",
+            "ProductionPreparedCertifiedServeV1::Service(reason)",
+            "DecidedLaneRecoveryDrainDecision::FailClosed(reason)",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        decided_authorization,
+        "terminal recovery cannot shadow shared durable Serve authorization",
+        ("authorizer.stage_negative(", "authorizer.prepare_exact("),
+    )
+    decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
+    require_order(
+        "runner",
+        decided_drain,
+        "live terminal drain authenticates before checked authorization",
+        (
+            "receiver.try_recv_if_checked(",
+            "prepare_decided_lane_recovery_ingress(",
+            "executor.context().height",
+            "decided_subject",
+            "executor.authenticate_certified_body_request(request, sender)",
+            "authorize_decided_lane_recovery_drain(preparation, services)",
+            "DecidedLaneRecoveryDrainDecision::Retain",
+            "DecidedLaneRecoveryDrainDecision::Authorized(candidate)",
+            "DecidedLaneRecoveryDrainDecision::FailClosed(reason)",
         ),
     )
     lifecycle_consumer = item("driver", "consume_prepared_ordinary_ingress_turn")

@@ -3739,7 +3739,9 @@ mod tests {
             LifecycleState::Terminal(TerminalOutcome::Cancelled)
         );
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(certified_fetch_completion_source_keeps_the_durable_cut_ordered);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        certified_fetch_completion_source_keeps_the_durable_cut_ordered
+    );
     #[test]
     fn certified_response_maps_to_formal_untrusted_resource_source() {
         assert!(lifecycle_ingress_resource_is_untrusted(

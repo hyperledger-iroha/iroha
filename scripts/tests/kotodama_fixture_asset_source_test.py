@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        '674ff036888e203cec993e1af62cb9f789e9b3a02ec491ce404e3988326dc51e',
+        '3f439f0267ca186c043fd62575e6af2b0320ef767be4a430bdf726ae57f125f1',
         (
             AssetSpec('001.ko', 'e74a429259169313587e92db6f37a267ec784845a32bb273770952315beead8e', 309, False),
             AssetSpec('002.ko', '03ab49f13ad97b62a823f31fa261ee44841b2dd5ff95c7891fea8a3eaceea302', 566, False),
@@ -231,7 +231,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs',
-        '40539de884ec1bdc96913180dbe5ccf08a8d612bdf0335d22d391748eaadda57',
+        '65af9350557a584b846de68ad39e7a464f759b291db5d08227383173f0c86fc6',
         (
             AssetSpec('001.ko', 'dee9b111e29ae18bfa974545eda20c3accf2420bfb2596de4dfce17e38d51cd8', 2978, True),
             AssetSpec('002.ko', 'fa16878159bb06bcc92bab63c9b955c4a15cb71f1571e56e5b095b168851d61b', 1454, True),
@@ -287,8 +287,9 @@ SOURCES = (
 )
 
 _INCLUDE_RE = re.compile(
-    rb'include_str!\("(?P<path>[^"\r\n]*fixtures/koto_v1/[^"\r\n]+)"\)'
-    rb'(?P<sentinel>\.strip_suffix\(\'\\n\'\)\.expect\("fixture sentinel newline"\))?'
+    rb'include_str!\([ \t\r\n]*"(?P<path>[^"\r\n]*fixtures/koto_v1/[^"\r\n]+)"[ \t\r\n]*\)'
+    rb'(?P<sentinel>[ \t\r\n]*\.strip_suffix\([ \t\r\n]*\'\\n\'[ \t\r\n]*\)'
+    rb'[ \t\r\n]*\.expect\([ \t\r\n]*"fixture sentinel newline"[ \t\r\n]*\))?'
 )
 
 

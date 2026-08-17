@@ -13245,12 +13245,9 @@ pub(crate) fn nexus_active_lane_dataspace_at_height(
     nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height)
         .then_some(dataspace_id)
 }
-/// Resolve the canonical lane that owns mutable staking state for a physical dataspace.
-///
-/// Static lanes in one dataspace share one validator cohort, so only the
-/// lowest active stake-elected lane owns its canonical lane-keyed storage rows.
-/// Disabled Nexus admits only the canonical `SINGLE`/`UNIVERSAL` owner;
-/// autoscale-managed lanes retain their exact-lane behavior.
+/// Resolve the canonical mutable-staking owner for a physical dataspace.
+/// Static lanes share the lowest active stake-elected owner; disabled Nexus
+/// admits only `SINGLE`/`UNIVERSAL`, while autoscale lanes retain exact ownership.
 pub(crate) fn nexus_staking_authority_lane_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -13291,11 +13288,8 @@ pub(crate) fn nexus_staking_authority_lane_at_height(
         .map(|candidate| candidate.id)
         .min()
 }
-/// Resolve the lane route used by consensus at an explicit proposal height.
-///
-/// Nexus mode applies the height-sensitive catalog and autoscale policy. In
-/// single-lane mode only the canonical `SINGLE`/`UNIVERSAL` catalog geometry
-/// remains authoritative even though Nexus routing itself is disabled.
+/// Resolve the height-sensitive consensus route. Disabled Nexus admits only
+/// the canonical `SINGLE`/`UNIVERSAL` catalog geometry.
 pub(crate) fn consensus_lane_dataspace_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -13303,12 +13297,11 @@ pub(crate) fn consensus_lane_dataspace_at_height(
 ) -> Option<DataSpaceId> {
     if nexus.enabled {
         nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)
-    } else {
-        if lane_id != LaneId::SINGLE {
-            return None;
-        }
+    } else if lane_id == LaneId::SINGLE {
         nexus_catalog_geometry_lane_dataspace(lane_id, nexus)
             .filter(|dataspace_id| *dataspace_id == DataSpaceId::UNIVERSAL)
+    } else {
+        None
     }
 }
 /// Resolve the manifest-authority source lanes for one active routed target.
@@ -18644,84 +18637,653 @@ pub(crate) fn fee_sponsor_revision_safe_activation_height(
     }
     Ok(safe_height)
 }
+macro_rules! world_ro_accessors {
+    // The schema has only fixed, typed field-access forms; executable methods stay in the trait.
+    (@items declaration;) => {};
+    (@items implementation;) => {};
+    (@items declaration;
+        $(#[$meta:meta])* storage $name:ident: $key:ty => $value:ty; $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        fn $name(&self) -> &impl StorageReadOnly<$key, $value>;
+        world_ro_accessors!(@items declaration; $($rest)*);
+    };
+    (@items implementation;
+        $(#[$meta:meta])* storage $name:ident: $key:ty => $value:ty; $($rest:tt)*
+    ) => {
+        fn $name(&self) -> &impl StorageReadOnly<$key, $value> {
+            &self.$name
+        }
+        world_ro_accessors!(@items implementation; $($rest)*);
+    };
+    (@items declaration;
+        $(#[$meta:meta])* ref $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        fn $name(&self) -> &$value;
+        world_ro_accessors!(@items declaration; $($rest)*);
+    };
+    (@items implementation;
+        $(#[$meta:meta])* ref $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        fn $name(&self) -> &$value {
+            &self.$name
+        }
+        world_ro_accessors!(@items implementation; $($rest)*);
+    };
+    (@items declaration;
+        $(#[$meta:meta])* cell_ref $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        fn $name(&self) -> &$value;
+        world_ro_accessors!(@items declaration; $($rest)*);
+    };
+    (@items implementation;
+        $(#[$meta:meta])* cell_ref $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        fn $name(&self) -> &$value {
+            self.$name.get()
+        }
+        world_ro_accessors!(@items implementation; $($rest)*);
+    };
+    (@items declaration;
+        $(#[$meta:meta])* cell_copy $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        fn $name(&self) -> $value;
+        world_ro_accessors!(@items declaration; $($rest)*);
+    };
+    (@items implementation;
+        $(#[$meta:meta])* cell_copy $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        fn $name(&self) -> $value {
+            *self.$name.get()
+        }
+        world_ro_accessors!(@items implementation; $($rest)*);
+    };
+    (@items declaration;
+        $(#[$meta:meta])* cell_inner $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        fn $name(&self) -> $value;
+        world_ro_accessors!(@items declaration; $($rest)*);
+    };
+    (@items implementation;
+        $(#[$meta:meta])* cell_inner $name:ident: $value:ty; $($rest:tt)*
+    ) => {
+        fn $name(&self) -> $value {
+            self.$name.get().get()
+        }
+        world_ro_accessors!(@items implementation; $($rest)*);
+    };
+    (configuration, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Global parameters registry.
+            ref parameters: Parameters;
+            /// Dataspace alias catalog used to qualify domain-scoped aliases.
+            ref dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog;
+        );
+    };
+    (identity, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Known peers in the network.
+            ref peers: Peers;
+            /// Domain storage (read-only).
+            storage domains: DomainId => Domain;
+            /// Domain owner index (read-only).
+            storage domains_by_owner: AccountId => BTreeSet<DomainId>;
+            /// Endorsement committees (read-only).
+            storage domain_committees: String => DomainCommittee;
+            /// Per-domain endorsement policies (read-only).
+            storage domain_endorsement_policies: DomainId => DomainEndorsementPolicy;
+            /// Recorded domain endorsements keyed by payload hash (read-only).
+            storage domain_endorsements: HashOf<DomainEndorsement> => DomainEndorsementRecord;
+            /// Domain endorsement index keyed by domain id (read-only).
+            storage domain_endorsements_by_domain: DomainId => Vec<HashOf<DomainEndorsement>>;
+            /// Account storage (read-only).
+            storage accounts: AccountId => AccountValue;
+            /// UAID to account index (read-only).
+            storage uaid_accounts: UniversalAccountId => AccountId;
+            /// Account alias index (read-only).
+            storage account_aliases: AccountAlias => AccountId;
+            /// Reverse account alias index (read-only).
+            storage account_aliases_by_account: AccountId => BTreeSet<AccountAlias>;
+            /// Read-side account scope directory (read-only).
+            storage account_scope_directory: AccountId => AccountScopeDirectoryEntry;
+            /// Reverse read-side account scope index by `(dataspace, alias-domain)`.
+            storage account_scope_accounts:
+                (DataSpaceId, AccountAliasDomain) => BTreeSet<AccountId>;
+            /// Opaque identifier to UAID index (read-only).
+            storage opaque_uaids: OpaqueAccountId => UniversalAccountId;
+            /// Global RAM-LFE program policy registry (read-only).
+            storage ram_lfe_program_policies: RamLfeProgramId => RamLfeProgramPolicy;
+            /// Global identifier policy registry (read-only).
+            storage identifier_policies: IdentifierPolicyId => IdentifierPolicy;
+            /// Sponsor-owned fee program registry (read-only).
+            storage fee_sponsor_programs: FeeSponsorProgramId => FeeSponsorProgram;
+            /// Immutable sponsor-program revision registry (read-only).
+            storage fee_sponsor_program_revisions:
+                FeeSponsorProgramRevisionKey => FeeSponsorProgramRevision;
+            /// Sponsor-program enrollment registry (read-only).
+            storage fee_sponsor_enrollments: FeeSponsorEnrollmentKey => FeeSponsorEnrollment;
+            /// Sponsor-program vault registry (read-only).
+            storage fee_sponsor_vaults: FeeSponsorVaultKey => FeeSponsorVault;
+            /// Sponsor-program budget-counter registry (read-only).
+            storage fee_sponsor_budget_counters:
+                FeeSponsorBudgetCounterKey => FeeSponsorBudgetCounter;
+            /// Active identifier claims keyed by opaque identifier (read-only).
+            storage identifier_claims: OpaqueAccountId => IdentifierClaimRecord;
+        );
+    };
+    (assets, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Account label/signatory registry (read-only).
+            storage account_rekey_records: AccountAlias => AccountRekeyRecord;
+            /// Alias-keyed account recovery policy registry (read-only).
+            storage account_recovery_policies: AccountAlias => AccountRecoveryPolicy;
+            /// Alias-keyed account recovery request registry (read-only).
+            storage account_recovery_requests: AccountAlias => AccountRecoveryRequest;
+            /// Asset definition storage (read-only).
+            storage asset_definitions: AssetDefinitionId => AssetDefinition;
+            /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
+            /// aid.
+            storage asset_definition_aliases: AssetDefinitionAlias => AssetDefinitionId;
+            /// Alias lease metadata keyed by canonical aid.
+            storage asset_definition_alias_bindings:
+                AssetDefinitionId => AssetDefinitionAliasBindingRecord;
+            /// Alias index mapping `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` to canonical
+            /// contract addresses.
+            storage contract_aliases: ContractAlias => ContractAddress;
+            /// Alias lease metadata keyed by canonical contract address.
+            storage contract_alias_bindings: ContractAddress => ContractAliasBindingRecord;
+            /// Authoritative domain ownership context for canonical asset definition ids.
+            storage asset_definition_domains: AssetDefinitionId => DomainId;
+            /// Asset-definition ids grouped by domain.
+            storage domain_asset_definitions: DomainId => BTreeSet<AssetDefinitionId>;
+            /// Asset-definition ids grouped by owner account.
+            storage asset_definitions_by_owner: AccountId => BTreeSet<AssetDefinitionId>;
+            /// Holder index keyed by asset definition id.
+            storage asset_definition_holders: AssetDefinitionId => BTreeSet<AccountId>;
+            /// Asset-id index keyed by asset definition id.
+            storage asset_definition_assets: AssetDefinitionId => BTreeSet<AssetId>;
+            /// Exact asset-id index keyed by owner account.
+            storage assets_by_account: AccountId => BTreeSet<AssetId>;
+            /// Exact asset-id index keyed by asset-definition domain.
+            storage assets_by_domain: DomainId => BTreeSet<AssetId>;
+            /// Non-zero holder index keyed by asset definition id.
+            storage asset_definition_nonzero_holders: AssetDefinitionId => BTreeSet<AccountId>;
+            /// Asset storage (read-only).
+            storage assets: AssetId => AssetValue;
+            /// Asset metadata storage (read-only).
+            storage asset_metadata: AssetId => Metadata;
+            /// NFT storage (read-only).
+            storage nfts: NftId => NftValue;
+            /// NFT owner index (read-only).
+            storage nfts_by_owner: AccountId => BTreeSet<NftId>;
+            /// Exact NFT-id index keyed by NFT domain.
+            storage nfts_by_domain: DomainId => BTreeSet<NftId>;
+            /// RWA storage (read-only).
+            storage rwas: RwaId => RwaValue;
+            /// RWA owner index (read-only).
+            storage rwas_by_owner: AccountId => BTreeSet<RwaId>;
+            /// RWA status index (read-only).
+            storage rwas_by_status: Option<Name> => BTreeSet<RwaId>;
+            /// RWA frozen-state index (read-only).
+            storage rwas_by_frozen: bool => BTreeSet<RwaId>;
+            /// Role storage (read-only).
+            storage roles: RoleId => Role;
+            /// Account permissions mapping (read-only).
+            storage account_permissions: AccountId => Permissions;
+            /// Account roles mapping (read-only).
+            storage account_roles: RoleIdWithOwner => ();
+        );
+    };
+    (oracle_and_incentives, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Oracle feed configurations (read-only).
+            storage oracle_feeds: FeedId => FeedConfig;
+            /// Buffered oracle observations (read-only).
+            storage oracle_observations:
+                crate::oracle::ObservationWindowKey => crate::oracle::ObservationWindow;
+            /// Bounded oracle feed history (read-only).
+            storage oracle_history:
+                FeedId => Vec<iroha_data_model::events::data::oracle::FeedEventRecord>;
+            /// Aggregation statistics per provider.
+            storage oracle_provider_stats: OracleProviderKey => OracleProviderStats;
+            /// Stored oracle disputes keyed by id.
+            storage oracle_disputes: OracleDisputeId => OracleDispute;
+            /// Oracle change proposals keyed by id.
+            storage oracle_changes:
+                iroha_data_model::oracle::OracleChangeId =>
+                iroha_data_model::oracle::OracleChangeProposal;
+            /// Retained DeFi oracle attestations keyed by domain and subject id.
+            storage defi_oracle_attestations:
+                DefiOracleAttestationKey => Vec<DefiOracleAttestation>;
+            /// Twitter follow binding attestations keyed by binding digest.
+            storage twitter_bindings: Hash => TwitterBindingRecord;
+            /// Inverted index from UAID to binding digests.
+            storage twitter_bindings_by_uaid: UniversalAccountId => Vec<Hash>;
+            /// Rolling reward budget for viral incentive payouts.
+            cell_ref viral_reward_budget: ViralRewardBudget;
+            /// Campaign-wide budget for viral incentive payouts.
+            cell_ref viral_campaign_budget: ViralCampaignBudget;
+            /// Daily reward counters keyed by UAID.
+            storage viral_daily_counters: UniversalAccountId => ViralDailyCounter;
+            /// Lifetime reward claims keyed by binding digest.
+            storage viral_binding_claims: Hash => u32;
+            /// Pending escrows for unbound handles keyed by binding digest.
+            storage viral_escrows: Hash => ViralEscrowRecord;
+            /// Bindings that have already paid a sender bonus.
+            storage viral_bonus_paid: Hash => bool;
+        );
+    };
+    (escrow_and_outbound, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Native asset escrow records keyed by escrow identifier.
+            storage asset_escrows: EscrowId => AssetEscrowRecord;
+            /// Native asset escrow ids grouped by seller account.
+            storage asset_escrows_by_seller: AccountId => BTreeSet<EscrowId>;
+            /// Native asset escrow ids grouped by buyer account.
+            storage asset_escrows_by_buyer: AccountId => BTreeSet<EscrowId>;
+            /// Native asset escrow ids grouped by lifecycle status.
+            storage asset_escrows_by_status: AssetEscrowStatus => BTreeSet<EscrowId>;
+            /// Native SoraNet VPN lease escrow records keyed by lease identifier.
+            storage vpn_leases: [u8; 32] => VpnLeaseRecordV1;
+            /// Active VPN lease id claimed by each client account.
+            storage vpn_active_lease_by_account: AccountId => [u8; 32];
+            /// Active VPN lease id claimed on each typed address slot.
+            storage vpn_active_lease_by_address_slot: VpnAddressSlotV1 => [u8; 32];
+            /// Newest settled VPN leases per client, ordered by settlement timestamp and lease id.
+            storage vpn_settled_leases_by_account: AccountId => BTreeSet<(u64, [u8; 32])>;
+            /// UAID dataspace bindings managed by the Space Directory.
+            storage uaid_dataspaces: UniversalAccountId => UaidDataspaceBindings;
+            /// UAID capability manifests maintained by the Space Directory.
+            storage space_directory_manifests: UniversalAccountId => SpaceDirectoryManifestSet;
+            /// Per-dataspace AXT policy entries derived from Space Directory manifests.
+            storage axt_policies: DataSpaceId => AxtPolicyEntry;
+            /// Bounded replay ledger keyed by handle fingerprint.
+            storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
+            /// Consensus-accounted usage of payload-bearing pending SCCP entries.
+            cell_copy sccp_outbound_pending_usage: SccpOutboundPendingUsageV1;
+            /// Pending outbound SCCP payload registry keyed by exact lane and lane-bound message id.
+            storage sccp_outbound_pending_messages:
+                SccpOutboundMessageKeyV1 => SccpOutboundPendingMessageRecordV1;
+            /// Global message-id locator into the authoritative outbound replay map.
+            storage sccp_outbound_message_locator: [u8; 32] => SccpOutboundMessageKeyV1;
+            /// Height-ordered outbound message discovery index.
+            storage sccp_outbound_message_index: SccpOutboundMessageIndexKeyV1 => ();
+            /// Accepted outbound SCCP proof replay registry keyed by exact lane and message id.
+            storage sccp_outbound_proofs: SccpOutboundMessageKeyV1 => SccpOutboundProofRecordV1;
+        );
+    };
+    (sccp_inbound, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Inbound native SCCP replay registry keyed by exact lane and message id.
+            storage sccp_inbound_messages: SccpInboundMessageKeyV1 => SccpInboundMessageRecordV1;
+            /// Greatest authenticated consensus coordinate admitted per exact lane and trust anchor.
+            storage sccp_inbound_anchor_high_water: SccpInboundAnchorHighWaterKeyV1 => u64;
+        );
+    };
+    (runtime_and_proofs, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Latest committed transaction sequence per authority (read-only).
+            storage tx_sequences: AccountId => u64;
+            /// Trigger set (read-only).
+            ref triggers: impl TriggerSetReadOnly;
+            /// Runtime executor configuration.
+            ref executor: Executor;
+            /// Data model used by the executor.
+            ref executor_data_model: ExecutorDataModel;
+            /// Verifying key registry (read-only).
+            storage verifying_keys:
+                iroha_data_model::proof::VerifyingKeyId =>
+                iroha_data_model::proof::VerifyingKeyRecord;
+            /// Secondary index mapping `(circuit_id, version)` to verifying-key identifier.
+            storage verifying_keys_by_circuit:
+                (String, u32) => iroha_data_model::proof::VerifyingKeyId;
+            /// Consensus/committee key registry (read-only).
+            storage consensus_keys: ConsensusKeyId => ConsensusKeyRecord;
+            /// Index mapping consensus public keys to registered identifiers.
+            storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
+            /// Pedersen parameter registry (read-only).
+            storage pedersen_params:
+                iroha_data_model::confidential::ConfidentialParamsId =>
+                iroha_data_model::confidential::PedersenParams;
+            /// Poseidon parameter registry (read-only).
+            storage poseidon_params:
+                iroha_data_model::confidential::ConfidentialParamsId =>
+                iroha_data_model::confidential::PoseidonParams;
+            /// Runtime upgrade registry (read-only).
+            storage runtime_upgrades:
+                iroha_data_model::runtime::RuntimeUpgradeId =>
+                iroha_data_model::runtime::RuntimeUpgradeRecord;
+            /// Commit QCs keyed by subject block hash (read-only).
+            storage commit_qcs: HashOf<BlockHeader> => Qc;
+            /// Latest lane merge-hint roots observed via the merge ledger.
+            ref merge_hint_roots: Vec<Hash>;
+            /// Latest reduced global state root advertised by the merge ledger.
+            ref merge_global_state_root: Option<Hash>;
+            /// Persisted consensus evidence log (read-only).
+            storage consensus_evidence: Vec<u8> => EvidenceRecord;
+            /// Proof verification records (read-only).
+            storage proofs:
+                iroha_data_model::proof::ProofId => iroha_data_model::proof::ProofRecord;
+            /// Inverted proof status index (read-only).
+            storage proofs_by_status:
+                iroha_data_model::proof::ProofStatus => BTreeSet<iroha_data_model::proof::ProofId>;
+        );
+    };
+    (contract_uploads, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Stored ZK1 TLV tags per proof id (read-only).
+            storage proof_tags: iroha_data_model::proof::ProofId => Vec<[u8; 4]>;
+            /// Inverted index from TLV tag to proof ids (read-only).
+            storage proofs_by_tag: [u8; 4] => Vec<iroha_data_model::proof::ProofId>;
+            /// Contract manifests (read-only).
+            storage contract_manifests:
+                iroha_crypto::Hash => iroha_data_model::smart_contract::manifest::ContractManifest;
+            /// Get stored contract code bytes by hash (read-only)
+            storage contract_code: iroha_crypto::Hash => Vec<u8>;
+            /// Pending contract-code upload descriptors (read-only).
+            storage contract_code_uploads:
+                SmartContractCodeUploadKey => SmartContractCodeUploadDescriptor;
+            /// Pending contract-code upload chunks (read-only).
+            storage contract_code_upload_chunks: SmartContractCodeUploadChunkKey => Vec<u8>;
+        );
+    };
+    (contract_state, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Contract instances mapping `contract_address -> code_hash` (read-only)
+            storage contract_instances:
+                iroha_data_model::smart_contract::ContractAddress => iroha_crypto::Hash;
+            /// Irreversible versioned subject identity for every historically activated address.
+            storage contract_subject_bindings:
+                iroha_data_model::smart_contract::ContractAddress =>
+                crate::smartcontracts::code::ContractSubjectBinding;
+            /// Reverse index for historical contract subjects; rebuilt from authenticated bindings.
+            storage contract_subject_addresses:
+                AccountId => iroha_data_model::smart_contract::ContractAddress;
+            /// Durable smart-contract state keyed by logical path (read-only).
+            storage smart_contract_state: StatePath => Vec<u8>;
+            /// Immutable Musubi namespace bindings keyed by canonical namespace text.
+            storage musubi_namespace_bindings: MusubiNamespaceV1 => MusubiNamespaceBindingV1;
+            /// Authoritative monotonic domain-owner generations used by Musubi delegations.
+            storage musubi_domain_ownership_generations: DomainId => u64;
+        );
+    };
+    (musubi_registry, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Authoritative Musubi package records.
+            storage musubi_packages: MusubiPackageIdV1 => MusubiPackageRecordV1;
+            /// Mutable Musubi package metadata records.
+            storage musubi_package_metadata: MusubiPackageIdV1 => MusubiPackageMetadataRecordV1;
+            /// Accepted Musubi package members ordered by package and account.
+            storage musubi_package_members: MusubiPackageMemberKeyV1 => MusubiPackageMemberV1;
+            /// Musubi package-governance invitations.
+            storage musubi_package_invitations: MusubiInviteIdV1 => MusubiMaintainerInvitationV1;
+            /// Accepted members and pending invitations ordered for package-scoped queries.
+            storage musubi_maintainer_directory:
+                MusubiMaintainerDirectoryKeyV1 => MusubiMaintainerDirectoryEntryV1;
+            /// Musubi release records keyed by exact release identity.
+            storage musubi_releases: MusubiReleaseIdV1 => MusubiReleaseRecordV1;
+            /// Canonical Musubi source archive commitments.
+            storage musubi_archives: ArchiveId => MusubiArchiveRecordV1;
+            /// Immutable provider bundle attestations keyed by archive, order, and provider.
+            storage musubi_provider_bundle_attestations:
+                MusubiProviderBundleAttestationKeyV1 => MusubiProviderBundleAttestationRecordV1;
+            /// Renewable Musubi archive locations.
+            storage musubi_archive_locations: MusubiArchiveLocationKeyV1 => MusubiArchiveLocationV1;
+            /// Exact pin-manifest to Musubi-location reverse index.
+            storage musubi_locations_by_pin: ManifestDigest => MusubiPinLocationReferenceV1;
+            /// Exact replication-order to Musubi-location reverse index.
+            storage musubi_locations_by_replication_order:
+                ReplicationOrderId => MusubiReplicationOrderLocationReferenceV1;
+            /// Ordered provider/location reverse index.
+            storage musubi_locations_by_provider: MusubiProviderLocationKeyV1 => ();
+            /// Finalized Musubi archive availability projections.
+            storage musubi_archive_availability: ArchiveId => MusubiArchiveAvailabilityV1;
+            /// Reverse references from archives to every active or yanked bound release.
+            storage musubi_archive_reverse_references:
+                ArchiveId => MusubiArchiveReverseReferencesV1;
+            /// Universal sparse Musubi resolver index.
+            storage musubi_resolver_index: MusubiReleaseIdV1 => MusubiResolverReleaseRowV1;
+            /// Historical block-final activation anchors for Musubi resolver-index revisions.
+            storage musubi_resolver_index_checkpoints:
+                MusubiResolverIndexRevisionV1 => MusubiRegistrySnapshotV1;
+            /// Public ordered package directory.
+            storage musubi_public_directory: MusubiPackageSelectorV1 => MusubiOrderedPackageEntryV1;
+            /// Permanent paid Musubi aliases.
+            storage musubi_aliases: MusubiAliasNameV1 => MusubiAliasRecordV1;
+            /// Complete permanent-alias history.
+            storage musubi_alias_history: MusubiAliasHistoryKeyV1 => MusubiAliasHistoryEntryV1;
+            /// Enacted Musubi governance decisions retained for replay protection.
+            storage musubi_governance_decisions: [u8; 32] => MusubiGovernanceDecisionConsumptionV1;
+            /// Active Musubi registry admission and alias-pricing policy.
+            cell_ref musubi_registry_policy: MusubiRegistryPolicyV1;
+        );
+    };
+    (soracloud, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Universal Musubi sparse-index revision bound into finalized cursors.
+            cell_inner musubi_resolver_index_revision: u64;
+            /// Exact count of releases bound to archives below fresh-selection quorum.
+            cell_copy musubi_replication_shortfall_releases: u64;
+            /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
+            storage soracloud_service_revisions: (String, String) => SoraDeploymentBundleV1;
+            /// Current Soracloud deployment state keyed by service name (read-only).
+            storage soracloud_service_deployments: Name => SoraServiceDeploymentStateV1;
+            /// Current Soracloud app topology state keyed by app name (read-only).
+            storage soracloud_app_infra_states: Name => SoraAppInfraStateV1;
+            /// Active Soracloud runtime state keyed by service name (read-only).
+            storage soracloud_service_runtime: Name => SoraServiceRuntimeStateV1;
+            /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
+            storage soracloud_inrou_replica_runtime:
+                (String, String, String) => SoraInrouReplicaRuntimeStateV1;
+            /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
+            storage soracloud_service_audit_events: u64 => SoraServiceAuditEventV1;
+            /// Soracloud app topology audit events keyed by deterministic sequence (read-only).
+            storage soracloud_app_infra_audit_events: u64 => SoraAppInfraAuditEventV1;
+            /// Authoritative service state keyed by `(service_name, binding_name, state_key)` (read-only).
+            storage soracloud_service_state_entries:
+                (String, String, String) => SoraServiceStateEntryV1;
+            /// Recorded decryption requests keyed by `(service_name, request_id)` (read-only).
+            storage soracloud_decryption_request_records:
+                (String, String) => SoraDecryptionRequestRecordV1;
+            /// Authoritative agent apartments keyed by apartment name (read-only).
+            storage soracloud_agent_apartments: String => SoraAgentApartmentRecordV1;
+            /// Agent-apartment audit events keyed by deterministic sequence (read-only).
+            storage soracloud_agent_apartment_audit_events: u64 => SoraAgentApartmentAuditEventV1;
+            /// Authoritative training jobs keyed by `(service_name, job_id)` (read-only).
+            storage soracloud_training_jobs: (String, String) => SoraTrainingJobRecordV1;
+            /// Training-job audit events keyed by deterministic sequence (read-only).
+            storage soracloud_training_job_audit_events: u64 => SoraTrainingJobAuditEventV1;
+            /// Model registries keyed by `(service_name, model_name)` (read-only).
+            storage soracloud_model_registries: (String, String) => SoraModelRegistryV1;
+            /// Model-weight versions keyed by `(service_name, model_name, weight_version)` (read-only).
+            storage soracloud_model_weight_versions:
+                (String, String, String) => SoraModelWeightVersionRecordV1;
+            /// Model-weight audit events keyed by deterministic sequence (read-only).
+            storage soracloud_model_weight_audit_events: u64 => SoraModelWeightAuditEventV1;
+            /// Model artifacts keyed by `(service_name, training_job_id)` (read-only).
+            storage soracloud_model_artifacts: (String, String) => SoraModelArtifactRecordV1;
+            /// Model-artifact audit events keyed by deterministic sequence (read-only).
+            storage soracloud_model_artifact_audit_events: u64 => SoraModelArtifactAuditEventV1;
+            /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)` (read-only).
+            storage soracloud_uploaded_model_bundles:
+                (String, String, String) => SoraUploadedModelBundleV1;
+            /// Active validator-host capability adverts keyed by validator account id (read-only).
+            storage soracloud_model_host_capabilities: AccountId => SoraModelHostCapabilityRecordV1;
+            /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
+            storage soracloud_inrou_host_capabilities: AccountId => SoraInrouHostCapabilityRecordV1;
+            /// Canonical Hugging Face sources keyed by source identifier (read-only).
+            storage soracloud_hf_sources: Hash => SoraHfSourceRecordV1;
+            /// HF shared-lease pools keyed by canonical pool identifier (read-only).
+            storage soracloud_hf_shared_lease_pools: Hash => SoraHfSharedLeasePoolV1;
+            /// HF shared-lease memberships keyed by `(pool_id, account_id)` (read-only).
+            storage soracloud_hf_shared_lease_members:
+                (String, String) => SoraHfSharedLeaseMemberV1;
+            /// HF shared-lease audit events keyed by deterministic sequence (read-only).
+            storage soracloud_hf_shared_lease_audit_events: u64 => SoraHfSharedLeaseAuditEventV1;
+            /// Model-host violation evidence keyed by deterministic evidence identifier (read-only).
+            storage soracloud_model_host_violation_evidence:
+                Hash => SoraModelHostViolationEvidenceRecordV1;
+            /// Active HF placement records keyed by shared-lease pool identifier (read-only).
+            storage soracloud_hf_placements: Hash => SoraHfPlacementRecordV1;
+            /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
+            storage soracloud_inrou_service_placements:
+                (String, String) => SoraInrouServicePlacementRecordV1;
+            /// Ordered Soracloud mailbox messages keyed by message id (read-only).
+            storage soracloud_mailbox_messages: Hash => SoraServiceMailboxMessageV1;
+            /// Soracloud runtime receipts keyed by receipt id (read-only).
+            storage soracloud_runtime_receipts: Hash => SoraRuntimeReceiptV1;
+            /// Private uploaded-model execution receipts keyed by receipt id (read-only).
+            storage soracloud_private_uploaded_model_execution_receipts:
+                Hash => SoraPrivateUploadedModelExecutionReceiptV1;
+        );
+    };
+    (agreements_and_lanes, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Repo agreement registry (read-only).
+            storage repo_agreements: RepoAgreementId => RepoAgreement;
+            /// Repo agreement ids keyed by initiating account (read-only).
+            storage repo_agreements_by_initiator: AccountId => BTreeSet<RepoAgreementId>;
+            /// Repo agreement ids keyed by counterparty account (read-only).
+            storage repo_agreements_by_counterparty: AccountId => BTreeSet<RepoAgreementId>;
+            /// Repo agreement ids keyed by custodian account (read-only).
+            storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
+            /// Successful settlement receipts (read-only).
+            storage settlement_receipts: SettlementId => SettlementReceipt;
+            /// Offline replay keys (read-only).
+            storage kagemusha_replay_keys: Hash => ();
+            /// Direct standalone lane-block application markers (read-only).
+            storage direct_lane_block_application_markers:
+                DirectLaneBlockApplicationKey => DirectLaneBlockApplicationMarker;
+            /// Public lane validators keyed by `(lane_id, validator)` (read-only).
+            storage public_lane_validators: (LaneId, AccountId) => PublicLaneValidatorRecord;
+            /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
+            storage public_lane_stake_shares:
+                (LaneId, AccountId, AccountId) => PublicLaneStakeShare;
+            /// Public lane reward ledger keyed by `(lane_id, epoch)` (read-only).
+            storage public_lane_rewards: (LaneId, u64) => PublicLaneRewardRecord;
+            /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
+            storage public_lane_reward_claims: (LaneId, AccountId, AssetId) => u64;
+            /// Emergency lane relay validator overrides keyed by lane (read-only).
+            storage lane_relay_emergency_validators: LaneId => LaneRelayEmergencyValidatorSet;
+            /// Capacity declarations (read-only).
+            storage capacity_declarations: ProviderId => CapacityDeclarationRecord;
+            /// Capacity fee ledger (read-only).
+            storage capacity_fee_ledger: ProviderId => CapacityFeeLedgerEntry;
+            /// Capacity disputes keyed by dispute identifier (read-only).
+            storage capacity_disputes: CapacityDisputeId => CapacityDisputeRecord;
+        );
+    };
+    (sorafs_and_privacy, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// Governance-controlled `SoraFS` pricing schedule (read-only).
+            ref sorafs_pricing: PricingScheduleRecord;
+            /// Provider credit ledger entries (read-only).
+            storage provider_credit_ledger: ProviderId => ProviderCreditRecord;
+            /// Owner bindings for registered `SoraFS` providers (read-only).
+            storage provider_owners: ProviderId => AccountId;
+            /// Provider-ingest completion-owner and signer-policy bindings (read-only).
+            storage provider_ingest_completion_authorities:
+                ProviderId => ProviderIngestCompletionAuthorityV1;
+            /// DA pin intents keyed by storage ticket (read-only).
+            storage da_pin_intents_by_ticket: StorageTicketId => DaPinIntentWithLocation;
+            /// Alias index for DA pin intents (read-only).
+            storage da_pin_intents_by_alias: String => StorageTicketId;
+            /// Manifest index for DA pin intents (read-only).
+            storage da_pin_intents_by_manifest: ManifestDigest => StorageTicketId;
+            /// Lane/epoch/sequence index for DA pin intents (read-only).
+            storage da_pin_intents_by_lane_epoch: (LaneId, u64, u64) => StorageTicketId;
+            /// Active alias bindings keyed by alias identifier (read-only).
+            storage manifest_aliases: ManifestAliasId => ManifestAliasRecord;
+            /// `SoraFS` pin manifest registry (read-only).
+            storage pin_manifests: ManifestDigest => PinManifestRecord;
+            /// Replication orders issued for manifests (read-only).
+            storage replication_orders: ReplicationOrderId => ReplicationOrderRecord;
+            /// Content bundles keyed by bundle identifier (read-only).
+            storage content_bundles: ContentBundleId => ContentBundleRecord;
+            /// Deduplicated chunk storage backing content bundles (read-only).
+            storage content_chunks: [u8; 32] => ContentChunk;
+            /// Resolver directory records keyed by deterministic identifier (read-only).
+            storage soradns_directory_records: DirectoryId => ResolverDirectoryRecordV1;
+            /// Pending resolver directory drafts awaiting council publication (read-only).
+            storage soradns_directory_pending: DirectoryId => PendingDirectoryDraftV1;
+            /// Latest published resolver directory identifier (read-only).
+            ref soradns_directory_latest: Option<DirectoryId>;
+            /// Historical resolver directory identifiers (read-only).
+            storage soradns_directory_history: u64 => DirectoryId;
+            /// Reverse pointers linking directory ids to their predecessors (read-only).
+            storage soradns_directory_prev_of: DirectoryId => DirectoryId;
+            /// Resolver revocation hotfix entries (read-only).
+            storage soradns_directory_revocations: ResolverId => ResolverRevocationRecordV1;
+            /// Release signer allowlist (read-only).
+            storage soradns_release_signers: PublicKey => ();
+            /// Rotation policy snapshot (read-only).
+            ref soradns_rotation_policy: DirectoryRotationPolicyV1;
+            /// Timestamp (milliseconds) of the last publish event (read-only).
+            ref soradns_last_publish_ms: Option<u64>;
+            /// Rotation history length counter (read-only).
+            ref soradns_history_len: u64;
+            /// Authoritative singleton privacy policy (read-only).
+            cell_ref privacy_consensus_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1;
+            /// Authoritative governed privacy activations (read-only).
+            storage privacy_activations:
+                crate::privacy_state::PrivacyActivationKeyV1 =>
+                iroha_data_model::privacy::PrivacyProtocolActivationRecordV1;
+        );
+    };
+    (governance, $mode:ident) => {
+        world_ro_accessors!(@items $mode;
+            /// ZK shielded ledger state (read-only) per asset definition.
+            storage zk_assets: AssetDefinitionId => ZkAssetState;
+            /// Anonymous elections state (read-only) keyed by election id.
+            storage elections: String => ElectionState;
+            /// Registered citizens keyed by account id (read-only).
+            storage citizens: AccountId => CitizenshipRecord;
+            /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
+            storage ministry_agenda_proposals:
+                String => iroha_data_model::ministry::AgendaProposalRecordV1;
+            /// Governance proposals (read-only) keyed by deterministic id.
+            storage governance_proposals: [u8; 32] => GovernanceProposalRecord;
+            /// Validation-fee proposal ids ordered by creation height then id.
+            storage validation_fee_proposal_index: (u64, [u8; 32]) => ();
+            /// Parliament approvals recorded per referendum id (read-only).
+            storage governance_stage_approvals: String => GovernanceStageApprovals;
+            /// Governance locks per referendum id (read-only).
+            storage governance_locks: String => GovernanceLocksForReferendum;
+            /// Governance-lock references grouped by expiry height.
+            storage governance_lock_expiry_index:
+                u64 => BTreeSet<(String, iroha_data_model::account::AccountId)>;
+            /// Governance slashing ledger per referendum id (read-only).
+            storage governance_slashes: String => GovernanceSlashLedger;
+            /// Height at which governance locks were last swept (read-only).
+            ref governance_last_unlock_sweep_height: u64;
+            /// Statistics captured by the latest governance-lock sweep.
+            ref governance_unlock_stats: GovernanceUnlockStatsSnapshot;
+            /// Governance referenda by id (read-only).
+            storage governance_referenda: String => GovernanceReferendumRecord;
+            /// Sortition council state by epoch (read-only).
+            storage council: u64 => CouncilState;
+            /// Parliament multi-body rosters by epoch (read-only).
+            storage parliament_bodies: u64 => iroha_data_model::governance::types::ParliamentBodies;
+            /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
+            storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
+        );
+    };
+}
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
 /// roles, triggers and the executor configuration without mutation.
 pub trait WorldReadOnly {
-    /// Global parameters registry.
-    fn parameters(&self) -> &Parameters;
-    /// Dataspace alias catalog used to qualify domain-scoped aliases.
-    fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog;
+    world_ro_accessors!(configuration, declaration);
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
-    /// Known peers in the network.
-    fn peers(&self) -> &Peers;
-    /// Domain storage (read-only).
-    fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
-    /// Domain owner index (read-only).
-    fn domains_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>>;
-    /// Endorsement committees (read-only).
-    fn domain_committees(&self) -> &impl StorageReadOnly<String, DomainCommittee>;
-    /// Per-domain endorsement policies (read-only).
-    fn domain_endorsement_policies(
-        &self,
-    ) -> &impl StorageReadOnly<DomainId, DomainEndorsementPolicy>;
-    /// Recorded domain endorsements keyed by payload hash (read-only).
-    fn domain_endorsements(
-        &self,
-    ) -> &impl StorageReadOnly<HashOf<DomainEndorsement>, DomainEndorsementRecord>;
-    /// Domain endorsement index keyed by domain id (read-only).
-    fn domain_endorsements_by_domain(
-        &self,
-    ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>;
-    /// Account storage (read-only).
-    fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
-    /// UAID to account index (read-only).
-    fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
-    /// Account alias index (read-only).
-    fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId>;
-    /// Reverse account alias index (read-only).
-    fn account_aliases_by_account(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
-    /// Read-side account scope directory (read-only).
-    fn account_scope_directory(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
-    /// Reverse read-side account scope index by `(dataspace, alias-domain)`.
-    fn account_scope_accounts(
-        &self,
-    ) -> &impl StorageReadOnly<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>;
-    /// Opaque identifier to UAID index (read-only).
-    fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
-    /// Global RAM-LFE program policy registry (read-only).
-    fn ram_lfe_program_policies(
-        &self,
-    ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy>;
-    /// Global identifier policy registry (read-only).
-    fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
-    /// Sponsor-owned fee program registry (read-only).
-    fn fee_sponsor_programs(&self)
-    -> &impl StorageReadOnly<FeeSponsorProgramId, FeeSponsorProgram>;
-    /// Immutable sponsor-program revision registry (read-only).
-    fn fee_sponsor_program_revisions(
-        &self,
-    ) -> &impl StorageReadOnly<FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>;
-    /// Sponsor-program enrollment registry (read-only).
-    fn fee_sponsor_enrollments(
-        &self,
-    ) -> &impl StorageReadOnly<FeeSponsorEnrollmentKey, FeeSponsorEnrollment>;
-    /// Sponsor-program vault registry (read-only).
-    fn fee_sponsor_vaults(&self) -> &impl StorageReadOnly<FeeSponsorVaultKey, FeeSponsorVault>;
-    /// Sponsor-program budget-counter registry (read-only).
-    fn fee_sponsor_budget_counters(
-        &self,
-    ) -> &impl StorageReadOnly<FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>;
-    /// Active identifier claims keyed by opaque identifier (read-only).
-    fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
+    world_ro_accessors!(identity, declaration);
     /// Iterate registered identifier policies.
     #[inline]
     fn ram_lfe_program_policies_iter(&self) -> impl Iterator<Item = &RamLfeProgramPolicy> {
@@ -18761,176 +19323,9 @@ pub trait WorldReadOnly {
             .iter()
             .find_map(|(_, claim)| (claim.receipt_hash == *receipt_hash).then(|| claim.clone()))
     }
-    /// Account label/signatory registry (read-only).
-    fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord>;
-    /// Alias-keyed account recovery policy registry (read-only).
-    fn account_recovery_policies(
-        &self,
-    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy>;
-    /// Alias-keyed account recovery request registry (read-only).
-    fn account_recovery_requests(
-        &self,
-    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest>;
-    /// Asset definition storage (read-only).
-    fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
-    /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
-    /// aid.
-    fn asset_definition_aliases(
-        &self,
-    ) -> &impl StorageReadOnly<AssetDefinitionAlias, AssetDefinitionId>;
-    /// Alias lease metadata keyed by canonical aid.
-    fn asset_definition_alias_bindings(
-        &self,
-    ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
-    /// Alias index mapping `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` to canonical
-    /// contract addresses.
-    fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress>;
-    /// Alias lease metadata keyed by canonical contract address.
-    fn contract_alias_bindings(
-        &self,
-    ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord>;
-    /// Authoritative domain ownership context for canonical asset definition ids.
-    fn asset_definition_domains(&self) -> &impl StorageReadOnly<AssetDefinitionId, DomainId>;
-    /// Asset-definition ids grouped by domain.
-    fn domain_asset_definitions(
-        &self,
-    ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>>;
-    /// Asset-definition ids grouped by owner account.
-    fn asset_definitions_by_owner(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetDefinitionId>>;
-    /// Holder index keyed by asset definition id.
-    fn asset_definition_holders(
-        &self,
-    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>>;
-    /// Asset-id index keyed by asset definition id.
-    fn asset_definition_assets(
-        &self,
-    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>>;
-    /// Exact asset-id index keyed by owner account.
-    fn assets_by_account(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetId>>;
-    /// Exact asset-id index keyed by asset-definition domain.
-    fn assets_by_domain(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetId>>;
-    /// Non-zero holder index keyed by asset definition id.
-    fn asset_definition_nonzero_holders(
-        &self,
-    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>>;
-    /// Asset storage (read-only).
-    fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
-    /// Asset metadata storage (read-only).
-    fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
-    /// NFT storage (read-only).
-    fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
-    /// NFT owner index (read-only).
-    fn nfts_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<NftId>>;
-    /// Exact NFT-id index keyed by NFT domain.
-    fn nfts_by_domain(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<NftId>>;
-    /// RWA storage (read-only).
-    fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
-    /// RWA owner index (read-only).
-    fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>>;
-    /// RWA status index (read-only).
-    fn rwas_by_status(&self) -> &impl StorageReadOnly<Option<Name>, BTreeSet<RwaId>>;
-    /// RWA frozen-state index (read-only).
-    fn rwas_by_frozen(&self) -> &impl StorageReadOnly<bool, BTreeSet<RwaId>>;
-    /// Role storage (read-only).
-    fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
-    /// Account permissions mapping (read-only).
-    fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions>;
-    /// Account roles mapping (read-only).
-    fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()>;
-    /// Oracle feed configurations (read-only).
-    fn oracle_feeds(&self) -> &impl StorageReadOnly<FeedId, FeedConfig>;
-    /// Buffered oracle observations (read-only).
-    fn oracle_observations(
-        &self,
-    ) -> &impl StorageReadOnly<crate::oracle::ObservationWindowKey, crate::oracle::ObservationWindow>;
-    /// Bounded oracle feed history (read-only).
-    fn oracle_history(
-        &self,
-    ) -> &impl StorageReadOnly<FeedId, Vec<iroha_data_model::events::data::oracle::FeedEventRecord>>;
-    /// Aggregation statistics per provider.
-    fn oracle_provider_stats(
-        &self,
-    ) -> &impl StorageReadOnly<OracleProviderKey, OracleProviderStats>;
-    /// Stored oracle disputes keyed by id.
-    fn oracle_disputes(&self) -> &impl StorageReadOnly<OracleDisputeId, OracleDispute>;
-    /// Oracle change proposals keyed by id.
-    fn oracle_changes(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::oracle::OracleChangeId,
-        iroha_data_model::oracle::OracleChangeProposal,
-    >;
-    /// Retained DeFi oracle attestations keyed by domain and subject id.
-    fn defi_oracle_attestations(
-        &self,
-    ) -> &impl StorageReadOnly<DefiOracleAttestationKey, Vec<DefiOracleAttestation>>;
-    /// Twitter follow binding attestations keyed by binding digest.
-    fn twitter_bindings(&self) -> &impl StorageReadOnly<Hash, TwitterBindingRecord>;
-    /// Inverted index from UAID to binding digests.
-    fn twitter_bindings_by_uaid(&self) -> &impl StorageReadOnly<UniversalAccountId, Vec<Hash>>;
-    /// Rolling reward budget for viral incentive payouts.
-    fn viral_reward_budget(&self) -> &ViralRewardBudget;
-    /// Campaign-wide budget for viral incentive payouts.
-    fn viral_campaign_budget(&self) -> &ViralCampaignBudget;
-    /// Daily reward counters keyed by UAID.
-    fn viral_daily_counters(&self) -> &impl StorageReadOnly<UniversalAccountId, ViralDailyCounter>;
-    /// Lifetime reward claims keyed by binding digest.
-    fn viral_binding_claims(&self) -> &impl StorageReadOnly<Hash, u32>;
-    /// Pending escrows for unbound handles keyed by binding digest.
-    fn viral_escrows(&self) -> &impl StorageReadOnly<Hash, ViralEscrowRecord>;
-    /// Bindings that have already paid a sender bonus.
-    fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool>;
-    /// Native asset escrow records keyed by escrow identifier.
-    fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord>;
-    /// Native asset escrow ids grouped by seller account.
-    fn asset_escrows_by_seller(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native asset escrow ids grouped by buyer account.
-    fn asset_escrows_by_buyer(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native asset escrow ids grouped by lifecycle status.
-    fn asset_escrows_by_status(
-        &self,
-    ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
-    /// Native SoraNet VPN lease escrow records keyed by lease identifier.
-    fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1>;
-    /// Active VPN lease id claimed by each client account.
-    fn vpn_active_lease_by_account(&self) -> &impl StorageReadOnly<AccountId, [u8; 32]>;
-    /// Active VPN lease id claimed on each typed address slot.
-    fn vpn_active_lease_by_address_slot(&self)
-    -> &impl StorageReadOnly<VpnAddressSlotV1, [u8; 32]>;
-    /// Newest settled VPN leases per client, ordered by settlement timestamp and lease id.
-    fn vpn_settled_leases_by_account(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<(u64, [u8; 32])>>;
-    /// UAID dataspace bindings managed by the Space Directory.
-    fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
-    /// UAID capability manifests maintained by the Space Directory.
-    fn space_directory_manifests(
-        &self,
-    ) -> &impl StorageReadOnly<UniversalAccountId, SpaceDirectoryManifestSet>;
-    /// Per-dataspace AXT policy entries derived from Space Directory manifests.
-    fn axt_policies(&self) -> &impl StorageReadOnly<DataSpaceId, AxtPolicyEntry>;
-    /// Bounded replay ledger keyed by handle fingerprint.
-    fn axt_replay_ledger(&self) -> &impl StorageReadOnly<AxtHandleReplayKey, AxtReplayRecord>;
-    /// Consensus-accounted usage of payload-bearing pending SCCP entries.
-    fn sccp_outbound_pending_usage(&self) -> SccpOutboundPendingUsageV1;
-    /// Pending outbound SCCP payload registry keyed by exact lane and lane-bound message id.
-    fn sccp_outbound_pending_messages(
-        &self,
-    ) -> &impl StorageReadOnly<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>;
-    /// Global message-id locator into the authoritative outbound replay map.
-    fn sccp_outbound_message_locator(
-        &self,
-    ) -> &impl StorageReadOnly<[u8; 32], SccpOutboundMessageKeyV1>;
-    /// Height-ordered outbound message discovery index.
-    fn sccp_outbound_message_index(
-        &self,
-    ) -> &impl StorageReadOnly<SccpOutboundMessageIndexKeyV1, ()>;
-    /// Accepted outbound SCCP proof replay registry keyed by exact lane and message id.
-    fn sccp_outbound_proofs(
-        &self,
-    ) -> &impl StorageReadOnly<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>;
+    world_ro_accessors!(assets, declaration);
+    world_ro_accessors!(oracle_and_incentives, declaration);
+    world_ro_accessors!(escrow_and_outbound, declaration);
     /// Resolve one pending payload record globally by its committed message id.
     #[must_use]
     fn sccp_outbound_pending_message_by_id(
@@ -18985,14 +19380,7 @@ pub trait WorldReadOnly {
         let proof = self.sccp_outbound_proofs().get(key)?;
         Some((key, proof))
     }
-    /// Inbound native SCCP replay registry keyed by exact lane and message id.
-    fn sccp_inbound_messages(
-        &self,
-    ) -> &impl StorageReadOnly<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>;
-    /// Greatest authenticated consensus coordinate admitted per exact lane and trust anchor.
-    fn sccp_inbound_anchor_high_water(
-        &self,
-    ) -> &impl StorageReadOnly<SccpInboundAnchorHighWaterKeyV1, u64>;
+    world_ro_accessors!(sccp_inbound, declaration);
     /// Derive a snapshot of AXT policies (per dataspace).
     fn axt_policy_snapshot(&self) -> AxtPolicySnapshot {
         let mut entries: Vec<AxtPolicyBinding> = self
@@ -19007,69 +19395,7 @@ pub trait WorldReadOnly {
         let version = AxtPolicySnapshot::compute_version(&entries);
         AxtPolicySnapshot { version, entries }
     }
-    /// Latest committed transaction sequence per authority (read-only).
-    fn tx_sequences(&self) -> &impl StorageReadOnly<AccountId, u64>;
-    /// Trigger set (read-only).
-    fn triggers(&self) -> &impl TriggerSetReadOnly;
-    /// Runtime executor configuration.
-    fn executor(&self) -> &Executor;
-    /// Data model used by the executor.
-    fn executor_data_model(&self) -> &ExecutorDataModel;
-    /// Verifying key registry (read-only).
-    fn verifying_keys(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::proof::VerifyingKeyId,
-        iroha_data_model::proof::VerifyingKeyRecord,
-    >;
-    /// Secondary index mapping `(circuit_id, version)` to verifying-key identifier.
-    fn verifying_keys_by_circuit(
-        &self,
-    ) -> &impl StorageReadOnly<(String, u32), iroha_data_model::proof::VerifyingKeyId>;
-    /// Consensus/committee key registry (read-only).
-    fn consensus_keys(&self) -> &impl StorageReadOnly<ConsensusKeyId, ConsensusKeyRecord>;
-    /// Index mapping consensus public keys to registered identifiers.
-    fn consensus_keys_by_pk(&self) -> &impl StorageReadOnly<String, Vec<ConsensusKeyId>>;
-    /// Pedersen parameter registry (read-only).
-    fn pedersen_params(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::confidential::ConfidentialParamsId,
-        iroha_data_model::confidential::PedersenParams,
-    >;
-    /// Poseidon parameter registry (read-only).
-    fn poseidon_params(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::confidential::ConfidentialParamsId,
-        iroha_data_model::confidential::PoseidonParams,
-    >;
-    /// Runtime upgrade registry (read-only).
-    fn runtime_upgrades(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
-    >;
-    /// Commit QCs keyed by subject block hash (read-only).
-    fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc>;
-    /// Latest lane merge-hint roots observed via the merge ledger.
-    fn merge_hint_roots(&self) -> &Vec<Hash>;
-    /// Latest reduced global state root advertised by the merge ledger.
-    fn merge_global_state_root(&self) -> &Option<Hash>;
-    /// Persisted consensus evidence log (read-only).
-    fn consensus_evidence(&self) -> &impl StorageReadOnly<Vec<u8>, EvidenceRecord>;
-    /// Proof verification records (read-only).
-    fn proofs(
-        &self,
-    ) -> &impl StorageReadOnly<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>;
-    /// Inverted proof status index (read-only).
-    fn proofs_by_status(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::proof::ProofStatus,
-        BTreeSet<iroha_data_model::proof::ProofId>,
-    >;
+    world_ro_accessors!(runtime_and_proofs, declaration);
     /// Iterate proof records for one backend using the proof id key prefix.
     fn proofs_by_backend_iter<'a>(
         &'a self,
@@ -19099,29 +19425,7 @@ pub trait WorldReadOnly {
             .flat_map(BTreeSet::iter)
             .filter_map(|proof_id| self.proofs().get_key_value(proof_id))
     }
-    /// Stored ZK1 TLV tags per proof id (read-only).
-    fn proof_tags(&self) -> &impl StorageReadOnly<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>;
-    /// Inverted index from TLV tag to proof ids (read-only).
-    fn proofs_by_tag(
-        &self,
-    ) -> &impl StorageReadOnly<[u8; 4], Vec<iroha_data_model::proof::ProofId>>;
-    /// Contract manifests (read-only).
-    fn contract_manifests(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_crypto::Hash,
-        iroha_data_model::smart_contract::manifest::ContractManifest,
-    >;
-    /// Get stored contract code bytes by hash (read-only)
-    fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Pending contract-code upload descriptors (read-only).
-    fn contract_code_uploads(
-        &self,
-    ) -> &impl StorageReadOnly<SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>;
-    /// Pending contract-code upload chunks (read-only).
-    fn contract_code_upload_chunks(
-        &self,
-    ) -> &impl StorageReadOnly<SmartContractCodeUploadChunkKey, Vec<u8>>;
+    world_ro_accessors!(contract_uploads, declaration);
     /// Return committed progress for one authority-owned pending upload.
     fn contract_code_upload_progress(
         &self,
@@ -19140,29 +19444,7 @@ pub trait WorldReadOnly {
             received_chunks,
         })
     }
-    /// Contract instances mapping `contract_address -> code_hash` (read-only)
-    fn contract_instances(
-        &self,
-    ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
-    /// Irreversible versioned subject identity for every historically activated address.
-    fn contract_subject_bindings(
-        &self,
-    ) -> &impl StorageReadOnly<
-        iroha_data_model::smart_contract::ContractAddress,
-        crate::smartcontracts::code::ContractSubjectBinding,
-    >;
-    /// Reverse index for historical contract subjects; rebuilt from authenticated bindings.
-    fn contract_subject_addresses(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, iroha_data_model::smart_contract::ContractAddress>;
-    /// Durable smart-contract state keyed by logical path (read-only).
-    fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>>;
-    /// Immutable Musubi namespace bindings keyed by canonical namespace text.
-    fn musubi_namespace_bindings(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiNamespaceV1, MusubiNamespaceBindingV1>;
-    /// Authoritative monotonic domain-owner generations used by Musubi delegations.
-    fn musubi_domain_ownership_generations(&self) -> &impl StorageReadOnly<DomainId, u64>;
+    world_ro_accessors!(contract_state, declaration);
     /// Return the current domain-owner generation, treating an untransferred domain as V1.
     fn musubi_domain_ownership_generation(&self, domain: &DomainId) -> u64 {
         self.musubi_domain_ownership_generations()
@@ -19170,319 +19452,14 @@ pub trait WorldReadOnly {
             .copied()
             .unwrap_or(1)
     }
-    /// Authoritative Musubi package records.
-    fn musubi_packages(&self) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageRecordV1>;
-    /// Mutable Musubi package metadata records.
-    fn musubi_package_metadata(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageMetadataRecordV1>;
-    /// Accepted Musubi package members ordered by package and account.
-    fn musubi_package_members(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiPackageMemberKeyV1, MusubiPackageMemberV1>;
-    /// Musubi package-governance invitations.
-    fn musubi_package_invitations(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiInviteIdV1, MusubiMaintainerInvitationV1>;
-    /// Accepted members and pending invitations ordered for package-scoped queries.
-    fn musubi_maintainer_directory(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>;
-    /// Musubi release records keyed by exact release identity.
-    fn musubi_releases(&self) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiReleaseRecordV1>;
-    /// Canonical Musubi source archive commitments.
-    fn musubi_archives(&self) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1>;
-    /// Immutable provider bundle attestations keyed by archive, order, and provider.
-    fn musubi_provider_bundle_attestations(
-        &self,
-    ) -> &impl StorageReadOnly<
-        MusubiProviderBundleAttestationKeyV1,
-        MusubiProviderBundleAttestationRecordV1,
-    >;
-    /// Renewable Musubi archive locations.
-    fn musubi_archive_locations(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>;
-    /// Exact pin-manifest to Musubi-location reverse index.
-    fn musubi_locations_by_pin(
-        &self,
-    ) -> &impl StorageReadOnly<ManifestDigest, MusubiPinLocationReferenceV1>;
-    /// Exact replication-order to Musubi-location reverse index.
-    fn musubi_locations_by_replication_order(
-        &self,
-    ) -> &impl StorageReadOnly<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>;
-    /// Ordered provider/location reverse index.
-    fn musubi_locations_by_provider(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiProviderLocationKeyV1, ()>;
-    /// Finalized Musubi archive availability projections.
-    fn musubi_archive_availability(
-        &self,
-    ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveAvailabilityV1>;
-    /// Reverse references from archives to every active or yanked bound release.
-    fn musubi_archive_reverse_references(
-        &self,
-    ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveReverseReferencesV1>;
-    /// Universal sparse Musubi resolver index.
-    fn musubi_resolver_index(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>;
-    /// Historical block-final activation anchors for Musubi resolver-index revisions.
-    fn musubi_resolver_index_checkpoints(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>;
-    /// Public ordered package directory.
-    fn musubi_public_directory(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>;
-    /// Permanent paid Musubi aliases.
-    fn musubi_aliases(&self) -> &impl StorageReadOnly<MusubiAliasNameV1, MusubiAliasRecordV1>;
-    /// Complete permanent-alias history.
-    fn musubi_alias_history(
-        &self,
-    ) -> &impl StorageReadOnly<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>;
-    /// Enacted Musubi governance decisions retained for replay protection.
-    fn musubi_governance_decisions(
-        &self,
-    ) -> &impl StorageReadOnly<[u8; 32], MusubiGovernanceDecisionConsumptionV1>;
-    /// Active Musubi registry admission and alias-pricing policy.
-    fn musubi_registry_policy(&self) -> &MusubiRegistryPolicyV1;
+    world_ro_accessors!(musubi_registry, declaration);
     /// Active Musubi registry policy revision.
     fn musubi_registry_policy_revision(&self) -> u64 {
         self.musubi_registry_policy().revision
     }
-    /// Universal Musubi sparse-index revision bound into finalized cursors.
-    fn musubi_resolver_index_revision(&self) -> u64;
-    /// Exact count of releases bound to archives below fresh-selection quorum.
-    fn musubi_replication_shortfall_releases(&self) -> u64;
-    /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
-    fn soracloud_service_revisions(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1>;
-    /// Current Soracloud deployment state keyed by service name (read-only).
-    fn soracloud_service_deployments(
-        &self,
-    ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
-    /// Current Soracloud app topology state keyed by app name (read-only).
-    fn soracloud_app_infra_states(&self) -> &impl StorageReadOnly<Name, SoraAppInfraStateV1>;
-    /// Active Soracloud runtime state keyed by service name (read-only).
-    fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
-    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
-    fn soracloud_inrou_replica_runtime(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1>;
-    /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
-    fn soracloud_service_audit_events(&self)
-    -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
-    /// Soracloud app topology audit events keyed by deterministic sequence (read-only).
-    fn soracloud_app_infra_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraAppInfraAuditEventV1>;
-    /// Authoritative service state keyed by `(service_name, binding_name, state_key)` (read-only).
-    fn soracloud_service_state_entries(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1>;
-    /// Recorded decryption requests keyed by `(service_name, request_id)` (read-only).
-    fn soracloud_decryption_request_records(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1>;
-    /// Authoritative agent apartments keyed by apartment name (read-only).
-    fn soracloud_agent_apartments(
-        &self,
-    ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1>;
-    /// Agent-apartment audit events keyed by deterministic sequence (read-only).
-    fn soracloud_agent_apartment_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1>;
-    /// Authoritative training jobs keyed by `(service_name, job_id)` (read-only).
-    fn soracloud_training_jobs(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1>;
-    /// Training-job audit events keyed by deterministic sequence (read-only).
-    fn soracloud_training_job_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1>;
-    /// Model registries keyed by `(service_name, model_name)` (read-only).
-    fn soracloud_model_registries(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1>;
-    /// Model-weight versions keyed by `(service_name, model_name, weight_version)` (read-only).
-    fn soracloud_model_weight_versions(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>;
-    /// Model-weight audit events keyed by deterministic sequence (read-only).
-    fn soracloud_model_weight_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1>;
-    /// Model artifacts keyed by `(service_name, training_job_id)` (read-only).
-    fn soracloud_model_artifacts(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1>;
-    /// Model-artifact audit events keyed by deterministic sequence (read-only).
-    fn soracloud_model_artifact_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
-    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)` (read-only).
-    fn soracloud_uploaded_model_bundles(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1>;
-    /// Active validator-host capability adverts keyed by validator account id (read-only).
-    fn soracloud_model_host_capabilities(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1>;
-    /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
-    fn soracloud_inrou_host_capabilities(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1>;
-    /// Canonical Hugging Face sources keyed by source identifier (read-only).
-    fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
-    /// HF shared-lease pools keyed by canonical pool identifier (read-only).
-    fn soracloud_hf_shared_lease_pools(
-        &self,
-    ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1>;
-    /// HF shared-lease memberships keyed by `(pool_id, account_id)` (read-only).
-    fn soracloud_hf_shared_lease_members(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1>;
-    /// HF shared-lease audit events keyed by deterministic sequence (read-only).
-    fn soracloud_hf_shared_lease_audit_events(
-        &self,
-    ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1>;
-    /// Model-host violation evidence keyed by deterministic evidence identifier (read-only).
-    fn soracloud_model_host_violation_evidence(
-        &self,
-    ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
-    /// Active HF placement records keyed by shared-lease pool identifier (read-only).
-    fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
-    /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
-    fn soracloud_inrou_service_placements(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1>;
-    /// Ordered Soracloud mailbox messages keyed by message id (read-only).
-    fn soracloud_mailbox_messages(
-        &self,
-    ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>;
-    /// Soracloud runtime receipts keyed by receipt id (read-only).
-    fn soracloud_runtime_receipts(&self) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>;
-    /// Private uploaded-model execution receipts keyed by receipt id (read-only).
-    fn soracloud_private_uploaded_model_execution_receipts(
-        &self,
-    ) -> &impl StorageReadOnly<Hash, SoraPrivateUploadedModelExecutionReceiptV1>;
-    /// Repo agreement registry (read-only).
-    fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
-    /// Repo agreement ids keyed by initiating account (read-only).
-    fn repo_agreements_by_initiator(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
-    /// Repo agreement ids keyed by counterparty account (read-only).
-    fn repo_agreements_by_counterparty(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
-    /// Repo agreement ids keyed by custodian account (read-only).
-    fn repo_agreements_by_custodian(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
-    /// Successful settlement receipts (read-only).
-    fn settlement_receipts(&self) -> &impl StorageReadOnly<SettlementId, SettlementReceipt>;
-    /// Offline replay keys (read-only).
-    fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
-    /// Direct standalone lane-block application markers (read-only).
-    fn direct_lane_block_application_markers(
-        &self,
-    ) -> &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>;
-    /// Public lane validators keyed by `(lane_id, validator)` (read-only).
-    fn public_lane_validators(
-        &self,
-    ) -> &impl StorageReadOnly<(LaneId, AccountId), PublicLaneValidatorRecord>;
-    /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
-    fn public_lane_stake_shares(
-        &self,
-    ) -> &impl StorageReadOnly<(LaneId, AccountId, AccountId), PublicLaneStakeShare>;
-    /// Public lane reward ledger keyed by `(lane_id, epoch)` (read-only).
-    fn public_lane_rewards(&self) -> &impl StorageReadOnly<(LaneId, u64), PublicLaneRewardRecord>;
-    /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
-    fn public_lane_reward_claims(&self)
-    -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64>;
-    /// Emergency lane relay validator overrides keyed by lane (read-only).
-    fn lane_relay_emergency_validators(
-        &self,
-    ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet>;
-    /// Capacity declarations (read-only).
-    fn capacity_declarations(&self)
-    -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord>;
-    /// Capacity fee ledger (read-only).
-    fn capacity_fee_ledger(&self) -> &impl StorageReadOnly<ProviderId, CapacityFeeLedgerEntry>;
-    /// Capacity disputes keyed by dispute identifier (read-only).
-    fn capacity_disputes(&self) -> &impl StorageReadOnly<CapacityDisputeId, CapacityDisputeRecord>;
-    /// Governance-controlled `SoraFS` pricing schedule (read-only).
-    fn sorafs_pricing(&self) -> &PricingScheduleRecord;
-    /// Provider credit ledger entries (read-only).
-    fn provider_credit_ledger(&self) -> &impl StorageReadOnly<ProviderId, ProviderCreditRecord>;
-    /// Owner bindings for registered `SoraFS` providers (read-only).
-    fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId>;
-    /// Provider-ingest completion-owner and signer-policy bindings (read-only).
-    fn provider_ingest_completion_authorities(
-        &self,
-    ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1>;
-    /// DA pin intents keyed by storage ticket (read-only).
-    fn da_pin_intents_by_ticket(
-        &self,
-    ) -> &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation>;
-    /// Alias index for DA pin intents (read-only).
-    fn da_pin_intents_by_alias(&self) -> &impl StorageReadOnly<String, StorageTicketId>;
-    /// Manifest index for DA pin intents (read-only).
-    fn da_pin_intents_by_manifest(&self) -> &impl StorageReadOnly<ManifestDigest, StorageTicketId>;
-    /// Lane/epoch/sequence index for DA pin intents (read-only).
-    fn da_pin_intents_by_lane_epoch(
-        &self,
-    ) -> &impl StorageReadOnly<(LaneId, u64, u64), StorageTicketId>;
-    /// Active alias bindings keyed by alias identifier (read-only).
-    fn manifest_aliases(&self) -> &impl StorageReadOnly<ManifestAliasId, ManifestAliasRecord>;
-    /// `SoraFS` pin manifest registry (read-only).
-    fn pin_manifests(&self) -> &impl StorageReadOnly<ManifestDigest, PinManifestRecord>;
-    /// Replication orders issued for manifests (read-only).
-    fn replication_orders(
-        &self,
-    ) -> &impl StorageReadOnly<ReplicationOrderId, ReplicationOrderRecord>;
-    /// Content bundles keyed by bundle identifier (read-only).
-    fn content_bundles(&self) -> &impl StorageReadOnly<ContentBundleId, ContentBundleRecord>;
-    /// Deduplicated chunk storage backing content bundles (read-only).
-    fn content_chunks(&self) -> &impl StorageReadOnly<[u8; 32], ContentChunk>;
-    /// Resolver directory records keyed by deterministic identifier (read-only).
-    fn soradns_directory_records(
-        &self,
-    ) -> &impl StorageReadOnly<DirectoryId, ResolverDirectoryRecordV1>;
-    /// Pending resolver directory drafts awaiting council publication (read-only).
-    fn soradns_directory_pending(
-        &self,
-    ) -> &impl StorageReadOnly<DirectoryId, PendingDirectoryDraftV1>;
-    /// Latest published resolver directory identifier (read-only).
-    fn soradns_directory_latest(&self) -> &Option<DirectoryId>;
-    /// Historical resolver directory identifiers (read-only).
-    fn soradns_directory_history(&self) -> &impl StorageReadOnly<u64, DirectoryId>;
-    /// Reverse pointers linking directory ids to their predecessors (read-only).
-    fn soradns_directory_prev_of(&self) -> &impl StorageReadOnly<DirectoryId, DirectoryId>;
-    /// Resolver revocation hotfix entries (read-only).
-    fn soradns_directory_revocations(
-        &self,
-    ) -> &impl StorageReadOnly<ResolverId, ResolverRevocationRecordV1>;
-    /// Release signer allowlist (read-only).
-    fn soradns_release_signers(&self) -> &impl StorageReadOnly<PublicKey, ()>;
-    /// Rotation policy snapshot (read-only).
-    fn soradns_rotation_policy(&self) -> &DirectoryRotationPolicyV1;
-    /// Timestamp (milliseconds) of the last publish event (read-only).
-    fn soradns_last_publish_ms(&self) -> &Option<u64>;
-    /// Rotation history length counter (read-only).
-    fn soradns_history_len(&self) -> &u64;
-    /// Authoritative singleton privacy policy (read-only).
-    fn privacy_consensus_policy(&self) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1;
-    /// Authoritative governed privacy activations (read-only).
-    fn privacy_activations(
-        &self,
-    ) -> &impl StorageReadOnly<
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
-    >;
+    world_ro_accessors!(soracloud, declaration);
+    world_ro_accessors!(agreements_and_lanes, declaration);
+    world_ro_accessors!(sorafs_and_privacy, declaration);
     /// Load one current authoritative Bootle/Lantern issuer policy by its
     /// exact typed issuer and policy identities.
     ///
@@ -19499,46 +19476,7 @@ pub trait WorldReadOnly {
         issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
         policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
     ) -> core::result::Result<iroha_data_model::privacy::BootleLanternIssuerPolicyV1, String>;
-    /// ZK shielded ledger state (read-only) per asset definition.
-    fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState>;
-    /// Anonymous elections state (read-only) keyed by election id.
-    fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
-    /// Registered citizens keyed by account id (read-only).
-    fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord>;
-    /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
-    fn ministry_agenda_proposals(
-        &self,
-    ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>;
-    /// Governance proposals (read-only) keyed by deterministic id.
-    fn governance_proposals(&self) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord>;
-    /// Validation-fee proposal ids ordered by creation height then id.
-    fn validation_fee_proposal_index(&self) -> &impl StorageReadOnly<(u64, [u8; 32]), ()>;
-    /// Parliament approvals recorded per referendum id (read-only).
-    fn governance_stage_approvals(&self)
-    -> &impl StorageReadOnly<String, GovernanceStageApprovals>;
-    /// Governance locks per referendum id (read-only).
-    fn governance_locks(&self) -> &impl StorageReadOnly<String, GovernanceLocksForReferendum>;
-    /// Governance-lock references grouped by expiry height.
-    fn governance_lock_expiry_index(
-        &self,
-    ) -> &impl StorageReadOnly<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>;
-    /// Governance slashing ledger per referendum id (read-only).
-    fn governance_slashes(&self) -> &impl StorageReadOnly<String, GovernanceSlashLedger>;
-    /// Height at which governance locks were last swept (read-only).
-    fn governance_last_unlock_sweep_height(&self) -> &u64;
-    /// Statistics captured by the latest governance-lock sweep.
-    fn governance_unlock_stats(&self) -> &GovernanceUnlockStatsSnapshot;
-    /// Governance referenda by id (read-only).
-    fn governance_referenda(&self) -> &impl StorageReadOnly<String, GovernanceReferendumRecord>;
-    /// Sortition council state by epoch (read-only).
-    fn council(&self) -> &impl StorageReadOnly<u64, CouncilState>;
-    /// Parliament multi-body rosters by epoch (read-only).
-    fn parliament_bodies(
-        &self,
-    ) -> &impl StorageReadOnly<u64, iroha_data_model::governance::types::ParliamentBodies>;
-    /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
-    fn vrf_epochs(&self)
-    -> &impl StorageReadOnly<u64, iroha_data_model::consensus::VrfEpochRecord>;
+    world_ro_accessors!(governance, declaration);
     /// Return the single ABI version accepted by the first release runtime.
     fn abi_version(&self) -> u16 {
         1
@@ -20178,963 +20116,19 @@ pub trait WorldReadOnly {
 macro_rules! impl_world_ro {
     ($($ident:ty),*) => {$(
         impl WorldReadOnly for $ident {
-            fn parameters(&self) -> &Parameters {
-                &self.parameters
-            }
-            fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog {
-                &self.dataspace_catalog
-            }
-            fn peers(&self) -> &Peers {
-                &self.peers
-            }
-            fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain> {
-                &self.domains
-            }
-            fn domains_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>> {
-                &self.domains_by_owner
-            }
-            fn domain_committees(&self) -> &impl StorageReadOnly<String, DomainCommittee> {
-                &self.domain_committees
-            }
-            fn domain_endorsement_policies(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, DomainEndorsementPolicy> {
-                &self.domain_endorsement_policies
-            }
-            fn domain_endorsements(
-                &self,
-            ) -> &impl StorageReadOnly<HashOf<DomainEndorsement>, DomainEndorsementRecord> {
-                &self.domain_endorsements
-            }
-            fn domain_endorsements_by_domain(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>> {
-                &self.domain_endorsements_by_domain
-            }
-            fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
-                &self.accounts
-            }
-            fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
-                &self.uaid_accounts
-            }
-            fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId> {
-                &self.account_aliases
-            }
-            fn account_aliases_by_account(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
-                &self.account_aliases_by_account
-            }
-            fn account_scope_directory(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
-                &self.account_scope_directory
-            }
-            fn account_scope_accounts(
-                &self,
-            ) -> &impl StorageReadOnly<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>> {
-                &self.account_scope_accounts
-            }
-            fn opaque_uaids(
-                &self,
-            ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
-                &self.opaque_uaids
-            }
-            fn ram_lfe_program_policies(
-                &self,
-            ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy> {
-                &self.ram_lfe_program_policies
-            }
-            fn identifier_policies(
-                &self,
-            ) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy> {
-                &self.identifier_policies
-            }
-            fn fee_sponsor_programs(
-                &self,
-            ) -> &impl StorageReadOnly<FeeSponsorProgramId, FeeSponsorProgram> {
-                &self.fee_sponsor_programs
-            }
-            fn fee_sponsor_program_revisions(
-                &self,
-            ) -> &impl StorageReadOnly<FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision> {
-                &self.fee_sponsor_program_revisions
-            }
-            fn fee_sponsor_enrollments(
-                &self,
-            ) -> &impl StorageReadOnly<FeeSponsorEnrollmentKey, FeeSponsorEnrollment> {
-                &self.fee_sponsor_enrollments
-            }
-            fn fee_sponsor_vaults(
-                &self,
-            ) -> &impl StorageReadOnly<FeeSponsorVaultKey, FeeSponsorVault> {
-                &self.fee_sponsor_vaults
-            }
-            fn fee_sponsor_budget_counters(
-                &self,
-            ) -> &impl StorageReadOnly<FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter> {
-                &self.fee_sponsor_budget_counters
-            }
-            fn identifier_claims(
-                &self,
-            ) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord> {
-                &self.identifier_claims
-            }
-            fn account_rekey_records(
-                &self,
-            ) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord> {
-                &self.account_rekey_records
-            }
-            fn account_recovery_policies(
-                &self,
-            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy> {
-                &self.account_recovery_policies
-            }
-            fn account_recovery_requests(
-                &self,
-            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest> {
-                &self.account_recovery_requests
-            }
-            fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
-                &self.asset_definitions
-            }
-            fn asset_definition_aliases(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionAlias, AssetDefinitionId> {
-                &self.asset_definition_aliases
-            }
-            fn asset_definition_alias_bindings(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
-                &self.asset_definition_alias_bindings
-            }
-            fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress> {
-                &self.contract_aliases
-            }
-            fn contract_alias_bindings(
-                &self,
-            ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord> {
-                &self.contract_alias_bindings
-            }
-            fn asset_definition_domains(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionId, DomainId> {
-                &self.asset_definition_domains
-            }
-            fn domain_asset_definitions(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>> {
-                &self.domain_asset_definitions
-            }
-            fn asset_definitions_by_owner(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetDefinitionId>> {
-                &self.asset_definitions_by_owner
-            }
-            fn asset_definition_holders(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
-                &self.asset_definition_holders
-            }
-            fn asset_definition_assets(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>> {
-                &self.asset_definition_assets
-            }
-            fn assets_by_account(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetId>> {
-                &self.assets_by_account
-            }
-            fn assets_by_domain(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetId>> {
-                &self.assets_by_domain
-            }
-            fn asset_definition_nonzero_holders(
-                &self,
-            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
-                &self.asset_definition_nonzero_holders
-            }
-            fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
-                &self.assets
-            }
-            fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata> {
-                &self.asset_metadata
-            }
-            fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
-                &self.nfts
-            }
-            fn nfts_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<NftId>> {
-                &self.nfts_by_owner
-            }
-            fn nfts_by_domain(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<NftId>> {
-                &self.nfts_by_domain
-            }
-            fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
-                &self.rwas
-            }
-            fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>> {
-                &self.rwas_by_owner
-            }
-            fn rwas_by_status(&self) -> &impl StorageReadOnly<Option<Name>, BTreeSet<RwaId>> {
-                &self.rwas_by_status
-            }
-            fn rwas_by_frozen(&self) -> &impl StorageReadOnly<bool, BTreeSet<RwaId>> {
-                &self.rwas_by_frozen
-            }
-            fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
-                &self.roles
-            }
-            fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions> {
-                &self.account_permissions
-            }
-            fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()> {
-                &self.account_roles
-            }
-            fn oracle_feeds(&self) -> &impl StorageReadOnly<FeedId, FeedConfig> {
-                &self.oracle_feeds
-            }
-            fn oracle_observations(
-                &self,
-            ) -> &impl StorageReadOnly<
-                crate::oracle::ObservationWindowKey,
-                crate::oracle::ObservationWindow,
-            > {
-                &self.oracle_observations
-            }
-            fn oracle_history(
-                &self,
-            ) -> &impl StorageReadOnly<
-                FeedId,
-                Vec<iroha_data_model::events::data::oracle::FeedEventRecord>,
-            > {
-                &self.oracle_history
-            }
-            fn oracle_provider_stats(
-                &self,
-            ) -> &impl StorageReadOnly<OracleProviderKey, OracleProviderStats> {
-                &self.oracle_provider_stats
-            }
-            fn oracle_disputes(
-                &self,
-            ) -> &impl StorageReadOnly<OracleDisputeId, OracleDispute> {
-                &self.oracle_disputes
-            }
-            fn oracle_changes(
-                &self,
-            ) -> &impl StorageReadOnly<
-                iroha_data_model::oracle::OracleChangeId,
-                iroha_data_model::oracle::OracleChangeProposal,
-            > {
-                &self.oracle_changes
-            }
-            fn defi_oracle_attestations(
-                &self,
-            ) -> &impl StorageReadOnly<
-                DefiOracleAttestationKey,
-                Vec<DefiOracleAttestation>,
-            > {
-                &self.defi_oracle_attestations
-            }
-            fn twitter_bindings(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, TwitterBindingRecord> {
-                &self.twitter_bindings
-            }
-            fn twitter_bindings_by_uaid(
-                &self,
-            ) -> &impl StorageReadOnly<UniversalAccountId, Vec<Hash>> {
-                &self.twitter_bindings_by_uaid
-            }
-            fn viral_reward_budget(&self) -> &ViralRewardBudget {
-                self.viral_reward_budget.get()
-            }
-            fn viral_campaign_budget(&self) -> &ViralCampaignBudget {
-                self.viral_campaign_budget.get()
-            }
-            fn viral_daily_counters(
-                &self,
-            ) -> &impl StorageReadOnly<UniversalAccountId, ViralDailyCounter> {
-                &self.viral_daily_counters
-            }
-            fn viral_binding_claims(&self) -> &impl StorageReadOnly<Hash, u32> {
-                &self.viral_binding_claims
-            }
-            fn viral_escrows(&self) -> &impl StorageReadOnly<Hash, ViralEscrowRecord> {
-                &self.viral_escrows
-            }
-            fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool> {
-                &self.viral_bonus_paid
-            }
-            fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord> {
-                &self.asset_escrows
-            }
-            fn asset_escrows_by_seller(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.asset_escrows_by_seller
-            }
-            fn asset_escrows_by_buyer(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.asset_escrows_by_buyer
-            }
-            fn asset_escrows_by_status(
-                &self,
-            ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
-                &self.asset_escrows_by_status
-            }
-            fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1> {
-                &self.vpn_leases
-            }
-            fn vpn_active_lease_by_account(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, [u8; 32]> {
-                &self.vpn_active_lease_by_account
-            }
-            fn vpn_active_lease_by_address_slot(
-                &self,
-            ) -> &impl StorageReadOnly<VpnAddressSlotV1, [u8; 32]> {
-                &self.vpn_active_lease_by_address_slot
-            }
-            fn vpn_settled_leases_by_account(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<(u64, [u8; 32])>> {
-                &self.vpn_settled_leases_by_account
-            }
-            fn uaid_dataspaces(
-                &self,
-            ) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings> {
-                &self.uaid_dataspaces
-            }
-            fn space_directory_manifests(
-                &self,
-            ) -> &impl StorageReadOnly<UniversalAccountId, SpaceDirectoryManifestSet> {
-                &self.space_directory_manifests
-            }
-            fn axt_policies(&self) -> &impl StorageReadOnly<DataSpaceId, AxtPolicyEntry> {
-                &self.axt_policies
-            }
-            fn axt_replay_ledger(
-                &self,
-            ) -> &impl StorageReadOnly<AxtHandleReplayKey, AxtReplayRecord> {
-                &self.axt_replay_ledger
-            }
-            fn sccp_outbound_pending_usage(&self) -> SccpOutboundPendingUsageV1 {
-                *self.sccp_outbound_pending_usage.get()
-            }
-            fn sccp_outbound_pending_messages(
-                &self,
-            ) -> &impl StorageReadOnly<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1> {
-                &self.sccp_outbound_pending_messages
-            }
-            fn sccp_outbound_message_locator(
-                &self,
-            ) -> &impl StorageReadOnly<[u8; 32], SccpOutboundMessageKeyV1> {
-                &self.sccp_outbound_message_locator
-            }
-            fn sccp_outbound_message_index(
-                &self,
-            ) -> &impl StorageReadOnly<SccpOutboundMessageIndexKeyV1, ()> {
-                &self.sccp_outbound_message_index
-            }
-            fn sccp_outbound_proofs(
-                &self,
-            ) -> &impl StorageReadOnly<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1> {
-                &self.sccp_outbound_proofs
-            }
-            fn sccp_inbound_messages(
-                &self,
-            ) -> &impl StorageReadOnly<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1> {
-                &self.sccp_inbound_messages
-            }
-            fn sccp_inbound_anchor_high_water(
-                &self,
-            ) -> &impl StorageReadOnly<SccpInboundAnchorHighWaterKeyV1, u64> {
-                &self.sccp_inbound_anchor_high_water
-            }
-            fn tx_sequences(&self) -> &impl StorageReadOnly<AccountId, u64> {
-                &self.tx_sequences
-            }
-            fn triggers(&self) -> &impl TriggerSetReadOnly {
-                &self.triggers
-            }
-            fn executor(&self) -> &Executor {
-                &self.executor
-            }
-            fn executor_data_model(&self) -> &ExecutorDataModel {
-                &self.executor_data_model
-            }
-            fn verifying_keys(&self) -> &impl StorageReadOnly<
-                iroha_data_model::proof::VerifyingKeyId,
-                iroha_data_model::proof::VerifyingKeyRecord,
-            > {
-                &self.verifying_keys
-            }
-            fn verifying_keys_by_circuit(&self) -> &impl StorageReadOnly<
-                (String, u32),
-                iroha_data_model::proof::VerifyingKeyId,
-            > {
-                &self.verifying_keys_by_circuit
-            }
-            fn consensus_keys(
-                &self,
-            ) -> &impl StorageReadOnly<ConsensusKeyId, ConsensusKeyRecord> {
-                &self.consensus_keys
-            }
-            fn consensus_keys_by_pk(
-                &self,
-            ) -> &impl StorageReadOnly<String, Vec<ConsensusKeyId>> {
-                &self.consensus_keys_by_pk
-            }
-            fn pedersen_params(&self) -> &impl StorageReadOnly<
-                iroha_data_model::confidential::ConfidentialParamsId,
-                iroha_data_model::confidential::PedersenParams,
-            > {
-                &self.pedersen_params
-            }
-            fn poseidon_params(&self) -> &impl StorageReadOnly<
-                iroha_data_model::confidential::ConfidentialParamsId,
-                iroha_data_model::confidential::PoseidonParams,
-            > {
-                &self.poseidon_params
-            }
-            fn proofs(&self) -> &impl StorageReadOnly<
-                iroha_data_model::proof::ProofId,
-                iroha_data_model::proof::ProofRecord,
-            > {
-                &self.proofs
-            }
-            fn proofs_by_status(&self) -> &impl StorageReadOnly<
-                iroha_data_model::proof::ProofStatus,
-                BTreeSet<iroha_data_model::proof::ProofId>,
-            > {
-                &self.proofs_by_status
-            }
-            fn proof_tags(&self) -> &impl StorageReadOnly<
-                iroha_data_model::proof::ProofId,
-                Vec<[u8; 4]>,
-            > {
-                &self.proof_tags
-            }
-            fn proofs_by_tag(&self) -> &impl StorageReadOnly<
-                [u8; 4],
-                Vec<iroha_data_model::proof::ProofId>,
-            > {
-                &self.proofs_by_tag
-            }
-            fn runtime_upgrades(&self) -> &impl StorageReadOnly<
-                iroha_data_model::runtime::RuntimeUpgradeId,
-                iroha_data_model::runtime::RuntimeUpgradeRecord,
-            > {
-                &self.runtime_upgrades
-            }
-            fn contract_manifests(&self) -> &impl StorageReadOnly<
-                iroha_crypto::Hash,
-                iroha_data_model::smart_contract::manifest::ContractManifest,
-            > {
-                &self.contract_manifests
-            }
-            fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>> {
-                &self.contract_code
-            }
-            fn contract_code_uploads(
-                &self,
-            ) -> &impl StorageReadOnly<
-                SmartContractCodeUploadKey,
-                SmartContractCodeUploadDescriptor,
-            > {
-                &self.contract_code_uploads
-            }
-            fn contract_code_upload_chunks(
-                &self,
-            ) -> &impl StorageReadOnly<SmartContractCodeUploadChunkKey, Vec<u8>> {
-                &self.contract_code_upload_chunks
-            }
-            fn contract_instances(
-                &self,
-            ) -> &impl StorageReadOnly<
-                iroha_data_model::smart_contract::ContractAddress,
-                iroha_crypto::Hash,
-            > {
-                &self.contract_instances
-            }
-            fn contract_subject_bindings(
-                &self,
-            ) -> &impl StorageReadOnly<
-                iroha_data_model::smart_contract::ContractAddress,
-                crate::smartcontracts::code::ContractSubjectBinding,
-            > {
-                &self.contract_subject_bindings
-            }
-            fn contract_subject_addresses(
-                &self,
-            ) -> &impl StorageReadOnly<
-                AccountId,
-                iroha_data_model::smart_contract::ContractAddress,
-            > {
-                &self.contract_subject_addresses
-            }
-            fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>> {
-                &self.smart_contract_state
-            }
-            fn musubi_namespace_bindings(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiNamespaceV1, MusubiNamespaceBindingV1> {
-                &self.musubi_namespace_bindings
-            }
-            fn musubi_domain_ownership_generations(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, u64> {
-                &self.musubi_domain_ownership_generations
-            }
-            fn musubi_packages(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageRecordV1> {
-                &self.musubi_packages
-            }
-            fn musubi_package_metadata(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageMetadataRecordV1> {
-                &self.musubi_package_metadata
-            }
-            fn musubi_package_members(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiPackageMemberKeyV1, MusubiPackageMemberV1> {
-                &self.musubi_package_members
-            }
-            fn musubi_package_invitations(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiInviteIdV1, MusubiMaintainerInvitationV1> {
-                &self.musubi_package_invitations
-            }
-            fn musubi_maintainer_directory(
-                &self,
-            ) -> &impl StorageReadOnly<
-                MusubiMaintainerDirectoryKeyV1,
-                MusubiMaintainerDirectoryEntryV1,
-            > {
-                &self.musubi_maintainer_directory
-            }
-            fn musubi_releases(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiReleaseRecordV1> {
-                &self.musubi_releases
-            }
-            fn musubi_archives(
-                &self,
-            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1> {
-                &self.musubi_archives
-            }
-            fn musubi_provider_bundle_attestations(
-                &self,
-            ) -> &impl StorageReadOnly<
-                MusubiProviderBundleAttestationKeyV1,
-                MusubiProviderBundleAttestationRecordV1,
-            > {
-                &self.musubi_provider_bundle_attestations
-            }
-            fn musubi_archive_locations(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1> {
-                &self.musubi_archive_locations
-            }
-            fn musubi_locations_by_pin(
-                &self,
-            ) -> &impl StorageReadOnly<ManifestDigest, MusubiPinLocationReferenceV1> {
-                &self.musubi_locations_by_pin
-            }
-            fn musubi_locations_by_replication_order(
-                &self,
-            ) -> &impl StorageReadOnly<
-                ReplicationOrderId,
-                MusubiReplicationOrderLocationReferenceV1,
-            > {
-                &self.musubi_locations_by_replication_order
-            }
-            fn musubi_locations_by_provider(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiProviderLocationKeyV1, ()> {
-                &self.musubi_locations_by_provider
-            }
-            fn musubi_archive_availability(
-                &self,
-            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveAvailabilityV1> {
-                &self.musubi_archive_availability
-            }
-            fn musubi_archive_reverse_references(
-                &self,
-            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveReverseReferencesV1> {
-                &self.musubi_archive_reverse_references
-            }
-            fn musubi_resolver_index(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1> {
-                &self.musubi_resolver_index
-            }
-            fn musubi_resolver_index_checkpoints(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>
-            {
-                &self.musubi_resolver_index_checkpoints
-            }
-            fn musubi_public_directory(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1> {
-                &self.musubi_public_directory
-            }
-            fn musubi_aliases(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiAliasNameV1, MusubiAliasRecordV1> {
-                &self.musubi_aliases
-            }
-            fn musubi_alias_history(
-                &self,
-            ) -> &impl StorageReadOnly<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1> {
-                &self.musubi_alias_history
-            }
-            fn musubi_governance_decisions(
-                &self,
-            ) -> &impl StorageReadOnly<[u8; 32], MusubiGovernanceDecisionConsumptionV1> {
-                &self.musubi_governance_decisions
-            }
-            fn musubi_registry_policy(&self) -> &MusubiRegistryPolicyV1 {
-                self.musubi_registry_policy.get()
-            }
-            fn musubi_resolver_index_revision(&self) -> u64 {
-                self.musubi_resolver_index_revision.get().get()
-            }
-            fn musubi_replication_shortfall_releases(&self) -> u64 {
-                *self.musubi_replication_shortfall_releases.get()
-            }
-            fn soracloud_service_revisions(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1> {
-                &self.soracloud_service_revisions
-            }
-            fn soracloud_service_deployments(
-                &self,
-            ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1> {
-                &self.soracloud_service_deployments
-            }
-            fn soracloud_app_infra_states(
-                &self,
-            ) -> &impl StorageReadOnly<Name, SoraAppInfraStateV1> {
-                &self.soracloud_app_infra_states
-            }
-            fn soracloud_service_runtime(
-                &self,
-            ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
-                &self.soracloud_service_runtime
-            }
-            fn soracloud_inrou_replica_runtime(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
-                &self.soracloud_inrou_replica_runtime
-            }
-            fn soracloud_service_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
-                &self.soracloud_service_audit_events
-            }
-            fn soracloud_app_infra_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraAppInfraAuditEventV1> {
-                &self.soracloud_app_infra_audit_events
-            }
-            fn soracloud_service_state_entries(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1> {
-                &self.soracloud_service_state_entries
-            }
-            fn soracloud_decryption_request_records(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1> {
-                &self.soracloud_decryption_request_records
-            }
-            fn soracloud_agent_apartments(
-                &self,
-            ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1> {
-                &self.soracloud_agent_apartments
-            }
-            fn soracloud_agent_apartment_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1> {
-                &self.soracloud_agent_apartment_audit_events
-            }
-            fn soracloud_training_jobs(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1> {
-                &self.soracloud_training_jobs
-            }
-            fn soracloud_training_job_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1> {
-                &self.soracloud_training_job_audit_events
-            }
-            fn soracloud_model_registries(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1> {
-                &self.soracloud_model_registries
-            }
-            fn soracloud_model_weight_versions(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>
-            {
-                &self.soracloud_model_weight_versions
-            }
-            fn soracloud_model_weight_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1> {
-                &self.soracloud_model_weight_audit_events
-            }
-            fn soracloud_model_artifacts(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1> {
-                &self.soracloud_model_artifacts
-            }
-            fn soracloud_model_artifact_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
-                &self.soracloud_model_artifact_audit_events
-            }
-            fn soracloud_uploaded_model_bundles(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1> {
-                &self.soracloud_uploaded_model_bundles
-            }
-            fn soracloud_model_host_capabilities(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1> {
-                &self.soracloud_model_host_capabilities
-            }
-            fn soracloud_inrou_host_capabilities(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1> {
-                &self.soracloud_inrou_host_capabilities
-            }
-            fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
-                &self.soracloud_hf_sources
-            }
-            fn soracloud_hf_shared_lease_pools(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1> {
-                &self.soracloud_hf_shared_lease_pools
-            }
-            fn soracloud_hf_shared_lease_members(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1> {
-                &self.soracloud_hf_shared_lease_members
-            }
-            fn soracloud_hf_shared_lease_audit_events(
-                &self,
-            ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1> {
-                &self.soracloud_hf_shared_lease_audit_events
-            }
-            fn soracloud_model_host_violation_evidence(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1> {
-                &self.soracloud_model_host_violation_evidence
-            }
-            fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
-                &self.soracloud_hf_placements
-            }
-            fn soracloud_inrou_service_placements(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1> {
-                &self.soracloud_inrou_service_placements
-            }
-            fn soracloud_mailbox_messages(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1> {
-                &self.soracloud_mailbox_messages
-            }
-            fn soracloud_runtime_receipts(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1> {
-                &self.soracloud_runtime_receipts
-            }
-            fn soracloud_private_uploaded_model_execution_receipts(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraPrivateUploadedModelExecutionReceiptV1> {
-                &self.soracloud_private_uploaded_model_execution_receipts
-            }
-            fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement> {
-                &self.repo_agreements
-            }
-            fn repo_agreements_by_initiator(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
-                &self.repo_agreements_by_initiator
-            }
-            fn repo_agreements_by_counterparty(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
-                &self.repo_agreements_by_counterparty
-            }
-            fn repo_agreements_by_custodian(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
-                &self.repo_agreements_by_custodian
-            }
-            fn settlement_receipts(&self) -> &impl StorageReadOnly<SettlementId, SettlementReceipt> {
-                &self.settlement_receipts
-            }
-            fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.kagemusha_replay_keys
-            }
-            fn direct_lane_block_application_markers(
-                &self,
-            ) -> &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker> {
-                &self.direct_lane_block_application_markers
-            }
-            fn public_lane_validators(
-                &self,
-            ) -> &impl StorageReadOnly<(LaneId, AccountId), PublicLaneValidatorRecord> {
-                &self.public_lane_validators
-            }
-            fn public_lane_stake_shares(
-                &self,
-            ) -> &impl StorageReadOnly<(LaneId, AccountId, AccountId), PublicLaneStakeShare> {
-                &self.public_lane_stake_shares
-            }
-            fn public_lane_rewards(
-                &self,
-            ) -> &impl StorageReadOnly<(LaneId, u64), PublicLaneRewardRecord> {
-                &self.public_lane_rewards
-            }
-            fn public_lane_reward_claims(
-                &self,
-            ) -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64> {
-                &self.public_lane_reward_claims
-            }
-            fn lane_relay_emergency_validators(
-                &self,
-            ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet> {
-                &self.lane_relay_emergency_validators
-            }
-            fn capacity_declarations(&self) -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord> {
-                &self.capacity_declarations
-            }
-            fn capacity_fee_ledger(&self) -> &impl StorageReadOnly<ProviderId, CapacityFeeLedgerEntry> {
-                &self.capacity_fee_ledger
-            }
-            fn capacity_disputes(
-                &self,
-            ) -> &impl StorageReadOnly<CapacityDisputeId, CapacityDisputeRecord> {
-                &self.capacity_disputes
-            }
-            fn sorafs_pricing(&self) -> &PricingScheduleRecord {
-                &self.sorafs_pricing
-            }
-            fn provider_credit_ledger(
-                &self,
-            ) -> &impl StorageReadOnly<ProviderId, ProviderCreditRecord> {
-                &self.provider_credit_ledger
-            }
-            fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId> {
-                &self.provider_owners
-            }
-            fn provider_ingest_completion_authorities(
-                &self,
-            ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1> {
-                &self.provider_ingest_completion_authorities
-            }
-            fn da_pin_intents_by_ticket(
-                &self,
-            ) -> &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation> {
-                &self.da_pin_intents_by_ticket
-            }
-            fn da_pin_intents_by_alias(&self) -> &impl StorageReadOnly<String, StorageTicketId> {
-                &self.da_pin_intents_by_alias
-            }
-            fn da_pin_intents_by_manifest(
-                &self,
-            ) -> &impl StorageReadOnly<ManifestDigest, StorageTicketId> {
-                &self.da_pin_intents_by_manifest
-            }
-            fn da_pin_intents_by_lane_epoch(
-                &self,
-            ) -> &impl StorageReadOnly<(LaneId, u64, u64), StorageTicketId> {
-                &self.da_pin_intents_by_lane_epoch
-            }
-            fn manifest_aliases(
-                &self,
-            ) -> &impl StorageReadOnly<ManifestAliasId, ManifestAliasRecord> {
-                &self.manifest_aliases
-            }
-            fn pin_manifests(
-                &self,
-            ) -> &impl StorageReadOnly<ManifestDigest, PinManifestRecord> {
-                &self.pin_manifests
-            }
-            fn replication_orders(
-                &self,
-            ) -> &impl StorageReadOnly<ReplicationOrderId, ReplicationOrderRecord> {
-                &self.replication_orders
-            }
-            fn content_bundles(
-                &self,
-            ) -> &impl StorageReadOnly<ContentBundleId, ContentBundleRecord> {
-                &self.content_bundles
-            }
-            fn content_chunks(&self) -> &impl StorageReadOnly<[u8; 32], ContentChunk> {
-                &self.content_chunks
-            }
-            fn soradns_directory_records(
-                &self,
-            ) -> &impl StorageReadOnly<DirectoryId, ResolverDirectoryRecordV1> {
-                &self.soradns_directory_records
-            }
-            fn soradns_directory_pending(
-                &self,
-            ) -> &impl StorageReadOnly<DirectoryId, PendingDirectoryDraftV1> {
-                &self.soradns_directory_pending
-            }
-            fn soradns_directory_latest(&self) -> &Option<DirectoryId> {
-                &self.soradns_directory_latest
-            }
-            fn soradns_directory_history(
-                &self,
-            ) -> &impl StorageReadOnly<u64, DirectoryId> {
-                &self.soradns_directory_history
-            }
-            fn soradns_directory_prev_of(
-                &self,
-            ) -> &impl StorageReadOnly<DirectoryId, DirectoryId> {
-                &self.soradns_directory_prev_of
-            }
-            fn soradns_directory_revocations(
-                &self,
-            ) -> &impl StorageReadOnly<ResolverId, ResolverRevocationRecordV1> {
-                &self.soradns_directory_revocations
-            }
-            fn soradns_release_signers(&self) -> &impl StorageReadOnly<PublicKey, ()> {
-                &self.soradns_release_signers
-            }
-            fn soradns_rotation_policy(&self) -> &DirectoryRotationPolicyV1 {
-                &self.soradns_rotation_policy
-            }
-            fn soradns_last_publish_ms(&self) -> &Option<u64> {
-                &self.soradns_last_publish_ms
-            }
-            fn soradns_history_len(&self) -> &u64 {
-                &self.soradns_history_len
-            }
-            fn privacy_consensus_policy(
-                &self,
-            ) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
-                self.privacy_consensus_policy.get()
-            }
-            fn privacy_activations(
-                &self,
-            ) -> &impl StorageReadOnly<
-                crate::privacy_state::PrivacyActivationKeyV1,
-                iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
-            > {
-                &self.privacy_activations
-            }
+            world_ro_accessors!(configuration, implementation);
+            world_ro_accessors!(identity, implementation);
+            world_ro_accessors!(assets, implementation);
+            world_ro_accessors!(oracle_and_incentives, implementation);
+            world_ro_accessors!(escrow_and_outbound, implementation);
+            world_ro_accessors!(sccp_inbound, implementation);
+            world_ro_accessors!(runtime_and_proofs, implementation);
+            world_ro_accessors!(contract_uploads, implementation);
+            world_ro_accessors!(contract_state, implementation);
+            world_ro_accessors!(musubi_registry, implementation);
+            world_ro_accessors!(soracloud, implementation);
+            world_ro_accessors!(agreements_and_lanes, implementation);
+            world_ro_accessors!(sorafs_and_privacy, implementation);
             fn privacy_bootle_lantern_issuer_policy_v1(
                 &self,
                 issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
@@ -21149,91 +20143,7 @@ macro_rules! impl_world_ro {
                     &self.privacy_commitments,
                 )
             }
-            fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc> {
-                &self.commit_qcs
-            }
-            fn merge_hint_roots(&self) -> &Vec<Hash> {
-                &self.merge_hint_roots
-            }
-            fn merge_global_state_root(&self) -> &Option<Hash> {
-                &self.merge_global_state_root
-            }
-            fn consensus_evidence(&self) -> &impl StorageReadOnly<Vec<u8>, EvidenceRecord> {
-                &self.consensus_evidence
-            }
-            fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState> {
-                &self.zk_assets
-            }
-            fn elections(&self) -> &impl StorageReadOnly<String, ElectionState> {
-                &self.elections
-            }
-            fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord> {
-                &self.citizens
-            }
-            fn ministry_agenda_proposals(
-                &self,
-            ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>
-            {
-                &self.ministry_agenda_proposals
-            }
-            fn governance_proposals(
-                &self,
-            ) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord> {
-                &self.governance_proposals
-            }
-            fn validation_fee_proposal_index(
-                &self,
-            ) -> &impl StorageReadOnly<(u64, [u8; 32]), ()> {
-                &self.validation_fee_proposal_index
-            }
-            fn governance_stage_approvals(
-                &self,
-            ) -> &impl StorageReadOnly<String, GovernanceStageApprovals> {
-                &self.governance_stage_approvals
-            }
-            fn governance_locks(
-                &self,
-            ) -> &impl StorageReadOnly<String, GovernanceLocksForReferendum> {
-                &self.governance_locks
-            }
-            fn governance_lock_expiry_index(
-                &self,
-            ) -> &impl StorageReadOnly<
-                u64,
-                BTreeSet<(String, iroha_data_model::account::AccountId)>,
-            > {
-                &self.governance_lock_expiry_index
-            }
-            fn governance_slashes(
-                &self,
-            ) -> &impl StorageReadOnly<String, GovernanceSlashLedger> {
-                &self.governance_slashes
-            }
-            fn governance_last_unlock_sweep_height(&self) -> &u64 {
-                &self.governance_last_unlock_sweep_height
-            }
-            fn governance_unlock_stats(&self) -> &GovernanceUnlockStatsSnapshot {
-                &self.governance_unlock_stats
-            }
-            fn governance_referenda(
-                &self,
-            ) -> &impl StorageReadOnly<String, GovernanceReferendumRecord> {
-                &self.governance_referenda
-            }
-            fn council(&self) -> &impl StorageReadOnly<u64, CouncilState> {
-                &self.council
-            }
-            fn parliament_bodies(
-                &self,
-            ) -> &impl StorageReadOnly<u64, iroha_data_model::governance::types::ParliamentBodies>
-            {
-                &self.parliament_bodies
-            }
-            fn vrf_epochs(
-                &self,
-            ) -> &impl StorageReadOnly<u64, iroha_data_model::consensus::VrfEpochRecord> {
-                &self.vrf_epochs
-            }
+            world_ro_accessors!(governance, implementation);
         }
     )*};
 }
@@ -30948,10 +29858,8 @@ impl State {
             block_height,
         )
     }
-    /// Resolve the authoritative validator peer ids for a lane.
-    ///
-    /// Canonical single-lane consensus uses the commit topology; enabled Nexus
-    /// lanes derive authority from their manifest or staking state.
+    /// Resolve validator peers from the commit topology in single-lane mode or
+    /// from manifest/staking authority when Nexus is enabled.
     pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
         self.authoritative_lane_peer_ids_at_height(lane_id, self.lane_authority_height())
     }
@@ -30962,16 +29870,14 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         let nexus = self.nexus_snapshot();
-        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
         let manifest_registry = self.lane_manifests.read().clone();
-        let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
             lane_id,
-            validator_mode,
+            nexus.staking.validator_mode(lane_id, &nexus.lane_catalog),
             manifest_registry.as_ref(),
             &nexus,
-            &commit_topology,
+            &self.commit_topology_snapshot(),
             block_height,
         )
     }
@@ -31283,13 +30189,10 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         if !nexus.enabled {
-            return if consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
-                == Some(DataSpaceId::UNIVERSAL)
-            {
-                commit_topology.to_vec()
-            } else {
-                Vec::new()
-            };
+            return (consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
+                == Some(DataSpaceId::UNIVERSAL))
+            .then(|| commit_topology.to_vec())
+            .unwrap_or_default();
         }
         let Some(inputs) =
             Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
@@ -48244,7 +47147,7 @@ fn compute_execution_policy_digest_v1(
             settlement,
             nexus_policy_digest,
             compute_zk_consensus_policy_hash(zk),
-            kagemusha_release_catalog.configured_policy_sha256(),
+            kagemusha_release_catalog.consensus_policy_digest(),
         ),
     )
 }

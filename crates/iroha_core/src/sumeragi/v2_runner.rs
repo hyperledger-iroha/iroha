@@ -87,7 +87,7 @@ use super::{
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
-        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 #[cfg(test)]
@@ -139,8 +139,8 @@ pub(in crate::sumeragi) use lifecycle_runner_authority::{
     RecoveredLifecycleOwnerFactoryDependencyPermitV1,
 };
 use ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionPreparedCertifiedServeV1,
-    ProductionPreparedOrdinaryIngressConsumptionV1, consume_prepared_dequeued_v2_ingress,
+    PreparedDequeuedV2IngressV1, ProductionPreparedOrdinaryIngressConsumptionV1,
+    consume_prepared_dequeued_v2_ingress,
 };
 pub(in crate::sumeragi) use preactivation_ingress::ProductionLifecycleCanonicalRecoveryIngressV1;
 
@@ -853,6 +853,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         genesis_network,
         block_rx,
         lane_relay_rx,
+        pending_queue_plan_admission_dirty,
         wake_rx,
         shutdown_signal,
         ingress_ready,
@@ -986,6 +987,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network,
             block_rx,
             lane_relay_rx,
+            Arc::clone(&pending_queue_plan_admission_dirty),
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -1026,6 +1028,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network,
             block_rx,
             lane_relay_rx,
+            pending_queue_plan_admission_dirty,
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -2007,6 +2010,27 @@ fn lane_work_limits(
         non_zero(config.limits.native_amx_signing_guard_anchor_bytes)?,
     )
     .map_err(|_| V2RunnerError::InvalidLimits)?;
+    let max_transactions = non_zero(config.limits.max_transactions)?;
+    let control_queue_capacity = non_zero(config.limits.control_queue_capacity)?;
+    let native_body_buckets_per_source = crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS
+        .checked_mul(2)
+        .ok_or(V2RunnerError::InvalidLimits)?;
+    let required_native_signing_records = max_transactions
+        .get()
+        .checked_mul(crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS)
+        .ok_or(V2RunnerError::InvalidLimits)?;
+    if native_amx_signing_guard_limits.max_records.get() < required_native_signing_records {
+        return Err(V2RunnerError::NativeAmxSigningCapacity {
+            configured: native_amx_signing_guard_limits.max_records.get(),
+            required: required_native_signing_records,
+        });
+    }
+    let native_session_capacity =
+        NonZeroUsize::new(control_queue_capacity.get().max(max_transactions.get()))
+            .expect("the maximum of non-zero capacities is non-zero");
+    let native_body_buckets_per_session =
+        NonZeroUsize::new(max_transactions.get().max(native_body_buckets_per_source))
+            .expect("the maximum of non-zero capacities is non-zero");
     let merge_sidecar_request_timeout_ms =
         NonZeroU64::new(config.limits.merge_sidecar_request_timeout_ms)
             .ok_or(V2RunnerError::InvalidLimits)?;
@@ -2031,12 +2055,12 @@ fn lane_work_limits(
     )
     .map_err(|_| V2RunnerError::InvalidLimits)?;
     Ok(V2LaneWorkLimits::new(
-        non_zero(config.limits.control_queue_capacity)?,
-        non_zero(config.limits.max_transactions)?,
+        control_queue_capacity,
+        max_transactions,
         non_zero(config.limits.effect_work_capacity)?,
         non_zero(config.limits.chunk_queue_capacity)?,
         non_zero(config.limits.certified_request_capacity)?,
-        non_zero(config.limits.control_queue_capacity)?,
+        control_queue_capacity,
         NonZeroUsize::new(reply_source_capacity).ok_or(V2RunnerError::InvalidLimits)?,
         NonZeroUsize::new(consensus_frame_byte_capacity).ok_or(V2RunnerError::InvalidLimits)?,
         NonZeroUsize::new(block_sync_frame_byte_capacity).ok_or(V2RunnerError::InvalidLimits)?,
@@ -2053,6 +2077,11 @@ fn lane_work_limits(
         merge_sidecar_limits,
         merge_signing_guard_limits,
         native_amx_signing_guard_limits,
+    )
+    .with_native_cache_limits(
+        native_session_capacity,
+        native_body_buckets_per_session,
+        max_transactions,
     ))
 }
 fn candidate_limits(
@@ -2216,6 +2245,7 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<bool, V2RunnerError> {
+    let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
@@ -2225,6 +2255,21 @@ fn retry_exact_output_and_apply_sidecar_admissions(
         .map_err(V2RunnerError::Service)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
+}
+fn apply_native_amx_output_retention(
+    lane_work: &V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let Some((round, terminal, expected_requests)) = lane_work.native_amx_output_retention() else {
+        return Ok(0);
+    };
+    let global = services
+        .retain_certified_global_view_output(round)
+        .map_err(V2RunnerError::Service)?;
+    let native = services
+        .retain_native_amx_round(round, terminal, &expected_requests)
+        .map_err(V2RunnerError::Service)?;
+    Ok(global.saturating_add(native))
 }
 /// Cancel service-owned historical requests whose adapter owner completed
 /// before retrying any retained network occurrence.
@@ -2331,11 +2376,13 @@ fn dispatch_lane_work_effects_with_progress(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<usize, V2RunnerError> {
+    let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    let mut queue_plan_sources = None;
     let scan_limit = lane_work.effect_count();
     let mut dispatched = 0usize;
     for _ in 0..scan_limit {
@@ -2349,12 +2396,30 @@ fn dispatch_lane_work_effects_with_progress(
             let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
             continue;
         }
+        if queue_plan_sources.is_none()
+            && matches!(
+                &next_effect,
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+            )
+        {
+            queue_plan_sources = Some(
+                services
+                    .queue_plan_admission_batch_sources()
+                    .map_err(V2RunnerError::Service)?,
+            );
+        }
         if !services
-            .can_retain_lane_work_effect(&next_effect)
+            .can_retain_lane_work_effect_from_snapshot(&next_effect, queue_plan_sources.as_mut())
             .map_err(V2RunnerError::Service)?
         {
             let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
             drop(effect);
+            if next_effect.retries_from_native_catalog_after_source_retention() {
+                // Catalog ownership survives a known-full worker just as it
+                // survives an enqueue race below. Do not let this peer pin the
+                // adapter's bounded delivery queue.
+                continue;
+            }
             if !lane_work.requeue_effect(next_effect) {
                 return Err(V2RunnerError::Service(
                     "lane-work scheduler could not restore a reserved effect".to_owned(),
@@ -2364,11 +2429,21 @@ fn dispatch_lane_work_effects_with_progress(
         }
         let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
         drop(effect);
-        match dispatch_lane_work_effect(services, next_effect)? {
+        match dispatch_lane_work_effect_from_snapshot(
+            services,
+            next_effect,
+            queue_plan_sources.as_mut(),
+        )? {
             LaneWorkEffectDispatch::Complete => {
                 dispatched = dispatched.saturating_add(1);
             }
             LaneWorkEffectDispatch::SourceRetained(effect) => {
+                if effect.retries_from_native_catalog_after_source_retention() {
+                    // The compact body/peer catalog remains the source owner.
+                    // Free this bounded delivery slot so the next cadence can
+                    // rotate past a worker-saturated or silent peer.
+                    continue;
+                }
                 if !lane_work.requeue_effect(effect) {
                     return Err(V2RunnerError::Service(
                         "lane-work scheduler could not retain a source-backpressured sidecar effect"
@@ -2390,6 +2465,25 @@ enum LaneWorkEffectDispatch {
 fn dispatch_lane_work_effect(
     services: &ProductionV2Services,
     effect: V2LaneWorkEffect,
+) -> Result<LaneWorkEffectDispatch, V2RunnerError> {
+    let mut sources = if matches!(
+        &effect,
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+    ) {
+        Some(
+            services
+                .queue_plan_admission_batch_sources()
+                .map_err(V2RunnerError::Service)?,
+        )
+    } else {
+        None
+    };
+    dispatch_lane_work_effect_from_snapshot(services, effect, sources.as_mut())
+}
+fn dispatch_lane_work_effect_from_snapshot(
+    services: &ProductionV2Services,
+    effect: V2LaneWorkEffect,
+    queue_plan_sources: Option<&mut QueuePlanBatchSources>,
 ) -> Result<LaneWorkEffectDispatch, V2RunnerError> {
     match effect {
         V2LaneWorkEffect::PostLaneBlock { peer, message } => services
@@ -2441,6 +2535,23 @@ fn dispatch_lane_work_effect(
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
+        }
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer,
+            view,
+            certificate,
+        } => {
+            let queue_plan_sources = queue_plan_sources.ok_or_else(|| {
+                V2RunnerError::Service(
+                    "QueuePlan admission dispatch lacks its Kura batch snapshot".to_owned(),
+                )
+            })?;
+            services.post_queue_plan_admission_certificate(
+                peer,
+                view,
+                certificate,
+                queue_plan_sources,
+            );
         }
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer,
@@ -2665,6 +2776,16 @@ pub(super) enum V2RunnerError {
     /// A configured limit is zero.
     #[error("Sumeragi v2 configured limits must be positive")]
     InvalidLimits,
+    /// The durable Native-AMX journal cannot cover every source/route Commit decision.
+    #[error(
+        "Sumeragi v2 Native AMX signing capacity {configured} is smaller than the {required} decisions required by max_transactions and the protocol lane bound"
+    )]
+    NativeAmxSigningCapacity {
+        /// Configured durable signing-record capacity.
+        configured: usize,
+        /// Minimum capacity implied by configured transaction and protocol lane bounds.
+        required: usize,
+    },
     /// The fixed v2 ingress cannot reserve first-message and progress slots for the roster.
     #[error(
         "Sumeragi v2 body ingress capacity {configured} is smaller than the {required} first-message, progress, and untrusted slots required by the frozen roster"

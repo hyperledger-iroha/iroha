@@ -63,15 +63,69 @@ path = "src/bin/{readiness.NATIVE_BINARY}.rs"
 required-features = ["{readiness.NATIVE_FEATURE}"]
 ''',
     )
-    native_contract = "\n".join(
-        (
-            readiness.NATIVE_MODULE,
-            readiness.FRAME_MAGIC,
-            *readiness.ROLE_REGISTRY,
-            *readiness.NATIVE_COMMANDS,
-        )
+    _write(
+        root / readiness.NATIVE_SOURCE_PATH,
+        f"fn main() {{ {readiness.NATIVE_MODULE}::run_cli(); }}\n",
     )
-    _write(root / readiness.NATIVE_SOURCE_PATH, f"/*\n{native_contract}\n*/\n")
+    role_variants = "\n".join(
+        f"    {variant} = {index},"
+        for index, variant in enumerate(readiness.NATIVE_ROLE_VARIANTS, 1)
+    )
+    role_labels = "\n".join(f'// {role}' for role in readiness.ROLE_REGISTRY)
+    _write(
+        root / readiness.NATIVE_PROTOCOL_PATH,
+        f'''const MAGIC: &str = "{readiness.FRAME_MAGIC}";
+pub enum TairaAuthorityRoleV1 {{
+{role_variants}
+}}
+{role_labels}
+''',
+    )
+    command_variants = "\n".join(
+        f"    {variant}(Args)," for variant in readiness.NATIVE_COMMAND_VARIANTS
+    )
+    _write(
+        root / readiness.NATIVE_TRANSPORT_PATH,
+        f'''enum Command {{
+{command_variants}
+}}
+''',
+    )
+    _write(
+        root / readiness.NATIVE_SERVICE_PATH,
+        '''impl Authority {
+    fn authorize_json(&self, request: Request) {
+        if request.deploy_disposition == Some(DeployDispositionV1::Finalize) {
+            self.finalize_deployment();
+        }
+        if self.role == TairaAuthorityRoleV1::PrivacyGovernance {
+            privacy_governance::validate_assigned_privacy_governance_request_v1();
+        }
+        match self.role {
+            TairaAuthorityRoleV1::NativeEvidence => {
+                native_evidence::validate_native_evidence_v1();
+            }
+            TairaAuthorityRoleV1::PrivacyProtocolOrigin => {
+                privacy_protocol_origin::validate_privacy_protocol_origin_v1();
+            }
+            TairaAuthorityRoleV1::Qualification => {
+                sandbox::run_qualification_probes();
+            }
+            TairaAuthorityRoleV1::RolloutObservation => {
+                rollout_observation::validate_rollout_observation_subject_v1();
+            }
+            TairaAuthorityRoleV1::PublicSoakObservation => {
+                self.issue_public_soak_observation();
+            }
+            TairaAuthorityRoleV1::PublicSoakReplayAdmission => {
+                self.issue_public_soak_replay_admission();
+            }
+            _ => {}
+        }
+    }
+}
+''',
+    )
 
     for prerequisite in readiness.PREREQUISITES:
         grouped: dict[str, list[readiness.RequiredCall]] = {}
@@ -127,6 +181,18 @@ def test_registry_is_the_exact_eight_role_contract() -> None:
     assert len({role for role in readiness.ROLE_REGISTRY}) == 8
 
 
+def test_qualification_prerequisite_uses_neutral_call_roots() -> None:
+    """The source audit follows the public qualification definitions."""
+
+    prerequisite = readiness.PREREQUISITES[3]
+    assert prerequisite.barrier == "require_native_qualification_isolation"
+    assert prerequisite.calls == (
+        readiness.RequiredCall(
+            "assemble_qualification_handoff", "authorize", "qualification"
+        ),
+    )
+
+
 def test_complete_native_service_client_and_call_paths_are_ready(
     tmp_path: Path,
 ) -> None:
@@ -134,6 +200,59 @@ def test_complete_native_service_client_and_call_paths_are_ready(
 
     _complete_fixture(tmp_path)
     assert readiness.unresolved_prerequisites(tmp_path) == []
+
+
+def test_validator_names_without_authorize_dispatch_never_turn_green(
+    tmp_path: Path,
+) -> None:
+    """Loose names cannot substitute for concrete role-guarded Rust calls."""
+
+    _complete_fixture(tmp_path)
+    _write(
+        tmp_path / readiness.NATIVE_SERVICE_PATH,
+        "\n".join(readiness.NATIVE_ROLE_VALIDATORS.values()) + "\n",
+    )
+    reports = readiness.unresolved_prerequisites(tmp_path)
+    missing = {
+        str(report["detail"])
+        for report in reports
+        if report["kind"] == "native-role-validator"
+    }
+    assert len(missing) == len(readiness.ROLE_REGISTRY)
+
+
+def test_authorize_validators_cannot_be_cross_wired_between_roles(
+    tmp_path: Path,
+) -> None:
+    _complete_fixture(tmp_path)
+    service = tmp_path / readiness.NATIVE_SERVICE_PATH
+    source = service.read_text(encoding="utf-8")
+    native_call = "native_evidence::validate_native_evidence_v1();"
+    origin_call = (
+        "privacy_protocol_origin::validate_privacy_protocol_origin_v1();"
+    )
+    source = source.replace(native_call, "swapped_validator();", 1)
+    source = source.replace(origin_call, native_call, 1)
+    source = source.replace("swapped_validator();", origin_call, 1)
+    _write(service, source)
+
+    reports = readiness.unresolved_prerequisites(tmp_path)
+    missing = {
+        str(report["detail"])
+        for report in reports
+        if report["kind"] == "native-role-validator"
+    }
+    assert any("native-evidence" in detail for detail in missing)
+    assert any("privacy-protocol-origin" in detail for detail in missing)
+
+
+def test_rust_markers_in_comments_and_strings_are_not_structural_items() -> None:
+    source = '''
+// enum TairaAuthorityRoleV1 { NativeEvidence, }
+const CLAIM: &str = "enum TairaAuthorityRoleV1 { NativeEvidence, }";
+/* enum TairaAuthorityRoleV1 { NativeEvidence, } */
+'''
+    assert readiness._rust_enum_variants(source, "TairaAuthorityRoleV1") is None
 
 
 def test_removing_a_raise_without_wiring_the_client_never_turns_green(
@@ -156,6 +275,58 @@ def {prerequisite.calls[0].function}():
     reports = readiness.unresolved_prerequisites(tmp_path)
     assert any(report["kind"] == "authority-preflight" for report in reports)
     assert any(report["kind"] == "authority-call-path" for report in reports)
+
+
+def test_statically_dead_client_calls_never_turn_green(tmp_path: Path) -> None:
+    """Calls hidden under a literal-false branch are not executable paths."""
+
+    _complete_fixture(tmp_path)
+    prerequisite = readiness.PREREQUISITES[0]
+    path = tmp_path / prerequisite.path
+    source = path.read_text(encoding="utf-8")
+    source = source.replace(
+        '    taira_authority_client.preflight("native-evidence")',
+        '    if False:\n        taira_authority_client.preflight("native-evidence")',
+        1,
+    )
+    _write(path, source)
+    reports = readiness.unresolved_prerequisites(tmp_path)
+    assert any(report["kind"] == "authority-preflight" for report in reports)
+
+
+def test_native_role_command_and_validator_registries_are_required(
+    tmp_path: Path,
+) -> None:
+    """A wrapper with marker comments cannot stand in for the native service."""
+
+    _complete_fixture(tmp_path)
+    protocol = tmp_path / readiness.NATIVE_PROTOCOL_PATH
+    _write(
+        protocol,
+        protocol.read_text(encoding="utf-8").replace(
+            "    RolloutObservation = 6,\n", "", 1
+        ),
+    )
+    transport = tmp_path / readiness.NATIVE_TRANSPORT_PATH
+    _write(
+        transport,
+        transport.read_text(encoding="utf-8").replace(
+            "    VerifyReceipt(Args),\n", "", 1
+        ),
+    )
+    service = tmp_path / readiness.NATIVE_SERVICE_PATH
+    _write(
+        service,
+        service.read_text(encoding="utf-8").replace(
+            readiness.NATIVE_ROLE_VALIDATORS["privacy-protocol-origin"], "", 1
+        ),
+    )
+    kinds = {report["kind"] for report in readiness.unresolved_prerequisites(tmp_path)}
+    assert {
+        "native-role-registry",
+        "native-command-registry",
+        "native-role-validator",
+    } <= kinds
 
 
 def test_missing_role_and_transport_are_both_fail_closed(tmp_path: Path) -> None:

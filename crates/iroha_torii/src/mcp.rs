@@ -7741,8 +7741,7 @@ const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
     0xdb, 0x7b, 0xcf, 0xc3, 0x11, 0x26, 0x50, 0x74, 0xc4, 0x3f, 0x67, 0xae, 0x24, 0x68, 0x6d, 0x34,
     0x5b, 0xe2, 0xa5, 0x4a, 0xe4, 0xb1, 0x11, 0xbe, 0x5c, 0x22, 0xe3, 0x60, 0xe4, 0x63, 0xac, 0x2a,
 ];
-const MANUAL_STATIC_TOOL_ASSET: &[u8] =
-    include_bytes!("mcp/manual_tool_descriptors_v1.json");
+const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
 #[derive(Clone)]
 struct ManualStaticToolDescriptor {
@@ -7754,9 +7753,8 @@ struct ManualStaticToolDescriptor {
     input_schema: Value,
 }
 
-static MANUAL_STATIC_TOOL_DESCRIPTORS: LazyLock<
-    BTreeMap<String, ManualStaticToolDescriptor>,
-> = LazyLock::new(load_manual_static_tool_descriptors);
+static MANUAL_STATIC_TOOL_DESCRIPTORS: LazyLock<BTreeMap<String, ManualStaticToolDescriptor>> =
+    LazyLock::new(load_manual_static_tool_descriptors);
 
 fn take_manual_static_tool_asset_string(
     record: &mut Map,
@@ -7862,8 +7860,7 @@ fn load_manual_static_tool_descriptors() -> BTreeMap<String, ManualStaticToolDes
                 && record.contains_key("input_schema"),
             "manual MCP descriptor asset record {record_index} fields drifted"
         );
-        let function =
-            take_manual_static_tool_asset_string(&mut record, "function", record_index);
+        let function = take_manual_static_tool_asset_string(&mut record, "function", record_index);
         assert!(
             manual_static_tool_asset_identifier_is_valid(&function),
             "manual MCP descriptor asset record {record_index} has an invalid function identifier"
@@ -7873,8 +7870,7 @@ fn load_manual_static_tool_descriptors() -> BTreeMap<String, ManualStaticToolDes
             !name.is_empty() && tool_names.insert(name.clone()),
             "manual MCP descriptor asset record {record_index} has an empty or duplicate tool name"
         );
-        let effect_name =
-            take_manual_static_tool_asset_string(&mut record, "effect", record_index);
+        let effect_name = take_manual_static_tool_asset_string(&mut record, "effect", record_index);
         let effect = match effect_name.as_str() {
             "read" => ToolEffect::Read,
             "build_instruction" => ToolEffect::BuildInstruction,
@@ -7895,8 +7891,7 @@ fn load_manual_static_tool_descriptors() -> BTreeMap<String, ManualStaticToolDes
             !description.is_empty(),
             "manual MCP descriptor asset record {record_index} has an empty description"
         );
-        let method_name =
-            take_manual_static_tool_asset_string(&mut record, "method", record_index);
+        let method_name = take_manual_static_tool_asset_string(&mut record, "method", record_index);
         let method = match method_name.as_str() {
             "GET" => Method::GET,
             "POST" => Method::POST,
@@ -7964,17 +7959,86 @@ fn manual_static_tool(function: &str, expected_name: &str) -> ToolSpec {
     }
 }
 
-macro_rules! static_manual_tool_wrapper {
+macro_rules! manual_tool {
     ($function:ident, $name:literal) => {
         fn $function() -> ToolSpec {
             manual_static_tool(stringify!($function), $name)
         }
     };
+    ($($function:ident => $name:literal;)+) => {
+        $(manual_tool!($function, $name);)+
+    };
 }
-static_manual_tool_wrapper!(connect_ws_ticket_tool, "connect.ws.ticket");
-static_manual_tool_wrapper!(connect_session_create_tool, "connect.session.create");
-static_manual_tool_wrapper!(connect_session_create_and_ticket_tool, "connect.session.create_and_ticket");
-static_manual_tool_wrapper!(connect_session_delete_tool, "connect.session.delete");
+manual_tool! {
+    connect_ws_ticket_tool => "connect.ws.ticket";
+    connect_session_create_tool => "connect.session.create";
+    connect_session_create_and_ticket_tool => "connect.session.create_and_ticket";
+    connect_session_delete_tool => "connect.session.delete";
+    iroha_node_query_projection_checkpoint_plan_tool => "iroha.node.query_projection_checkpoint_plan";
+    iroha_node_query_projection_checkpoint_publish_tool => "iroha.node.query_projection_checkpoint_publish";
+    iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
+    iroha_da_manifests_get_tool => "iroha.da.manifests.get";
+    iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";
+    iroha_runtime_upgrades_cancel_tool => "iroha.runtime.upgrades.cancel";
+    iroha_ledger_headers_tool => "iroha.ledger.headers";
+    iroha_ledger_state_root_tool => "iroha.ledger.state_root";
+    iroha_ledger_state_proof_tool => "iroha.ledger.state_proof";
+    iroha_ledger_block_proof_tool => "iroha.ledger.block_proof";
+    iroha_bridge_finality_proof_tool => "iroha.bridge.finality.proof";
+    iroha_bridge_finality_bundle_tool => "iroha.bridge.finality.bundle";
+    iroha_proofs_get_tool => "iroha.proofs.get";
+    iroha_gov_contract_get_tool => "iroha.gov.contract.get";
+    iroha_aliases_resolve_tool => "iroha.aliases.resolve";
+    iroha_aliases_resolve_index_tool => "iroha.aliases.resolve_index";
+    iroha_aliases_by_account_tool => "iroha.aliases.by_account";
+    iroha_contracts_code_get_tool => "iroha.contracts.code.get";
+    iroha_contracts_code_bytes_get_tool => "iroha.contracts.code.bytes.get";
+    iroha_contracts_call_and_wait_tool => "iroha.contracts.call_and_wait";
+    iroha_contracts_state_get_tool => "iroha.contracts.state.get";
+    iroha_accounts_list_tool => "iroha.accounts.list";
+    iroha_accounts_get_tool => "iroha.accounts.get";
+    iroha_accounts_qr_tool => "iroha.accounts.qr";
+    iroha_accounts_query_tool => "iroha.accounts.query";
+    iroha_accounts_onboard_plan_tool => "iroha.accounts.onboard.plan";
+    iroha_accounts_onboard_tool => "iroha.accounts.onboard";
+    iroha_accounts_faucet_tool => "iroha.accounts.faucet";
+    iroha_account_transactions_tool => "iroha.accounts.transactions";
+    iroha_account_history_tool => "iroha.accounts.history";
+    iroha_account_transactions_query_tool => "iroha.accounts.transactions.query";
+    iroha_account_assets_tool => "iroha.accounts.assets";
+    iroha_account_assets_query_tool => "iroha.accounts.assets.query";
+    iroha_account_permissions_tool => "iroha.accounts.permissions";
+    iroha_account_portfolio_tool => "iroha.accounts.portfolio";
+    iroha_domains_list_tool => "iroha.domains.list";
+    iroha_domains_get_tool => "iroha.domains.get";
+    iroha_domains_query_tool => "iroha.domains.query";
+    iroha_subscriptions_plans_list_tool => "iroha.subscriptions.plans.list";
+    iroha_subscriptions_plans_create_tool => "iroha.subscriptions.plans.create";
+    iroha_subscriptions_list_tool => "iroha.subscriptions.list";
+    iroha_subscriptions_create_tool => "iroha.subscriptions.create";
+    iroha_subscriptions_get_tool => "iroha.subscriptions.get";
+    iroha_asset_definitions_tool => "iroha.assets.definitions";
+    iroha_asset_definitions_get_tool => "iroha.assets.definitions.get";
+    iroha_asset_definitions_query_tool => "iroha.assets.definitions.query";
+    iroha_asset_holders_tool => "iroha.assets.holders";
+    iroha_asset_holders_query_tool => "iroha.assets.holders.query";
+    iroha_assets_list_tool => "iroha.assets.list";
+    iroha_assets_get_tool => "iroha.assets.get";
+    iroha_nfts_list_tool => "iroha.nfts.list";
+    iroha_nfts_get_tool => "iroha.nfts.get";
+    iroha_nfts_query_tool => "iroha.nfts.query";
+    iroha_rwas_list_tool => "iroha.rwas.list";
+    iroha_rwas_get_tool => "iroha.rwas.get";
+    iroha_rwas_query_tool => "iroha.rwas.query";
+    iroha_transactions_list_tool => "iroha.transactions.list";
+    iroha_transactions_get_tool => "iroha.transactions.get";
+    iroha_instructions_list_tool => "iroha.instructions.list";
+    iroha_instructions_get_tool => "iroha.instructions.get";
+    iroha_blocks_list_tool => "iroha.blocks.list";
+    iroha_blocks_get_tool => "iroha.blocks.get";
+    iroha_transactions_wait_tool => "iroha.transactions.wait";
+    iroha_transactions_status_tool => "iroha.transactions.status";
+}
 fn iroha_connect_ws_ticket_tool() -> ToolSpec {
     let mut tool = connect_ws_ticket_tool();
     tool.name = "iroha.connect.ws.ticket".to_owned();
@@ -8296,18 +8360,6 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
         "/v1/node/capabilities",
     )
 }
-static_manual_tool_wrapper!(
-    iroha_node_query_projection_checkpoint_plan_tool,
-    "iroha.node.query_projection_checkpoint_plan"
-);
-static_manual_tool_wrapper!(
-    iroha_node_query_projection_checkpoint_publish_tool,
-    "iroha.node.query_projection_checkpoint_publish"
-);
-static_manual_tool_wrapper!(
-    iroha_node_query_projection_shard_catalog_tool,
-    "iroha.node.query_projection_shard_catalog"
-);
 fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.node.query_projection_checkpoint",
@@ -8358,7 +8410,6 @@ fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
         "/v1/da/proof-policies/snapshot",
     )
 }
-static_manual_tool_wrapper!(iroha_da_manifests_get_tool, "iroha.da.manifests.get");
 fn iroha_da_commitments_list_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.commitments.list",
@@ -8443,15 +8494,6 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
         "Raw runtime-upgrade proposal payload.",
     )
 }
-static_manual_tool_wrapper!(iroha_runtime_upgrades_activate_tool, "iroha.runtime.upgrades.activate");
-static_manual_tool_wrapper!(iroha_runtime_upgrades_cancel_tool, "iroha.runtime.upgrades.cancel");
-static_manual_tool_wrapper!(iroha_ledger_headers_tool, "iroha.ledger.headers");
-static_manual_tool_wrapper!(iroha_ledger_state_root_tool, "iroha.ledger.state_root");
-static_manual_tool_wrapper!(iroha_ledger_state_proof_tool, "iroha.ledger.state_proof");
-static_manual_tool_wrapper!(iroha_ledger_block_proof_tool, "iroha.ledger.block_proof");
-static_manual_tool_wrapper!(iroha_bridge_finality_proof_tool, "iroha.bridge.finality.proof");
-static_manual_tool_wrapper!(iroha_bridge_finality_bundle_tool, "iroha.bridge.finality.bundle");
-static_manual_tool_wrapper!(iroha_proofs_get_tool, "iroha.proofs.get");
 fn iroha_proofs_query_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.proofs.query",
@@ -8564,7 +8606,6 @@ fn iroha_gov_post_tool_with_fields(
 fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     iroha_gov_post_tool_with_fields(name, description, path_template, &[])
 }
-static_manual_tool_wrapper!(iroha_gov_contract_get_tool, "iroha.gov.contract.get");
 fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.proposals.deploy_contract",
@@ -8787,9 +8828,6 @@ fn iroha_gov_finalize_tool() -> ToolSpec {
         ],
     )
 }
-static_manual_tool_wrapper!(iroha_aliases_resolve_tool, "iroha.aliases.resolve");
-static_manual_tool_wrapper!(iroha_aliases_resolve_index_tool, "iroha.aliases.resolve_index");
-static_manual_tool_wrapper!(iroha_aliases_by_account_tool, "iroha.aliases.by_account");
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
@@ -8815,8 +8853,6 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
         }),
     }
 }
-static_manual_tool_wrapper!(iroha_contracts_code_get_tool, "iroha.contracts.code.get");
-static_manual_tool_wrapper!(iroha_contracts_code_bytes_get_tool, "iroha.contracts.code.bytes.get");
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.call",
@@ -8824,18 +8860,6 @@ fn iroha_contracts_call_tool() -> ToolSpec {
         "/v1/contracts/call",
     )
 }
-static_manual_tool_wrapper!(iroha_contracts_call_and_wait_tool, "iroha.contracts.call_and_wait");
-static_manual_tool_wrapper!(iroha_contracts_state_get_tool, "iroha.contracts.state.get");
-static_manual_tool_wrapper!(iroha_accounts_list_tool, "iroha.accounts.list");
-static_manual_tool_wrapper!(iroha_accounts_get_tool, "iroha.accounts.get");
-static_manual_tool_wrapper!(iroha_accounts_qr_tool, "iroha.accounts.qr");
-static_manual_tool_wrapper!(iroha_accounts_query_tool, "iroha.accounts.query");
-static_manual_tool_wrapper!(iroha_accounts_onboard_plan_tool, "iroha.accounts.onboard.plan");
-static_manual_tool_wrapper!(iroha_accounts_onboard_tool, "iroha.accounts.onboard");
-static_manual_tool_wrapper!(iroha_accounts_faucet_tool, "iroha.accounts.faucet");
-static_manual_tool_wrapper!(iroha_account_transactions_tool, "iroha.accounts.transactions");
-static_manual_tool_wrapper!(iroha_account_history_tool, "iroha.accounts.history");
-static_manual_tool_wrapper!(iroha_account_transactions_query_tool, "iroha.accounts.transactions.query");
 fn iroha_transactions_query_tool() -> ToolSpec {
     transactions_query_tool(
         "iroha.transactions.query",
@@ -8884,13 +8908,6 @@ fn transactions_query_tool(name: &str, path_template: &str, description: &str) -
         }),
     }
 }
-static_manual_tool_wrapper!(iroha_account_assets_tool, "iroha.accounts.assets");
-static_manual_tool_wrapper!(iroha_account_assets_query_tool, "iroha.accounts.assets.query");
-static_manual_tool_wrapper!(iroha_account_permissions_tool, "iroha.accounts.permissions");
-static_manual_tool_wrapper!(iroha_account_portfolio_tool, "iroha.accounts.portfolio");
-static_manual_tool_wrapper!(iroha_domains_list_tool, "iroha.domains.list");
-static_manual_tool_wrapper!(iroha_domains_get_tool, "iroha.domains.get");
-static_manual_tool_wrapper!(iroha_domains_query_tool, "iroha.domains.query");
 fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
     MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
         let request_body = spec
@@ -8938,11 +8955,6 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
         }
     })
 }
-static_manual_tool_wrapper!(iroha_subscriptions_plans_list_tool, "iroha.subscriptions.plans.list");
-static_manual_tool_wrapper!(iroha_subscriptions_plans_create_tool, "iroha.subscriptions.plans.create");
-static_manual_tool_wrapper!(iroha_subscriptions_list_tool, "iroha.subscriptions.list");
-static_manual_tool_wrapper!(iroha_subscriptions_create_tool, "iroha.subscriptions.create");
-static_manual_tool_wrapper!(iroha_subscriptions_get_tool, "iroha.subscriptions.get");
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.cancel",
@@ -9109,14 +9121,6 @@ fn iroha_subscription_action_tool(
         }),
     }
 }
-static_manual_tool_wrapper!(iroha_asset_definitions_tool, "iroha.assets.definitions");
-static_manual_tool_wrapper!(iroha_asset_definitions_get_tool, "iroha.assets.definitions.get");
-static_manual_tool_wrapper!(iroha_asset_definitions_query_tool, "iroha.assets.definitions.query");
-static_manual_tool_wrapper!(iroha_asset_holders_tool, "iroha.assets.holders");
-static_manual_tool_wrapper!(iroha_asset_holders_query_tool, "iroha.assets.holders.query");
-static_manual_tool_wrapper!(iroha_assets_list_tool, "iroha.assets.list");
-static_manual_tool_wrapper!(iroha_assets_get_tool, "iroha.assets.get");
-static_manual_tool_wrapper!(iroha_nfts_list_tool, "iroha.nfts.list");
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.nfts.chain.list",
@@ -9124,9 +9128,6 @@ fn iroha_nfts_chain_list_tool() -> ToolSpec {
         "/v1/nfts",
     )
 }
-static_manual_tool_wrapper!(iroha_nfts_get_tool, "iroha.nfts.get");
-static_manual_tool_wrapper!(iroha_nfts_query_tool, "iroha.nfts.query");
-static_manual_tool_wrapper!(iroha_rwas_list_tool, "iroha.rwas.list");
 fn iroha_rwas_chain_list_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.rwas.chain.list",
@@ -9134,8 +9135,6 @@ fn iroha_rwas_chain_list_tool() -> ToolSpec {
         "/v1/rwas",
     )
 }
-static_manual_tool_wrapper!(iroha_rwas_get_tool, "iroha.rwas.get");
-static_manual_tool_wrapper!(iroha_rwas_query_tool, "iroha.rwas.query");
 include!("mcp/iso20022_tools.rs");
 fn iroha_queries_submit_tool() -> ToolSpec {
     ToolSpec {
@@ -9164,12 +9163,6 @@ fn iroha_queries_submit_tool() -> ToolSpec {
         }),
     }
 }
-static_manual_tool_wrapper!(iroha_transactions_list_tool, "iroha.transactions.list");
-static_manual_tool_wrapper!(iroha_transactions_get_tool, "iroha.transactions.get");
-static_manual_tool_wrapper!(iroha_instructions_list_tool, "iroha.instructions.list");
-static_manual_tool_wrapper!(iroha_instructions_get_tool, "iroha.instructions.get");
-static_manual_tool_wrapper!(iroha_blocks_list_tool, "iroha.blocks.list");
-static_manual_tool_wrapper!(iroha_blocks_get_tool, "iroha.blocks.get");
 fn iroha_transactions_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit".to_owned(),
@@ -9245,8 +9238,6 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
         }),
     }
 }
-static_manual_tool_wrapper!(iroha_transactions_wait_tool, "iroha.transactions.wait");
-static_manual_tool_wrapper!(iroha_transactions_status_tool, "iroha.transactions.status");
 /// Build the HTTP status + JSON-RPC error payload for oversized requests.
 pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCode, Value) {
     (

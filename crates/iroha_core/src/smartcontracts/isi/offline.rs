@@ -20,8 +20,11 @@ use iroha_data_model::{
         },
     },
     offline::{
+        KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1,
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
         KagemushaActiveReceiverActiveEntryV1, KagemushaActiveReceiverAmbiguousEntryV1,
         KagemushaActiveReceiverEntryV1, KagemushaActiveReceiverKeyV1,
         KagemushaActiveReceiverSnapshotV1, KagemushaActiveReceiverValueV1,
@@ -907,12 +910,8 @@ pub mod isi {
     const KAGEMUSHA_ATTESTATION_CHALLENGE_REPLAY_DOMAIN: &str = "kagemusha-attestation-challenge";
     const KAGEMUSHA_ATTESTATION_REPORT_REPLAY_DOMAIN: &str = "kagemusha-attestation-report";
     const KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN: &str = "kagemusha-attestation-evidence";
-    // This namespace was introduced together with native-only contract-state
-    // protection.  Registrations in the legacy `v1` namespace are deliberately
-    // not eligible for receiver snapshots because older generic IVM programs
-    // could forge that namespace.  Devices must re-register once after the
-    // upgrade so an active-receiver proof can rely on native admission.
-    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_v2_";
+    // Online registrations use one native-authored, read-only first-release namespace.
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_";
     const KAGEMUSHA_V4_OPERATION_DOMAIN: &str = "kagemusha-v4-operation";
     const KAGEMUSHA_V4_NONCE_DOMAIN: &str = "kagemusha-v4-authorization-nonce";
     const KAGEMUSHA_V4_PAYLOAD_DOMAIN: &str = "kagemusha-v4-payload";
@@ -1020,7 +1019,7 @@ pub mod isi {
         aaguid: [u8; 16],
         credential_id: Vec<u8>,
         cose_key: Vec<u8>,
-        extensions: Option<IosAppAttestExtensionProperties>,
+        extensions: IosAppAttestExtensionProperties,
     }
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct IosAppAttestExtensionProperties {
@@ -1030,7 +1029,7 @@ pub mod isi {
     struct IosAppAttestAssertionAuthData {
         rp_id_hash: [u8; 32],
         sign_count: u32,
-        extensions: Option<IosAppAttestExtensionProperties>,
+        extensions: IosAppAttestExtensionProperties,
     }
     struct AndroidKeyMintReport {
         certificates: Vec<Vec<u8>>,
@@ -1371,7 +1370,6 @@ pub mod isi {
                 environment: OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION.to_owned(),
                 allowed_validation_categories: ios_validation_categories,
                 allowed_bundle_versions: ios_bundle_versions,
-                allow_legacy_auth_data_without_extensions: false,
             }],
             android_apps: vec![OfflineAndroidAppAttestationPolicy {
                 package_name: android_package_name,
@@ -2438,6 +2436,208 @@ pub mod isi {
                 .into()
             })
     }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum KagemushaOnlineRegistrationCapacityErrorV1 {
+        Global,
+        Account,
+    }
+    fn validate_kagemusha_online_registration_capacity_v1(
+        global_after_admission: usize,
+        account_after_admission: usize,
+    ) -> Result<(), KagemushaOnlineRegistrationCapacityErrorV1> {
+        if global_after_admission > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+            return Err(KagemushaOnlineRegistrationCapacityErrorV1::Global);
+        }
+        if account_after_admission > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 {
+            return Err(KagemushaOnlineRegistrationCapacityErrorV1::Account);
+        }
+        Ok(())
+    }
+    #[derive(Debug)]
+    struct KagemushaExpiredOnlineRegistrationV1 {
+        state_key: StatePath,
+        replay_keys: [Hash; 4],
+    }
+    #[derive(Debug, Default)]
+    struct KagemushaOnlineRegistrationAdmissionPlanV1 {
+        expired: Vec<KagemushaExpiredOnlineRegistrationV1>,
+    }
+    impl KagemushaOnlineRegistrationAdmissionPlanV1 {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) {
+            for expired in self.expired {
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .remove(&expired.state_key);
+                for replay_key in expired.replay_keys {
+                    state_transaction
+                        .world
+                        .kagemusha_replay_keys
+                        .remove(&replay_key);
+                }
+            }
+        }
+    }
+    fn kagemusha_registration_replay_keys(
+        registration: &OfflineDeviceAttestationRegistration,
+        registration_hash: &Hash,
+    ) -> [Hash; 4] {
+        [
+            kagemusha_device_registration_key(registration_hash),
+            kagemusha_attestation_challenge_key(&registration.challenge_hash),
+            kagemusha_attestation_report_key(&registration.attestation_report_hash),
+            kagemusha_attestation_evidence_key(&registration.evidence_hash),
+        ]
+    }
+    fn plan_kagemusha_online_registration_admission_v1(
+        registration: &OfflineDeviceAttestationRegistration,
+        admission_policy_hash: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaOnlineRegistrationAdmissionPlanV1, Error> {
+        let evaluated_at_ms = state_transaction.block_unix_timestamp_ms();
+        let mut retained_count = 0_usize;
+        let mut active_global_count = 0_usize;
+        let mut active_account_count = 0_usize;
+        let mut seen_replay_keys = BTreeSet::new();
+        let mut plan = KagemushaOnlineRegistrationAdmissionPlanV1::default();
+
+        // TODO: Replace this protocol-bounded namespace scan with consensus-maintained global and
+        // per-account counters plus an expiry index. Opportunistic pruning bounds retained work for
+        // newly admitted state, but an index would make admission and block snapshot derivation O(1)
+        // and O(active registrations), respectively.
+        for (existing_key, existing_archive) in
+            state_transaction.world.smart_contract_state.iter()
+        {
+            if !existing_key
+                .to_string()
+                .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+            {
+                continue;
+            }
+            retained_count = retained_count.checked_add(1).ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "Kagemusha device-registration count overflowed",
+                )
+            })?;
+            if retained_count > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+                return Err(labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "retained Kagemusha device registrations exceed the global protocol limit",
+                )
+                .into());
+            }
+            let existing: KagemushaOnlineRegistrationStateV3 =
+                norito::decode_canonical(existing_archive).map_err(|error| {
+                    labeled_invariant(
+                        "invalid_attestation",
+                        format!("failed to decode existing Kagemusha registration state: {error}"),
+                    )
+                })?;
+            if existing.version != 3 {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state is non-canonical",
+                )
+                .into());
+            }
+            let other = &existing.registration;
+            let other_hash = canonical_registration_hash(other)?;
+            let expected_state_key =
+                kagemusha_online_registration_state_key(&exact_hash_bytes(&other_hash))?;
+            if &expected_state_key != existing_key {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state key does not match its canonical registration",
+                )
+                .into());
+            }
+            let replay_keys = kagemusha_registration_replay_keys(other, &other_hash);
+            if replay_keys
+                .iter()
+                .any(|key| !seen_replay_keys.insert(*key))
+            {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration states reuse replay-protected material",
+                )
+                .into());
+            }
+            if replay_keys.iter().any(|key| {
+                state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .get(key)
+                    .is_none()
+            }) {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state is missing replay protection",
+                )
+                .into());
+            }
+            if other.expires_at_ms <= evaluated_at_ms {
+                plan.expired.push(KagemushaExpiredOnlineRegistrationV1 {
+                    state_key: existing_key.clone(),
+                    replay_keys,
+                });
+                continue;
+            }
+            active_global_count = active_global_count.checked_add(1).ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "active Kagemusha device-registration count overflowed",
+                )
+            })?;
+            if other.account_id == registration.account_id {
+                active_account_count = active_account_count.checked_add(1).ok_or_else(|| {
+                    labeled_invariant(
+                        "registration_capacity_exceeded",
+                        "per-account Kagemusha device-registration count overflowed",
+                    )
+                })?;
+            }
+            if existing.admission_policy_hash == admission_policy_hash
+                && other.account_id == registration.account_id
+                && other.device_id == registration.device_id
+                && other.asset_definition_id == registration.asset_definition_id
+                && other.public_key == registration.public_key
+            {
+                return Err(labeled_invariant(
+                    "duplicate_attestation",
+                    "an active registration already owns this account, device, asset, and P-256 key under the current policy",
+                )
+                .into());
+            }
+        }
+        let global_after_admission = active_global_count.checked_add(1).ok_or_else(|| {
+            labeled_invariant(
+                "registration_capacity_exceeded",
+                "active Kagemusha device-registration count overflowed",
+            )
+        })?;
+        let account_after_admission = active_account_count.checked_add(1).ok_or_else(|| {
+            labeled_invariant(
+                "registration_capacity_exceeded",
+                "per-account Kagemusha device-registration count overflowed",
+            )
+        })?;
+        validate_kagemusha_online_registration_capacity_v1(
+            global_after_admission,
+            account_after_admission,
+        )
+        .map_err(|error| match error {
+            KagemushaOnlineRegistrationCapacityErrorV1::Global => labeled_invariant(
+                "registration_capacity_exceeded",
+                "Kagemusha device registrations reached the global protocol limit",
+            ),
+            KagemushaOnlineRegistrationCapacityErrorV1::Account => labeled_invariant(
+                "registration_capacity_exceeded",
+                "Kagemusha device registrations reached the per-account protocol limit",
+            ),
+        })?;
+        Ok(plan)
+    }
     fn canonical_offline_device_attestation_policy_hash(
         policy: &OfflineDeviceAttestationPolicy,
     ) -> Result<[u8; 32], Error> {
@@ -2488,10 +2688,10 @@ pub mod isi {
     }
     /// Derive the canonical end-of-block active-receiver snapshot.
     ///
-    /// Only records in the post-upgrade native-protected `v2` namespace are eligible. Legacy
-    /// records require one fresh native registration. A corrupt protected record or policy produces
-    /// a deterministic unavailable snapshot; multiple current registrations for the same
-    /// account/device/ asset tuple produce an explicit ambiguous leaf which cannot be routed.
+    /// Only records in the canonical native-protected namespace are eligible. A corrupt protected
+    /// record or policy produces a deterministic unavailable snapshot; multiple current
+    /// registrations for the same account/device/asset tuple produce an explicit ambiguous leaf
+    /// which cannot be routed.
     pub fn derive_kagemusha_active_receiver_snapshot_v1(
         world: &impl WorldReadOnly,
         evaluated_height: u64,
@@ -3005,7 +3205,7 @@ pub mod isi {
                     parse_ios_app_attest_assertion_auth_data(&assertion.authenticator_data)?;
                 validate_ios_app_attest_extensions_against_policy(
                     app_policy,
-                    authenticator_data.extensions.as_ref(),
+                    &authenticator_data.extensions,
                 )?;
                 let expected_rp_id_hash = sha256_bytes(format!("{team_id}.{bundle_id}").as_bytes());
                 validate_ios_app_attest_assertion_identity(
@@ -4698,11 +4898,12 @@ pub mod isi {
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA;
         if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA == 0
+            || flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA == 0
             || flags & !allowed_flags != 0
         {
             return Err(labeled_invariant(
                 "invalid_attestation",
-                "iOS App Attest authData flags are invalid or missing attested credential data",
+                "iOS App Attest authData flags are invalid or missing attested credential or extension data",
             )
             .into());
         }
@@ -4754,27 +4955,14 @@ pub mod isi {
         })?;
         let cose_key = credential_and_extensions[..cose_key_end].to_vec();
         let extension_bytes = &credential_and_extensions[cose_key_end..];
-        let extensions = if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
-            if extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest authData sets ED without extension data",
-                )
-                .into());
-            }
-            Some(decode_ios_app_attest_attestation_extensions(
-                extension_bytes,
-            )?)
-        } else {
-            if !extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest authData has extension bytes without ED",
-                )
-                .into());
-            }
-            None
-        };
+        if extension_bytes.is_empty() {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "iOS App Attest authData sets ED without extension data",
+            )
+            .into());
+        }
+        let extensions = decode_ios_app_attest_attestation_extensions(extension_bytes)?;
         Ok(IosAppAttestAuthData {
             rp_id_hash,
             sign_count,
@@ -4801,10 +4989,10 @@ pub mod isi {
             .try_into()
             .expect("App Attest assertion minimum length is checked");
         let flags = auth_data[32];
-        if flags & !OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
+        if flags != OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA {
             return Err(labeled_invariant(
                 "invalid_authorization",
-                "iOS App Attest assertion authData flags may contain only ED",
+                "iOS App Attest assertion authData must contain only the extension-data flag",
             )
             .into());
         }
@@ -4814,26 +5002,8 @@ pub mod isi {
                 .expect("App Attest assertion minimum length is checked"),
         );
         let extension_bytes =
-            &auth_data[KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1..];
-        let extensions = if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
-            if extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_authorization",
-                    "iOS App Attest assertion sets ED without extension data",
-                )
-                .into());
-            }
-            Some(decode_ios_app_attest_assertion_extensions(extension_bytes)?)
-        } else {
-            if !extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_authorization",
-                    "iOS App Attest assertion has extension bytes without ED",
-                )
-                .into());
-            }
-            None
-        };
+            &auth_data[KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1..];
+        let extensions = decode_ios_app_attest_assertion_extensions(extension_bytes)?;
         Ok(IosAppAttestAssertionAuthData {
             rp_id_hash,
             sign_count,
@@ -4956,30 +5126,22 @@ pub mod isi {
     }
     fn validate_ios_app_attest_extensions_against_policy(
         app_policy: &OfflineIosAppAttestationPolicy,
-        extensions: Option<&IosAppAttestExtensionProperties>,
+        extensions: &IosAppAttestExtensionProperties,
     ) -> Result<(), Error> {
-        match extensions {
-            None if app_policy.allow_legacy_auth_data_without_extensions => Ok(()),
-            None => Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "legacy iOS App Attest authData without extensions is not allowed for this app",
-            )
-            .into()),
-            Some(extensions)
-                if app_policy
-                    .allowed_validation_categories
-                    .contains(&extensions.validation_category)
-                    && app_policy
-                        .allowed_bundle_versions
-                        .contains(&extensions.bundle_version) =>
-            {
-                Ok(())
-            }
-            Some(_) => Err(labeled_invariant(
+        if app_policy
+            .allowed_validation_categories
+            .contains(&extensions.validation_category)
+            && app_policy
+                .allowed_bundle_versions
+                .contains(&extensions.bundle_version)
+        {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
                 "invalid_attestation_policy",
                 "iOS App Attest validation category or bundle version is not allowed for this app",
             )
-            .into()),
+            .into())
         }
     }
     fn android_attestation_metadata(
@@ -5175,10 +5337,7 @@ pub mod isi {
         let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)?;
         let app_policy =
             ensure_ios_app_allowed_by_policy(policy, &team_id, &bundle_id, &environment)?;
-        validate_ios_app_attest_extensions_against_policy(
-            app_policy,
-            auth_data.extensions.as_ref(),
-        )?;
+        validate_ios_app_attest_extensions_against_policy(app_policy, &auth_data.extensions)?;
         let expected_aaguid = if environment == OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT {
             OFFLINE_ATTESTATION_IOS_AAGUID_DEVELOPMENT
         } else {
@@ -5777,143 +5936,7 @@ pub mod isi {
         }
         Ok(())
     }
-    fn validate_offline_attestation_registration_identifiers(
-        registration: &OfflineDeviceAttestationRegistration,
-    ) -> Result<(), Error> {
-        for (field, value) in [
-            ("platform", registration.platform.as_str()),
-            ("key_id", registration.key_id.as_str()),
-            ("device_id", registration.device_id.as_str()),
-            ("assertion_scheme", registration.assertion_scheme.as_str()),
-            (
-                "assertion_key_algorithm",
-                registration.assertion_key_algorithm.as_str(),
-            ),
-        ] {
-            validate_attestation_protocol_string(
-                "offline device attestation",
-                field,
-                value,
-                "invalid_attestation",
-            )
-            .map_err(Error::from)?;
-        }
-        if registration.key_id.len() > OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation key_id exceeds the first-release limit of {} bytes",
-                    OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1
-                ),
-            )
-            .into());
-        }
-        if registration.device_id.len() > OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
-            || registration.device_id.chars().any(char::is_control)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation device_id must contain at most {} bytes and no control characters",
-                    OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
-                ),
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn validate_offline_device_attestation_registration(
-        registration: &OfflineDeviceAttestationRegistration,
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(Hash, [u8; 32]), Error> {
-        ensure_can_submit_kagemusha_for_account(
-            &registration.account_id,
-            authority,
-            state_transaction,
-        )?;
-        if registration.version != 1 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation registration version is unsupported",
-            )
-            .into());
-        }
-        validate_offline_attestation_registration_identifiers(registration)?;
-        if registration.assertion_public_key.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be non-empty",
-            )
-            .into());
-        }
-        if is_zero_hash(&registration.challenge_hash)
-            || is_zero_hash(&registration.attestation_report_hash)
-            || is_zero_hash(&registration.evidence_hash)
-            || is_zero_hash(&registration.recent_block_hash)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation hashes must be non-zero",
-            )
-            .into());
-        }
-        validate_offline_attestation_platform_profile(registration)?;
-        validate_offline_attestation_optional_metadata(registration)?;
-        validate_offline_attestation_evidence_bytes(registration)?;
-        let expected_challenge_hash = registration.canonical_challenge_hash().map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to encode Offline attestation challenge preimage: {err}"),
-            )
-        })?;
-        if registration.challenge_hash != expected_challenge_hash {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation challenge hash does not match the canonical preimage",
-            )
-            .into());
-        }
-        if registration.expires_at_ms <= state_transaction.block_unix_timestamp_ms() {
-            return Err(labeled_invariant(
-                "expired_attestation",
-                "offline device attestation registration is expired",
-            )
-            .into());
-        }
-        let policy = effective_offline_device_attestation_policy(state_transaction)?;
-        let admitted_at_ms = state_transaction.block_unix_timestamp_ms();
-        validate_offline_attestation_policy(&policy, admitted_at_ms)?;
-        let lifetime_policy = offline_attestation_policy_for_registration_lifetime(
-            &policy,
-            &registration.platform,
-            admitted_at_ms,
-            registration.expires_at_ms,
-        )?;
-        validate_offline_attestation_policy(&lifetime_policy, admitted_at_ms)?;
-        validate_offline_attestation_recent_block(registration, state_transaction)?;
-        validate_offline_attestation_report(registration, &lifetime_policy, admitted_at_ms)?;
-        // Admission must cover the registration's entire lifetime. Certificate
-        // validity and governed root activation are continuous time ranges, so
-        // validating both endpoints prevents a registration from surviving
-        // beyond either bound without repeating X.509 verification on every use.
-        validate_offline_attestation_policy(&lifetime_policy, registration.expires_at_ms)?;
-        validate_offline_attestation_report(
-            registration,
-            &lifetime_policy,
-            registration.expires_at_ms,
-        )?;
-        let bytes = norito::encode_canonical(registration).map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to encode Kagemusha device registration: {err}"),
-            )
-        })?;
-        Ok((
-            Hash::new(bytes),
-            canonical_offline_device_attestation_policy_hash(&policy)?,
-        ))
-    }
+    include!("offline/device_attestation_registration_validation.rs");
     impl Execute for RegisterOfflineDeviceAttestation {
         fn execute(
             self,
@@ -5975,46 +5998,11 @@ pub mod isi {
                 )
                 .into());
             }
-            for (existing_key, existing_archive) in
-                state_transaction.world.smart_contract_state.iter()
-            {
-                if !existing_key
-                    .to_string()
-                    .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
-                {
-                    continue;
-                }
-                let existing: KagemushaOnlineRegistrationStateV3 =
-                    norito::decode_canonical(existing_archive).map_err(|error| {
-                        labeled_invariant(
-                            "invalid_attestation",
-                            format!(
-                                "failed to decode existing Kagemusha registration state: {error}"
-                            ),
-                        )
-                    })?;
-                if existing.version != 3 {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "existing Kagemusha registration state is non-canonical",
-                    )
-                    .into());
-                }
-                let other = &existing.registration;
-                if existing.admission_policy_hash == admission_policy_hash
-                    && other.account_id == registration.account_id
-                    && other.device_id == registration.device_id
-                    && other.asset_definition_id == registration.asset_definition_id
-                    && other.public_key == registration.public_key
-                    && other.expires_at_ms > state_transaction.block_unix_timestamp_ms()
-                {
-                    return Err(labeled_invariant(
-                        "duplicate_attestation",
-                        "an active registration already owns this account, device, asset, and P-256 key under the current policy",
-                    )
-                    .into());
-                }
-            }
+            let registration_admission_plan = plan_kagemusha_online_registration_admission_v1(
+                &registration,
+                admission_policy_hash,
+                state_transaction,
+            )?;
             let lifecycle = match registration.platform.as_str() {
                 OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
                     KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused
@@ -6048,6 +6036,7 @@ pub mod isi {
                         format!("failed to persist exact Kagemusha registration: {err}"),
                     )
                 })?;
+            registration_admission_plan.commit(state_transaction);
             state_transaction
                 .world
                 .kagemusha_replay_keys

@@ -94,8 +94,16 @@ pub(super) struct SoftwareSignerRotationSuccessorV1 {
     pub successor: SoftwareSignerPublicBindingV1,
     pub journal_record: Vec<u8>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SignerProcessIdentityModeV1 {
+    Enforce,
+    #[cfg(test)]
+    SyntheticTest,
+}
+
 impl SoftwareSignerProvisioningV1 {
-    fn validate(&self) -> Result<(), SoftwareSignerErrorV1> {
+    fn validate_binding(&self) -> Result<(), SoftwareSignerErrorV1> {
         if !valid_software_signer_handle(self.role, &self.handle)
             || !valid_identity(&self.service_id)
             || !valid_identity(&self.administrator_id)
@@ -115,6 +123,11 @@ impl SoftwareSignerProvisioningV1 {
         {
             return Err(SoftwareSignerErrorV1::InvalidBinding);
         }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), SoftwareSignerErrorV1> {
+        self.validate_binding()?;
         #[cfg(unix)]
         if rustix::process::geteuid().as_raw() != self.service_uid {
             return Err(SoftwareSignerErrorV1::IdentityMismatch);
@@ -173,13 +186,62 @@ impl SoftwareSignerServiceV1 {
         Self::provision_with_keypair(state_directory, provisioning, wrapping_key, keypair)
     }
 
+    /// Provision a signer with a synthetic service UID for an in-process
+    /// multi-role test harness. Production entry points never call this path.
+    #[cfg(test)]
+    pub(super) fn provision_for_test(
+        state_directory: impl Into<PathBuf>,
+        provisioning: SoftwareSignerProvisioningV1,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, SoftwareSignerErrorV1> {
+        let keypair = KeyPair::try_random_with_algorithm(provisioning.algorithm.algorithm())
+            .map_err(|_| SoftwareSignerErrorV1::CryptoUnavailable)?;
+        Self::provision_with_keypair_for_test(state_directory, provisioning, wrapping_key, keypair)
+    }
+
     pub(super) fn provision_with_keypair(
         state_directory: impl Into<PathBuf>,
         provisioning: SoftwareSignerProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
         keypair: KeyPair,
     ) -> Result<Self, SoftwareSignerErrorV1> {
-        provisioning.validate()?;
+        Self::provision_with_keypair_inner(
+            state_directory,
+            provisioning,
+            wrapping_key,
+            keypair,
+            SignerProcessIdentityModeV1::Enforce,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn provision_with_keypair_for_test(
+        state_directory: impl Into<PathBuf>,
+        provisioning: SoftwareSignerProvisioningV1,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+        keypair: KeyPair,
+    ) -> Result<Self, SoftwareSignerErrorV1> {
+        Self::provision_with_keypair_inner(
+            state_directory,
+            provisioning,
+            wrapping_key,
+            keypair,
+            SignerProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+
+    fn provision_with_keypair_inner(
+        state_directory: impl Into<PathBuf>,
+        provisioning: SoftwareSignerProvisioningV1,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+        keypair: KeyPair,
+        process_identity_mode: SignerProcessIdentityModeV1,
+    ) -> Result<Self, SoftwareSignerErrorV1> {
+        match process_identity_mode {
+            SignerProcessIdentityModeV1::Enforce => provisioning.validate()?,
+            #[cfg(test)]
+            SignerProcessIdentityModeV1::SyntheticTest => provisioning.validate_binding()?,
+        }
         if keypair.algorithm() != provisioning.algorithm.algorithm() {
             return Err(SoftwareSignerErrorV1::InvalidBinding);
         }
@@ -249,6 +311,31 @@ impl SoftwareSignerServiceV1 {
         state_directory: impl Into<PathBuf>,
         wrapping_key: SoftwareSignerWrappingKeyV1,
     ) -> Result<Self, SoftwareSignerErrorV1> {
+        Self::open_inner(
+            state_directory,
+            wrapping_key,
+            SignerProcessIdentityModeV1::Enforce,
+        )
+    }
+
+    /// Open synthetic-UID signer state owned by the current test process.
+    #[cfg(test)]
+    pub(super) fn open_for_test(
+        state_directory: impl Into<PathBuf>,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, SoftwareSignerErrorV1> {
+        Self::open_inner(
+            state_directory,
+            wrapping_key,
+            SignerProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+
+    fn open_inner(
+        state_directory: impl Into<PathBuf>,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+        process_identity_mode: SignerProcessIdentityModeV1,
+    ) -> Result<Self, SoftwareSignerErrorV1> {
         let state_directory = state_directory.into();
         validate_absolute_normal_path(&state_directory)?;
         validate_secure_ancestors(&state_directory)?;
@@ -267,7 +354,9 @@ impl SoftwareSignerServiceV1 {
             .map_err(SoftwareSignerErrorV1::Envelope)?;
         let binding = binding_from_recovered(&recovered)?;
         #[cfg(unix)]
-        if binding.service_uid != rustix::process::geteuid().as_raw() {
+        if process_identity_mode == SignerProcessIdentityModeV1::Enforce
+            && binding.service_uid != rustix::process::geteuid().as_raw()
+        {
             return Err(SoftwareSignerErrorV1::IdentityMismatch);
         }
         Ok(Self {
@@ -486,6 +575,44 @@ impl SoftwareSignerServiceV1 {
             return Err(SoftwareSignerErrorV1::RollbackOrSubstitution);
         }
         Ok(())
+    }
+
+    /// Report whether the recovered journal contains the exact Taira sign
+    /// request that the current binding would construct for this operation and
+    /// payload.  This is deliberately crate-internal and is used only to
+    /// recover authority-owned write-ahead records; it is not exposed through
+    /// either signer protocol.
+    pub(super) fn taira_journal_has_exact_commit(
+        &self,
+        operation_id: [u8; 32],
+        payload: &[u8],
+    ) -> Result<bool, SoftwareSignerErrorV1> {
+        let state = self.lock_state()?;
+        state.ensure_available()?;
+        if state.binding.role != SoftwareSignerRoleV1::TairaAuthority {
+            return Err(SoftwareSignerErrorV1::Rejected);
+        }
+        let Some(commit) = state.sign_commits.get(&operation_id) else {
+            return Ok(false);
+        };
+        let mut request = SignRequestV1 {
+            binding_digest: state
+                .binding
+                .digest()
+                .map_err(|()| SoftwareSignerErrorV1::InvalidBinding)?,
+            operation_id,
+            expected_key_revision: state.binding.key_revision,
+            expected_policy_revision: state.binding.policy_revision,
+            expected_policy_digest: state.binding.policy_digest,
+            payload_digest: payload_digest(payload),
+            payload: payload.to_vec(),
+            request_digest: [0; 32],
+        };
+        request.request_digest =
+            sign_request_digest(&request).map_err(|()| SoftwareSignerErrorV1::Rejected)?;
+        Ok(commit.request_digest == request.request_digest
+            && commit.payload_digest == request.payload_digest
+            && commit.sequence <= state.journal.sequence())
     }
 
     pub(super) fn taira_rotation_successor(

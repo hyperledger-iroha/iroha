@@ -1,3 +1,34 @@
+type CompletionOwnerSnapshot = (
+    Instant,
+    u64,
+    bool,
+    Option<u128>,
+    Option<RecoveredDecisionApplyDispatchKeyV1>,
+);
+fn completion_owner_snapshot(
+    admission: &V2IoAdmission,
+    excluding: Option<RecoveredDecisionApplyDispatchKeyV1>,
+) -> Vec<CompletionOwnerSnapshot> {
+    admission
+        .completion_state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .owned
+        .iter()
+        .filter(|owner| {
+            excluding.is_none_or(|key| owner.recovered_decision_apply != Some(key))
+        })
+        .map(|owner| {
+            (
+                owner.retained_at,
+                owner.service_debt,
+                owner.requires_runtime_capacity,
+                owner.runtime_lifecycle_ordinal,
+                owner.recovered_decision_apply,
+            )
+        })
+        .collect()
+}
 #[test]
 fn recovered_decision_apply_completion_drop_is_fail_stop() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -258,23 +289,7 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
             state: V2IoWorkState::CompletionPending,
         },
     );
-    let unrelated_before = admission
-        .completion_state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .owned
-        .iter()
-        .filter(|owner| owner.recovered_decision_apply != Some(key))
-        .map(|owner| {
-            (
-                owner.retained_at,
-                owner.service_debt,
-                owner.requires_runtime_capacity,
-                owner.runtime_lifecycle_ordinal,
-                owner.recovered_decision_apply,
-            )
-        })
-        .collect::<Vec<_>>();
+    let unrelated_before = completion_owner_snapshot(&admission, Some(key));
     assert!(
         command_tx
             .queue
@@ -299,22 +314,7 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
     assert!(!admission.recovered_decision_apply_completion_is_exact(key));
     assert!(admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign));
-    let unrelated_after = admission
-        .completion_state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .owned
-        .iter()
-        .map(|owner| {
-            (
-                owner.retained_at,
-                owner.service_debt,
-                owner.requires_runtime_capacity,
-                owner.runtime_lifecycle_ordinal,
-                owner.recovered_decision_apply,
-            )
-        })
-        .collect::<Vec<_>>();
+    let unrelated_after = completion_owner_snapshot(&admission, None);
     assert_eq!(unrelated_after, unrelated_before);
 }
 #[test]
@@ -333,22 +333,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
                 state: V2IoWorkState::CompletionPending,
             },
         );
-        let completion_before = admission
-            .completion_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owned
-            .iter()
-            .map(|owner| {
-                (
-                    owner.retained_at,
-                    owner.service_debt,
-                    owner.requires_runtime_capacity,
-                    owner.runtime_lifecycle_ordinal,
-                    owner.recovered_decision_apply,
-                )
-            })
-            .collect::<Vec<_>>();
+        let completion_before = completion_owner_snapshot(&admission, None);
         assert!(matches!(
             command_tx
                 .queue
@@ -372,25 +357,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
         ));
         drop(state);
         assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert_eq!(
-            admission
-                .completion_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .owned
-                .iter()
-                .map(|owner| {
-                    (
-                        owner.retained_at,
-                        owner.service_debt,
-                        owner.requires_runtime_capacity,
-                        owner.runtime_lifecycle_ordinal,
-                        owner.recovered_decision_apply,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            completion_before
-        );
+        assert_eq!(completion_owner_snapshot(&admission, None), completion_before);
     }
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -415,22 +382,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             state: V2IoWorkState::CompletionPending,
         },
     );
-    let completion_before = admission
-        .completion_state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .owned
-        .iter()
-        .map(|owner| {
-            (
-                owner.retained_at,
-                owner.service_debt,
-                owner.requires_runtime_capacity,
-                owner.runtime_lifecycle_ordinal,
-                owner.recovered_decision_apply,
-            )
-        })
-        .collect::<Vec<_>>();
+    let completion_before = completion_owner_snapshot(&admission, None);
     assert!(matches!(
         command_tx
             .queue
@@ -460,25 +412,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
     ));
     drop(state);
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-    assert_eq!(
-        admission
-            .completion_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owned
-            .iter()
-            .map(|owner| {
-                (
-                    owner.retained_at,
-                    owner.service_debt,
-                    owner.requires_runtime_capacity,
-                    owner.runtime_lifecycle_ordinal,
-                    owner.recovered_decision_apply,
-                )
-            })
-            .collect::<Vec<_>>(),
-        completion_before
-    );
+    assert_eq!(completion_owner_snapshot(&admission, None), completion_before);
 }
 /// Exact test-only worker ownership retained behind a production service.
 #[must_use = "the exact test I/O fixture must remain alive with its service"]

@@ -1988,7 +1988,9 @@ mod tests {
         );
         assert_eq!(format!("{coordinator:?}"), before);
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(production_scheduler_factory_has_no_raw_rank_mint);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        production_scheduler_factory_has_no_raw_rank_mint
+    );
     #[test]
     fn planning_requires_a_fresh_rank_for_every_ready_ordinal() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));

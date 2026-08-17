@@ -26433,12 +26433,11 @@ pub mod tests {
     fn queue_plan_journal_tombstones_clear_all_records() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
-        let state = State::new(
+        let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        install_single_validator_topology_for_queue_test(&state, 0xA8);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -26446,6 +26445,7 @@ pub mod tests {
         });
         let queue =
             Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        install_manifest_lane_authority_for_queue_test(&mut state, &queue, 0xA8);
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
@@ -26477,23 +26477,20 @@ pub mod tests {
     fn queue_plan_journal_tombstones_clear_all_inflight_records() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
-        let state = Arc::new(State::new(
+        let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        ));
-        install_single_validator_topology_for_queue_test(&state, 0xA9);
+        );
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
             dataspace: DataSpaceId::UNIVERSAL,
         });
-        let queue = Arc::new(Queue::test_with_router_for_routes(
-            config_factory(),
-            &time_source,
-            router.clone(),
-            &[],
-        ));
+        let build = Queue::test_with_router_for_routes;
+        let queue = Arc::new(build(config_factory(), &time_source, router.clone(), &[]));
+        install_manifest_lane_authority_for_queue_test(&mut state, queue.as_ref(), 0xA9);
+        let state = Arc::new(state);
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");

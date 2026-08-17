@@ -532,7 +532,10 @@ def _validate_cargo_cache_input(
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ReceiptError("private runtime inventory is malformed JSON") from error
     runtime_keys = {"format", "schema_version", "runtime_root", "record_count", "file_bytes", "records", "source_disclosure", "input_record_count", "input_file_bytes", "input_records"}
-    if not isinstance(runtime_document, dict) or set(runtime_document) != runtime_keys or _canonical_json(runtime_document) != runtime_inventory.data or runtime_document["format"] != "iroha-sumeragi-v2-private-runtime" or type(runtime_document["schema_version"]) is not int or runtime_document["schema_version"] != 1 or runtime_document["source_disclosure"] != "withheld" or runtime_document["runtime_root"] != str(artifact_root.parent / "runtime"):
+    framework_runtime = "framework_python_relocation" in runtime_document
+    if framework_runtime:
+        runtime_keys.add("framework_python_relocation")
+    if not isinstance(runtime_document, dict) or set(runtime_document) != runtime_keys or _canonical_json(runtime_document) != runtime_inventory.data or runtime_document["format"] != "iroha-sumeragi-v2-private-runtime" or type(runtime_document["schema_version"]) is not int or runtime_document["schema_version"] != (2 if framework_runtime else 1) or runtime_document["source_disclosure"] != "withheld" or runtime_document["runtime_root"] != str(artifact_root.parent / "runtime"):
         raise ReceiptError("private runtime inventory schema is not exact")
     for prefix in ("", "input_"):
         records_name = f"{prefix}records"
@@ -559,9 +562,15 @@ def _validate_cargo_cache_input(
                 raise ReceiptError(f"{label} metadata is not exact")
             for key in identities | ({"size"} if kind == "file" else set()):
                 _cargo_cache_integer(record[key], label)
-            _cargo_cache_octal_mode(record["destination_mode" if prefix else "mode"], label)
+            output_mode = _cargo_cache_octal_mode(
+                record["destination_mode" if prefix else "mode"], label,
+            )
+            if framework_runtime and kind != "symlink" and output_mode & 0o022:
+                raise ReceiptError("framework Python runtime mode is unsafe")
             if prefix:
-                _cargo_cache_octal_mode(record["source_mode"], label)
+                source_mode = _cargo_cache_octal_mode(record["source_mode"], label)
+                if framework_runtime and kind != "symlink" and source_mode & 0o022:
+                    raise ReceiptError("framework Python source mode is unsafe")
             if kind == "file":
                 _require_digest(record["sha256"], f"{label} digest")
                 observed_runtime_bytes += record["size"]
@@ -569,6 +578,14 @@ def _validate_cargo_cache_input(
                 raise ReceiptError(f"{label} target is not text")
         if observed_runtime_bytes != runtime_document[bytes_name]:
             raise ReceiptError("private runtime byte accounting is not exact")
+    if framework_runtime:
+        _validate_framework_python_relocation_evidence(
+            runtime_document["framework_python_relocation"],
+            runtime_document["framework_python_relocation"],
+            runtime_document["input_records"], runtime_document["records"],
+            runtime_document["input_record_count"],
+            runtime_document["input_file_bytes"],
+        )
     try:
         final_document = json.loads(
             _decode_lf_text(final_inventory, "Cargo cache final inventory")

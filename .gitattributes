@@ -2,6 +2,8 @@
 
 # Byte-exact extracted fixtures preserve their source payload whitespace.
 crates/ivm/src/assets/text_v1/** -whitespace
+crates/ivm/fixtures/koto_v1/** -whitespace
+crates/kotodama_lang/fixtures/koto_v1/** -whitespace
 crates/kotodama_lang/src/compiler/fixtures/v1/** -whitespace
 crates/kotodama_lang/src/ir/fixtures/v1/** -whitespace
 crates/kotodama_lang/src/ir/test_sources/** -whitespace

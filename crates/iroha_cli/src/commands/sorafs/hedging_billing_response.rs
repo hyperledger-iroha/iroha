@@ -1,8 +1,8 @@
 //! Strict response binding for exact-checkpoint hedging and billing reads.
+use crate::RunContext;
 use eyre::{Result, eyre};
 use iroha::http::{Response, StatusCode};
 use norito::json::Value;
-use crate::RunContext;
 /// Validate and render one JSON page bound to the requested projection checkpoint.
 pub(super) fn render<C: RunContext>(
     context: &mut C,

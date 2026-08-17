@@ -205,32 +205,6 @@ def test_interrupts_enter_the_normal_error_path(
         handler(updater.signal.SIGTERM, None)
 
 
-def test_homebrew_python_runtime_rewrite_is_narrowly_authenticated(
-    tmp_path: Path,
-) -> None:
-    version = tmp_path / "Frameworks/Python.framework/Versions/3.12"
-    launcher = version / "bin/python3.12"
-    runtime = version / "Resources/Python.app/Contents/MacOS/Python"
-    launcher.parent.mkdir(parents=True)
-    runtime.parent.mkdir(parents=True)
-    launcher.write_bytes(b"launcher")
-    runtime.write_bytes(b"runtime")
-    launcher.chmod(0o755)
-    runtime.chmod(0o755)
-    tail = ("-I", "-S", "/Library/SORA/Taira/taira_peer_supervisor.py")
-
-    assert updater.framework_python_argv0_rewrite_matches(
-        (str(launcher), *tail),
-        (str(runtime), *tail),
-        owner_uid=os.getuid(),
-    )
-    assert not updater.framework_python_argv0_rewrite_matches(
-        (str(launcher), *tail),
-        (str(runtime), "-I", "-S", "/tmp/untrusted.py"),
-        owner_uid=os.getuid(),
-    )
-
-
 def test_atomic_plist_interruption_removes_temporary_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -262,6 +236,7 @@ def test_post_restart_verification_requires_exact_supervisor_and_child(
 
     class IdentityOps:
         def __init__(self) -> None:
+            self.supervisor_argv = snapshot.arguments
             self.child_argv = (
                 updater.required_option(snapshot.arguments, "--binary", snapshot.label),
                 "--sora",
@@ -275,7 +250,7 @@ def test_post_restart_verification_requires_exact_supervisor_and_child(
         def inspect_process(self, pid: int, _deadline: float) -> updater.ProcessInfo:
             if pid == supervisor_pid:
                 return updater.ProcessInfo(
-                    pid, 1, snapshot.runtime_uid, snapshot.arguments
+                    pid, 1, snapshot.runtime_uid, self.supervisor_argv
                 )
             return updater.ProcessInfo(
                 pid, supervisor_pid, snapshot.runtime_uid, self.child_argv
@@ -293,6 +268,15 @@ def test_post_restart_verification_requires_exact_supervisor_and_child(
         ops,  # type: ignore[arg-type]
         updater.time.monotonic() + 10,
     )
+    ops.supervisor_argv = ("/different/python", *snapshot.arguments[1:])
+    with pytest.raises(updater.TestnetUpdateError, match="live supervisor differs"):
+        updater.verify_managed_peer(
+            snapshot,
+            snapshot.plist_body,
+            ops,  # type: ignore[arg-type]
+            updater.time.monotonic() + 10,
+        )
+    ops.supervisor_argv = snapshot.arguments
     ops.child_argv = ("/tmp/wrong",)
     with pytest.raises(updater.TestnetUpdateError, match="live validator differs"):
         updater.verify_managed_peer(

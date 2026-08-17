@@ -74,6 +74,7 @@ TRUSTED_NAMES = {
     "receipt_validator": "validate-receipt.py",
     "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
     "runtime_helper": "copy-release-runtime.py",
+    "runtime_helper_cli": "copy_sumeragi_v2_release_cargo_cache_cli.py",
     "tool_probe_helper": "probe-release-tools.py",
     "approval_contract": "release-approval-contract.py",
     "approval_offline_toolchain_sdk": "offline-toolchain-sdk.approval.v1.json",
@@ -701,9 +702,10 @@ def _framework_python_runtime_record(inventory_path: Path) -> dict[str, Any]:
         "input_record_count",
         "input_file_bytes",
         "input_records",
+        "relocation",
     }
     assert inventory["format"] == "iroha-sumeragi-v2-private-framework-python-runtime"
-    assert inventory["schema_version"] == 1
+    assert inventory["schema_version"] == 2
     assert inventory["source_disclosure"] == "withheld"
     projected: list[dict[str, Any]] = []
     for record in inventory["records"]:
@@ -724,7 +726,7 @@ def _framework_python_runtime_record(inventory_path: Path) -> dict[str, Any]:
     metadata = inventory_path.stat()
     return {
         "format": "iroha-sumeragi-v2-framework-python-runtime",
-        "schema_version": 1,
+        "schema_version": 2,
         "archive_root": "python-runtime",
         "root_mode": "0500",
         "executable": "bin/python3",
@@ -737,6 +739,7 @@ def _framework_python_runtime_record(inventory_path: Path) -> dict[str, Any]:
         "record_count": len(projected),
         "file_bytes": inventory["file_bytes"],
         "records": projected,
+        "relocation": inventory["relocation"],
     }
 
 
@@ -1252,6 +1255,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         "receipt_validator": b"synthetic protected receipt validator",
         "receipt_validator_support": b"synthetic receipt validator support",
         "runtime_helper": b"synthetic protected runtime helper",
+        "runtime_helper_cli": b"synthetic runtime helper CLI component",
         "tool_probe_helper": fixture_tool_probe_helper(),
         "approval_contract": APPROVAL_CONTRACT.read_bytes(),
         "sdk_dependency_bundle_manifest": _canonical({
@@ -1929,6 +1933,67 @@ def test_noncanonical_authenticated_marker_is_rejected(release_fixture: Fixture)
 def test_out_of_band_marker_digest_mismatch_is_rejected(release_fixture: Fixture) -> None:
     release_fixture.environment["IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256"] = "0" * 64
     release_fixture.environment["SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256"] = "0" * 64
+    _assert_rejected(release_fixture.run())
+
+
+@pytest.mark.skipif(not FRAMEWORK_PYTHON, reason="requires framework Python archive")
+@pytest.mark.parametrize(
+    "mutation", ["duplicate", "count", "bytes", "source_mode", "destination_mode"]
+)
+def test_framework_runtime_rejects_source_inventory_accounting_drift(
+    release_fixture: Fixture, mutation: str,
+) -> None:
+    inventory_path = release_fixture.evidence / "python-runtime-input.json"
+    inventory = json.loads(inventory_path.read_bytes())
+    if mutation == "duplicate":
+        inventory["input_records"][1]["path"] = inventory["input_records"][0]["path"]
+    elif mutation == "count":
+        inventory["input_record_count"] += 1
+    elif mutation == "bytes":
+        inventory["input_file_bytes"] += 1
+    else:
+        next(
+            record for record in inventory["input_records"]
+            if record["kind"] in {"directory", "file"}
+        )[mutation] = "0777"
+    data = _canonical(inventory)
+    _write(inventory_path, data, 0o400)
+    marker = release_fixture.marker()
+    marker["trusted_inputs"]["python"]["runtime"]["inventory"].update(
+        {"sha256": _digest(data), "size_bytes": len(data)}
+    )
+    release_fixture.seal_marker(marker)
+    _assert_rejected(release_fixture.run())
+
+
+@pytest.mark.skipif(not FRAMEWORK_PYTHON, reason="requires framework Python archive")
+def test_framework_runtime_rejects_self_consistent_writable_member(
+    release_fixture: Fixture,
+) -> None:
+    inventory_path = release_fixture.evidence / "python-runtime-input.json"
+    inventory = json.loads(inventory_path.read_bytes())
+    private_record = next(
+        record for record in inventory["records"]
+        if record["kind"] == "file"
+        and record["path"] not in {
+            "bin/python3", "Resources/Python.app/Contents/MacOS/Python",
+        }
+    )
+    member = release_fixture.evidence / "python-runtime" / private_record["path"]
+    member.chmod(0o666)
+    private_record["mode"] = "0666"
+    data = _canonical(inventory)
+    _write(inventory_path, data, 0o400)
+    marker = release_fixture.marker()
+    public_record = next(
+        record for record in marker["trusted_inputs"]["python"]["runtime"]["records"]
+        if record["path"] == private_record["path"]
+    )
+    public_record["mode"] = "0666"
+    marker["trusted_inputs"]["python"]["runtime"]["inventory"].update(
+        {"sha256": _digest(data), "size_bytes": len(data)}
+    )
+    release_fixture.seal_marker(marker)
     _assert_rejected(release_fixture.run())
 
 

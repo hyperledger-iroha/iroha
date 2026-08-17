@@ -17,12 +17,10 @@ use iroha_core::{
     state::{State, StateReadOnly, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-use iroha_data_model::da::commitment::DaProofScheme;
 #[cfg(feature = "app_api")]
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
-    AssetPermissionManifest, LaneCatalog, LaneConfig, LaneStorageProfile, LaneVisibility,
-    ManifestVersion, UniversalAccountId,
+    AssetPermissionManifest, LaneCatalog, LaneConfig, ManifestVersion, UniversalAccountId,
 };
 #[allow(unused_imports)]
 use iroha_data_model::{

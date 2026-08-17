@@ -3911,8 +3911,9 @@ fn execution_policy_canonical_set<'a, T: Encode + 'a>(
 /// Compute the canonical first-release identity of process-local execution policy.
 ///
 /// The digest covers every boot-snapshot value which can change transaction admission,
-/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles are
-/// supplied as authenticated digests so filesystem placement never becomes consensus state.
+/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles and
+/// the complete authenticated Kagemusha release catalog are supplied as canonical digests so
+/// filesystem placement never becomes consensus state.
 ///
 /// Deliberately excluded values are limited to operational implementations which must preserve
 /// identical results: worker and cache sizing, parallel/GPU selection, signature batch sizing,
@@ -3932,7 +3933,7 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
-    kagemusha_release_policy_digest: Option<[u8; 32]>,
+    kagemusha_release_catalog_digest: Option<[u8; 32]>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4604,8 +4605,8 @@ pub fn execution_policy_digest_v1(
     policy.push("nexus.policy_digest", &nexus_policy_digest);
     policy.push("zk.policy_digest", &zk_policy_digest);
     policy.push(
-        "kagemusha.release_policy_digest",
-        &kagemusha_release_policy_digest,
+        "kagemusha.release_catalog_digest",
+        &kagemusha_release_catalog_digest,
     );
     let encoded = ExecutionPolicyPreimageV1 {
         version: VERSION,
@@ -5786,46 +5787,34 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.commit.window_slots",
         &nexus.commit.window_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.da.q_in_slot_total",
-        &nexus.da.q_in_slot_total.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.q_in_slot_per_ds_min",
-        &nexus.da.q_in_slot_per_ds_min.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.sample_size_base",
-        &nexus.da.sample_size_base.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.sample_size_max",
-        &nexus.da.sample_size_max.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.threshold_base",
-        &nexus.da.threshold_base.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.per_attester_shards",
-        &nexus.da.per_attester_shards.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.audit.sample_size",
-        &nexus.da.audit.sample_size.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.audit.window_count",
-        &nexus.da.audit.window_count.get(),
-    );
+    let da = &nexus.da;
+    for (tag, value) in [
+        ("nexus.da.q_in_slot_total", da.q_in_slot_total.get()),
+        (
+            "nexus.da.q_in_slot_per_ds_min",
+            da.q_in_slot_per_ds_min.get(),
+        ),
+        ("nexus.da.sample_size_base", da.sample_size_base.get()),
+        ("nexus.da.sample_size_max", da.sample_size_max.get()),
+        ("nexus.da.threshold_base", da.threshold_base.get()),
+        ("nexus.da.per_attester_shards", da.per_attester_shards.get()),
+        (
+            "nexus.da.ingest_quota_window_blocks",
+            da.ingest_quota_window_blocks.get(),
+        ),
+        (
+            "nexus.da.ingest_quota_max_count_per_account",
+            da.ingest_quota_max_count_per_account.get(),
+        ),
+        (
+            "nexus.da.ingest_quota_max_bytes_per_account",
+            da.ingest_quota_max_bytes_per_account.get(),
+        ),
+        ("nexus.da.audit.sample_size", da.audit.sample_size.get()),
+        ("nexus.da.audit.window_count", da.audit.window_count.get()),
+    ] {
+        append(&mut preimage, tag, &value);
+    }
     append(
         &mut preimage,
         "nexus.da.audit.interval_ns",
@@ -7307,8 +7296,8 @@ pub struct SumeragiV2Config {
 /// Derive the first-release view-zero round deadline and retransmission interval
 /// from the signed block cadence.
 ///
-/// The authoritative runtime applies deterministic linear backoff to the base
-/// deadline for later certified views. The retransmission interval stays fixed.
+/// The runtime applies linear backoff capped at ten base deadlines for later
+/// certified views. The retransmission interval stays fixed.
 ///
 /// # Errors
 ///

@@ -84,6 +84,10 @@ fn proof_scalar_to_quantity(amount: u128) -> Quantity {
 }
 /// Build a deterministic amount commitment used for hidden-amount fragments.
 ///
+/// This digest links the envelope and fragment copies for consistency; it does
+/// not authenticate the amount. Amount authenticity comes from the
+/// proof-bound FASTPQ batch metadata checked by the AXT proof verifier.
+///
 /// Canonical AXT proof envelopes are hashed with their `amount_commitment`
 /// field cleared. This makes the commitment non-circular and lets validators
 /// recompute it from an envelope that already carries the claimed value.

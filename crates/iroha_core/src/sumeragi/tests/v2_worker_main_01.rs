@@ -1145,6 +1145,217 @@ fn applied_height_handoff_rejects_output_without_reconstruction() {
     assert!(wrong.is_pending());
 }
 #[test]
+fn certified_round_retention_cancels_stale_native_amx_output_ownership() {
+    let (service, _) = fixture();
+    let peer = service.context.roster[1].validator.clone();
+    let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&peer))
+        .expect("one shared Native AMX retry plus the frozen credit");
+    let mut rounds = Vec::new();
+    for view in [0, 1] {
+        let mut message = native_amx_output(&service.context, service.local_peer.clone());
+        let NativeAmxMessage::PrepareVote(vote) = &mut message else {
+            panic!("fixture emits a Native AMX Prepare vote");
+        };
+        vote.body.round.view = view;
+        let round = vote.body.round;
+        let claim = ExactOutputRolloverClaim::NativeAmx {
+            scope: ExactOutputCreationScope {
+                context_id: round.context_id,
+                height: round.height,
+            },
+            round,
+            message_hash: HashOf::new(&message),
+        };
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![NetworkMessage::NativeAmx(Arc::new(message))],
+                    vec![peer.clone()],
+                    claim,
+                )
+                .expect("valid exact Native AMX claim")
+                .expect("non-empty Native AMX fanout"),
+            )
+            .expect("retain bounded Native AMX fanout");
+        rounds.push(round);
+    }
+    assert_eq!(pending.fanouts.len(), 2);
+
+    assert_eq!(
+        pending
+            .retain_native_amx_round(rounds[1], false, &BTreeMap::new())
+            .expect("retire the superseded global view"),
+        1
+    );
+    assert!(matches!(
+        pending.fanouts.front().map(|fanout| &fanout.rollover_claim),
+        Some(ExactOutputRolloverClaim::NativeAmx { round, .. }) if *round == rounds[1]
+    ));
+    assert_eq!(
+        pending
+            .retain_native_amx_round(rounds[1], true, &BTreeMap::new())
+            .expect("Decision retires the current Native AMX round"),
+        1
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+}
+#[test]
+fn certified_global_round_reclaims_stale_blocked_topology_owners() {
+    let (mut service, _) = fixture();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install one duplicate-target ownership unit");
+    let blocked = service.context.roster[1].validator.clone();
+    let blocked_for_hook = blocked.clone();
+    let admitted = Arc::new(Mutex::new(Vec::new()));
+    let admitted_for_hook = Arc::clone(&admitted);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        if post.peer_id == blocked_for_hook {
+            return Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            });
+        }
+        admitted_for_hook
+            .lock()
+            .expect("record responsive global output")
+            .push((post.peer_id, global_v2_output_round(&post.data)));
+        Ok(())
+    });
+
+    let old_votes = [
+        routing_vote(&service, 0, wire::GlobalPhase::Prepare),
+        routing_vote(&service, 0, wire::GlobalPhase::Commit),
+    ];
+    for vote in &old_votes {
+        assert_eq!(
+            service
+                .broadcast_consensus(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(vote.clone()),
+                ))
+                .expect("the first two old-view fanouts fit exactly"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+    }
+    assert_eq!(
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(old_votes[0].clone()),
+            ))
+            .expect("an exact periodic retry reuses its blocked topology owner"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    assert_eq!(
+        service
+            .lock_pending_exact_output()
+            .expect("inspect coalesced old-view owners")
+            .fanouts
+            .len(),
+        2
+    );
+    let timeout_round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: service.context.height,
+        view: 0,
+    };
+    assert_eq!(
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round: timeout_round,
+                    highest_prepare_qc: None,
+                    signer: service.local_validator.expect("fixture has a local voter"),
+                    signature: vec![0xA7],
+                }),
+            ))
+            .expect("pacemaker output bypasses full ordinary Safety ownership"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let current_round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: service.context.height,
+        view: 1,
+    };
+    let current_vote = routing_vote(&service, 1, wire::GlobalPhase::Prepare);
+    assert_eq!(
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(current_vote.clone()),
+            ))
+            .expect("full corridor retains the reducer source"),
+        ConsensusBroadcastDisposition::SourceRetained
+    );
+    assert_eq!(
+        service
+            .retain_certified_global_view_output(current_round)
+            .expect("certified view retires every obsolete fanout"),
+        3
+    );
+    assert_eq!(
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(current_vote),
+            ))
+            .expect("current fanout enters after stale ownership retirement"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let responsive = service
+        .remote_voters()
+        .into_iter()
+        .filter(|peer| peer != &blocked)
+        .collect::<BTreeSet<_>>();
+    let current_observed = admitted
+        .lock()
+        .expect("inspect responsive global output")
+        .iter()
+        .filter_map(|(peer, round)| (*round == Some(current_round)).then_some(peer.clone()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(current_observed, responsive);
+}
+#[test]
+fn identical_native_amx_topology_retry_reuses_one_exact_output_owner() {
+    let (service, _) = fixture();
+    let peer = service.context.roster[1].validator.clone();
+    let message = native_amx_output(&service.context, service.local_peer.clone());
+    let round = native_amx_message_body(&message)
+        .expect("valid Native AMX fixture round")
+        .round;
+    let claim = ExactOutputRolloverClaim::NativeAmx {
+        scope: ExactOutputCreationScope {
+            context_id: round.context_id,
+            height: round.height,
+        },
+        round,
+        message_hash: HashOf::new(&message),
+    };
+    let fanout = || {
+        PendingExactFanout::claimed(
+            vec![NetworkMessage::NativeAmx(Arc::new(message.clone()))],
+            vec![peer.clone()],
+            claim.clone(),
+        )
+        .expect("valid exact Native AMX claim")
+        .expect("non-empty Native AMX fanout")
+    };
+    let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&peer))
+        .expect("one frozen Native AMX topology owner");
+    assert_eq!(
+        pending.enqueue(fanout()).expect("retain first send"),
+        ExactFanoutOwnership::Owned
+    );
+    assert_eq!(
+        pending.enqueue(fanout()).expect("coalesce exact retry"),
+        ExactFanoutOwnership::Owned
+    );
+    assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(pending.ownership_units, 1);
+}
+#[test]
 fn closed_network_actor_fails_stop_before_later_output() {
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();

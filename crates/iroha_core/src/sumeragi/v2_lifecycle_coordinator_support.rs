@@ -287,13 +287,9 @@ fn source(id: SourceId) -> String {
         SourceId::RunnerHeightDriver => {
             include_str!("v2_runner/lifecycle_height_driver.rs").to_owned()
         }
-        SourceId::RunnerOuterCursor => {
-            include_str!("v2_runner/outer_ingress_cursor.rs").to_owned()
-        }
+        SourceId::RunnerOuterCursor => include_str!("v2_runner/outer_ingress_cursor.rs").to_owned(),
         SourceId::Runtime => reviewed_v2_runtime_source_for_test().to_owned(),
-        SourceId::SchedulerInputs => {
-            include_str!("v2_lifecycle_scheduler_inputs.rs").to_owned()
-        }
+        SourceId::SchedulerInputs => include_str!("v2_lifecycle_scheduler_inputs.rs").to_owned(),
         SourceId::Schema => include_str!("v2_lifecycle_schema.rs").to_owned(),
         SourceId::Selector => include_str!("v2_lifecycle_selector.rs").to_owned(),
         SourceId::Settlement => include_str!("v2_lifecycle_settlement.rs").to_owned(),
@@ -377,7 +373,10 @@ fn edge(kind: &str, token: String, start: bool) -> Result<Edge, String> {
         (true, "last", _) if !token.is_empty() && token != "-" => Ok(Edge::Last(token)),
         (false, "end", "-") => Ok(Edge::End),
         (false, "before", _) if !token.is_empty() && token != "-" => Ok(Edge::Before(token)),
-        _ => Err(format!("invalid {} edge {kind}:{token}", if start { "start" } else { "end" })),
+        _ => Err(format!(
+            "invalid {} edge {kind}:{token}",
+            if start { "start" } else { "end" }
+        )),
     }
 }
 
@@ -410,11 +409,18 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
                     contracts: Vec::new(),
                 });
             }
-            [tag, id, source_id, start_kind, start_token, end_kind, end_token]
-                if tag == "region" && identifier(id) =>
-            {
-                let source = SourceId::parse(source_id)
-                    .ok_or_else(|| format!("unknown source id {source_id} at line {line_number}"))?;
+            [
+                tag,
+                id,
+                source_id,
+                start_kind,
+                start_token,
+                end_kind,
+                end_token,
+            ] if tag == "region" && identifier(id) => {
+                let source = SourceId::parse(source_id).ok_or_else(|| {
+                    format!("unknown source id {source_id} at line {line_number}")
+                })?;
                 let span = Span {
                     source,
                     start: edge(start_kind, start_token.clone(), true)?,
@@ -497,17 +503,16 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
                 if case.regions.is_empty() || case.contracts.is_empty() {
                     return Err(format!("empty source contract case {}", case.id));
                 }
-                if case
-                    .contracts
-                    .iter()
-                    .any(|contract| match contract {
-                        Contract::Required(region, ..)
-                        | Contract::Forbidden(region, ..)
-                        | Contract::Count(region, ..)
-                        | Contract::Order(region, ..) => !case.regions.contains_key(region),
-                    })
-                {
-                    return Err(format!("source contract case {} names an unknown region", case.id));
+                if case.contracts.iter().any(|contract| match contract {
+                    Contract::Required(region, ..)
+                    | Contract::Forbidden(region, ..)
+                    | Contract::Count(region, ..)
+                    | Contract::Order(region, ..) => !case.regions.contains_key(region),
+                }) {
+                    return Err(format!(
+                        "source contract case {} names an unknown region",
+                        case.id
+                    ));
                 }
                 cases.push(case);
             }
@@ -515,7 +520,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
         }
     }
     if current.is_some() || cases.len() != 44 {
-        return Err(format!("source contract asset must contain exactly 44 closed cases"));
+        return Err(format!(
+            "source contract asset must contain exactly 44 closed cases"
+        ));
     }
     Ok(cases)
 }
@@ -580,15 +587,24 @@ pub(crate) fn run_source_contract(id: &str) {
         match contract {
             Contract::Required(region_id, needle, diagnostic) => {
                 let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
-                assert!(parts.iter().any(|part| part.contains(needle)), "{diagnostic}");
+                assert!(
+                    parts.iter().any(|part| part.contains(needle)),
+                    "{diagnostic}"
+                );
             }
             Contract::Forbidden(region_id, needle, diagnostic) => {
                 let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
-                assert!(parts.iter().all(|part| !part.contains(needle)), "{diagnostic}");
+                assert!(
+                    parts.iter().all(|part| !part.contains(needle)),
+                    "{diagnostic}"
+                );
             }
             Contract::Count(region_id, needle, expected, diagnostic) => {
                 let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
-                let actual = parts.iter().map(|part| part.matches(needle).count()).sum::<usize>();
+                let actual = parts
+                    .iter()
+                    .map(|part| part.matches(needle).count())
+                    .sum::<usize>();
                 assert_eq!(actual, *expected, "{diagnostic}");
             }
             Contract::Order(region_id, anchors, diagnostic) => {
@@ -597,7 +613,9 @@ pub(crate) fn run_source_contract(id: &str) {
                     .join("\n");
                 let mut remainder = text.as_str();
                 for anchor in anchors {
-                    let offset = remainder.find(anchor).unwrap_or_else(|| panic!("{diagnostic}"));
+                    let offset = remainder
+                        .find(anchor)
+                        .unwrap_or_else(|| panic!("{diagnostic}"));
                     remainder = &remainder[offset + anchor.len()..];
                 }
             }

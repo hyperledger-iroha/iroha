@@ -2842,6 +2842,16 @@ PROOF
     <2> QED BY <2>2, <2>3, <2>4
   <1> QED BY <1>1
 
+THEOREM ProductionAdequateViewTimeoutExists ==
+  /\ ModelConfiguration
+  /\ AsyncConfiguration
+  /\ AsyncProductionTimingInstantiation
+  /\ ViewDomain = Nat
+  => \E roundView \in Views:
+       /\ roundView <= AsyncMaximumView
+       /\ AsyncViewTimeout(roundView) > AsyncWorstCaseServiceBudget
+BY AdequateViewTimeoutExists
+
 THEOREM AsyncInitEstablishesTransportClockType ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncTransportClockTypeInvariant

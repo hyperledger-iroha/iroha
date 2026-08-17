@@ -111,7 +111,9 @@ public final class KagemushaRecursiveSpendProver {
 
   private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
   private static final int IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES = 8 * 1024;
-  private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES = 37;
+  private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES = 37;
+  private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_MIN_BYTES =
+      IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1;
   private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES = 4 * 1024;
   private static final int IOS_APP_ATTEST_EXTENSION_DATA_FLAG = 0x80;
   public static final int MAX_TORII_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -1962,22 +1964,15 @@ public final class KagemushaRecursiveSpendProver {
 
   private static void requireIosAppAttestAuthenticatorDataProjection(
       final byte[] authenticatorData) {
-    if (authenticatorData.length < IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES
+    if (authenticatorData.length < IOS_APP_ATTEST_AUTHENTICATOR_DATA_MIN_BYTES
         || authenticatorData.length > IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES) {
       throw new IllegalStateException(
           "native Kagemusha App Attest finalization returned invalid authenticator data");
     }
     final int flags = authenticatorData[32] & 0xff;
-    if ((flags & ~IOS_APP_ATTEST_EXTENSION_DATA_FLAG) != 0) {
+    if (flags != IOS_APP_ATTEST_EXTENSION_DATA_FLAG) {
       throw new IllegalStateException(
-          "native Kagemusha App Attest finalization returned unsupported authenticator flags");
-    }
-    final boolean hasExtensions = (flags & IOS_APP_ATTEST_EXTENSION_DATA_FLAG) != 0;
-    if ((hasExtensions && authenticatorData.length == IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES)
-        || (!hasExtensions
-            && authenticatorData.length != IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES)) {
-      throw new IllegalStateException(
-          "native Kagemusha App Attest finalization returned inconsistent authenticator data");
+          "native Kagemusha App Attest finalization must return extension-bearing authenticator data");
     }
   }
 

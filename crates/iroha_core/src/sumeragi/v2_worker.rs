@@ -97,6 +97,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
+    NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference,
         consensus::{
@@ -128,7 +129,7 @@ use iroha_p2p::{
 };
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     num::NonZeroUsize,
@@ -285,13 +286,8 @@ pub(crate) fn reliable_flush_trace_projection(
         capacity: reliable_flush_usize(capacity)?,
     })
 }
-/// Move-only exact Sign command projected from one closed recovered carrier.
-///
-/// Construction consumes a registry-minted identity and rehashes the complete
-/// tag/request pair against its installed Effect digest. A Prepare vote also
-/// retains its exact future `PreparedCandidateBody` marker. The task exposes
-/// no raw request, marker, signature, outbound payload, runtime binding, or
-/// generic work identifier outside this worker module.
+/// Move-only Sign command from a closed recovered carrier, rehashed against its
+/// registry Effect; opaque request, marker, signature, and binding stay local.
 #[must_use = "a recovered Sign task must enter its dedicated worker reservation"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {
     identity: RecoveredLifecycleSignDispatchIdentityV1,
@@ -342,12 +338,8 @@ impl RecoveredLifecycleSignTaskV1 {
             .expect("registry fixture identity revalidates its exact Sign material")
     }
 }
-/// Move-only carrier-derived authority for one recovered Decision Fetch request.
-///
-/// Construction requires the registry-minted identity still sealed in the
-/// recovered WAL carrier. This type lives beside [`ProductionV2Services`] so
-/// its exact request material and the service's signer/context fields are
-/// joined by one private implementation with no raw-key permit surface.
+/// Move-only recovered Decision Fetch authority joining the WAL-sealed registry
+/// identity with private service signer/context fields.
 #[must_use = "recovered Decision Fetch authority must enter the fixed production service"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestAuthorityV1 {
     identity: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchIdentityV1,
@@ -535,24 +527,15 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchOwnerCandidateProjectionV1 
     pub(in crate::sumeragi) subject: wire::BlockSubject,
     pub(in crate::sumeragi) response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
 }
-/// Closed signed output retained for the eventual restart-closed successor transaction.
-///
-/// The complete task remains inside this result, so the exact tag/request is
-/// transitively pinned to the carrier and queue key. Prepare-body successor
-/// material stays in that opaque task and Proposal payload bytes stay in this
-/// opaque result; neither is applied to services in this dispatch-only tranche.
-/// The raw signature likewise has no projection surface.
+/// Closed signed output retaining its task, successor material, Proposal bytes,
+/// and signature opaquely for the restart-closed successor transaction.
 struct RecoveredLifecycleSignWorkerResultV1 {
     task: RecoveredLifecycleSignTaskV1,
     signature: Vec<u8>,
     outbound_payload: Option<EncodedV2Payload>,
 }
-/// Move-only worker proof consumed only by the recovered-Sign adapter preview.
-///
-/// The constructor stays private to this module and the material can be
-/// released only with the adapter-private one-shot permit. This keeps the raw
-/// request, signature, and restored Proposal payload out of lifecycle callers
-/// while still letting the sole serialized adapter replay `Signed` exactly.
+/// Move-only worker proof whose private one-shot projection lets only the
+/// recovered-Sign adapter replay `Signed` and expose no raw material.
 #[must_use = "recovered Sign material must enter the fixed adapter preview"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
@@ -682,13 +665,8 @@ const CERTIFIED_SERVE_STATE_HEADER_BYTES: usize =
     CERTIFIED_SERVE_STATE_MAGIC.len() + 2 + 8 + CERTIFIED_SERVE_STATE_HASH_BYTES;
 const CERTIFIED_SERVE_STATE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
 const CERTIFIED_SERVE_TOMBSTONE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
-/// Immutable height-local owner of one exact certified-body Serve lifecycle.
-///
-/// The ordinal is minted once as part of hidden fair-ingress acceptance and is
-/// retained through physical carrier replacement, queueing, execution,
-/// completion, and the terminal replay tombstone. The high-watermark and exact
-/// identity are persisted under the height context's existing storage root
-/// before external exposure.
+/// Immutable height-local Serve owner whose ingress-minted ordinal survives
+/// carrier replacement through the persisted terminal tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct CertifiedServeLifecycleId {
     admission_ordinal: u128,
@@ -706,12 +684,8 @@ struct CertifiedServeFamilyKey {
     requester: PeerId,
     phase: wire::GlobalPhase,
 }
-/// Body-independent durable representation of one completed Serve response.
-///
-/// The canonical body already lives in [`V2BodyStore`]. Keeping only its
-/// manifest and signature prevents the bounded tombstone snapshot from
-/// duplicating every retained block while still reconstructing the exact
-/// signed response after a same-height restart.
+/// Durable completed-Serve response retaining only the manifest and signature;
+/// [`V2BodyStore`] supplies the canonical body after same-height restart.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeTombstone {
@@ -729,11 +703,7 @@ struct PersistedCertifiedServeLifecycle {
     owner: CertifiedServeOwnerKey,
     request: wire::CertifiedBodyRequest,
 }
-/// Bounded deterministic negative outcome for an exact Serve lifecycle.
-///
-/// Free-form validation text is deliberately excluded from durable state.
-/// These tags name only outcomes which cannot become serviceable through a
-/// later transport retry at the same immutable height context.
+/// Bounded durable Serve failure tag for outcomes no same-context retry can fix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) enum CertifiedServeNegativeOutcome {
     /// The authenticated request carried a quorum certificate rejected by the
@@ -752,18 +722,9 @@ struct PersistedCertifiedServeNegativeTombstone {
     request: wire::CertifiedBodyRequest,
     outcome: CertifiedServeNegativeOutcome,
 }
-/// Durable pre-selector owner of one authenticated exact Serve request.
-///
-/// While the process is live, an unserved logical lifecycle must be backed by
-/// exactly one volatile fair-ingress carrier. Losing that carrier is fail-stop
-/// evidence; a wire retry cannot repair or resume its consumed position.
-/// Restart cannot assume that any particular requester is responsive, even
-/// when it is in the frozen roster, so production startup discharges every
-/// restored lifecycle or terminal replay occurrence before exposing any
-/// producer. Its physical ticket is consumed in that same source-sealed batch;
-/// no requester retransmission is needed to clear debt. Inside one
-/// uninterrupted process, a drained nonterminal lifecycle remains retained
-/// without its consumed scheduler ticket until local service seals it.
+/// Durable pre-selector owner of an authenticated Serve request. Live unserved
+/// owners require one fair-ingress carrier; losing it is fail-stop. Startup
+/// locally discharges restored owners before producers, without retransmission.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeIngressWaiter {
@@ -1099,12 +1060,8 @@ enum CertifiedServeAdmissionKind {
     Existing,
     Stale,
 }
-/// Prepared ownership transfer from fair ingress into the ordered I/O FIFO.
-///
-/// A `New` admission already owns a reserved placeholder in the FIFO. The
-/// runner must consume this token with
-/// [`ProductionV2Services::serve_certified_request_on_routes`] immediately
-/// after removing the matching ingress owner.
+/// Prepared fair-ingress transfer whose `New` admission already reserves an I/O
+/// placeholder and must immediately enter `serve_certified_request_on_routes`.
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct CertifiedServeAdmission {
@@ -1183,11 +1140,7 @@ struct V2IoCertifiedServeIngressReservation {
     /// carrier. A post-drain replay receives both a fresh `id` and a fresh
     /// carrier ordinal. An undrained occurrence never changes either value.
     carrier_ordinal: Option<u64>,
-    /// Bounded older-runtime admission for this exact ticket occurrence.
-    ///
-    /// Each open turn admits or services at most one strictly older owner.
-    /// A lost carrier closes the height instead of resuming this state from a
-    /// requester retry.
+    /// Admit/service at most one older owner; a lost carrier closes the height.
     predecessor_admission: CertifiedServePredecessorAdmissionState,
 }
 impl V2IoCertifiedServeIngressReservation {
@@ -1333,12 +1286,8 @@ impl std::fmt::Debug for CertifiedServeIngressGate {
             .finish_non_exhaustive()
     }
 }
-/// RAII owner of one fair-ingress certified-body occurrence.
-///
-/// Dropping an undrained ticket rolls its live carrier back. A successful
-/// checked dequeue first publishes physical retirement, then makes Drop inert;
-/// a prepared handoff is thereafter settled by [`CertifiedServeAdmission`]
-/// Commit or Abort.
+/// RAII fair-ingress occurrence: undrained Drop rolls back its carrier, while
+/// checked dequeue retires it and delegates settlement to `CertifiedServeAdmission`.
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct CertifiedServeIngressReservation {
@@ -1356,13 +1305,8 @@ impl CertifiedServeIngressReservation {
     pub(crate) fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
         self.id.0 == barrier.scheduler_ordinal && self.lifecycle_id == barrier.lifecycle_id
     }
-    /// Publish physical dequeue before fair ingress removes this carrier.
-    ///
-    /// On failure the caller must retain the ingress entry. On success Drop is
-    /// inert: the queue either atomically retired a deterministic negative
-    /// outcome or retained a prepared volatile handoff whose durable snapshot
-    /// is already free of the consumed physical ordinal. A Provisional
-    /// current-height occurrence is rejected and cannot leave fair ingress.
+    /// Publish physical dequeue before ingress removal. Failure retains ingress;
+    /// success makes Drop inert after negative retirement or prepared handoff.
     pub(crate) fn publish_physical_drain(&self) -> Result<(), String> {
         self.gate
             .queue
@@ -1406,13 +1350,8 @@ impl CertifiedServeIngressGate {
     pub(crate) fn selected_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
-    /// Return the least durable owner ordinal whose physical carrier is absent.
-    ///
-    /// Production startup discharges restored owners before exposing this
-    /// gate. A dormant owner observed by the live runner is therefore
-    /// invariant evidence: it forces restart so startup can terminalize the
-    /// lifecycle locally. Test-only preserved snapshots use this query to
-    /// inspect crash cuts; production liveness never waits for retransmission.
+    /// Return the least carrierless durable owner. Since startup discharges all
+    /// restored owners, a live result is fail-stop evidence requiring restart.
     pub(crate) fn dormant_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
         let state = self.queue.lock();
         let mut dormant = None;
@@ -1477,13 +1416,10 @@ impl CertifiedServeIngressGate {
         }
         Ok(dormant)
     }
-    /// Reserve one internal future-slot ticket for a raw exact occurrence.
-    ///
+    /// Reserve an internal future-slot ticket for one raw occurrence.
     /// # Errors
-    ///
-    /// Returns [`CertifiedServeIngressReserveError`] when the request is
-    /// invalid, conflicts with retained ownership, encounters bounded
-    /// backpressure, or the height-local owner is closed.
+    /// Returns [`CertifiedServeIngressReserveError`] for invalid/conflicting
+    /// requests, bounded backpressure, or a closed height-local owner.
     pub(crate) fn reserve(
         &self,
         request: &wire::CertifiedBodyRequest,
@@ -1785,12 +1721,8 @@ impl V2IoWorkDescriptor {
         }
     }
 }
-/// Hierarchical admission for the single ordered I/O FIFO.
-///
-/// Admission is based on the total number of queued commands. Remote body
-/// service can occupy only the auxiliary prefix, consensus work can also use
-/// its reserved suffix, and trusted local control can use the final slot. The
-/// worker still consumes one physical FIFO, so admission never reorders work.
+/// Hierarchical single-FIFO admission: auxiliary work uses its prefix,
+/// consensus its suffix, and trusted control the final slot without reordering.
 struct V2IoAdmission {
     queued: AtomicUsize,
     lifecycle_capacity_generation: AtomicU64,
@@ -2153,14 +2085,8 @@ impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyRetryTaskFixtur
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoServeState {
-    /// Durable unsealed lifecycle admitted before selector visibility or
-    /// reconstructed inside production startup before queue exposure.
-    ///
-    /// It owns semantic request/family identity and its original ordinal, but
-    /// no runnable command until its selected physical carrier is prepared.
-    /// Production startup locally discharges restored instances to a response
-    /// or negative terminal; only test-preserved crash snapshots expose one
-    /// without a live reservation.
+    /// Durable unsealed lifecycle owning request/family identity and ordinal but
+    /// no command until carrier preparation; startup discharges restored owners.
     AwaitingRetry,
     /// Authenticated ingress owns the least future auxiliary slot. All later
     /// ordinary I/O admission is saturated until predecessors release it.
@@ -2207,22 +2133,14 @@ struct V2IoCommandQueueState {
         BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,
     serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
     serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
-    /// One monotone high-watermark/lifecycle slot per signed requester and
-    /// certified phase.
-    ///
-    /// This semantic alias is deliberately independent from the authenticated
-    /// relay charged for observer capacity. An exact retry or delayed lower
-    /// view cannot escape its tombstone by arriving through another relay.
+    /// Monotone requester/phase lifecycle slot, independent of the relay charged
+    /// for capacity so retries cannot route around its tombstone.
     serve_by_family: BTreeMap<CertifiedServeFamilyKey, CertifiedServeLifecycleId>,
     /// At most one authenticated future-slot debt is exposed to fair ingress.
     /// Its ordinal is therefore trivially the least outstanding ordinal.
     serve_barrier: Option<CertifiedServeLifecycleId>,
-    /// Serve lifecycles which already owned physical admission when the
-    /// off-queue target froze its predecessor prefix.
-    ///
-    /// Later producers cannot enter while the barrier exists, so every I/O
-    /// completion observed before materialization belongs to this finite
-    /// prefix. Serve acknowledgements are checked against this exact set.
+    /// Lifecycles owning admission when the target froze its finite predecessor
+    /// prefix; acknowledgements must belong to this exact set.
     serve_barrier_predecessors: BTreeSet<CertifiedServeLifecycleId>,
     /// Authenticated command payload retained while the future slot waits.
     pending_serve_requests: BTreeMap<CertifiedServeLifecycleId, AuthenticatedCertifiedBodyRequest>,
@@ -2231,19 +2149,9 @@ struct V2IoCommandQueueState {
         BTreeMap<CertifiedServeLifecycleId, (CertifiedServeLifecycleId, V2IoTrackedServe)>,
     /// Least live exact ingress occurrence admitted before selector visibility.
     serve_ingress_reservation: Option<V2IoCertifiedServeIngressReservation>,
-    /// Bounded durable request owners behind the selected ingress occurrence.
-    ///
-    /// There is at most one waiter per `(requester, phase)` family, so the
-    /// frozen prefix is bounded by `serve_family_capacity` (the configured
-    /// roster plus bounded authenticated sources, across the two certified
-    /// phases). Promotion only moves one of these existing records; it never
-    /// mints an ordinal or replenishes the prefix. Once a runtime clock is
-    /// frozen, every newly admitted ticket comes from the shared source after
-    /// that clock owner.
-    ///
-    /// A waiter whose `handed_off` is `None` has no volatile fair carrier. It
-    /// preserves only exact identity and ordinal so same-height restart or
-    /// cancellation cannot remint an old logical stage.
+    /// Bounded one-per-family durable waiters behind selected ingress. Promotion
+    /// moves an existing ordinal only; a carrierless waiter retains identity so
+    /// restart or cancellation cannot remint its logical stage.
     serve_ingress_waiters:
         BTreeMap<CertifiedServeIngressReservationId, V2IoCertifiedServeIngressReservation>,
     next_serve_ingress_reservation_ordinal: u128,
@@ -2255,23 +2163,16 @@ struct V2IoCommandQueueState {
     /// Monotone durable Decision subject for this frozen height, rehydrated
     /// from the consensus WAL at startup.
     durable_decided_subject: Option<wire::BlockSubject>,
-    /// One-shot handoff owed after the final frozen Serve occurrence retires.
-    ///
-    /// This closes the mutex gap between retirement and the runner acquiring
-    /// `producer_episode_active`: fresh network Serve traffic cannot repeatedly
-    /// replenish the selected barrier and starve an already-due proposal turn.
+    /// One-shot post-retirement handoff preventing fresh Serve traffic from
+    /// starving a due proposal before `producer_episode_active` is acquired.
     producer_episode_due: bool,
     /// Finite serialized-runner episode which preceded any later exact ticket.
     producer_episode_active: bool,
     sender_open: bool,
     receiver_open: bool,
 }
-/// Bounded cancellable FIFO shared by the serialized reducer and I/O worker.
-///
-/// Work ownership outlives physical queue admission: it remains indexed while
-/// active and while its completion waits for serialized delivery. This makes
-/// exact retransmission idempotent across every asynchronous race without
-/// charging completed work against the hierarchical queue reservations.
+/// Bounded cancellable reducer/I/O FIFO whose indexed ownership survives active
+/// work and pending delivery, making retransmission idempotent without debt.
 struct V2IoCommandQueue {
     capacity: usize,
     roster_serve_capacity: usize,
@@ -2357,15 +2258,9 @@ impl LifecycleIoCapacityWait {
         }
     }
 }
-/// Borrow-bound exact target reservation in the one physical I/O FIFO.
-///
-/// The queue-state guard and hierarchical admission slot are acquired in one
-/// transaction and retained together. Consequently no producer can enter
-/// behind the target and the worker cannot drain a predecessor while planning
-/// observes the target's exact position. The production owner must either use
-/// the typed pre-plan abort or consume the reservation into the command family
-/// sealed by `target` after its complete scheduler preflight. Any other drop
-/// closes consensus output for restart before releasing the slot.
+/// Borrow-bound target reservation holding queue state and admission together.
+/// It permits only typed abort or post-preflight consumption into `target`'s
+/// command family; any other Drop closes output before releasing the slot.
 #[must_use = "the exact I/O reservation must commit or use its typed pre-plan abort"]
 pub(crate) struct LifecycleIoCapacityReservation<'a> {
     queue: &'a V2IoCommandQueue,
@@ -2578,11 +2473,7 @@ impl LifecycleIoCapacityReservation<'_> {
             .complete();
     }
 }
-/// Locked Consensus-lane capacity for one exact recovered Decision Apply key.
-///
-/// The queue cut and output operation stay armed until the registry's prepared
-/// dispatch is consumed directly into the FIFO. No raw task or unreserved
-/// enqueue surface exists.
+/// Locked Consensus capacity held until a recovered Apply dispatch enters FIFO.
 #[must_use = "the recovered Decision Apply reservation must commit its prepared dispatch"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
     queue: &'a V2IoCommandQueue,
@@ -2899,12 +2790,8 @@ impl RecoveredCompletionPreparedCapacityV1 {
     }
 }
 
-/// One fail-stop snapshot of both physical corridors used by recovered
-/// Completion work.
-///
-/// The output mutex and worker queue remain frozen through the single logical
-/// plan. An unselected row owns no physical mutation. Dropping this value while
-/// armed closes output before either mutex is released.
+/// Fail-stop snapshot freezing both recovered-Completion corridors; armed Drop
+/// closes output before releasing either mutex.
 #[must_use = "the recovered Completion census must select one row or complete unchanged"]
 pub(in crate::sumeragi) struct RecoveredCompletionCapacityCensusV1<'service> {
     operation: Option<ConsensusFailStopOperation<'service>>,
@@ -4649,11 +4536,8 @@ impl V2IoCommandQueue {
             },
         ))
     }
-    /// Project one recovered worker candidate without changing the queue cut.
-    ///
-    /// The returned availability accounts for transferring a materialized
-    /// Serve placeholder to an older exact lifecycle predecessor. Both the
-    /// command count and its admission unit are projected together.
+    /// Project a recovered candidate and any Serve-placeholder transfer without
+    /// changing the queue cut, counting command and admission together.
     fn recovered_completion_worker_capacity(
         &self,
         state: &V2IoCommandQueueState,
@@ -5372,12 +5256,8 @@ impl V2IoCommandQueue {
         );
         Self::promote_next_serve_ingress_waiter(state)
     }
-    /// Retire one physically drained ingress occurrence while retaining its
-    /// logical Serve lifecycle/tombstone in `serves`.
-    ///
-    /// A later wire retransmission must reserve a fresh actor-global scheduler
-    /// ordinal; otherwise duplicate traffic could repeatedly resurrect the old
-    /// ticket ahead of a timeout which became due after the first drain.
+    /// Retire a drained occurrence but retain its Serve tombstone; retransmission
+    /// must mint a fresh ordinal and cannot resurrect the old ticket.
     fn retire_selected_serve_ingress_occurrence(
         state: &mut V2IoCommandQueueState,
         reservation_id: CertifiedServeIngressReservationId,
@@ -6430,14 +6310,8 @@ impl V2IoCommandQueue {
         });
         true
     }
-    /// Transfer an uncommitted Serve placeholder's physical unit to one
-    /// strictly older causal producer.
-    ///
-    /// The logical barrier, ingress ticket, and durable lifecycle remain
-    /// installed. Only the queue placeholder moves back to `PendingCapacity`;
-    /// therefore later Control or causal work still cannot interpose, while
-    /// the worker rematerializes the exact target under the queue lock as soon
-    /// as the predecessor command is received.
+    /// Transfer an uncommitted placeholder's physical unit to one older producer
+    /// while retaining barrier, ticket, lifecycle, and target rematerialization.
     fn suspend_materialized_serve_barrier_for_runtime_predecessor(
         &self,
         state: &mut V2IoCommandQueueState,
@@ -6489,15 +6363,8 @@ impl V2IoCommandQueue {
         self.admission.release();
         true
     }
-    /// Retire the sole uncommitted future-slot transaction.
-    ///
-    /// Shutdown cannot enqueue behind a `Reserved` Serve placeholder because
-    /// the worker deliberately waits for fair ingress to commit that exact
-    /// occurrence. Rewrite the durable non-runnable owner before releasing its
-    /// physical placeholder. The lifecycle ordinal and family high-watermark
-    /// remain consumed. Production restart terminalizes that owner locally
-    /// before exposing ingress; a later requester carrier cannot repair or
-    /// resurrect the drained stage.
+    /// Retire the uncommitted future slot by rewriting its durable owner before
+    /// release; ordinal/high-watermark stay consumed and restart terminalizes it.
     fn rollback_serve_barrier(&self, state: &mut V2IoCommandQueueState) -> Result<bool, String> {
         let Some(lifecycle_id) = state.serve_barrier else {
             return Ok(false);
@@ -8755,14 +8622,8 @@ impl Iterator for V2IoCommandTryIter<'_> {
         self.receiver.try_recv().ok()
     }
 }
-/// Persisted certified-Fetch completion guarded until its exact work-index
-/// acknowledgement has been prepared.
-///
-/// Raw shutdown, cleanup, channel-send, and held-completion paths may receive
-/// an ordinary [`V2IoCompletion`] without constructing a lifecycle `WorkAck`.
-/// Keeping the output guard beside this one variant makes every such drop
-/// fail-stop. The normal typed drain first validates the work index by borrow,
-/// then consumes this envelope only after the armed `WorkAck` exists.
+/// Persisted certified-Fetch completion guarded fail-stop until typed drain
+/// validates its work index and prepares the exact acknowledgement.
 struct CertifiedFetchBodyPersistenceDropGuard {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
@@ -8976,11 +8837,8 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
         }
     }
 }
-/// Move-only acknowledgement for one exact recovered Decision Apply command.
-///
-/// The lifecycle owner must durably settle the borrowed worker result before
-/// consuming this acknowledgement. Dropping it closes consensus output for
-/// restart without releasing the dedicated queue index.
+/// Move-only recovered-Apply acknowledgement consumed after durable settlement;
+/// Drop closes output without releasing its queue index.
 #[must_use = "recovered Decision Apply work remains indexed until owner settlement"]
 struct RecoveredDecisionApplyWorkAckV1 {
     queue: Arc<V2IoCommandQueue>,
@@ -9013,14 +8871,8 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
     work_ack: RecoveredDecisionApplyWorkAckV1,
 }
-/// Guarded lifecycle-owned recovered Sign completion parked for fixed settlement.
-///
-/// This token deliberately has no raw result, signature, payload, request,
-/// parts, acknowledgement, or generic settlement method. Its fixed projection
-/// mints an adapter-private preview authority while retaining the guarded
-/// result. Its queue `Arc` remains alive while the guarded completion drops,
-/// so abandonment closes output while the exact dedicated command owner is
-/// still representable for crash recovery.
+/// Guarded recovered-Sign completion with only a fixed adapter-private preview;
+/// abandonment closes output while its command owner remains recoverable.
 #[must_use = "recovered Sign completion must enter restart-closed owner settlement"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
@@ -9087,11 +8939,8 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
             )
             .then_some(Self { guarded, queue })
     }
-    /// Revalidate and clone the still-guarded worker result for adapter preview.
-    ///
-    /// The returned value exposes no fields and cannot be unpacked without the
-    /// adapter-private permit. The original guarded result remains parked until
-    /// the complete LedgerV1 publication transaction acknowledges it.
+    /// Clone a revalidated opaque result for private adapter preview while the
+    /// original remains guarded until LedgerV1 publication.
     pub(in crate::sumeragi) fn project_adapter_completion_authority(
         &self,
     ) -> Option<RecoveredLifecycleSignAdapterCompletionAuthorityV1> {
@@ -9107,11 +8956,8 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
             outbound_payload: result.outbound_payload.clone(),
         })
     }
-    /// Retire the exact dedicated command owner and disarm restart closure.
-    ///
-    /// The lifecycle owner may call this only after LedgerV1 has durably
-    /// published the signed Broadcast successor and every volatile owner has
-    /// completed its assertion-only tail.
+    /// Retire the command owner after durable Broadcast publication and all
+    /// volatile assertion-only tails, then disarm restart closure.
     pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
         let key = self.guarded.result().dispatch_key();
         self.queue.acknowledge_recovered_lifecycle_sign(key);
@@ -9129,11 +8975,8 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyDeferredRetryV1 {
     RestartRequired,
 }
 impl PreparedRecoveredDecisionApplyCompletionV1 {
-    /// Match the exact service queue, output guard, and lane recovery owner.
-    ///
-    /// This comparison-only oracle lets the launched lifecycle stack drive a
-    /// missing-sidecar retry without releasing the guarded completion or any
-    /// process-local dependency.
+    /// Compare service queue, output guard, and recovery owner without releasing
+    /// guarded completion or process-local dependencies.
     pub(in crate::sumeragi) fn authorizes_sidecar_owner(
         &self,
         services: &ProductionV2Services,
@@ -9158,12 +9001,8 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
         work_ack.acknowledge();
         (*guarded).into_result()
     }
-    /// Atomically republish an unchanged missing-sidecar task under its existing owner.
-    ///
-    /// The dedicated command index must still be `CompletionPending`. Capacity
-    /// is reserved and the exact task is enqueued before either completion
-    /// guard is disarmed. An unavailable lane reconstructs this whole token;
-    /// an ownership mismatch drops the armed guards and requires restart.
+    /// Republish a `CompletionPending` sidecar task under its existing owner,
+    /// reserving/enqueueing before disarming guards; mismatch requires restart.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn retry_deferred(self) -> RecoveredDecisionApplyDeferredRetryV1 {
         let Self { guarded, work_ack } = self;
@@ -9331,11 +9170,8 @@ enum V2IoCompletionAcknowledgement {
     RecoveredDecisionFetchRetained,
     Untracked,
 }
-/// Move-only acknowledgement owner for one exact indexed persistence command.
-///
-/// Extraction removes only completion-channel position ownership. This token
-/// keeps the existing work descriptor in `CompletionPending`, so a repeated
-/// selector probe coalesces until Phase B consumes the physical ingress carrier.
+/// Move-only persistence acknowledgement retaining `CompletionPending` work so
+/// repeated selector probes coalesce until Phase B consumes ingress.
 #[must_use = "the exact command index must remain occupied until Phase B commits"]
 pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceWorkAck {
     queue: Arc<V2IoCommandQueue>,
@@ -9426,12 +9262,8 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
 }
 
-/// Opaque result of taking the physical completion head exactly once.
-///
-/// Ordinary I/O and local reconstruction work is never exposed. An ordinary
-/// I/O head is restored into the service's sole held slot before
-/// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
-/// Recovered variants transfer only their guarded, class-specific owner.
+/// Opaque one-shot completion head: ordinary work is restored before
+/// `PassThrough`, while recovered variants transfer only their typed guard.
 #[allow(variant_size_differences)]
 #[must_use = "a selected recovered completion must remain lifecycle-owned"]
 pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
@@ -9570,13 +9402,8 @@ impl V2CleanupSubmission {
         }
     }
 }
-/// Runner-owned single janitor for all potentially blocking finalized cleanup.
-///
-/// The consensus thread only performs a non-blocking bounded enqueue. One
-/// runner-lifetime worker serializes body retirement and chunk deletion. If
-/// that worker or the filesystem stalls, the queue eventually fills and later
-/// heights retain their files for startup reconciliation; successor consensus
-/// construction never waits and no replacement cleanup threads accumulate.
+/// Runner-owned cleanup janitor: consensus only uses bounded non-blocking
+/// enqueue, and stalled work remains for startup reconciliation.
 pub(crate) struct V2CleanupSupervisor {
     submission: Option<V2CleanupSubmission>,
     join: Option<thread::JoinHandle<()>>,
@@ -10734,14 +10561,8 @@ enum BodyFetchServiceOwner {
     Live,
     Reconstructed(usize),
 }
-/// Exact service-owner removal frozen before a guarded certified response
-/// handoff.
-///
-/// This token owns the service's exclusive borrow, so a live fetch cannot move
-/// into or out of the reconstructed queue between preflight and commit.
-/// Dropping it leaves every service index unchanged. The commit surface stays
-/// private until the final late-response transaction joins it to the response
-/// claim, queue CAS, runtime reservation, registry swap, and coordinator wake.
+/// Service-owner removal frozen under an exclusive borrow until late-response
+/// commit atomically joins its claim, queue CAS, reservation, swap, and wake.
 pub(in crate::sumeragi) struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
     services: &'a mut ProductionV2Services,
     task: BodyFetchTask,
@@ -10858,13 +10679,8 @@ enum LockedCandidatePhysicalOwner {
     Stale,
     Superseded,
 }
-/// Height-scoped owner of the one exact body protected by the durable lock.
-///
-/// Disk acquisition identity is the immutable subject. Certified view changes
-/// may only advance the reducer incarnation which consumes the result. Ready
-/// bytes remain bounded to one body and can therefore be delivered again after
-/// a later view or same-view generation rebind without enqueueing another
-/// physical disk read.
+/// Height-scoped durable-lock owner whose immutable subject permits the same
+/// bounded ready body to rebind without another disk read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LockedCandidateAcquisition {
     round: wire::ConsensusRound,
@@ -11161,12 +10977,8 @@ struct RetainedOutboundPayload {
     subject: wire::BlockSubject,
     messages: Vec<wire::ConsensusMessageV2>,
 }
-/// One compact semantic fanout which remains owned until network-actor admission.
-///
-/// Messages and peers are retained once each. Every peer owns one bounded retry
-/// lane so backpressure on that target does not stall the other targets. Only
-/// the exact current [`Post`] returned by recoverable admission is stored in a
-/// lane with its FIFO ticket.
+/// Compact semantic fanout owning one message, unique peers, per-peer retry
+/// lanes, and only each recoverable admission's current [`Post`] and ticket.
 #[derive(Clone, Debug, Default)]
 enum ExactTargetRoute {
     /// Resolve the target through the actor-published direct topology.
@@ -11229,21 +11041,15 @@ struct ExactTargetSource {
     authority: ExactTargetAuthority,
     class: ExactOutputClass,
 }
-/// One bounded semantic ownership unit for a target, reliable class, and owner kind.
-///
-/// FIFO and backpressure follow the authenticated transport source, but
-/// reservation geometry follows the frozen semantic target set. Every
-/// ordinary target/class occurrence is charged independently, preventing one
-/// relay from multiplying credits and one multi-target fanout from being
-/// undercounted. A reproducible responder control instead owns one fanout-level
-/// unit per semantic target: its exact sources remain independently FIFO-indexed
-/// and route-bounded, but alternate authenticated return paths cannot make the
-/// dedicated control reservation depend on shared capacity. Topology-routed
-/// Request/Close progress and exact-reply responder controls use distinct kinds,
-/// so ordinary parked output cannot consume either bounded progress opportunity.
+/// Bounded target/class/kind ownership unit. FIFO follows authenticated source;
+/// reservation follows frozen semantic targets, with distinct fanout-level
+/// topology-progress and reproducible responder-control credits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ExactTargetReservationKind {
     Reliable,
+    /// One topology-routed timeout vote/certificate can escape ordinary
+    /// Safety-class backlog and certify the view which retires that backlog.
+    Pacemaker,
     SidecarTopologyProgress,
     SidecarReplyControl,
 }
@@ -11285,12 +11091,8 @@ struct PendingExactTarget {
     /// Exact actor-owned reply occurrence awaiting its peer writer's complete
     /// write and flush. The semantic cursor cannot advance while this exists.
     pending_flush: Option<PendingExactReplyFlush>,
-    /// The authenticated source is temporarily unavailable.
-    ///
-    /// Immutable payload, the non-regressing cursor, stable fanout age, FIFO
-    /// ownership, and reservation ownership remain retained. Only tenure-bound
-    /// actor state is discarded until an authenticated reconnect supplies a
-    /// new live writer.
+    /// Mark the source unavailable while retaining payload, cursor, age, FIFO,
+    /// and reservation ownership until authenticated reconnect.
     parked: bool,
 }
 impl PendingExactTarget {
@@ -11375,6 +11177,8 @@ impl CertifiedSidecarTransferIdentity {
     }
 }
 include!("v2_worker/exact_output_rollover_claim.rs");
+include!("v2_worker/queue_plan_admission_handoff.rs");
+include!("v2_worker/exact_output_pending_state.rs");
 #[derive(Debug)]
 struct PendingExactFanout {
     messages: Vec<NetworkMessage>,
@@ -11686,12 +11490,8 @@ impl PendingExactFanout {
         self.current_source_targets = self.expected_current_source_targets()?;
         Ok(())
     }
-    /// Prune retired routes while transferring an already-owned lane-work effect.
-    ///
-    /// This is deliberately separate from candidate admission: a newly
-    /// observed capability is rejected if it is inactive, while semantic work
-    /// which was already accepted by the lane adapter may discard only the
-    /// retired source occurrence and preserve every live sibling.
+    /// Transfer owned lane work while pruning retired source occurrences and
+    /// preserving live siblings; fresh inactive capabilities remain rejected.
     fn retain_active_unowned_reply_targets(&mut self) -> Result<usize, String> {
         if self.fifo_id.is_some()
             || self.targets.iter().any(|target| {
@@ -11957,7 +11757,9 @@ impl PendingExactFanout {
         semantic_target: &PeerId,
         class: ExactOutputClass,
     ) -> ExactTargetReservation {
-        let kind = if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
+        let kind = if class == ExactOutputClass::Safety && self.is_global_pacemaker_fanout() {
+            ExactTargetReservationKind::Pacemaker
+        } else if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
             ExactTargetReservationKind::SidecarTopologyProgress
         } else if self.retryable_certified_sidecar_responder_control_target()
             == Some(semantic_target)
@@ -12592,17 +12394,9 @@ impl PendingExactFanout {
             .all(|peer| peer == target)
             .then_some(target)
     }
-    /// Return the target when this fanout is a statelessly reproducible responder control.
-    ///
-    /// A stale request or close deterministically regenerates these controls.
-    /// The worker retains at most one for each semantic target, while a
-    /// distinct successor remains source-owned until the incumbent drains or
-    /// loses every writer and can be atomically replaced. Controls for
-    /// distinct targets remain independent.
-    /// Requester-owned `Request`/`Close` output remains non-droppable and is
-    /// never deduplicated; `CloseAck` and `GenerationHint` retain their exact
-    /// reply routes, and responder `Chunk` output retains ordinary exact
-    /// ownership.
+    /// Return a statelessly reproducible responder-control target. At most one
+    /// is retained per target; requester output and responder chunks keep exact
+    /// ownership, while controls for different targets stay independent.
     fn retryable_certified_sidecar_responder_control_target(&self) -> Option<&PeerId> {
         let route_shape_is_valid = match self.messages.as_slice() {
             [NetworkMessage::CertifiedMergeSidecar(message)] => match message.as_ref() {
@@ -12636,13 +12430,8 @@ impl PendingExactFanout {
                 )
         })
     }
-    /// Return whether a reproducible responder control has lost every writer.
-    ///
-    /// A pending writer-flush witness is deliberately not replaceable: the old
-    /// write may still cross its terminal flush fence even after its tenure
-    /// becomes unwritable. Actor-returned admission state has no such
-    /// ambiguity; when every incomplete route is monotonically unwritable,
-    /// dropping its ticket cancels that local actor reservation.
+    /// Whether a responder control has no writer and no pending flush witness;
+    /// only then may its actor-returned ticket cancel the reservation.
     fn is_stranded_retryable_certified_sidecar_responder_control(&self) -> bool {
         self.retryable_certified_sidecar_responder_control_target()
             .is_some()
@@ -12728,12 +12517,8 @@ enum ExactOutputAttemptOutcome {
     Unavailable,
     Retired,
 }
-/// Process-local owner shared by one exact-output corridor and its lane transport.
-///
-/// The allocation identity is deliberately absent from every wire and durable
-/// format. Both endpoints remain alive while a handoff is checked, so pointer
-/// identity is an unforgeable process-local binding without affecting
-/// deterministic consensus state.
+/// Process-local corridor/transport owner whose live endpoint identity binds a
+/// handoff without entering wire, durable, or consensus state.
 struct DurableExactOutputOwnerNonce {
     sealed: AtomicBool,
 }
@@ -12780,12 +12565,8 @@ impl DurableExactOutputTransportOwner {
         DurableExactOutputServiceOwner(Arc::clone(&self.0))
     }
 }
-/// Move-only proof that one exact service corridor was durably superseded.
-///
-/// The constructor is private to the final seal operation. In addition to the
-/// canonical Norito hashes, this receipt owns the service endpoint of the
-/// process-local owner pair; a service created independently for the same
-/// height context therefore cannot authorize another lane transport.
+/// Move-only durable-supersession proof binding canonical hashes to the private
+/// process-local service endpoint, excluding independently created services.
 #[must_use]
 pub(crate) struct DurableExactOutputHandoffReceipt {
     owner: Arc<DurableExactOutputOwnerNonce>,
@@ -12860,16 +12641,13 @@ struct PendingExactOutput {
     /// Every outstanding authenticated source mapped to its FIFO-ordered owners.
     source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
     /// Ownership-unit bound: shared units, one unit for every frozen
-    /// target/class pair, one sidecar topology-progress unit, and one
-    /// reproducible exact-reply control unit per frozen target.
+    /// target/class pair, one pacemaker unit, one sidecar topology-progress
+    /// unit, and one reproducible exact-reply control unit per frozen target.
     ownership_unit_capacity: usize,
     /// Units available to duplicate or non-frozen target/class ownership.
     shared_ownership_unit_capacity: usize,
-    /// Immutable validator reservation geometry for this height context.
-    ///
-    /// The set includes the three ordinary reliable classes plus distinct
-    /// sidecar topology-progress and exact-reply control reservations for each
-    /// frozen target.
+    /// Per-target reliable, pacemaker, topology-progress, and reply-control
+    /// reservation geometry frozen for this height.
     reserved_target_classes: BTreeSet<ExactTargetReservation>,
     /// Aggregate outstanding multiplicity for each semantic target/class/kind unit.
     reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
@@ -12885,11 +12663,8 @@ struct PendingExactOutput {
     max_messages_per_fanout: usize,
     max_peers_per_fanout: usize,
 }
-/// Fully precomputed mutation for one inseparable topology-fanout batch.
-///
-/// The owning mutex remains held from construction through commit. Every
-/// fallible validation, aggregate-capacity calculation, FIFO allocation, and
-/// source-index projection therefore precedes this assertion-only state swap.
+/// Precomputed topology-batch mutation held under one mutex after all fallible
+/// validation, capacity, FIFO, and index projection.
 struct PendingExactOutputBatchPlan {
     existing_fanout_count: usize,
     rebased_existing_fifo_ids: Option<Vec<ExactFanoutFifoId>>,
@@ -12923,6 +12698,11 @@ impl PendingExactOutput {
                         kind: ExactTargetReservationKind::Reliable,
                     })
                     .into_iter()
+                    .chain([ExactTargetReservation {
+                        semantic_target: semantic_target.clone(),
+                        class: ExactOutputClass::Safety,
+                        kind: ExactTargetReservationKind::Pacemaker,
+                    }])
                     .chain([ExactTargetReservation {
                         semantic_target: semantic_target.clone(),
                         // Topology-routed Request/Close progress is canonical
@@ -12973,12 +12753,8 @@ impl PendingExactOutput {
             max_peers_per_fanout,
         })
     }
-    /// Preflight an all-or-nothing batch of fresh topology fanouts.
-    ///
-    /// Reply coalescence and sidecar replacement have their own stateful
-    /// transactions and are deliberately excluded. Proposal control and chunk
-    /// fanouts are fresh topology owners, so their reservation multiplicities
-    /// can be aggregated once and charged with each frozen credit at most once.
+    /// Preflight an all-or-nothing fresh topology batch, aggregating Proposal
+    /// control/chunk multiplicities once and excluding stateful replacements.
     #[allow(clippy::too_many_lines)]
     fn prepare_atomic_fanout_batch(
         &self,
@@ -14103,6 +13879,13 @@ impl PendingExactOutput {
         Ok(())
     }
     fn capacity_available_for(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
+        if self
+            .fanouts
+            .iter()
+            .any(|pending| pending.can_coalesce_exact_topology_retry(fanout))
+        {
+            return Ok(true);
+        }
         if let Some(pending) = self
             .fanouts
             .iter()
@@ -14374,6 +14157,13 @@ impl PendingExactOutput {
         if self
             .fanouts
             .iter()
+            .any(|pending| pending.can_coalesce_exact_topology_retry(fanout))
+        {
+            return Ok(true);
+        }
+        if self
+            .fanouts
+            .iter()
             .any(|pending| pending.can_coalesce_retry(fanout))
         {
             return self.capacity_available_for(fanout);
@@ -14450,12 +14240,8 @@ impl PendingExactOutput {
         self.project_sidecar_receipt_completions(&mut fanout)?;
         self.enqueue_validated(fanout)
     }
-    /// Coalesce a reply redelivery after a sidecar writer flush was observed.
-    ///
-    /// Pending writer ownership remains on the ordinary fanout target, so its
-    /// unchanged cursor participates in the normal exact/reconnect merge. Only
-    /// a flushed admission receipt sits beyond the fanout and needs this
-    /// terminal-source projection.
+    /// Coalesce post-flush reply redelivery while ordinary fanout ownership and
+    /// cursor stay on the target; only the receipt needs terminal projection.
     fn project_sidecar_receipt_completions(
         &self,
         fanout: &mut PendingExactFanout,
@@ -14532,6 +14318,13 @@ impl PendingExactOutput {
                         ExactFanoutOwnership::SourceRetained
                     }
                 });
+        }
+        if self
+            .fanouts
+            .iter()
+            .any(|pending| pending.can_coalesce_exact_topology_retry(&fanout))
+        {
+            return Ok(ExactFanoutOwnership::Owned);
         }
         if let Some(index) = self
             .fanouts
@@ -14900,12 +14693,8 @@ impl PendingExactOutput {
         }
         Ok(None)
     }
-    /// Return whether a FIFO head is waiting for an external reply-route event.
-    ///
-    /// A later fanout for the same source remains locally dispatchable while
-    /// its older head is parked for reconnect or owns a pending writer-flush
-    /// acknowledgement. That is a valid quiescent state, not a missing-head
-    /// invariant failure.
+    /// Whether a FIFO head awaits reply-route activity; later local fanouts may
+    /// proceed while it waits for reconnect or flush acknowledgement.
     fn has_quiescent_fifo_head(&self) -> Result<bool, String> {
         for (fanout_index, fanout) in self.fanouts.iter().enumerate() {
             for (target_index, target) in fanout.targets.iter().enumerate() {
@@ -16067,11 +15856,7 @@ pub(crate) struct ProductionV2Services {
     leader_wire_recovery_authority: super::serviced_candidate_store::LeaderWireRecoveryAuthority,
     clean_teardown: bool,
 }
-/// Service-private permit for unpacking one durable signed Broadcast.
-///
-/// The constructor is private to this module. The WAL/registry projection
-/// accepts the value only by move, preventing another sibling from extracting
-/// or substituting the signed envelope.
+/// Private move-only permit for unpacking one WAL/registry signed Broadcast.
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
     _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
 }
@@ -16086,11 +15871,7 @@ impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
         }
     }
 }
-/// Service-private one-shot permit for resolving a next-Vote body lookup.
-///
-/// The exact executor mint requires this capability, so no sibling can bypass
-/// the launched worker/store identity join by calling the catalog projection
-/// directly.
+/// Private one-shot next-Vote lookup permit enforcing worker/store identity.
 pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
     _linearity: RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1,
     context: wire::HeightContext,
@@ -16132,11 +15913,8 @@ impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
         .then_some(self.body_store_identity)
     }
 }
-/// Service-private permit for consuming one adapter-sealed Proposal payload.
-///
-/// The adapter authority releases its signed control message and canonical
-/// encoded payload only to this module. The service retains both behind one
-/// exact-output reservation, so no sibling can split the pair first.
+/// Private permit consuming an adapter-sealed Proposal control/payload pair
+/// behind one exact-output reservation.
 pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputPermitV1 {
     _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
 }
@@ -16230,11 +16008,8 @@ pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV
     wal_append: RecoveredLifecycleProposalPrepareWalAppendSealV1,
 }
 
-/// Reservation-owned identity seal for the initial Proposal WAL append.
-///
-/// It is constructed only after the exact control/chunk batch owns aggregate
-/// corridor capacity. The public borrow wrapper below prevents the WAL append
-/// from outliving or bypassing that armed reservation.
+/// Identity seal created after a Proposal control/chunk batch owns capacity;
+/// its borrow prevents WAL append from bypassing the reservation.
 struct RecoveredLifecycleProposalPrepareWalAppendSealV1 {
     dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
     body_store_identity: V2BodyStoreInstanceIdentity,
@@ -16337,11 +16112,8 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service
     /// The same corridor mutex and fail-stop permit remain retained through claim.
     Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
 }
-/// Borrow-bound exact-output reservation retained before coordinator claim.
-///
-/// Preencoding, topology construction, rollover validation, and `can_enqueue`
-/// all precede scheduler planning. Dropping an armed reservation closes output;
-/// recoverable pre-claim failures must consume [`Self::abort_before_claim`].
+/// Borrow-bound pre-claim output reservation armed after preencoding, topology,
+/// rollover, and capacity checks; recoverable abort consumes its typed method.
 #[must_use = "exact recovered Fetch output must commit or use its typed pre-claim abort"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {
     operation: Option<ConsensusFailStopOperation<'service>>,
@@ -16391,11 +16163,8 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
         .min(wire::MAX_DA_ENCODED_PAYLOAD_BYTES)
 }
 impl ProductionV2Services {
-    /// Reserve exact output from one still-live durable recovered Broadcast.
-    ///
-    /// The authority is minted only after the closed registry carrier rejoins
-    /// its exact claimed LedgerV1 row. A successful capture does not retire
-    /// that durable row; it remains the crash-recovery output-debt source.
+    /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
+    /// retaining that durable row as crash-recovery debt.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
         &self,
         authority: super::v2_lifecycle_coordinator::RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
@@ -16584,12 +16353,8 @@ impl ProductionV2Services {
             },
         ))
     }
-    /// Atomically reserve a signed recovered Proposal and all canonical chunks.
-    ///
-    /// Both topology fanouts are built and their aggregate target/class debt is
-    /// charged while one corridor mutex is held. Capacity failure completes the
-    /// fail-stop operation and leaves every FIFO, index, and fanout unchanged;
-    /// no control-only prefix can escape without its protected body.
+    /// Atomically reserve a recovered Proposal and all chunks under one corridor
+    /// lock; capacity failure leaves every FIFO/index/fanout unchanged.
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_lines)]
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_proposal_exact_output(
@@ -16860,11 +16625,8 @@ impl ProductionV2Services {
         )
     }
 
-    /// Freeze every recovered Completion physical corridor for one logical plan.
-    ///
-    /// Fanouts are fully encoded before either mutex is acquired. Once armed,
-    /// the exact-output and worker queue cuts remain locked until the caller
-    /// selects one typed reservation or explicitly completes without selection.
+    /// Freeze output/worker cuts for one preencoded recovered-Completion plan
+    /// until typed selection or explicit no-selection completion.
     pub(in crate::sumeragi) fn capture_recovered_completion_capacity_census(
         &self,
         probes: Vec<RecoveredCompletionCapacityProbeV1>,
@@ -17098,13 +16860,8 @@ impl ProductionV2Services {
                 .is_some_and(|service_identity| service_identity.same_instance(owner_identity))
     }
 
-    /// Refresh the exact live Certified-Serve cut for all-row retirement.
-    ///
-    /// The output-handoff seal is the irreversible prerequisite: before it is
-    /// present a live output or ingress transaction could still race this
-    /// census. The launch-private permit and both retained store identities
-    /// prevent a sibling service, signer, or reopened directory owner from
-    /// authenticating the cut.
+    /// Refresh the live all-row Serve-retirement cut after the irreversible
+    /// output seal, bound by launch permit and both store identities.
     pub(in crate::sumeragi) fn authenticate_current_lifecycle_serve_retirement(
         &self,
         permit: ProductionLifecycleServeRetirementAuthenticationPermitV1,
@@ -17184,12 +16941,8 @@ impl ProductionV2Services {
             body_store_identity.clone(),
         ))
     }
-    /// Preview one recovered Sign and authenticate its next body in one borrow.
-    ///
-    /// The service joins the exact worker/store owner before the executor
-    /// creates its runtime-borrowing adapter preview. The executor then splits
-    /// that runtime borrow from its retained catalogs internally, so callers
-    /// never need a second preview or a conflicting whole-executor reborrow.
+    /// Preview recovered Sign and authenticate its successor in one joined
+    /// worker/store borrow, avoiding a second executor preview.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(
         &self,
@@ -17207,12 +16960,8 @@ impl ProductionV2Services {
             .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
             .map_err(|error| error.to_string())
     }
-    /// Publish the live completion owner only from final runner activation.
-    ///
-    /// The move-only permit is minted and retained by the opaque lifecycle
-    /// launch stack. No constructor, drain, or ordinary status update can
-    /// register this observer. The runner cut will consume this method only as
-    /// part of its final all-or-restart activation transaction.
+    /// Publish the completion owner only through the launch stack's move-only
+    /// permit during final all-or-restart runner activation.
     #[allow(dead_code)]
     pub(in crate::sumeragi) fn activate_effect_completion_observer(
         &self,
@@ -17236,13 +16985,8 @@ impl ProductionV2Services {
         activation.complete();
         Ok(())
     }
-    /// Atomically reserve the selected lifecycle carrier's exact I/O target.
-    ///
-    /// The selector's one-shot target seal is consumed only after this service
-    /// has proved that its height-local worker and canonical output gate are
-    /// live. Success retains the queue mutex, hierarchical admission slot, and
-    /// armed fail-stop output operation in one borrow-bound value; unavailable
-    /// capacity returns a service-generation wait rather than a sampled depth.
+    /// Reserve a selected lifecycle target after proving live worker/output,
+    /// retaining queue, admission, and fail-stop operation in one borrow.
     #[allow(clippy::result_large_err)]
     pub(crate) fn capture_lifecycle_capacity_rank<'a>(
         &'a self,
@@ -17308,11 +17052,8 @@ impl ProductionV2Services {
             }
         }
     }
-    /// Reserve the Consensus I/O lane for one exact recovered Decision Apply key.
-    ///
-    /// Capacity is captured before the coordinator claims the carrier. The
-    /// returned locked reservation accepts only the borrow-bound registry
-    /// projection carrying this same opaque key.
+    /// Reserve Consensus I/O before recovered-Apply claim, accepting only the
+    /// registry projection with the same opaque key.
     pub(in crate::sumeragi) fn capture_recovered_decision_apply_capacity<'a>(
         &'a self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -17335,11 +17076,8 @@ impl ProductionV2Services {
             .queue
             .capture_recovered_decision_apply_capacity(operation, key)
     }
-    /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
-    ///
-    /// This happens before coordinator claim. The locked reservation accepts
-    /// only a borrow-bound registry projection with the same class-sensitive
-    /// key and releases all capacity automatically on every pre-commit error.
+    /// Reserve Consensus before recovered-Sign claim for the matching registry
+    /// key, releasing capacity on every pre-commit error.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_capacity<'a>(
         &'a self,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -17362,14 +17100,8 @@ impl ProductionV2Services {
             .queue
             .capture_recovered_lifecycle_sign_capacity(operation, key)
     }
-    /// Restore the actor-global lifecycle source before constructing runtime
-    /// owners for this height.
-    ///
-    /// The same durable Serve state is fully validated again when the I/O
-    /// worker opens. Reading its high-watermark here ensures startup effects,
-    /// clocks, FIFO admissions, and restored exact waiters cannot alias after
-    /// a crash. Liveness remains conditional on a suffix without infinitely
-    /// recurring process crashes; safety does not rely on that condition.
+    /// Restore the actor-global lifecycle source before runtime owners so its
+    /// durable high-watermark prevents post-crash effect/FIFO/waiter aliasing.
     pub(crate) fn restore_lifecycle_ordinal_source(
         context: &wire::HeightContext,
         chunk_root: impl AsRef<Path>,
@@ -17472,12 +17204,8 @@ impl ProductionV2Services {
             exact_output_handoff_owner,
         )
     }
-    /// Start with the exact application service used for recovered marker replay.
-    ///
-    /// Identity validation runs before the shared constructor creates the
-    /// context chunk directory or starts any worker, so a substituted State,
-    /// Kura, context network identity, or proof roster fails without startup
-    /// side effects.
+    /// Start with the replay application service, validating State, Kura,
+    /// network identity, and roster before directories or workers exist.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn start_with_apply_service(
         _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
@@ -17971,12 +17699,8 @@ impl ProductionV2Services {
         self.commit_exact_body_fetch_owner_removal(task, owner);
         Ok(())
     }
-    /// Reserve an immutable Serve lifecycle before fair ingress releases it.
-    ///
-    /// A new request atomically installs a durable non-runnable lifecycle and
-    /// future-slot ticket. Predicate-time preparation materializes its physical
-    /// FIFO placeholder; exact retries reuse the original lifecycle even while
-    /// the auxiliary prefix is full.
+    /// Reserve a durable non-runnable Serve lifecycle/future slot before ingress
+    /// release; preparation materializes it and exact retries reuse it.
     pub(crate) fn certified_serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
@@ -17989,11 +17713,8 @@ impl ProductionV2Services {
         self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)
     }
 
-    /// Open one bounded older-I/O admission for this exact ticket.
-    ///
-    /// The returned move-only guard closes the aperture on every normal,
-    /// error, and unwind path. Runtime remains the sole authority deciding
-    /// whether the direct predecessor census requires this turn.
+    /// Open bounded older-I/O admission whose move-only guard always recloses;
+    /// runtime alone decides whether predecessor census needs the turn.
     pub(crate) fn open_certified_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
@@ -18009,14 +17730,8 @@ impl ProductionV2Services {
             barrier,
         ))
     }
-    /// Project one completed strict predecessor without consuming it.
-    ///
-    /// This mirrors the exact-Serve completion selector at its current held or
-    /// head I/O position and its least local reconstruction. Results that need
-    /// a runtime slot are visible only when that slot exists. The returned
-    /// process-local evidence participates in the next direct census; the
-    /// completion crosses into runtime only while the worker's bounded
-    /// predecessor admission is open.
+    /// Project, without consuming, the least completed strict predecessor at its
+    /// held/head/reconstructed position when runtime and admission permit it.
     pub(crate) fn certified_serve_predecessor_completion_evidence(
         &self,
         runtime_capacity_available: bool,
@@ -18066,13 +17781,8 @@ impl ProductionV2Services {
             .transpose()
     }
 
-    /// Return whether this open admission can dispatch one strictly older causal
-    /// owner into the completion-producing I/O corridor.
-    ///
-    /// A full frozen Control prefix returns `false` until the worker consumes a
-    /// unit. A materialized but uncommitted target returns `true`: its physical
-    /// unit can be transferred to the older owner without releasing the
-    /// logical exact-Serve barrier.
+    /// Whether open admission can dispatch a strictly older owner; a full frozen
+    /// prefix blocks, while an uncommitted target may transfer its physical unit.
     pub(crate) fn certified_serve_predecessor_capacity_available(
         &self,
         barrier: CertifiedServeBarrier,
@@ -18098,12 +17808,8 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .dormant_serve_ingress_scheduler_ordinal()
     }
-    /// Latch process restart when a carrierless live Serve lifecycle appears.
-    ///
-    /// Production startup locally discharges every restored lifecycle before
-    /// constructing this service. A later dormant owner therefore proves that
-    /// a live physical carrier was lost; continuing would reintroduce
-    /// requester-dependent liveness.
+    /// Latch restart for a carrierless live Serve owner, impossible after
+    /// startup discharge unless a physical carrier was lost.
     pub(crate) fn fail_closed_dormant_certified_serve(
         &mut self,
         scheduler_ordinal: u128,
@@ -18263,11 +17969,8 @@ impl ProductionV2Services {
             CertifiedServeCommit::Ignored => Ok(()),
         }
     }
-    /// Load the exact durable body required by a lock-constrained proposal.
-    ///
-    /// The physical acquisition is keyed by the immutable subject. A later
-    /// certified view only rebinds its completion consumer, so view rotation
-    /// cannot add same-subject disk reads to the ordered I/O FIFO.
+    /// Load a lock-constrained body by immutable subject so view rebinding adds
+    /// no same-subject disk read.
     pub(crate) fn request_locked_candidate(
         &mut self,
         tag: EventTag,
@@ -19353,14 +19056,8 @@ impl ProductionV2Services {
                 .expect("non-Serve completion acknowledgement is infallible");
         }
     }
-    /// Drain tagged I/O and reconstruction completions into the reducer owner.
-    ///
-    /// The service alternates between I/O and local reconstruction while the
-    /// runtime completion lane has capacity. Actor-backpressured output does
-    /// not suppress these durable completions: a response either transfers to
-    /// the bounded exact-output corridor or remains reconstructible from its
-    /// authenticated requester. If the runtime FIFO is full, one producing I/O
-    /// result remains owned while bounded auxiliary results behind it drain.
+    /// Drain tagged I/O/reconstruction completions while runtime has capacity;
+    /// backpressured responses transfer to exact output or remain reconstructible.
     pub(crate) fn drain_completions<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -19368,12 +19065,8 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_with_lifecycle(executor)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-    /// Drain the oldest completion only when it belongs to recovered Decision Apply.
-    ///
-    /// This path does not accept an effect executor and cannot call the
-    /// reducer's generic application completion API. A different oldest
-    /// completion remains held in place for the ordinary drain, preserving
-    /// the single worker FIFO.
+    /// Drain only a recovered Decision Apply head; any other completion stays
+    /// held for the ordinary single-FIFO drain.
     pub(in crate::sumeragi) fn drain_recovered_decision_apply_completion(
         &mut self,
     ) -> Result<RecoveredDecisionApplyCompletionDrainV1, String> {
@@ -19401,13 +19094,8 @@ impl ProductionV2Services {
         })
     }
 
-    /// Take and classify the oldest Completion-lane owner in one operation.
-    ///
-    /// This is the lifecycle driver's sole physical-head classifier. It does
-    /// not probe three mutually exclusive drains. A pending local completion,
-    /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
-    /// or ownership-position removal. A recovered result transfers exactly its
-    /// dedicated guarded token and advances completion-source rotation once.
+    /// Atomically classify the oldest completion: ordinary/local heads pass
+    /// through untouched; recovered heads transfer one guard and rotate once.
     pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(
         &mut self,
     ) -> Result<RecoveredLifecycleCompletionTakeV1, String> {
@@ -19500,11 +19188,8 @@ impl ProductionV2Services {
         }
     }
 
-    /// Drain only the oldest lifecycle-owned recovered Sign completion.
-    ///
-    /// The returned token remains opaque and guarded. A different FIFO head is
-    /// parked for its ordinary owner, and generic drains likewise never
-    /// acknowledge or remove this dedicated completion.
+    /// Drain only the oldest recovered-Sign guard; other heads remain parked and
+    /// generic drains cannot acknowledge this completion.
     pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(
         &mut self,
     ) -> Result<RecoveredLifecycleSignCompletionDrainV1, String> {
@@ -19559,14 +19244,9 @@ impl ProductionV2Services {
             completion: Some(completion),
         })
     }
-    /// Drain the ordinary bounded completion source while returning a
-    /// persisted certified-Fetch body directly to its serialized owner.
-    ///
-    /// TODO: Give the final runner one `LifecycleCoordinator`/registry owner and
-    /// consume this typed outcome only after restart recovery can rebuild the
-    /// exact Ready-Fetch response occurrence from a typed durable locator (or
-    /// this transaction durably advances directly to the BodyFrame-bound Store
-    /// stage). Until then, the count-only caller fail-stops on this outcome.
+    /// Drain ordinary completion and return a persisted Fetch body to its owner.
+    /// TODO: Route this typed outcome through the final coordinator/registry once
+    /// restart can rebuild Ready-Fetch or durably advance to Store.
     pub(crate) fn drain_completions_with_lifecycle<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -19577,16 +19257,9 @@ impl ProductionV2Services {
             CompletionDrainPolicy::Fair,
         )
     }
-    /// Admit at most one completed causal owner strictly older than an exact Serve ticket.
-    ///
-    /// The task's immutable actor-global ordinal is inspected before the
-    /// completion crosses into runtime. Consequently a completion created
-    /// after the ticket cannot use its one bounded direct-admission turn, even
-    /// when fresh retransmissions repeatedly reopen ingress. Until successful
-    /// service, the worker projects the exact completed predecessor without
-    /// consuming it. That evidence opens the checked aperture before the same
-    /// owner transfers into runtime; an incomplete asynchronous task remains
-    /// passive and cannot veto Serve.
+    /// Admit one completed owner strictly older than a Serve ticket, projecting
+    /// it non-consumingly before checked runtime transfer; later/incomplete work
+    /// cannot use or veto this bounded turn.
     pub(crate) fn drain_exact_serve_runtime_predecessor<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -19601,12 +19274,8 @@ impl ProductionV2Services {
         )?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-    /// Admit at most one completed causal owner from the inclusive timeout
-    /// recovery prefix.
-    ///
-    /// Unlike an exact Serve predecessor, the timeout signer's completion is
-    /// owned by the cut itself and must therefore use `<=`. Fresh producers
-    /// receive larger ordinals and remain behind the retained response.
+    /// Admit one completed owner from the inclusive timeout prefix (`<=`), while
+    /// fresh producers receive larger ordinals behind the retained response.
     pub(crate) fn drain_timeout_recovery_prefix_completion<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -19621,11 +19290,8 @@ impl ProductionV2Services {
         )?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-    /// Service at most one I/O result from the producer prefix frozen before an
-    /// off-queue exact Serve target.
-    ///
-    /// The Serve barrier rejects all later I/O admission, so this source-only
-    /// turn cannot consume a replenished local completion or a later producer.
+    /// Service one result from the prefix frozen before a Serve target; its
+    /// barrier excludes replenished or later producers.
     pub(crate) fn drain_certified_serve_predecessor_completion<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -20108,13 +19774,8 @@ impl ProductionV2Services {
         }
         Ok(serviced)
     }
-    /// Hand all height-local body and chunk cleanup to the bounded janitor.
-    ///
-    /// The caller invokes this only after the adapter verified Kura's typed
-    /// receipt. Enqueue failures are retained in the returned outcome; later
-    /// filesystem failures are logged by the janitor and leave the files for
-    /// startup reconciliation. Neither class can invalidate the committed
-    /// block or delay successor construction.
+    /// After Kura receipt verification, hand cleanup to the bounded janitor;
+    /// failures retain files for reconciliation without delaying successors.
     pub(crate) fn finish_height(
         mut self,
         receipt: KuraV2CommitReceipt,
@@ -20516,11 +20177,8 @@ impl ProductionV2Services {
         }
         Ok(ownership)
     }
-    /// Transfer an inseparable set of fresh topology fanouts into one corridor cut.
-    ///
-    /// Every fallible bound, aggregate-capacity, and FIFO check runs while the
-    /// same mutex is held. A full corridor therefore returns the whole batch to
-    /// its semantic producer without admitting a control-only prefix.
+    /// Transfer an inseparable topology batch after same-lock bound/capacity/FIFO
+    /// checks, returning it whole when full.
     fn enqueue_atomic_fanout_batch_while_guarded(
         &self,
         fanouts: Vec<PendingExactFanout>,
@@ -20633,15 +20291,9 @@ impl ProductionV2Services {
         operation.complete();
         Ok(pending_remains)
     }
-    /// Transfer remaining height-local output to durable reconstruction.
-    ///
-    /// This boundary is valid only after Kura has returned the exact applied
-    /// height receipt and finality artifact. Responsive targets are retried
-    /// before the caller invokes it. Globally scoped v2 output bound to this
-    /// finalized height, lane output covered by the complete durable authority,
-    /// exact Kura-backed global/lane responses, and exact-scope Native
-    /// AMX/merge/sidecar claims may be superseded here. Manually assembled or
-    /// cross-scope output remains exactly owned.
+    /// After exact Kura/finality authority, transfer finalized height-local,
+    /// durable lane, Kura-backed response, and exact-scope sidecar output to
+    /// reconstruction; manual or cross-scope output stays owned.
     pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(
         &self,
         receipt: &KuraV2CommitReceipt,
@@ -20686,14 +20338,8 @@ impl ProductionV2Services {
         operation.complete();
         Ok(retired)
     }
-    /// Seal the empty exact-output corridor and mint its unique rollover receipt.
-    ///
-    /// The repeatable handoff above may run multiple times while lane-local
-    /// committed output is still converging. This one-shot boundary must run
-    /// only after the runner has observed no remaining lane handoff. It
-    /// validates the exact Kura/finality authority again, performs one final
-    /// atomic corridor handoff, rejects a non-empty final pass, and seals all
-    /// later exact-output enqueue operations before returning the move-only owner-bound receipt.
+    /// After lane handoff quiesces, revalidate authority, perform the final
+    /// atomic handoff, require emptiness, seal enqueue, and mint one receipt.
     pub(crate) fn seal_applied_height_output_handoff(
         &self,
         receipt: &KuraV2CommitReceipt,
@@ -20758,21 +20404,6 @@ impl ProductionV2Services {
             );
         }
         Ok(())
-    }
-    /// Return whether the bounded corridor has dispatchable fanout work, a
-    /// pending writer-flush witness, or an admitted sidecar receipt awaiting
-    /// delivery to the lane. Parked retained payload is intentionally
-    /// non-spinning and becomes dispatchable only after reconnect atomically
-    /// reuses its retained FIFO and reservation ownership.
-    pub(crate) fn has_pending_exact_output(&self) -> Result<bool, String> {
-        self.lock_pending_exact_output().map(|pending| {
-            if self.exact_output_handoff_owner.is_sealed() {
-                debug_assert!(!pending.is_pending());
-                false
-            } else {
-                pending.is_pending()
-            }
-        })
     }
     /// Drain process-local sidecar receipts after the exact peer writer flushes
     /// their response chunks.
@@ -20840,38 +20471,11 @@ impl ProductionV2Services {
         }
         pending.cancel_acknowledged_certified_merge_sidecar_closes(acknowledgements)
     }
-    fn exact_target_geometry(
-        peer: &PeerId,
-        reply_routes: Option<&NetworkReplyRoutes>,
-    ) -> Result<
-        (
-            Vec<PeerId>,
-            Vec<ExactTargetRoute>,
-            Option<NetworkReplyRoutes>,
-        ),
-        String,
-    > {
-        let Some(reply_routes) = reply_routes else {
-            return Ok((vec![peer.clone()], vec![ExactTargetRoute::Topology], None));
-        };
-        if reply_routes.semantic_target() != peer || reply_routes.is_empty() {
-            return Err("Sumeragi v2 effect has invalid reply-route ownership".to_owned());
-        }
-        let routes = reply_routes
-            .iter()
-            .cloned()
-            .map(ExactTargetRoute::Reply)
-            .collect::<Vec<_>>();
-        Ok((
-            vec![peer.clone(); routes.len()],
-            routes,
-            Some(reply_routes.clone()),
-        ))
-    }
     /// Check the exact target/class/kind reservation for the next lane-work effect.
-    pub(crate) fn can_retain_lane_work_effect(
+    pub(crate) fn can_retain_lane_work_effect_from_snapshot(
         &self,
         effect: &V2LaneWorkEffect,
+        queue_plan_sources: Option<&mut QueuePlanBatchSources>,
     ) -> Result<bool, String> {
         let (messages, peers, routes, reply_route_history, ingress_ownership, rollover_claim) =
             match effect {
@@ -21018,6 +20622,18 @@ impl ProductionV2Services {
                         },
                     )
                 }
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                    peer,
+                    view,
+                    certificate,
+                } => self.queue_plan_effect_parts(
+                    peer,
+                    *view,
+                    certificate,
+                    queue_plan_sources.ok_or_else(|| {
+                        "QueuePlan admission handoff lacks its Kura batch snapshot".to_owned()
+                    })?,
+                )?,
                 V2LaneWorkEffect::PostCertifiedMergeSidecar {
                     peer,
                     reply_routes,
@@ -21151,14 +20767,6 @@ impl ProductionV2Services {
         } else {
             pending.can_enqueue(&fanout)
         }
-    }
-    fn remote_voters(&self) -> Vec<PeerId> {
-        self.context
-            .roster
-            .iter()
-            .filter(|entry| entry.validator != self.local_peer)
-            .map(|entry| entry.validator.clone())
-            .collect()
     }
     /// Publish one exact signed body-keeper advert from durable Kura state.
     ///
@@ -21441,12 +21049,8 @@ impl ProductionV2Services {
         }
         Ok(())
     }
-    /// Send one retained canonical lane-local message to an authenticated peer.
-    ///
-    /// The shared [`BlockMessage::is_lane_local`] predicate is authoritative:
-    /// executable payload and NewView traffic must traverse the same exact
-    /// output-ownership corridor as proposals, votes, QCs, certificates, and
-    /// historical recovery messages.
+    /// Send retained lane-local traffic selected by `BlockMessage::is_lane_local`
+    /// through the common exact-output corridor.
     pub(crate) fn post_lane_block(
         &self,
         peer: PeerId,
@@ -21968,6 +21572,7 @@ pub(super) mod tests {
     include!("tests/v2_worker_lifecycle_capacity_cases.rs");
     include!("tests/v2_worker_equivocation_and_selected_serve_fixture.rs");
     include!("v2_worker/applied_height_handoff_tests.rs");
+    include!("v2_worker/queue_plan_admission_handoff_tests.rs");
     include!("v2_worker/upstream_reply_route_test.rs");
     include!("tests/v2_worker_main_02.rs");
     include!("tests/v2_worker_main_03.rs");

@@ -95,28 +95,29 @@ class KagemushaRecursiveSpendProverTest {
             it[31] = 1
             it[63] = 1
         }
-        val legacyAuthenticatorData = ByteArray(37).also { it[36] = 1 }
+        val extensionAuthenticatorData = ByteArray(38).also {
+            it[32] = 0x80.toByte()
+            it[36] = 1
+            it[37] = 0xa0.toByte()
+        }
         val accepted = KagemushaRecursiveSpendProver
             .requestAuthorizationFromIosAppAttestNativeProjection(
-                arrayOf(authorizationArchive, rawLowSSignature, legacyAuthenticatorData),
+                arrayOf(authorizationArchive, rawLowSSignature, extensionAuthenticatorData),
             )
         assertContentEquals(authorizationArchive, accepted.noritoEncoded())
 
-        val extensionAuthenticatorData = ByteArray(38).also {
-            it[32] = 0x80.toByte()
-            it[37] = 0xa0.toByte()
-        }
-        KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
-            arrayOf(authorizationArchive, rawLowSSignature, extensionAuthenticatorData),
-        )
-
         val invalidProjections = listOf(
             arrayOf(authorizationArchive, rawLowSSignature),
-            arrayOf(authorizationArchive, ByteArray(0), legacyAuthenticatorData),
-            arrayOf(authorizationArchive, rawLowSSignature.copyOf(63), legacyAuthenticatorData),
-            arrayOf(authorizationArchive, ByteArray(64), legacyAuthenticatorData),
+            arrayOf(authorizationArchive, ByteArray(0), extensionAuthenticatorData),
+            arrayOf(authorizationArchive, rawLowSSignature.copyOf(63), extensionAuthenticatorData),
+            arrayOf(authorizationArchive, ByteArray(64), extensionAuthenticatorData),
             arrayOf(authorizationArchive, rawLowSSignature, ByteArray(36)),
             arrayOf(authorizationArchive, rawLowSSignature, ByteArray(38)),
+            arrayOf(
+                authorizationArchive,
+                rawLowSSignature,
+                ByteArray(37).also { it[36] = 1 },
+            ),
             arrayOf(
                 authorizationArchive,
                 rawLowSSignature,
@@ -125,7 +126,10 @@ class KagemushaRecursiveSpendProverTest {
             arrayOf(
                 authorizationArchive,
                 rawLowSSignature,
-                ByteArray(37).also { it[32] = 0x01 },
+                ByteArray(38).also {
+                    it[32] = 0x01
+                    it[37] = 0xa0.toByte()
+                },
             ),
             arrayOf(
                 authorizationArchive,

@@ -299,20 +299,11 @@
                 .into());
             }
             if app.allowed_validation_categories.is_empty()
-                != app.allowed_bundle_versions.is_empty()
+                || app.allowed_bundle_versions.is_empty()
             {
                 return Err(labeled_invariant(
                     "invalid_attestation_policy",
-                    "Offline device attestation policy iOS extension category and bundle-version allowlists must both be present or both be empty",
-                )
-                .into());
-            }
-            if app.allowed_validation_categories.is_empty()
-                && !app.allow_legacy_auth_data_without_extensions
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy iOS app must allow legacy authData or configure extension allowlists",
+                    "Offline device attestation policy iOS app must configure non-empty extension category and bundle-version allowlists",
                 )
                 .into());
             }
@@ -391,7 +382,19 @@
         }
         Ok(())
     }
-    fn validate_offline_attestation_policy_for_release_activation(
+    /// Validate the complete consensus policy used by one Kagemusha release activation.
+    ///
+    /// This side-effect-free entry point is shared with operator tooling so a
+    /// prepared activation cannot pass a weaker X.509 or application-policy
+    /// check than the instruction will receive during consensus execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an instruction-execution error when the policy is non-canonical,
+    /// exceeds a protocol bound, contains an invalid trusted CA certificate, is
+    /// not valid at `block_unix_timestamp_ms`, or does not enable the required
+    /// fail-closed production application policies.
+    pub fn validate_offline_attestation_policy_for_release_activation(
         policy: &OfflineDeviceAttestationPolicy,
         block_unix_timestamp_ms: u64,
     ) -> Result<(), Error> {
@@ -447,7 +450,6 @@
                 .into_iter()
                 .collect::<Vec<_>>();
             if app.environment != OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION
-                || app.allow_legacy_auth_data_without_extensions
                 || app.allowed_validation_categories.is_empty()
                 || app.allowed_bundle_versions.is_empty()
                 || app.allowed_validation_categories != sorted_categories

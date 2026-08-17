@@ -1,30 +1,13 @@
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
-    let first_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x95, "derive retryable first proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let second_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x96, "derive retryable second proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let first_peer_id = checked_torii_test_peer_id(0x95, "derive retryable first proxy peer fixture key");
+    let second_peer_id = checked_torii_test_peer_id(0x96, "derive retryable second proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(3));
-    let request = ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-        request_id: Hash::new(b"signed-query-complete-rejection"),
-        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
-    };
+    let request = signed_query_proxy_request_for_test(
+        Hash::new(b"signed-query-complete-rejection"),
+        route,
+    );
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
@@ -66,43 +49,46 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     .await;
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
+    let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"retry");
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[tokio::test]
-async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates()
- {
-    let route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(5));
-    let request_id = Hash::new(b"torii-proxy-no-candidates");
-    let request = ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-        request_id: request_id.clone(),
-        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
+#[derive(Clone, Copy)]
+enum RouteUnavailableProxyCase {
+    NoCandidates,
+    TransportErrors,
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
+    let (route, request_id, candidates, failure_message) = match case {
+        RouteUnavailableProxyCase::NoCandidates => (
+            RoutingDecision::new(LaneId::new(4), DataSpaceId::new(5)),
+            Hash::new(b"torii-proxy-no-candidates"),
+            Vec::new(),
+            "execute should not be called without candidates",
+        ),
+        RouteUnavailableProxyCase::TransportErrors => (
+            RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9)),
+            Hash::new(b"torii-proxy-all-transport-errors"),
+            vec![ToriiProxyCandidate::P2p(checked_torii_test_peer_id(
+                0x98,
+                "derive transport error proxy peer fixture key",
+            ))],
+            "transport unavailable",
+        ),
     };
+    let request = signed_query_proxy_request_for_test(request_id.clone(), route);
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
-        Vec::new(),
+        candidates,
         route,
         request,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
-        |_candidate, _request| async move {
+        move |_candidate, _request| async move {
             Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
-                ToriiProxyAttemptError::before_dispatch(
-                    "execute should not be called without candidates",
-                ),
+                ToriiProxyAttemptError::before_dispatch(failure_message),
             )
         },
         move |completed_request_id| {
@@ -116,14 +102,7 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         },
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
+    assert_route_unavailable_response(&response);
     assert_eq!(
         completed
             .lock()
@@ -134,26 +113,17 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
+async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates()
+ {
+    run_route_unavailable_proxy_case(RouteUnavailableProxyCase::NoCandidates).await;
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_response() {
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x97, "derive last retryable proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0x97, "derive last retryable proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::new(6), DataSpaceId::new(7));
-    let request = ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-        request_id: Hash::new(b"torii-proxy-last-retryable"),
-        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
-    };
+    let request =
+        signed_query_proxy_request_for_test(Hash::new(b"torii-proxy-last-retryable"), route);
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
@@ -175,15 +145,10 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-transport")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-transport"),
         Some("p2p_proxy")
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
+    let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"retry-later");
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -214,16 +179,11 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
         let response = strongest.expect("one reducer candidate must remain").2;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "ordinary retryable failures must never overwrite an indeterminate admission"
         );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read preserved outcome-unknown response");
+        let body = torii_body_bytes(response, "read preserved outcome-unknown response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown error envelope");
         assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
@@ -265,16 +225,11 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
         let response = strongest.expect("one reducer candidate must remain").2;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "a definite failure from one authority cannot mask another dispatched authority"
         );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read strict proxy outcome-unknown response");
+        let body = torii_body_bytes(response, "read strict proxy outcome-unknown response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown envelope");
         assert_eq!(
@@ -310,10 +265,7 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
         assert_eq!(priority, 1);
         assert_eq!(candidate_index, 0);
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("candidate_zero"),
             "candidate index must break equal-priority ties independent of arrival order"
         );
@@ -322,14 +274,7 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xac,
-            "derive forged outcome-unknown proxy peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xac, "derive forged outcome-unknown proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
         incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
@@ -363,15 +308,10 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN")
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read rebuilt outcome-unknown response");
+    let body = torii_body_bytes(response, "read rebuilt outcome-unknown response").await;
     let envelope: ErrorEnvelope =
         norito::decode_from_bytes(&body).expect("decode rebuilt outcome-unknown envelope");
     assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
@@ -392,14 +332,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let (app, request) =
         incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let final_authority = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
-    let forwarding_authority = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xef,
-            "derive QueuePlanSynced forwarding-authority fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let forwarding_authority = checked_torii_test_peer_id(0xef, "derive QueuePlanSynced forwarding-authority fixture key");
     assert_ne!(forwarding_authority, final_authority);
     let final_authority_snapshot =
         exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
@@ -437,9 +370,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         StatusCode::ACCEPTED,
         "a forwarding peer must not invalidate an exact receipt signed by another authoritative candidate"
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read reforwarded strict receipt");
+    let body = torii_body_bytes(response, "read reforwarded strict receipt").await;
     let certificate: QueuePlanAdmissionCertificateV2 =
         norito::decode_from_bytes(&body).expect("decode reforwarded strict certificate");
     let attestation = certificate
@@ -520,25 +451,15 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
             );
         }
         assert_eq!(
-            proxied
-                .headers()
-                .get("x-iroha-route-transport")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&proxied, "x-iroha-route-transport"),
             Some("p2p_proxy")
         );
         assert_eq!(
-            proxied
-                .headers()
-                .get("x-iroha-routed-by")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&proxied, "x-iroha-routed-by"),
             Some("proxy")
         );
-        let local_body = axum::body::to_bytes(local.into_body(), usize::MAX)
-            .await
-            .expect("read local public submission response");
-        let proxied_body = axum::body::to_bytes(proxied.into_body(), usize::MAX)
-            .await
-            .expect("read proxied public submission response");
+        let local_body = torii_body_bytes(local, "read local public submission response").await;
+        let proxied_body = torii_body_bytes(proxied, "read proxied public submission response").await;
         if minimal_response {
             assert!(local_body.is_empty());
             assert!(proxied_body.is_empty());
@@ -705,16 +626,11 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
             "{label} must be classified as indeterminate after dispatch"
         );
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "{label} must fail with the stable outcome-unknown code"
         );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read indeterminate strict acceptance response");
+        let body = torii_body_bytes(response, "read indeterminate strict acceptance response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown response envelope");
         assert_eq!(
@@ -736,14 +652,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xb0,
-            "derive strict post-admission failure proxy peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xb0, "derive strict post-admission failure proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
         incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
@@ -785,16 +694,11 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
             "{label}"
         );
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "{label}"
         );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read post-admission outcome-unknown response");
+        let body = torii_body_bytes(response, "read post-admission outcome-unknown response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode post-admission outcome envelope");
         assert_eq!(
@@ -816,19 +720,8 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport() {
-    let p2p_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xa5, "derive post-dispatch P2P proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let http_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xa6,
-            "derive post-dispatch HTTP proxy peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let p2p_peer_id = checked_torii_test_peer_id(0xa5, "derive post-dispatch P2P proxy peer fixture key");
+    let http_peer_id = checked_torii_test_peer_id(0xa6, "derive post-dispatch HTTP proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     for (seed, candidate, expected_transport) in [
         (0xa7, ToriiProxyCandidate::P2p(p2p_peer_id), "p2p_proxy"),
@@ -863,22 +756,14 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN")
         );
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-route-transport")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-route-transport"),
             Some(expected_transport)
         );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read post-dispatch outcome-unknown response");
+        let body = torii_body_bytes(response, "read post-dispatch outcome-unknown response").await;
         let envelope: ErrorEnvelope = norito::decode_from_bytes(&body)
             .expect("decode post-dispatch outcome-unknown envelope");
         assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
@@ -897,11 +782,7 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
 async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
     let (app, request) =
         incoming_proxy_submit_fixture(0xc1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xc2, "derive missing-network proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xc2, "derive missing-network proxy peer fixture key");
     let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, Arc::new(request))
         .await
         .expect_err("missing P2P network must fail before dispatch");
@@ -919,11 +800,7 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
     Arc::get_mut(&mut app)
         .expect("fixture app must be uniquely owned")
         .p2p = Some(iroha_core::IrohaNetwork::closed_for_tests());
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xc4, "derive closed-channel proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xc4, "derive closed-channel proxy peer fixture key");
     let pending_key = (request.request_id.clone(), peer_id.clone());
     let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, Arc::new(request))
         .await
@@ -1004,11 +881,7 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
 #[tokio::test]
 async fn backpressured_response_admission_obeys_local_egress_deadline() {
     let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
-    let target = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xc7, "derive local egress-deadline target fixture key")
-            .public_key()
-            .clone(),
-    );
+    let target = checked_torii_test_peer_id(0xc7, "derive local egress-deadline target fixture key");
     let request_id = Hash::new(b"backpressured-response-local-egress-deadline");
     let local_deadline = tokio::time::Instant::now() + Duration::from_millis(20);
     let result = tokio::time::timeout(
@@ -1049,11 +922,7 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (app, send_request) =
         incoming_proxy_submit_fixture(0xc5, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xc6, "derive HTTP-loss proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xc6, "derive HTTP-loss proxy peer fixture key");
     let send_error = super::execute_torii_proxy_request_via_http_bridge(
         &app,
         peer_id.clone(),
@@ -1136,11 +1005,7 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
     });
     let (app, request) =
         incoming_proxy_submit_fixture(0xc8, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0xc9, "derive HTTP-redirect proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xc9, "derive HTTP-redirect proxy peer fixture key");
     let snapshot = super::execute_torii_proxy_request_via_http_bridge(
         &app,
         peer_id,
@@ -1164,14 +1029,7 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable() {
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xb5,
-            "derive pre-dispatch strict proxy peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let peer_id = checked_torii_test_peer_id(0xb5, "derive pre-dispatch strict proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
         incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
@@ -1191,17 +1049,8 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
         |_request_id| async move {},
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read definite pre-dispatch failure");
+    assert_route_unavailable_response(&response);
+    let body = torii_body_bytes(response, "read definite pre-dispatch failure").await;
     let envelope: ErrorEnvelope =
         norito::decode_from_bytes(&body).expect("decode route-unavailable envelope");
     assert_eq!(envelope.code(), "route_unavailable");
@@ -1216,65 +1065,7 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors()
  {
-    let peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x98, "derive transport error proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
-    let request_id = Hash::new(b"torii-proxy-all-transport-errors");
-    let request = ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-        request_id: request_id.clone(),
-        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
-    };
-    let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let completed_ref = completed.clone();
-    let response = super::execute_torii_proxy_request_across_candidates(
-        vec![ToriiProxyCandidate::P2p(peer_id)],
-        route,
-        request,
-        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
-        |_candidate, _request| async move {
-            Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
-                ToriiProxyAttemptError::before_dispatch("transport unavailable"),
-            )
-        },
-        move |completed_request_id| {
-            let completed = completed_ref.clone();
-            async move {
-                completed
-                    .lock()
-                    .expect("completion tracker should lock")
-                    .push(completed_request_id);
-            }
-        },
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
-    assert_eq!(
-        completed
-            .lock()
-            .expect("completion tracker should lock")
-            .as_slice(),
-        &[request_id]
-    );
+    run_route_unavailable_proxy_case(RouteUnavailableProxyCase::TransportErrors).await;
 }
 #[cfg(feature = "telemetry")]
 fn sample_privacy_event_dto() -> RecordSoranetPrivacyEventDto {
@@ -1699,9 +1490,7 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     .await
     .expect("ok");
     assert_eq!(metrics_resp.status(), axum::http::StatusCode::OK);
-    let metrics_bytes = axum::body::to_bytes(metrics_resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let metrics_bytes = torii_body_bytes(metrics_resp, "body").await;
     let metrics: crate::runtime::RuntimeMetricsResponse =
         norito::json::from_slice(&metrics_bytes).expect("decode json");
     assert_eq!(metrics.abi_version, 1);
@@ -1714,9 +1503,7 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     .await
     .expect("ok");
     assert_eq!(caps_resp.status(), axum::http::StatusCode::OK);
-    let caps_bytes = axum::body::to_bytes(caps_resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let caps_bytes = torii_body_bytes(caps_resp, "body").await;
     let caps: crate::runtime::NodeCapabilitiesResponse =
         norito::json::from_slice(&caps_bytes).expect("decode json");
     assert_eq!(caps.abi_version, 1);
@@ -1865,9 +1652,7 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
             crate::utils::NORITO_MIME_TYPE,
         ))
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.indexed_height, 55);
@@ -2038,9 +1823,7 @@ async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload()
             crate::utils::NORITO_MIME_TYPE,
         ))
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.emitted_at_unix, 1_714_002_111);
@@ -2092,9 +1875,7 @@ async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
             crate::utils::NORITO_MIME_TYPE,
         ))
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.emitted_at_unix, 1_714_002_333);
@@ -2171,9 +1952,7 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
             crate::utils::NORITO_MIME_TYPE,
         ))
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
     for shard in &checkpoint.shards {
@@ -2214,9 +1993,7 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
             crate::utils::NORITO_MIME_TYPE,
         ))
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(catalog.resource, "accounts");
@@ -2247,9 +2024,7 @@ async fn node_query_projection_shard_export_handler_returns_binary_archive() {
             .map(axum::http::HeaderValue::as_bytes),
         Some(b"application/octet-stream".as_slice())
     );
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let bytes = torii_body_bytes(response, "body").await;
     let archive: iroha_core::query::projection_shard::QueryProjectionShardArchive =
         norito::decode_from_bytes(&bytes).expect("decode archive");
     assert_eq!(
@@ -2272,9 +2047,7 @@ async fn core_info_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let config_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("config body");
+    let config_bytes = torii_body_bytes(resp, "config body").await;
     let config: ConfigGetDTO =
         norito::json::from_slice(&config_bytes).expect("decode config payload");
     assert!(
@@ -2310,9 +2083,7 @@ async fn core_info_handlers_ok() {
             .and_then(|value| value.to_str().ok()),
         Some("application/json")
     );
-    let peer_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("peers body");
+    let peer_bytes = torii_body_bytes(resp, "peers body").await;
     let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
     assert!(peers.is_empty());
     // A generic test state intentionally has no authenticated ABI-21/V4
@@ -2329,11 +2100,7 @@ async fn core_info_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
-    let health_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("health body");
-    let health: norito::json::Value =
-        norito::json::from_slice(&health_bytes).expect("decode health payload");
+    let health = decode_torii_json(resp, "health body", "decode health payload").await;
     assert_eq!(
         health
             .get("cash_handoff_capability")
@@ -2419,9 +2186,7 @@ where
 }
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn extract_error(resp: AxResponse) -> ErrorEnvelope {
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("error body");
+    let bytes = torii_body_bytes(resp, "error body").await;
     norito::decode_from_bytes(&bytes).expect("decode error envelope")
 }
 #[cfg(all(feature = "app_api", feature = "push"))]

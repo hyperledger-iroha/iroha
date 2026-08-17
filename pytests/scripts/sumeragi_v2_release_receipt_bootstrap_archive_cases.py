@@ -30,6 +30,29 @@ from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
+def test_runtime_helper_rejects_oversized_cli_component_before_read(
+    tmp_path: Path,
+) -> None:
+    helper_path = tmp_path / "copy_sumeragi_v2_release_cargo_cache.py"
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py",
+        helper_path,
+    )
+    component = tmp_path / "copy_sumeragi_v2_release_cargo_cache_cli.py"
+    with component.open("wb") as sparse:
+        sparse.truncate(512 * 1024 + 1)
+    component.chmod(0o600)
+    spec = importlib.util.spec_from_file_location(
+        "oversized_release_cache_cli_component", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(module.CacheCopyError, match="metadata is unsafe"):
+        module._cli_component()
+
+
 def _load_receipt_writer_module() -> object:
     """Load the production writer without relying on the parent suite namespace."""
 
@@ -831,9 +854,11 @@ def exercise_private_pr_outer_lifecycle(runner: Path, tmp_path: Path) -> None:
 
     host_python = Path(sys.executable).resolve(strict=True)
     helper = runner.with_name("copy_sumeragi_v2_release_cargo_cache.py")
+    helper_cli = runner.with_name("copy_sumeragi_v2_release_cargo_cache_cli.py")
     runner_support = runner.with_name("run_sumeragi_v2_release_gates_support.sh")
     shutil.copy2(runner, scripts / runner.name)
     shutil.copy2(helper, scripts / helper.name)
+    shutil.copy2(helper_cli, scripts / helper_cli.name)
     shutil.copy2(runner_support, scripts / runner_support.name)
     (candidate / "Cargo.lock").write_bytes(b"private PR fixture lock\n")
     (candidate / "Cargo.lock").chmod(0o600)
@@ -1189,6 +1214,12 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     assert runtime_document["source_disclosure"] == "withheld"
     assert runtime_document["input_record_count"] == len(runtime_document["input_records"])
     if framework_python:
+        assert runtime_document["schema_version"] == 2
+        relocation = runtime_document["framework_python_relocation"]
+        assert relocation["artifacts"]["launcher"]["derived"]["framework_dependency"] \
+            == "@executable_path/../Python"
+        assert relocation["artifacts"]["trampoline"]["derived"]["framework_dependency"] \
+            == "@executable_path/../../../../Python"
         stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
         site_packages_path = f"lib/{stdlib_name}/site-packages"
         runtime_records = {
@@ -1262,9 +1293,13 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         observe_source_members(source_root / "Resources", "Resources")
         observe_source_members(source_root / "lib", "lib")
         for path, expected in source_records.items():
+            if path == site_packages_path or path.startswith(f"{site_packages_path}/"):
+                continue
             actual = runtime_records[path]
             assert actual["kind"] == expected[0]
             if expected[0] == "file":
+                if path == "Resources/Python.app/Contents/MacOS/Python":
+                    continue
                 assert (actual["size"], actual["sha256"]) == expected[1:]
             elif expected[0] == "symlink":
                 assert actual["target"] == expected[1]

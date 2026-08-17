@@ -23,7 +23,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "70b1951856692582c0ee024b6a338b63a27a3c39510b9755fa3cc2de93fc64c3"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "c5a1546939ede32b831d75c6905035d5692ef5d4c1db94a0b7fc0f1fafdf5ede"
+    "b8da38b347fae37b7d323d9ef8d3bc617a644b0f53115bed089a91e91296b8da"
 )
 EXPECTED_BLAKE3_BYTES = (
     0xDB, 0x7B, 0xCF, 0xC3, 0x11, 0x26, 0x50, 0x74,
@@ -366,7 +366,7 @@ def _extract_direct_builder(source: str, function: str) -> str:
 def validate(source: str, asset_bytes: bytes) -> None:
     asset = _parse_asset(asset_bytes)
     loader_start = source.find("const MANUAL_STATIC_TOOL_ASSET_VERSION")
-    first_wrapper = source.find("static_manual_tool_wrapper!(connect_ws_ticket_tool")
+    first_wrapper = source.find("manual_tool! {", loader_start)
     if loader_start < 0 or first_wrapper <= loader_start:
         raise GuardError("static descriptor loader boundaries drifted")
     loader = source[loader_start:first_wrapper]
@@ -387,15 +387,38 @@ def validate(source: str, asset_bytes: bytes) -> None:
         raise GuardError("runtime BLAKE3 seal drifted")
 
     wrapper_pattern = re.compile(
-        r"\bstatic_manual_tool_wrapper!\(\s*"
-        r"([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-        r'("(?:\\.|[^"\\])*")\s*\);',
+        r"\bmanual_tool!\s*(?:"
+        r"\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
+        r'("(?:\\.|[^"\\])*")\s*\);|'
+        r"\{(.*?)\})",
         re.DOTALL,
     )
-    wrappers = tuple(
-        (match.group(1), json.loads(match.group(2)))
-        for match in wrapper_pattern.finditer(source)
+    group_entry_pattern = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*=>\s*"
+        r'("(?:\\.|[^"\\])*")\s*;',
+        re.DOTALL,
     )
+    wrappers_list: list[tuple[str, str]] = []
+    for match in wrapper_pattern.finditer(source):
+        if match.group(1) is not None:
+            wrappers_list.append((match.group(1), json.loads(match.group(2))))
+            continue
+        group = match.group(3)
+        assert group is not None
+        entries = tuple(group_entry_pattern.finditer(group))
+        cursor = 0
+        if not entries:
+            raise GuardError("manual wrapper group syntax drifted")
+        for entry in entries:
+            if group[cursor : entry.start()].strip():
+                raise GuardError("manual wrapper group syntax drifted")
+            cursor = entry.end()
+        if group[cursor:].strip():
+            raise GuardError("manual wrapper group syntax drifted")
+        wrappers_list.extend(
+            (entry.group(1), json.loads(entry.group(2))) for entry in entries
+        )
+    wrappers = tuple(wrappers_list)
     if wrappers != EXPECTED_WRAPPERS:
         raise GuardError("source wrapper function/name/order inventory drifted")
     asset_inventory = tuple(
@@ -441,8 +464,8 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (
             (
-                'static_manual_tool_wrapper!(connect_ws_ticket_tool, "connect.ws.ticket");',
-                'static_manual_tool_wrapper!(connect_ws_ticket_tool, "connect.session.create");',
+                'connect_ws_ticket_tool => "connect.ws.ticket";',
+                'connect_ws_ticket_tool => "connect.session.create";',
             ),
             (
                 'manual_tool_effect_from_name(expected_name)',

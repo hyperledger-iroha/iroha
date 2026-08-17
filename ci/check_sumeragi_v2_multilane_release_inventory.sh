@@ -15,6 +15,7 @@ readonly release_runner_support="scripts/run_sumeragi_v2_release_gates_support.s
 readonly release_bootstrap="scripts/bootstrap_sumeragi_v2_release.py"
 readonly release_bootstrap_test="pytests/scripts/sumeragi_v2_release_bootstrap_test.py"
 readonly cargo_cache_copier="scripts/copy_sumeragi_v2_release_cargo_cache.py"
+readonly cargo_cache_cli_component="scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"
 readonly cargo_cache_ack_component="scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
@@ -352,7 +353,8 @@ python3 -I -S - \
   "$cargo_cache_ack_component" \
   "$release_receipt_gate_component" \
   "$release_receipt_publication_component" \
-  "$release_bootstrap_component" <<'PY'
+  "$release_bootstrap_component" \
+  "$cargo_cache_cli_component" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -397,8 +399,13 @@ release_bootstrap_component = Path(sys.argv[14])
 release_bootstrap_component_source = release_bootstrap_component.read_text(
     encoding="utf-8"
 )
+cargo_cache_cli_component = Path(sys.argv[15])
+cargo_cache_cli_component_source = cargo_cache_cli_component.read_text(
+    encoding="utf-8"
+)
 cargo_cache_closure_source = (
-    cargo_cache_source + "\n" + cargo_cache_ack_component_source
+    cargo_cache_source + "\n" + cargo_cache_cli_component_source
+    + "\n" + cargo_cache_ack_component_source
 )
 
 
@@ -513,6 +520,35 @@ cargo_cache_assignments = {
     for target in node.targets
     if isinstance(target, ast.Name)
 }
+if ast.literal_eval(cargo_cache_assignments["CLI_COMPONENT_FILES"]) != (
+    "copy_sumeragi_v2_release_cargo_cache_cli.py",
+):
+    reject("Cargo cache CLI component manifest is not exact")
+if (
+    ast.literal_eval(cargo_cache_assignments["CLI_COMPONENT_SHA256"])
+    != hashlib.sha256(cargo_cache_cli_component.read_bytes()).hexdigest()
+):
+    reject("Cargo cache CLI component digest is not exact")
+if len(cargo_cache_cli_component_source.splitlines()) >= 3_000:
+    reject("Cargo cache CLI component exceeds its source budget")
+cli_component_tree = ast.parse(cargo_cache_cli_component_source)
+if sum(
+    isinstance(node, ast.FunctionDef) and node.name == "_cli_component"
+    for node in cargo_cache_tree.body
+) != 1 or sum(
+    isinstance(node, ast.FunctionDef) and node.name == "run"
+    for node in cli_component_tree.body
+) != 1:
+    reject("Cargo cache CLI loader/dispatcher ownership changed")
+for token in (
+    "component = Path(__file__).parent.resolve(strict=True) / CLI_COMPONENT_FILES[0]",
+    'code = compile(payload, str(component), "exec")',
+    "exec(code, namespace)",
+    "error_type=CacheCopyError,",
+):
+    expected_count = 8 if token == "error_type=CacheCopyError," else 1
+    if cargo_cache_closure_source.count(token) != expected_count:
+        reject(f"Cargo cache CLI authenticated-load contract changed: {token}")
 if ast.literal_eval(cargo_cache_assignments["VALIDATION_ACK_COMPONENT_FILES"]) != (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 ):
@@ -745,6 +781,9 @@ expected_receipt_gate_component_symbols = (
     "_runtime_tool_probe_evidence",
 )
 expected_receipt_publication_component_symbols = (
+    "_validate_framework_python_input_records",
+    "_validate_framework_python_macho_closure",
+    "_validate_framework_python_relocation_evidence",
     "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
     "_capture_path_contract",
     "_snapshot_receipt_inputs", "_capture_directory_contract",
@@ -1651,7 +1690,8 @@ python3 -I -S - \
   "$nexus_cross_lane_pr_helper" \
   "$nexus_pr_helper_test" \
   "$release_runner_support" \
-  "$cargo_cache_ack_component" <<'PY'
+  "$cargo_cache_ack_component" \
+  "$cargo_cache_cli_component" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
@@ -1688,6 +1728,11 @@ expected_edges = (
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
+        'pr_clone_helper_cli="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"',
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/run_sumeragi_v2_release_gates_support.sh",
         'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"',
     ),
@@ -1695,6 +1740,11 @@ expected_edges = (
         "scripts/copy_sumeragi_v2_release_cargo_cache.py",
         "scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
         '"copy_sumeragi_v2_release_cargo_cache_validation_ack.py",',
+    ),
+    (
+        "scripts/copy_sumeragi_v2_release_cargo_cache.py",
+        "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
+        '"copy_sumeragi_v2_release_cargo_cache_cli.py",',
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
