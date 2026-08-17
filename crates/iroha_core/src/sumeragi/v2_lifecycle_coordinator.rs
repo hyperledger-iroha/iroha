@@ -138,16 +138,6 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
 ) {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
 }
-#[cfg(all(test, feature = "bls"))]
-/// Build the exact retired H/H+1 inputs for lifecycle clean-shutdown tests.
-pub(in crate::sumeragi) fn complete_tip_lifecycle_shutdown_fixture() -> (
-    std::sync::Arc<crate::kura::Kura>,
-    super::v2::VerifiedHeightContext,
-    iroha_crypto::KeyPair,
-    RetiredRecoveredCompleteTipActivationAuthorityV1,
-) {
-    ledger::tests::durable_ready_fetch_recovery::complete_tip_lifecycle_shutdown_fixture()
-}
 #[cfg(test)]
 pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
 #[cfg(test)]

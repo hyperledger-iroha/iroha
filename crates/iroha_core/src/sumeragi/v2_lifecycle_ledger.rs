@@ -1419,16 +1419,44 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                     })
             }
     }
-    /// Reauthenticate the retained canonical H+1 ledger at its Kura-derived target.
-    pub(in crate::sumeragi) fn authorizes_retained_successor(&self) -> bool {
-        let Some(successor_root) = self.successor_store.path.parent() else {
-            return false;
-        };
+    fn predecessor_remains_exact(&self) -> bool {
         self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity
             && self
                 .predecessor_store
                 .is_authorized_complete_tip_predecessor_target(&self.complete_tip)
             && self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)
+    }
+    /// Authenticate the sole startup publication allowed after retirement.
+    ///
+    /// A production owner may repair an exact recovered WAL row while opening
+    /// the H+1 store.  Retirement necessarily precedes that open, so an
+    /// initially empty successor can advance before the owner is joined.  The
+    /// adoption is deliberately one-way and narrow: only the exact initialized
+    /// empty frame can move, and every row in the replacement must begin above
+    /// the predecessor's retained ordinal floor.  A nonempty retirement-time
+    /// frame remains frozen and must match byte-for-byte.
+    fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool {
+        if successor == &self.successor_ledger {
+            return self.successor_descends_from_retirement();
+        }
+        self.successor_descends_from_retirement()
+            && self.successor_ledger.records.is_empty()
+            && self.successor_ledger.producer_debts.is_empty()
+            && self.successor_ledger.high_water == self.retained_high_water
+            && successor.context() == self.successor_store.context
+            && !successor.records.is_empty()
+            && successor.high_water >= self.retained_high_water
+            && successor.records.iter().all(|record| {
+                record.ordinal() > self.retained_high_water
+                    && record.owner().first_admission_ordinal() > self.retained_high_water
+            })
+    }
+    /// Reauthenticate the retained canonical H+1 ledger at its Kura-derived target.
+    pub(in crate::sumeragi) fn authorizes_retained_successor(&self) -> bool {
+        let Some(successor_root) = self.successor_store.path.parent() else {
+            return false;
+        };
+        self.predecessor_remains_exact()
             && self.successor_descends_from_retirement()
             && self.complete_tip.authorizes_successor_lifecycle_target(
                 successor_root,
@@ -1455,7 +1483,11 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
             && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)
             && successor.last_committed_height == self.complete_tip.predecessor().height()
     }
-    fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
+    fn matches_successor_owner_ledger(
+        &self,
+        owner: &mut ProductionLifecycleOwnerV1,
+        successor_ledger: &LifecycleLedgerV1,
+    ) -> bool {
         let Some(successor_root) = self.successor_store.path.parent() else {
             return false;
         };
@@ -1471,17 +1503,16 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         if owner.body_store_identity.is_some()
             || owner.coordinator.fault.is_some()
             || owner.coordinator.active_lease.is_some()
+            || !self.predecessor_remains_exact()
             || !self
                 .complete_tip
                 .authorizes_successor_kura(owner.kura_binding.as_ref())
-            || !self.successor_descends_from_retirement()
             || !self
                 .complete_tip
                 .authorizes_verified_successor(&owner.verified)
-            || !self.complete_tip.authorizes_successor_lifecycle_target(
-                successor_root,
-                self.successor_ledger.context(),
-            )
+            || !self
+                .complete_tip
+                .authorizes_successor_lifecycle_target(successor_root, successor_ledger.context())
             || !self
                 .complete_tip
                 .authorizes_successor_body_store(body_store, &owner.verified)
@@ -1494,22 +1525,26 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                 .validate_authenticated_cut(&owner.serve_payloads)
                 .is_err()
             || !super::open::authenticated_serve_payloads_match_ledger(
-                &self.successor_ledger,
+                successor_ledger,
                 &owner.serve_payloads,
             )
             || !owner_store.same_publication_target(&self.successor_store)
-            || self.successor_store.load().ok().as_ref() != Some(&self.successor_ledger)
-            || owner_store.load().ok().as_ref() != Some(&self.successor_ledger)
+            || self.successor_store.load().ok().as_ref() != Some(successor_ledger)
+            || owner_store.load().ok().as_ref() != Some(successor_ledger)
             || LifecycleLedgerV1::from_coordinator(&owner.coordinator)
                 .ok()
                 .as_ref()
-                != Some(&self.successor_ledger)
+                != Some(successor_ledger)
         {
             return false;
         }
         let registry = owner.registry.registry_mut();
         registry.exactly_covers_recovered_ready_work(&owner.coordinator)
             || registry.exactly_covers_recovered_ready_work_and_wal_authority(&owner.coordinator)
+    }
+    fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
+        self.successor_descends_from_retirement()
+            && self.matches_successor_owner_ledger(owner, &self.successor_ledger)
     }
     /// Consume retirement and the exact unlaunched H+1 owner into one seal.
     ///
@@ -1520,10 +1555,23 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     /// returned.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn bind_successor_owner(
-        self,
+        mut self,
         mut owner: ProductionLifecycleOwnerV1,
     ) -> Result<BoundRecoveredCompleteTipSuccessorOwnerV1, CompleteTipSuccessorOwnerBindErrorV1>
     {
+        let Ok(successor_ledger) = self.successor_store.load() else {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        };
+        if !self.authorizes_owner_open_successor(&successor_ledger)
+            || !self.matches_successor_owner_ledger(&mut owner, &successor_ledger)
+        {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        }
+        // Freeze the owner-authenticated publication, not the retirement-time
+        // empty snapshot.  Every later runner/status check is strict against
+        // this new frame and therefore still rejects post-bind drift.
+        self.successor_frame_identity = successor_ledger.frame_identity();
+        self.successor_ledger = successor_ledger;
         if !self.exactly_matches_successor_owner(&mut owner) {
             return Err(CompleteTipSuccessorOwnerBindErrorV1);
         }

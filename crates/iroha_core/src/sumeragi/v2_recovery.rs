@@ -2495,6 +2495,20 @@ pub(crate) enum V2RecoveryError {
     #[error("Sumeragi v2 height overflow")]
     HeightOverflow,
 }
+/// Build the exact clean-height-one recovery boundary used by the lifecycle
+/// runner's CompleteTip restart regression.
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_test() -> (
+    std::sync::Arc<crate::kura::Kura>,
+    std::sync::Arc<crate::state::State>,
+    crate::sumeragi::v2::VerifiedHeightContext,
+    crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1,
+    iroha_crypto::KeyPair,
+    crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
+) {
+    tests::production_empty_genesis_complete_tip_fixture()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2924,6 +2938,81 @@ mod tests {
         let _commit_receipt = kura
             .store_v2_finality_artifact(artifact)
             .expect("persist authenticated v2 finality");
+    }
+    #[cfg(feature = "bls")]
+    pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
+        Arc<Kura>,
+        Arc<State>,
+        VerifiedHeightContext,
+        RecoveredLifecycleStorageAuthorityV1,
+        KeyPair,
+        crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    ) {
+        let (verified_genesis, keys) = verified_context();
+        let context = verified_genesis.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(state_with_consensus_keys(&kura, context.network_id, &keys));
+        let block = dummy_block(&keys[0], 1, None);
+        kura.store_block(block.clone())
+            .expect("persist production-shaped signed genesis block");
+        commit_to_state(state.as_ref(), &block, &context);
+        let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
+        persist_complete_height(kura.as_ref(), state.as_ref(), &artifact);
+        let context_store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+        context_store
+            .persist(&PersistedHeightContext::from_verified(&verified_genesis))
+            .expect("persist signed genesis context");
+
+        let recovered = recover_active_height(
+            kura.as_ref(),
+            state.as_ref(),
+            None,
+            keys[0].public_key().clone(),
+        )
+        .expect("recover the exact Kura height-one CompleteTip");
+        let (
+            verified_successor,
+            _context_store,
+            signature_policy,
+            lifecycle_storage,
+            authenticated_genesis,
+            activation,
+            staged_genesis,
+        ) = recovered.into_parts();
+        assert!(authenticated_genesis.is_none());
+        assert!(staged_genesis.is_none());
+        assert!(matches!(
+            signature_policy,
+            BlockSignaturePolicy::RotatingLeader
+        ));
+        let Some(RecoveredSuccessorActivationAuthority::CompleteTip(complete_tip)) = activation
+        else {
+            panic!("a complete signed genesis tip must recover CompleteTip authority")
+        };
+        let predecessor_frame = complete_tip
+            .lifecycle_storage
+            .predecessor
+            .root
+            .join("lifecycle-ledger-v1.norito");
+        assert!(
+            !predecessor_frame.exists(),
+            "the production-shaped predecessor lifecycle must begin genuinely empty"
+        );
+        let retirement = complete_tip
+            .into_canonical_predecessor_storage(&keys[0])
+            .and_then(
+                crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1::retire,
+            )
+            .expect("retire the empty signed-genesis predecessor");
+        (
+            kura,
+            state,
+            verified_successor,
+            lifecycle_storage,
+            keys[0].clone(),
+            retirement,
+        )
     }
     fn hash_only_snapshot_boundary(
         anchor_height: u64,

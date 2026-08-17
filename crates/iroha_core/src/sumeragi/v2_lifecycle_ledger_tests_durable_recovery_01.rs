@@ -1212,38 +1212,6 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
     (kura, predecessor_root, successor_context, retirement)
 }
 
-/// Build a retired CompleteTip pair with the exact verified H+1 and
-/// local signer needed by the production lifecycle-launch fixture.
-pub(crate) fn complete_tip_lifecycle_shutdown_fixture() -> (
-    std::sync::Arc<Kura>,
-    VerifiedHeightContext,
-    KeyPair,
-    RetiredRecoveredCompleteTipActivationAuthorityV1,
-) {
-    let fixture = RecoveryFixture::new("complete-tip-lifecycle-shutdown", 0x4D);
-    let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
-    let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
-    let local_signer = fixture.keys[0].clone();
-    let kura = Kura::blank_kura_for_testing();
-    let predecessor_root = kura
-        .sumeragi_v2_storage_root()
-        .join("lifecycle-v1")
-        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
-    let (predecessor_store, empty) =
-        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
-            .expect("open canonical lifecycle-shutdown predecessor");
-    assert!(empty.records().is_empty());
-    predecessor_store
-        .persist(&predecessor)
-        .expect("persist lifecycle-shutdown predecessor");
-    let retirement =
-        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
-            .into_canonical_predecessor_storage(&fixture.keys[0])
-            .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
-            .expect("retire lifecycle-shutdown predecessor");
-    (kura, verified_successor, local_signer, retirement)
-}
-
 fn empty_successor_owner_for_complete_tip(
     retirement: &RetiredRecoveredCompleteTipActivationAuthorityV1,
     kura: &Kura,

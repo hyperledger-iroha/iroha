@@ -507,11 +507,11 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
-fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
+fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
-    let (kura, verified, local_signer, retirement) =
-        super::super::v2_lifecycle_coordinator::complete_tip_lifecycle_shutdown_fixture();
+    let (kura, state, verified, storage_authority, local_signer, retirement) =
+        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -524,6 +524,37 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     let wal_path = storage_root
         .join("wal")
         .join(format!("{:020}.wal", context.height));
+    let successor_ledger_path = storage_root
+        .join("lifecycle-v1")
+        .join(hex::encode(context.id().0.as_ref()))
+        .join("lifecycle-ledger-v1.norito");
+    let empty_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the retirement-time empty successor frame");
+    let (mut adapter, effects) = SumeragiV2Adapter::open_with_aggregator(
+        wal_path.clone(),
+        verified.clone(),
+        Some(local_validator),
+        reducer::Generation::new(1),
+        [0x4D; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open production-shaped H+1 adapter");
+    assert!(effects.is_empty());
+    let timeout = adapter
+        .timeout_elapsed(adapter.current_tag())
+        .expect("persist the exact H+1 TimeoutIntent")
+        .into_effects();
+    assert!(matches!(
+        timeout.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }]
+    ));
+    drop(adapter);
+    crate::sumeragi::status::clear_v2_status();
     let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         wal_path,
         verified.clone(),
@@ -537,8 +568,9 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     .expect("open sealed empty H+1 adapter startup")
     .authenticate_final_wal_startup_authority()
     .unwrap_or_else(|(error, _startup)| {
-        panic!("authenticate empty CompleteTip successor WAL: {error}")
+        panic!("authenticate CompleteTip successor TimeoutIntent: {error}")
     });
+    assert!(authenticated.has_recovered_control_sign_for_test());
     let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
     let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
         storage_root.join("bodies"),
@@ -547,13 +579,6 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     )
     .expect("open canonical H+1 body store");
     let body_store = quarantined_lifecycle_body_store_for_test(body_store);
-    let storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
-        kura.as_ref(),
-        &verified,
-        signature_policy,
-        AccountId::new(local_signer.public_key().clone()),
-    );
-    let state = lifecycle_factory_state_for_test(Arc::clone(&kura), context.network_id);
     let factory_inputs = try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage_authority,
@@ -570,6 +595,12 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
             body_store,
         )
         .unwrap_or_else(|error| panic!("open CompleteTip H+1 lifecycle owner: {error}"));
+    let repaired_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the owner-open recovered-control successor frame");
+    assert_ne!(
+        repaired_successor, empty_successor,
+        "owner startup must reproduce the production empty-to-control-repair publication"
+    );
     let ingress = Arc::new(
         crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
