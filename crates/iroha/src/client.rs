@@ -215,7 +215,7 @@ enum SorafsEndpointAuth {
     Account,
 }
 
-/// Exact transport contract for one SoraFS HTTP endpoint.
+/// Exact transport contract for one `SoraFS` HTTP endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SorafsEndpoint<'a> {
     path: &'a str,
@@ -285,7 +285,7 @@ impl<'a> SorafsEndpoint<'a> {
 macro_rules! sorafs_transaction_methods {
     ($submitter:ident; $($name:ident => $route:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Submit the exact `", stringify!($route), "` SoraFS transaction.")]
+            #[doc = concat!("Submit the exact `", stringify!($route), "` `SoraFS` transaction.")]
             /// # Errors
             /// Returns errors from route validation, compatibility admission, or transport.
             pub fn $name(
@@ -346,7 +346,7 @@ macro_rules! sorafs_signed_json_methods {
 macro_rules! sorafs_filtered_get_methods {
     ($($name:ident($filter:ident: $filter_type:ty) => $endpoint:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Fetch the filtered SoraFS projection for `", stringify!($name), "`.")]
+            #[doc = concat!("Fetch the filtered `SoraFS` projection for `", stringify!($name), "`.")]
             /// # Errors
             /// Returns an error if request construction or transport fails.
             pub fn $name(&self, $filter: $filter_type) -> Result<Response<Vec<u8>>> {
@@ -363,7 +363,7 @@ macro_rules! sorafs_filtered_get_methods {
 macro_rules! sorafs_static_get_methods {
     ($($name:ident => $endpoint:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Fetch the static SoraFS projection for `", stringify!($name), "`.")]
+            #[doc = concat!("Fetch the static `SoraFS` projection for `", stringify!($name), "`.")]
             /// # Errors
             /// Returns an error if request construction, signing, or transport fails.
             pub fn $name(&self) -> Result<Response<Vec<u8>>> {
@@ -409,7 +409,7 @@ macro_rules! sorafs_quarantine_post_methods {
                 let quarantine_id_hex =
                     normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
                 let path = format!(
-                    concat!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/", $suffix)
+                    concat!("v1/sorafs/moderation/quarantine/{}/", $suffix), quarantine_id_hex,
                 );
                 let body = $encode($request)?;
                 self.send_sorafs_endpoint(SorafsEndpoint::account_json_post(&path), body, |_| {})
@@ -1965,10 +1965,6 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     #[norito(rename = "max_governed_lanes")]
@@ -1999,10 +1995,6 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     #[norito(rename = "max_outbound_messages_per_block")]
@@ -4727,10 +4719,6 @@ fn expected_zk_vk_status(
         )),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the verifier-key draft reconstruction keeps its ordered fail-closed validation in one audit surface"
-)]
 fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
@@ -5529,7 +5517,8 @@ macro_rules! sorafs_checkpoint_filter {
                         require_nonzero_lower_hex32(after, $after_context)?,
                     );
                 }
-                url.query_pairs_mut().append_pair("limit", &limit.to_string());
+                url.query_pairs_mut()
+                    .append_pair("limit", &limit.to_string());
                 Ok(())
             }
         }
@@ -7546,9 +7535,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let status = if Self::is_norito_content_type(content_type) {
-            let status = decode_from_bytes::<SumeragiV2Status>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
-            status
+            decode_from_bytes::<SumeragiV2Status>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else if Self::is_exact_json_content_type(content_type) {
             norito::json::from_slice::<SumeragiV2Status>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
@@ -26983,6 +26971,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the operator-authentication audit checks every signed header and network binding in one fixture"
+    )]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 2] = [
@@ -28454,6 +28446,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the hedging and billing audit keeps all endpoint-specific signed-request bindings together"
+    )]
     fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -28513,26 +28509,40 @@ mod tests {
         ];
         let queries = [
             None,
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25")),
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25"
+            )),
             Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
             Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
             None,
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50")),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&limit=100")),
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50"
+            )),
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&limit=100"
+            )),
         ];
         assert_eq!(snapshots.len(), paths.len());
         for (index, snapshot) in snapshots.iter().enumerate() {
             assert_canonical_account_signed_request(&client, snapshot);
             assert_eq!(
                 snapshot.method,
-                if index == 3 { HttpMethod::POST } else { HttpMethod::GET }
+                if index == 3 {
+                    HttpMethod::POST
+                } else {
+                    HttpMethod::GET
+                }
             );
             assert_eq!(snapshot.url.path(), paths[index]);
             assert_eq!(snapshot.url.query(), queries[index].as_deref());
             let is_statement = index == 2;
             assert_single_accept_header(
                 snapshot,
-                if is_statement { APPLICATION_NORITO } else { APPLICATION_JSON },
+                if is_statement {
+                    APPLICATION_NORITO
+                } else {
+                    APPLICATION_JSON
+                },
             );
             assert_eq!(
                 snapshot.max_response_bytes,
@@ -28625,6 +28635,8 @@ mod tests {
     );
     #[test]
     fn sorafs_list_readbacks_target_exact_endpoints() {
+        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
+        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
@@ -28673,8 +28685,6 @@ mod tests {
                 response.expect("SoraFS list readback request");
             }
         });
-        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
-        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let expected = [
             ("/v1/sorafs/moderation/quarantine", Some("limit=7")),
             ("/v1/sorafs/moderation/model-registry", Some("limit=11")),
@@ -28761,7 +28771,7 @@ mod tests {
         snapshot
     }
 
-    fn assert_error_contains<T>(result: Result<T>, expected: &str) {
+    fn assert_error_contains<T, E: fmt::Display>(result: Result<T, E>, expected: &str) {
         let Err(error) = result else {
             panic!("request unexpectedly succeeded")
         };
@@ -29062,9 +29072,12 @@ mod tests {
             &body,
             |client| client.post_sorafs_moderation_screening_result(&request),
         );
-        assert!(snapshot.body.windows(idempotency_key_lower.len()).any(|bytes| {
-            bytes == idempotency_key_lower.as_bytes()
-        }));
+        assert!(
+            snapshot
+                .body
+                .windows(idempotency_key_lower.len())
+                .any(|bytes| { bytes == idempotency_key_lower.as_bytes() })
+        );
     }
     #[test]
     fn sorafs_moderation_screening_submit_rejects_missing_runtime_authority() {

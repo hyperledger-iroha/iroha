@@ -361,6 +361,10 @@ mod norito_rpc_fixture_tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps one cohesive canonical and alias-encoding golden audit"
+    )]
     fn compact_external_entrypoint_golden_matches_native_hash_and_rejects_alias_encodings() {
         use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
         use sha2::Digest as _;

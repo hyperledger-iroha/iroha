@@ -4,6 +4,7 @@ use crate::{
     PreparedRuntimeSource, base64_standard, path, peer,
 };
 use norito::json::{self, Map, Value};
+use std::fmt::Write as _;
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
     let mut map = Map::new();
     map.insert(
@@ -69,7 +70,6 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
     Value::Object(map)
 }
 fn encode_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         write!(&mut out, "{byte:02x}").expect("format hex byte");
@@ -686,8 +686,9 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     String::from_utf8(encoded).expect("hex alphabet is valid UTF-8")
 }
 fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> String {
-    let launch = match runtime {
-        Some(runtime) => {
+    let launch = runtime.map_or_else(
+        || "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned(),
+        |runtime| {
             let sora = if runtime.requires_sora_profile {
                 " --sora"
             } else {
@@ -704,11 +705,13 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
                         .display();
                     let encoded = prepared_runtime_encoded_target(file);
                     let temporary = format!("{}.kagami-tmp", file.target);
-                    materialize.push_str(&format!(
+                    write!(
+                        &mut materialize,
                         "mkdir -p {parent} && base64 -d < {encoded} > {temporary} && \
                          chmod 0400 {temporary} && mv -f {temporary} {} && ",
                         file.target
-                    ));
+                    )
+                    .expect("format runtime materialization command");
                 }
             }
             format!(
@@ -718,11 +721,8 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
                  --config-blake3 {config_blake3}",
                 runtime.build_line.as_str()
             )
-        }
-        None => {
-            "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned()
-        }
-    };
+        },
+    );
     format!(
         r#"/bin/sh -eu -c "
     GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\
@@ -831,7 +831,7 @@ impl IrohadRef {
 #[derive(Debug)]
 enum BuildOrPull<'a> {
     Build {
-        primary: (IrohadRef, Irohad<'a, BuildImage<'a>>),
+        primary: Box<(IrohadRef, Irohad<'a, BuildImage<'a>>)>,
         irohads: std::collections::BTreeMap<IrohadRef, Irohad<'a, BuiltImage<'a>>>,
     },
     Pull {
@@ -877,7 +877,7 @@ impl<'a> BuildOrPull<'a> {
             .next()
             .expect("a swarm always contains at least one validator");
         Self::Build {
-            primary: (
+            primary: Box::new((
                 IrohadRef(primary_info.name.clone()),
                 Self::irohad(
                     image,
@@ -889,7 +889,7 @@ impl<'a> BuildOrPull<'a> {
                     &trusted_peers_pop,
                     primary_info,
                 ),
-            ),
+            )),
             irohads: peers
                 .map(|(index, info)| {
                     (
@@ -909,6 +909,10 @@ impl<'a> BuildOrPull<'a> {
                 .collect(),
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Compose service assembly requires the complete peer deployment context"
+    )]
     fn irohad<Image: ComposeImageFields>(
         image: Image,
         healthcheck: bool,
@@ -935,6 +939,10 @@ impl<'a> BuildOrPull<'a> {
             runtime,
         )
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Compose service assembly requires the complete peer deployment context"
+    )]
     fn irohads<Image: ComposeImageFields + Copy>(
         image: Image,
         healthcheck: bool,
@@ -968,7 +976,7 @@ impl<'a> BuildOrPull<'a> {
         let mut services = norito::json::Map::new();
         match self {
             BuildOrPull::Build { primary, irohads } => {
-                let (service_ref, service) = primary;
+                let (service_ref, service) = *primary;
                 services.insert(
                     service_ref.service_name(),
                     norito::json::Value::Object(service.into_map()),

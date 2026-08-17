@@ -1845,7 +1845,8 @@ region|publication|registry_recovery_impl|after|pub(super) fn publish_recovered_
 region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(|before|pub(crate) fn preflight_runtime_command_admission(
 region|runtime|runtime|begin|-|end|-
 region|executor|effects|begin|-|end|-
-region|settlement|launch|after|pub(in crate::sumeragi) fn settle_recovered_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
+region|settlement|launch|after|fn settle_recovered_decision_apply_completion_owner(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
+region|completion_dispatch|turn_driver|after|if self.recovered_decision_fetch_body_completion.is_some() {|before|let selected = match self.owner.classify_completion_ready_work() {
 region|deferred_retry|launch|after|impl RetainedRecoveredDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
 region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|/// Exercise recovered Apply dispatch
 region|exact_request|lane_work|after|fn dispatch_next_recovered_apply_sidecar_request(|before|#[cfg(test)]
@@ -1891,7 +1892,7 @@ required|adapter_preview|self.last_progress = prior_last_progress|adapter previe
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
 required|runtime|fn prepare_recovered_decision_apply_completion(|runtime lost recovered Decision Apply completion preparation
 required|executor|fn commit_recovered_decision_apply_finality(|executor lost recovered Decision Apply finality commit
-required|settlement|drain_recovered_decision_apply_completion()|settlement omitted drain_recovered_decision_apply_completion()
+order|completion_dispatch|3|self.services.take_next_recovered_lifecycle_completion()|RecoveredLifecycleCompletionTakeV1::Apply(completion)|settle_recovered_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer recovered Apply ownership directly to settlement
 required|settlement|RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted completion.authorizes_sidecar_owner(services, lane_work)
 required|settlement|sidecar.register(lane_work)|settlement omitted sidecar.register(lane_work)
@@ -2026,22 +2027,29 @@ region|enqueue|worker|after|fn try_send_as(|before|fn cancel(
 region|reservation|worker|after|impl RecoveredDecisionApplyCapacityReservationV1<'_>|before|impl Drop for RecoveredDecisionApplyCapacityReservationV1
 region|completion|worker|after|struct RecoveredDecisionApplyWorkAckV1|before|enum V2IoCompletion
 region|retry|worker|after|fn retry_recovered_decision_apply<|before|fn acknowledge_completion(
-region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_decision_apply_completion(
+region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_lifecycle_sign_completion(
+region|census|worker|after|impl<'service> RecoveredCompletionCapacityCensusV1<'service>|before|impl Drop for RecoveredCompletionCapacityCensusV1<'_>
+region|unified_take|worker|after|pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(|before|/// Drain only the oldest recovered-Sign guard
 region|runtime_capacity|worker|after|const fn requires_runtime_capacity(&self) -> bool|before|fn acknowledgement(&self)
 required|enqueue|UnreservedRecoveredDecisionApply|generic queue lost the unreserved recovered Apply classification
-required|reservation|authenticated_predecessor_debt|recovered Apply reservation lost authenticated predecessor debt
 required|reservation|prepared.commit_for_worker()|recovered Apply reservation lost its worker commit
 required|reservation|V2IoCommand::RecoveredDecisionApply(task)|recovered Apply reservation lost its dedicated command
+required|census|fn authenticated_capacity(|recovered Completion census lost authenticated capacity projection
+required|census|self.worker_predecessor_debt|recovered Completion census lost frozen worker predecessor debt
+required|census|fn select_apply(|recovered Completion census lost exact Apply selection
 required|completion|acknowledge_recovered_decision_apply|recovered Apply acknowledgement is missing
 required|completion|fn acknowledge_retry_publication|recovered Apply retry acknowledgement is missing
 required|completion|fn retry_deferred(|recovered Apply deferred retry is missing
 required|completion|retry_recovered_decision_apply(task)|recovered Apply acknowledgement no longer retries the retained task
 required|completion|acknowledge_recovered_decision_apply_completion(self.key)|recovered Apply completion acknowledgement is missing
-order|retry|6|V2IoWorkState::CompletionPending|exact_target_active|try_reserve(V2IoAdmissionClass::Consensus)|transfer_recovered_decision_apply_completion(key)|V2IoWorkState::Queued|task.into_command()|deferred retry must rejoin the Serve barrier and transfer completion ownership before publication
+order|retry|5|V2IoWorkState::CompletionPending|try_reserve(V2IoAdmissionClass::Consensus)|transfer_recovered_decision_apply_completion(key)|V2IoWorkState::Queued|task.into_command()|deferred retry must transfer completion ownership before queue publication
 required|generic_take|V2IoCompletion::RecoveredDecisionApply(_)|generic completion take lost recovered Apply retention
 required|generic_take|IoCompletionTake::retained_runtime()|generic completion take must retain recovered Apply runtime ownership
 required|runtime_capacity|Self::RecoveredDecisionApply(_)|recovered Apply completion lost runtime capacity classification
-required|whole|fn drain_recovered_decision_apply_completion(|dedicated recovered Apply completion drain is missing
+required|unified_take|V2IoCompletion::RecoveredDecisionApply(guarded)|unified completion classifier lost recovered Apply ownership
+required|unified_take|prepare_recovered_decision_apply_ack|unified completion classifier lost recovered Apply acknowledgement preparation
+required|unified_take|RecoveredLifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
+required|unified_take|PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }|unified completion classifier lost its guarded Apply handoff
 required|whole|fn authorizes_sidecar_owner(|recovered Apply sidecar owner oracle is missing
 forbidden|whole|_services: &'services mut ProductionV2Services|worker recovered Apply corridor must not borrow production services
 forbidden|whole|complete_application(*guarded|worker recovered Apply corridor must not call the legacy guarded completion

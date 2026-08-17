@@ -262,6 +262,12 @@ type TestRuntime = ProviderIngestRuntimeV1<
     TestIngress,
     TestClock,
 >;
+type TestRuntimeParts = (
+    TestRuntime,
+    Arc<TestLedger>,
+    Arc<TestFetch>,
+    Arc<TestIngress>,
+);
 fn test_runtime_with_network_id(
     row: ProviderIngestFinalizedAssignmentV1,
     existing: bool,
@@ -270,15 +276,7 @@ fn test_runtime_with_network_id(
     disposition: ProviderIngestIngressDispositionV1,
     wrong_signer: bool,
     network_id: NetworkId,
-) -> Result<
-    (
-        TestRuntime,
-        Arc<TestLedger>,
-        Arc<TestFetch>,
-        Arc<TestIngress>,
-    ),
-    ProviderIngestRuntimeErrorV1,
-> {
+) -> Result<TestRuntimeParts, ProviderIngestRuntimeErrorV1> {
     let page = fixture_page(row.clone());
     let finalized_cursor = page.finalized_cursor;
     let ledger = Arc::new(TestLedger {

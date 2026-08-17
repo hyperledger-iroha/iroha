@@ -1291,7 +1291,6 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     );
 }
 #[test]
-#[test]
 fn network_admission_uses_exact_normal_and_progress_reservations() {
     let start = Instant::now();
     let initial = tag(0);

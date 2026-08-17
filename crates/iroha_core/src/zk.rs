@@ -3614,18 +3614,6 @@ macro_rules! advice {
             $value,
         )
     };
-    ($region:ident, $label:literal, $column:expr => value $value:expr) => {
-        advice!(@call $region, || $label, $column, 0, || $value)
-    };
-    ($region:ident, format $label:literal, $column:expr, $offset:expr => $value:expr) => {
-        advice!(
-            @call $region,
-            || format!($label),
-            $column,
-            $offset,
-            || halo2_proofs::circuit::Value::known($value)
-        )
-    };
     ($region:ident, $label:literal, $column:expr => $value:expr) => {
         advice!(
             @call $region,
@@ -3650,6 +3638,21 @@ macro_rules! advice {
             move || format!($label),
             $column,
             0,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+}
+#[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
+macro_rules! advice_dev {
+    ($region:ident, $label:literal, $column:expr => value $value:expr) => {
+        advice!(@call $region, || $label, $column, 0, || $value)
+    };
+    ($region:ident, format $label:literal, $column:expr, $offset:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            || format!($label),
+            $column,
+            $offset,
             || halo2_proofs::circuit::Value::known($value)
         )
     };
@@ -10565,10 +10568,10 @@ mod pasta_tiny {
                 let (a_cell, b_cell, digest_cell) = layouter.assign_region(
                     || "poseidon2_inputs",
                     |mut region| {
-                        let a_cell = advice!(region, "a", poseidon_cfg.state[0] => value a)?;
-                        let b_cell = advice!(region, "b", poseidon_cfg.state[1] => value b)?;
+                        let a_cell = advice_dev!(region, "a", poseidon_cfg.state[0] => value a)?;
+                        let b_cell = advice_dev!(region, "b", poseidon_cfg.state[1] => value b)?;
                         let digest_cell =
-                            advice!(region, "digest", poseidon_cfg.state[2] => value digest)?;
+                            advice_dev!(region, "digest", poseidon_cfg.state[2] => value digest)?;
                         Ok((a_cell, b_cell, digest_cell))
                     },
                 )?;
@@ -10812,16 +10815,16 @@ mod pasta_tiny {
                             let right_val = sib_val + dir_val * (current - sib_val);
                             let hash_val = compress2_native(left_val, right_val);
                             let node_cell =
-                                advice!(region, format "node_{row}", node, row => current)?;
+                                advice_dev!(region, format "node_{row}", node, row => current)?;
                             if let Some(ref prev) = previous_output {
                                 layouter.constrain_equal(node_cell.cell(), prev.cell())?;
                             }
-                            advice!(region, format "sibling_{row}", sibling, row => sib_val)?;
-                            advice!(region, format "dir_{row}", dir, row => dir_val)?;
+                            advice_dev!(region, format "sibling_{row}", sibling, row => sib_val)?;
+                            advice_dev!(region, format "dir_{row}", dir, row => dir_val)?;
                             let left_cell =
-                                advice!(region, format "left_{row}", left, row => left_val)?;
+                                advice_dev!(region, format "left_{row}", left, row => left_val)?;
                             let right_cell =
-                                advice!(region, format "right_{row}", right, row => right_val)?;
+                                advice_dev!(region, format "right_{row}", right, row => right_val)?;
                             sel.enable(&mut region, row)?;
                             let hash_cells = chip.hash2_chip(
                                 &mut layouter,
@@ -10832,7 +10835,7 @@ mod pasta_tiny {
                             layouter.constrain_equal(left_cell.cell(), hash_cells.left.cell())?;
                             layouter.constrain_equal(right_cell.cell(), hash_cells.right.cell())?;
                             let out_cell =
-                                advice!(region, format "out_{row}", out, row => hash_val)?;
+                                advice_dev!(region, format "out_{row}", out, row => hash_val)?;
                             layouter.constrain_equal(out_cell.cell(), hash_cells.digest.cell())?;
                             previous_output = Some(out_cell.clone());
                             current = hash_val;
@@ -13764,9 +13767,4 @@ mod preverify_tests {
     }
 }
 #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
-#[allow(unused_imports)]
-mod tests {
-    include!("zk/halo2_backend_01_tests.rs");
-    include!("zk/halo2_backend_02_tests.rs");
-    include!("zk/halo2_backend_03_tests.rs");
-}
+include!("zk/halo2_backend_tests.rs");

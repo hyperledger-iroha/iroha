@@ -491,7 +491,7 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
     let mut offset = raw_start;
     // The sequence reader already charged one retained byte per u8 element.
     let mut payload = allocate_signature_payload_exact(count)?;
-    for destination in payload.iter_mut() {
+    for destination in &mut payload {
         let (elem_len, header_len) = ncore::inspect_len_from_slice(
             bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?,
         )?;
@@ -1098,6 +1098,7 @@ mod tests {
         assert_eq!(signature.payload(), &[0x11u8; 64]);
     }
     #[test]
+    #[expect(clippy::too_many_lines, reason = "cohesive signature decode matrix")]
     fn raw_compatibility_signature_decode_uses_exact_fallible_storage() {
         let payload = [0x11_u8; 64];
         let mut bytes = Vec::with_capacity(8 + payload.len());
@@ -1126,7 +1127,7 @@ mod tests {
                 <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             });
         assert!(denied.is_err());
-        assert!(usage.total_allocated_bytes() <= payload.len() - 1);
+        assert!(usage.total_allocated_bytes() < payload.len());
 
         let sequence_limited = norito::core::DecodeLimits::new(
             payload.len() - 1,

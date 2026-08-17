@@ -545,10 +545,13 @@ fn run_pending_active_height(
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
-            if activated
+            if let Err(error) = activated
                 .settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)
-                .is_err()
             {
+                iroha_logger::error!(
+                    failure = ?error.failure(),
+                    "pending-Kura ProducerTurn terminal settlement requires restart"
+                );
                 output_guard.close_admission_for_restart();
                 return Err(V2RunnerError::RestartRequired);
             }

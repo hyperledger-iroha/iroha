@@ -14480,12 +14480,6 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
     return errors
 
 
-def _serve_ingress_gate_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
 def _serve_ingress_ordinal_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Delegate the retired entry point to the lifecycle-owned Serve seal."""
 
@@ -45257,25 +45251,6 @@ assert_eq!(
             "lifecycle root",
             errors,
         )
-        require_runtime_item_order(
-            causal_runtime_regressions.get(
-                "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it"
-            ),
-            (
-                """
-assert!(
-    runtime.older_lifecycle_predates_exact_serve(now, serve_ordinal)
-""",
-                "runtime.ingress.pop_next_with_ownership()",
-                "assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);",
-                """
-assert!(
-    !runtime.older_lifecycle_predates_exact_serve(now, serve_ordinal)
-""",
-            ),
-            "ordinary Fair ownership must precede Serve exactly until runtime "
-            "consumes it",
-        )
         _require_rust_token_sequence(
             runtime_path,
             causal_runtime_regressions.get(
@@ -56865,30 +56840,6 @@ fn require_peeked_lane_work_effect(
         errors,
         count=3,
     )
-    for path, source, item_name in (
-        (
-            lifecycle_runner_path,
-            lifecycle_runner_source,
-            "service_certified_serve_barrier",
-        ),
-        (
-            pending_runner_path,
-            pending_runner_source,
-            "service_pending_certified_serve_barrier",
-        ),
-    ):
-        selected_serve = _require_rust_item(path, source, item_name, errors)
-        _require_rust_token_sequence(
-            path,
-            selected_serve,
-            "services.drain_exact_serve_runtime_predecessor("
-            "executor, serve_barrier.scheduler_ordinal())?",
-            "each lifecycle runner must drain exactly one strict completion only "
-            "while its move-only selected-Serve predecessor admission is live",
-            errors,
-            count=1,
-        )
-
     chunk_network_floor = _require_rust_item(
         ingress_path,
         ingress_source,
@@ -57782,7 +57733,9 @@ def _exact_output_production_source_fidelity_errors(
         / "sumeragi"
         / "v2_effects.rs"
     )
-    errors: list[str] = []
+    errors = _lifecycle_certified_serve_production_source_fidelity_errors(
+        repo_root
+    )
     worker_path, worker_source = _read_reviewed_rust_source(
         repo_root,
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -58225,37 +58178,7 @@ fn validate_shared_ownership_geometry(
             "ingress-owned exact reply constructor",
         ),
     )
-    ingress_seam_items["worker::queue_commit_serve"] = (
-        worker_path,
-        _require_qualified_rust_item(
-            worker_path,
-            worker_source,
-            "V2IoCommandQueue",
-            "commit_serve",
-            errors,
-            "ingress-owned exact Serve retry commit",
-        ),
-    )
-    for owner, key in (
-        ("V2IoHandle", "worker::io_handle_certified_serve_ingress_gate"),
-        (
-            "ProductionV2Services",
-            "worker::services_certified_serve_ingress_gate",
-        ),
-    ):
-        ingress_seam_items[key] = (
-            worker_path,
-            _require_qualified_rust_item(
-                worker_path,
-                worker_source,
-                owner,
-                "certified_serve_ingress_gate",
-                errors,
-                f"exact Serve ingress gate carrier {owner}",
-            ),
-        )
     for item_name in (
-        "serve_certified_request_on_routes",
         "route_payload_chunk",
         "has_exact_reconstructed_completion",
         "buffer_orphan_payload_chunk_inner",
@@ -58852,80 +58775,6 @@ if let Some(ownership) = ingress_ownership {
 }
 """,
         "exact reply construction must attach only a validated fair-ingress carrier matching the complete per-source route set",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        ingress_seam_items["worker::serve_certified_request_on_routes"][1],
-        """
-if !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(&request_message)
-    || !ingress_ownership.matches_semantic_origin(Some(&admission.request.requester))
-    || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
-    || reply_routes.semantic_target() != &admission.request.requester
-{
-""",
-        "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        ingress_seam_items["worker::queue_commit_serve"][1],
-        """
-let (merged_reply_routes, merged_ingress_ownership) = if let (
-    Some(retained_routes), Some(retained_ownership),
-) = (tracked.reply_routes.as_ref(), tracked.ingress_ownership.as_ref(),) {
-    let mut route_candidate = retained_routes.clone();
-    let receipt = route_candidate
-        .merge_observed_with_receipt(&reply_routes)
-        .map_err(|error| {
-            format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
-        })?;
-    let mut ownership_candidate = retained_ownership.clone();
-    let merged_routes = ownership_candidate
-        .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
-        .ok_or_else(|| {
-            "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
-        })?;
-    (merged_routes, ownership_candidate)
-} else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
-    (reply_routes, ingress_ownership)
-} else {
-    return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
-};
-""",
-        "exact Serve retries must consume one observed-route receipt into a cloned route/ownership pair before the sealed function installs both together",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        ingress_seam_items[
-            "worker::io_handle_certified_serve_ingress_gate"
-        ][1],
-        """
-fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {
-    CertifiedServeIngressGate {
-        queue: Arc::clone(&self.command_tx.queue),
-    }
-}
-""",
-        "the I/O handle must expose a gate over its exact command queue rather than a detached reservation owner",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        ingress_seam_items[
-            "worker::services_certified_serve_ingress_gate"
-        ][1],
-        """
-pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {
-    self.io
-        .as_ref()
-        .map(V2IoHandle::certified_serve_ingress_gate)
-        .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
-}
-""",
-        "production services must bind ingress to the live I/O handle's exact Serve queue",
         errors,
     )
     _require_rust_token_sequence(
@@ -68212,12 +68061,6 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         )
         return errors
     runner_parent_source = runner_path.read_text(encoding="utf-8")
-    runner_test_path, runner_test_source = _read_reviewed_rust_source(
-        repo_root,
-        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
-        errors,
-        "production runner regression source",
-    )
     runner_test_module_declaration = (
         '#[cfg(test)]\n#[path = "v2_runner_tests.rs"]\nmod tests;'
     )
@@ -68226,20 +68069,17 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             f"{runner_path}: production runner must compile exactly one "
             "reviewed split test module"
         )
-    height_ingress_path = (
-        runner_path.parent / "v2_runner" / "height_ingress_bindings.rs"
-    )
+    height_ingress_path = runner_path
     if not height_ingress_path.is_file() or height_ingress_path.is_symlink():
         errors.append(
-            f"{height_ingress_path}: production joint height-ingress source must "
+            f"{height_ingress_path}: production leader-wire height-ingress source must "
             "be a regular file"
         )
         return errors
     height_ingress_source = height_ingress_path.read_text(encoding="utf-8")
-    # The former LeaderWireIngressBinding/CertifiedServeIngressBinding and
-    # HeightIngressBindings wrappers are now cfg(test)-only compatibility
-    # fixtures. Production retirement is owned by the queue-level close and
-    # authenticated unbind operations below, so seal only those live seams.
+    # Production retirement is owned by queue-level close and the exact
+    # leader-wire lifecycle unbind. Retired Certified-Serve and joint
+    # height-ingress gate wrappers are not first-release seams.
     height_ingress_binding_items: dict[str, RustItem | None] = {
         "runner::close_ingress_for_rollover": (
             _require_rust_item(
@@ -68252,7 +68092,6 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     }
     for item_name in (
         "unbind_leader_wire_lifecycle_gate",
-        "unbind_height_ingress_gates",
         "close",
     ):
         height_ingress_binding_items[f"ingress::{item_name}"] = (
@@ -68262,13 +68101,12 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                 "FairV2Ingress",
                 item_name,
                 errors,
-                f"joint height-ingress transaction FairV2Ingress::{item_name}",
+                f"leader-wire height-ingress transaction FairV2Ingress::{item_name}",
             )
         )
     expected_height_ingress_binding_keys = {
         "runner::close_ingress_for_rollover",
         "ingress::unbind_leader_wire_lifecycle_gate",
-        "ingress::unbind_height_ingress_gates",
         "ingress::close",
     }
     observed_height_ingress_binding_keys = set(
@@ -68276,7 +68114,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     )
     if observed_height_ingress_binding_keys != expected_height_ingress_binding_keys:
         errors.append(
-            f"{runner_path}: joint height-ingress token-seal inventory mismatch: "
+            f"{runner_path}: leader-wire height-ingress token-seal inventory mismatch: "
             f"missing={sorted(expected_height_ingress_binding_keys - observed_height_ingress_binding_keys)}, "
             f"extra={sorted(observed_height_ingress_binding_keys - expected_height_ingress_binding_keys)}"
         )
@@ -68291,7 +68129,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             path,
             height_ingress_binding_items.get(qualified_name),
             expected_sha256,
-            f"joint height-ingress ownership {qualified_name}",
+            f"leader-wire height-ingress ownership {qualified_name}",
             errors,
         )
 
@@ -68346,236 +68184,6 @@ Ok(())
         "standalone leader-wire unbind must require closed empty ingress, validate the exact gate, and clear local mirrors only afterward",
         errors,
     )
-    _require_rust_token_sequence(
-        ingress_path,
-        height_ingress_binding_items["ingress::unbind_height_ingress_gates"],
-        """
-let _service_guard = self.service_lock.lock();
-let mut state = self.state.lock();
-if state.open {
-    return Err("height ingress gates cannot unbind from open ingress".to_owned());
-}
-let bound_certified_serve = state
-    .certified_serve_gate
-    .as_ref()
-    .ok_or_else(|| "height ingress lost its certified Serve gate".to_owned())?;
-if !bound_certified_serve.ptr_eq(certified_serve_gate) {
-    return Err("certified Serve gate changed per-height I/O ownership".to_owned());
-}
-let bound_leader_wire = state
-    .leader_wire_lifecycle_gate
-    .as_ref()
-    .ok_or_else(|| "height ingress lost its leader-wire lifecycle gate".to_owned())?;
-if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
-    bound_leader_wire,
-    leader_wire_gate,
-) {
-    return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
-}
-""",
-        "atomic height-ingress unbind must lock service and queue state and validate both exact gates before mutation",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        height_ingress_binding_items["ingress::unbind_height_ingress_gates"],
-        """
-let mut lanes = BTreeMap::new();
-for peer in &state.roster {
-    lanes.insert(
-        FairV2IngressSource::Validator(peer.clone()),
-        FairV2IngressLane::default(),
-    );
-}
-lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
-state.lanes = lanes;
-state.pending_wire_owners.clear();
-state.ready.clear();
-state.len = 0;
-state.bytes = 0;
-state.nonempty_since = None;
-state.last_service_attempt_at = None;
-
-let detached_certified_serve = state
-    .certified_serve_gate
-    .take()
-    .expect("validated certified Serve gate remains bound");
-debug_assert!(detached_certified_serve.ptr_eq(certified_serve_gate));
-let detached_leader_wire = state
-    .leader_wire_lifecycle_gate
-    .take()
-    .expect("validated leader-wire lifecycle gate remains bound");
-debug_assert!(
-    serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
-        &detached_leader_wire,
-        leader_wire_gate,
-    )
-);
-state.leader_wire_lifecycle_ordinals = None;
-state.leader_wire_context = None;
-state.leader_wire_lifecycles.clear();
-self.debug_assert_consistent(&state);
-Ok(())
-""",
-        "atomic height-ingress unbind must clear every carrier and debt before detaching both validated gates in one locked transaction",
-        errors,
-    )
-    joint_unbind = height_ingress_binding_items["ingress::unbind_height_ingress_gates"]
-    if joint_unbind is not None and _token_sequence_count(
-        rust_code_tokens(joint_unbind.body),
-        rust_code_tokens("last_admission_ordinal"),
-    ):
-        errors.append(
-            f"{ingress_path}:{joint_unbind.line}: joint height-ingress unbind "
-            "must retain the process-monotone physical admission high-watermark"
-        )
-
-    expected_height_ingress_test_keys = {
-        "worker::closed_height_atomically_retires_serve_and_leader_ingress",
-    }
-    observed_height_ingress_test_keys = set(
-        _PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256
-    )
-    if observed_height_ingress_test_keys != expected_height_ingress_test_keys:
-        errors.append(
-            f"{runner_path}: joint height-ingress regression seal inventory mismatch: "
-            f"missing={sorted(expected_height_ingress_test_keys - observed_height_ingress_test_keys)}, "
-            f"extra={sorted(observed_height_ingress_test_keys - expected_height_ingress_test_keys)}"
-        )
-    height_ingress_test_items: dict[str, RustItem | None] = {}
-    for qualified_name, expected_sha256 in (
-        _PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256.items()
-    ):
-        qualification = qualified_name.split("::", 1)
-        if len(qualification) != 2 or qualification[0] not in {"runner", "worker"}:
-            errors.append(
-                f"{runner_path}: unrecognized joint height-ingress regression "
-                f"seal key {qualified_name!r}"
-            )
-            height_ingress_test_items[qualified_name] = None
-            continue
-        owner, test_name = qualification
-        test_path = runner_test_path if owner == "runner" else worker_path
-        test_source = runner_test_source if owner == "runner" else worker_source
-        expected_context = (
-            ()
-            if owner == "runner"
-            else (
-                (
-                    "#", "[", "cfg", "(", "test", ")", "]", "pub", "(",
-                    "super", ")", "mod", "tests",
-                ),
-            )
-        )
-        test_item = _require_rust_item(
-            test_path,
-            test_source,
-            test_name,
-            errors,
-        )
-        height_ingress_test_items[qualified_name] = test_item
-        _require_rust_item_context(
-            test_path,
-            test_item,
-            expected_context,
-            f"joint height-ingress regression {qualified_name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            test_path,
-            test_item,
-            expected_sha256,
-            f"joint height-ingress regression {qualified_name}",
-            errors,
-        )
-
-    worker_regression = height_ingress_test_items.get(
-        "worker::closed_height_atomically_retires_serve_and_leader_ingress"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_regression,
-        """
-assert_eq!(ingress.len(), 3);
-assert!(
-    serve_gate
-        .selected_barrier()
-        .expect("inspect live Serve reservation")
-        .is_some(),
-    "the closed-height lanes include a live Serve RAII carrier"
-);
-let durable_ingress_ordinals = leader_gate
-    .ingress_scheduler_ordinals()
-    .expect("inspect retained productive carriers");
-assert_eq!(
-    durable_ingress_ordinals.len(),
-    2,
-    "Proposal and TimeoutVote own independent durable lifecycles"
-);
-""",
-        "joint retirement regression must begin with three physical carriers, live Serve debt, and two durable leader owners",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_regression,
-        """
-ingress.close();
-ingress
-    .unbind_height_ingress_gates(&serve_gate, &leader_gate)
-    .expect("joint retirement cannot expose a carrierless Ingress record");
-
-let state = ingress.state.lock();
-assert_eq!(state.len, 0);
-assert!(state.certified_serve_gate.is_none());
-assert!(state.leader_wire_lifecycle_gate.is_none());
-assert!(state.leader_wire_lifecycles.is_empty());
-ingress.debug_assert_consistent(&state);
-drop(state);
-assert_eq!(
-    serve_gate
-        .selected_barrier()
-        .expect("inspect retired Serve reservation"),
-    None,
-    "joint lane retirement rolls back the live Serve RAII carrier"
-);
-""",
-        "joint retirement regression must close first, atomically detach both gates, clear all physical carriers, and roll back Serve debt",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_regression,
-        """
-assert_eq!(dormant_restore.records().len(), 2);
-assert!(dormant_restore.records().iter().all(|record| {
-    record.status()
-        == super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
-}));
-assert_eq!(
-    dormant_restore.scheduler_ordinal_high_watermark(),
-    scheduler_high_watermark
-);
-""",
-        "same-height replay must normalize detached leader owners to Dormant without resetting the scheduler high-watermark",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_regression,
-        """
-assert!(reconciled_restore.records().is_empty());
-assert_eq!(
-    reconciled_restore.scheduler_ordinal_high_watermark(),
-    scheduler_high_watermark,
-    "obsolete records leave the anti-ABA scheduler high-watermark intact"
-);
-""",
-        "Decision replay must retire obsolete records while retaining the anti-ABA scheduler high-watermark",
-        errors,
-    )
-
     expected_exact_output_runner_items = {
         "drain_v2_ingress", "authorize_decided_lane_recovery_drain", "rollover_finalized_height_outputs",
         "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
@@ -69052,45 +68660,6 @@ let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_rout
 if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
 """,
         "runner ingress must retain canonical message, semantic origin, and source-isolated routes through checked dequeue and Runtime binding",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        "Some(ProductionPreparedCertifiedServeV1::Admitted(_)) | None => { "
-        'return Err(V2RunnerError::Service("".to_owned(),)); }',
-        "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-match prepared_serve.take() {
-    Some(ProductionPreparedCertifiedServeV1::Admitted(admission)) => {
-        services
-            .serve_certified_request_on_routes(
-                admission,
-                reply_routes,
-                ingress_ownership,
-            )
-            .map_err(V2RunnerError::Service)?;
-    }
-    Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) => {
-        iroha_logger::debug!(%reason, "rejected certified body request");
-        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-    }
-    Some(ProductionPreparedCertifiedServeV1::Service(reason)) => {
-        return Err(V2RunnerError::Service(reason));
-    }
-    None => {
-        return Err(V2RunnerError::Service(
-            "current-height certified-body ingress crossed fair removal without an atomic Serve admission".to_owned(),
-        ));
-    }
-}
-""",
-        "a current-height exact request may cross ingress removal only with its already-prepared lifecycle admission",
         errors,
     )
     _require_rust_token_sequence(

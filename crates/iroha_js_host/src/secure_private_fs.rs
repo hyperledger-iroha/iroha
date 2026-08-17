@@ -594,7 +594,7 @@ fn create_private_temporary_file(
                 }
                 return Ok((TemporaryPath::new(path), file));
             }
-            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
             Err(source) => {
                 return Err(SecureFsError::io(
                     "create secure private temporary file",
@@ -921,7 +921,9 @@ mod platform {
     pub(super) fn pin_ancestor_directory(path: &Path) -> io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options.read(true).custom_flags(
-            (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
+            (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW)
+                .bits()
+                .cast_signed(),
         );
         options.open(path)
     }
@@ -929,7 +931,7 @@ mod platform {
         let mut options = fs::OpenOptions::new();
         options
             .read(true)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
         options.open(path)
     }
     pub(super) fn create_private_file(path: &Path) -> io::Result<fs::File> {
@@ -939,7 +941,7 @@ mod platform {
             .write(true)
             .create_new(true)
             .mode(PRIVATE_FILE_MODE)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
         let file = options.open(path)?;
         if let Err(source) = extended_acl::clear_file(&file) {
             drop(file);
@@ -954,7 +956,9 @@ mod platform {
     fn sync_directory(path: &Path) -> io::Result<()> {
         let mut options = fs::OpenOptions::new();
         options.read(true).custom_flags(
-            (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
+            (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW)
+                .bits()
+                .cast_signed(),
         );
         options.open(path)?.sync_all()
     }
@@ -1043,22 +1047,22 @@ mod platform {
             require_valid(&acl, path)?;
             let mut entry = ptr::null_mut();
             // SAFETY: `acl` is live and `entry` is a valid out pointer.
-            match unsafe { acl_get_entry(acl.0, ACL_FIRST_ENTRY, &mut entry) } {
-                0 => Err(SecureFsError::unsafe_storage(format!(
+            let status = unsafe { acl_get_entry(acl.0, ACL_FIRST_ENTRY, &raw mut entry) };
+            if status == 0 {
+                Err(SecureFsError::unsafe_storage(format!(
                     "secure private object {} must not have an extended ACL",
                     path.display()
-                ))),
-                _ => {
-                    let source = io::Error::last_os_error();
-                    if is_entry_exhaustion(&source) {
-                        Ok(())
-                    } else {
-                        Err(SecureFsError::io(
-                            "inspect macOS extended ACL",
-                            path,
-                            source,
-                        ))
-                    }
+                )))
+            } else {
+                let source = io::Error::last_os_error();
+                if is_entry_exhaustion(&source) {
+                    Ok(())
+                } else {
+                    Err(SecureFsError::io(
+                        "inspect macOS extended ACL",
+                        path,
+                        source,
+                    ))
                 }
             }
         }
@@ -1071,36 +1075,34 @@ mod platform {
             loop {
                 let mut entry = ptr::null_mut();
                 // SAFETY: `acl` is live and `entry` is a valid out pointer.
-                match unsafe { acl_get_entry(acl.0, entry_id, &mut entry) } {
-                    0 => {
-                        let mut tag_type = 0;
-                        // SAFETY: A successful acl_get_entry returned a live ACL entry.
-                        if unsafe { acl_get_tag_type(entry, &mut tag_type) } != 0 {
-                            return Err(SecureFsError::io(
-                                "inspect macOS ancestor ACL tag",
-                                path,
-                                io::Error::last_os_error(),
-                            ));
-                        }
-                        if tag_type != ACL_EXTENDED_DENY {
-                            return Err(SecureFsError::unsafe_storage(format!(
-                                "secure private ancestor {} must not have an extended allow ACL",
-                                path.display()
-                            )));
-                        }
-                        entry_id = ACL_NEXT_ENTRY;
-                    }
-                    _ => {
-                        let source = io::Error::last_os_error();
-                        if is_entry_exhaustion(&source) {
-                            return Ok(());
-                        }
+                let status = unsafe { acl_get_entry(acl.0, entry_id, &raw mut entry) };
+                if status == 0 {
+                    let mut tag_type = 0;
+                    // SAFETY: A successful acl_get_entry returned a live ACL entry.
+                    if unsafe { acl_get_tag_type(entry, &raw mut tag_type) } != 0 {
                         return Err(SecureFsError::io(
-                            "inspect macOS ancestor ACL",
+                            "inspect macOS ancestor ACL tag",
                             path,
-                            source,
+                            io::Error::last_os_error(),
                         ));
                     }
+                    if tag_type != ACL_EXTENDED_DENY {
+                        return Err(SecureFsError::unsafe_storage(format!(
+                            "secure private ancestor {} must not have an extended allow ACL",
+                            path.display()
+                        )));
+                    }
+                    entry_id = ACL_NEXT_ENTRY;
+                } else {
+                    let source = io::Error::last_os_error();
+                    if is_entry_exhaustion(&source) {
+                        return Ok(());
+                    }
+                    return Err(SecureFsError::io(
+                        "inspect macOS ancestor ACL",
+                        path,
+                        source,
+                    ));
                 }
             }
         }

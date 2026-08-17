@@ -114,6 +114,31 @@ pub(crate) enum LifecycleIngressSelectorError {
     /// The complete occurrence key set or cardinality was not representable.
     InvalidCensus,
 }
+impl LifecycleIngressSelectorError {
+    /// Render the exact fail-closed selector reason without discarding its payload.
+    pub(crate) fn detail(&self) -> String {
+        match self {
+            Self::QueueCutCapture => "queue cut capture failed".to_owned(),
+            Self::ForeignContext => "queue cut belongs to another height context".to_owned(),
+            Self::QueueCutChanged => "queue cut changed during executor classification".to_owned(),
+            Self::InvalidOccurrenceIdentity { ordinal } => {
+                format!("physical ingress occurrence {ordinal} lost its ownership identity")
+            }
+            Self::CandidateRevalidationDrift { ordinal } => {
+                format!("claimed response candidate {ordinal} changed during revalidation")
+            }
+            Self::ExecutorAuthority { ordinal, error } => {
+                format!("executor authority failed for physical occurrence {ordinal:?}: {error}")
+            }
+            Self::ExecutorState(error) => {
+                format!("executor terminal state could not be read: {error:?}")
+            }
+            Self::InvalidCensus => {
+                "physical ingress occurrence census is not representable".to_owned()
+            }
+        }
+    }
+}
 /// Opaque exact identity of one bounded certified-Fetch persistence command.
 ///
 /// The physical queue identity remains nested and cannot be reconstructed from
@@ -247,10 +272,6 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
         self.id.dispatch_key
     }
-    /// Return the exact queue ordinal solely for fresh selector recapture.
-    pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
-        self.id.ingress_identity.physical_admission_ordinal()
-    }
     /// Match the exact selected physical ingress occurrence.
     pub(in crate::sumeragi) fn matches_ingress_identity(
         &self,
@@ -330,21 +351,42 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchBodyPersistencePreparationFai
     /// The executor candidate changed during the final equality re-probe.
     Executor(EffectTransportError),
 }
+impl RecoveredDecisionFetchBodyPersistencePreparationFailureV1 {
+    /// Render the exact recovered Phase-A failure without releasing retry ownership.
+    pub(in crate::sumeragi) fn detail(&self) -> String {
+        match self {
+            Self::Selector(error) => format!("selector authority: {error:?}"),
+            Self::Executor(error) => format!("executor revalidation: {error}"),
+        }
+    }
+}
 /// Ownership-preserving recovered persistence preparation failure.
 #[must_use = "the unchanged selector remains available for capacity rollback"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
+    failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
     prepared: PreparedLifecycleIngressSelector,
 }
 impl RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-    /// Recover the unchanged complete selector for reservation rollback.
-    pub(in crate::sumeragi) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
-        self.prepared
+    /// Recover the typed failure and unchanged selector for reservation rollback.
+    pub(in crate::sumeragi) fn into_parts(
+        self,
+    ) -> (
+        RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
+        PreparedLifecycleIngressSelector,
+    ) {
+        (self.failure, self.prepared)
     }
 }
 /// Why a selector could not be consumed into one storage-worker command.
 #[derive(Debug)]
 #[allow(variant_size_differences)]
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
+    )
+)]
 pub(crate) enum CertifiedFetchBodyPersistencePreparationFailure {
     /// The selected occurrence did not retain exact certified-Fetch authority.
     Selector(CertifiedFetchReadyPublicationError),
@@ -354,14 +396,10 @@ pub(crate) enum CertifiedFetchBodyPersistencePreparationFailure {
 /// Ownership-preserving Phase-A preparation failure.
 #[must_use = "the unchanged selector remains available for retry or drop"]
 pub(crate) struct CertifiedFetchBodyPersistencePreparationError {
-    failure: CertifiedFetchBodyPersistencePreparationFailure,
+    _failure: CertifiedFetchBodyPersistencePreparationFailure,
     prepared: PreparedLifecycleIngressSelector,
 }
 impl CertifiedFetchBodyPersistencePreparationError {
-    /// Return the closed failure classification.
-    pub(crate) const fn failure(&self) -> &CertifiedFetchBodyPersistencePreparationFailure {
-        &self.failure
-    }
     /// Recover the complete unchanged selector preparation.
     pub(crate) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
         self.prepared
@@ -390,6 +428,13 @@ pub(crate) struct CertifiedFetchBodyPersistenceRetryError {
     failure: CertifiedFetchBodyPersistenceRetryFailure,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
 }
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
+    )
+)]
 impl CertifiedFetchBodyPersistenceRetryError {
     /// Stable diagnostic category for the retryable pre-ledger rejection.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -456,6 +501,30 @@ pub(in crate::sumeragi) enum CertifiedServeExactDequeueErrorV1 {
     /// The frozen ingress prefix changed before the service lock was acquired.
     Queue(FairIngressQueueCutError),
 }
+
+impl RecoveredDecisionFetchExactDequeueErrorV1 {
+    /// Render the exact recovered Store-settlement ingress failure.
+    pub(in crate::sumeragi) fn detail(&self) -> String {
+        match self {
+            Self::CompletionIdentity => {
+                "persisted completion changed before exact dequeue".to_owned()
+            }
+            Self::Executor(error) => format!("executor exact-dequeue preflight: {error}"),
+            Self::Queue(error) => format!("frozen ingress prefix changed: {error:?}"),
+        }
+    }
+}
+impl CertifiedServeExactDequeueErrorV1 {
+    /// Render the exact Certified-Serve ingress failure.
+    pub(in crate::sumeragi) fn detail(&self) -> String {
+        match self {
+            Self::SelectorAuthority => {
+                "Certified-Serve selector authority changed before exact dequeue".to_owned()
+            }
+            Self::Queue(error) => format!("frozen ingress prefix changed: {error:?}"),
+        }
+    }
+}
 /// Prevalidated recovered response dequeue held across LedgerV1 fsync.
 #[must_use = "recovered Decision Fetch ingress occurrence has not been acknowledged"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchExactDequeueV1<'a> {
@@ -474,17 +543,11 @@ impl PreparedRecoveredDecisionFetchExactDequeueV1<'_> {
 pub(in crate::sumeragi) struct PreparedCertifiedServeExactDequeueV1<'a> {
     locked: LockedPreparedFairIngressExactDequeue<'a>,
     selector_debt: u64,
-    selected_positions: FairIngressQueuePositions,
 }
 impl PreparedCertifiedServeExactDequeueV1<'_> {
     /// Return the complete selector debt frozen before any durable mutation.
     pub(in crate::sumeragi) const fn selector_debt(&self) -> u64 {
         self.selector_debt
-    }
-
-    /// Return the exact lane/source positions of the retained request.
-    pub(super) const fn selected_positions(&self) -> FairIngressQueuePositions {
-        self.selected_positions
     }
 
     /// Assertion-remove the exact authenticated request after lifecycle publication.
@@ -546,6 +609,13 @@ pub(crate) struct CertifiedFetchBodyPersistenceRestartError {
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
     exact_dequeue: PreparedCertifiedFetchExactDequeue,
 }
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
+    )
+)]
 impl CertifiedFetchBodyPersistenceRestartError {
     /// Stable diagnostic category for the restart-only boundary.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -573,6 +643,13 @@ impl CertifiedFetchBodyPersistenceRestartError {
 /// Closed Phase-B status split at the LedgerV1 durability boundary.
 #[must_use = "retryable and restart-only failures have different ownership rules"]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
+    )
+)]
 pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     /// No ledger publication was invoked; the whole completion may be retried.
     Retry(CertifiedFetchBodyPersistenceRetryError),
@@ -1474,7 +1551,6 @@ impl PreparedLifecycleIngressSelector {
             selector_debt,
         } = self;
         drop(claimed_response_families);
-        let selected_positions = queue_witness.selected_positions();
         let locked = queue_witness
             .lock_exact_dequeue_retaining(
                 ingress,
@@ -1486,7 +1562,6 @@ impl PreparedLifecycleIngressSelector {
             PreparedCertifiedServeExactDequeueV1 {
                 locked,
                 selector_debt,
-                selected_positions,
             },
             target,
         ))
@@ -1739,6 +1814,13 @@ impl LifecycleCoordinator {
     /// the fail-stop output operation closes admission. A successful ledger
     /// cut is followed by the checked dequeue and an assertion-only registry,
     /// coordinator, executor, service, and work-index commit tail.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
+        )
+    )]
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn complete_certified_fetch_body_persistence(
         &mut self,
@@ -2309,7 +2391,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 Ok(family) => family,
                 Err(failure) => {
                     return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-                        _failure:
+                        failure:
                             RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
                                 failure,
                             ),
@@ -2319,7 +2401,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             };
             let Some(candidate) = family.candidate.recovered() else {
                 return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                    failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2327,7 +2409,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             };
             let Some((response, responder)) = family.authenticated_response() else {
                 return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                    failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2344,7 +2426,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             Ok(true) => {}
             Ok(false) => {
                 return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                    failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2352,7 +2434,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             }
             Err(failure) => {
                 return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
-                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Executor(
+                    failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Executor(
                         failure,
                     ),
                     prepared,
@@ -2414,7 +2496,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             Ok(ready) => ready,
             Err(failure) => {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(failure),
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(failure),
                     prepared,
                 });
             }
@@ -2422,7 +2504,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         let revalidated = {
             let Some(family) = prepared.claimed_response_families.get(&ready.request_hash) else {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
                         CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse,
                     ),
                     prepared,
@@ -2430,7 +2512,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             };
             let Some((response, responder)) = family.authenticated_response() else {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2438,7 +2520,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             };
             let Some(candidate) = family.candidate.ordinary() else {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2450,7 +2532,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             Ok(true) => {}
             Ok(false) => {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
                         CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                     ),
                     prepared,
@@ -2458,7 +2540,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             }
             Err(failure) => {
                 return Err(CertifiedFetchBodyPersistencePreparationError {
-                    failure: CertifiedFetchBodyPersistencePreparationFailure::Executor(failure),
+                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Executor(failure),
                     prepared,
                 });
             }
@@ -2475,7 +2557,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         } = family;
         let PreparedCertifiedResponseCandidate::Ordinary(candidate) = candidate else {
             return Err(CertifiedFetchBodyPersistencePreparationError {
-                failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
                     CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
                 ),
                 prepared,

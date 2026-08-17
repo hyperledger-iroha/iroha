@@ -4,7 +4,6 @@
 //! sequencing, active concurrency leases, and the ordered callback outbox. This
 //! module only derives the public launch binding, performs an exact startup
 //! readback, and supervises replay into the committed reputation runtime.
-use std::{fmt, sync::Arc, time::Duration};
 use iroha_config::parameters::actual::SorafsTokenConfig;
 use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -13,10 +12,11 @@ use iroha_torii::sorafs::{
     StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
 };
 use sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1;
+use std::{fmt, sync::Arc, time::Duration};
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Fail-closed launcher error without runtime credentials or evidence payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamTokenGatewayRuntimeErrorV1 {
+pub enum StreamTokenGatewayRuntimeErrorV1 {
     /// A provider was injected while stream-token issuance is disabled.
     UnexpectedProvider,
     /// Enabled issuance has no deployment-owned admission provider.
@@ -77,7 +77,7 @@ impl From<StreamTokenGatewayAdmissionErrorV1> for StreamTokenGatewayRuntimeError
 /// The first pending readback is reconciled synchronously. Consequently Torii
 /// cannot begin serving while a stale, substituted, or malformed durable
 /// callback prefix exists.
-pub(crate) fn prepare_capture(
+pub fn prepare_capture(
     network_id: &NetworkId,
     tokens: &SorafsTokenConfig,
     compliance_gateway_id: Option<&str>,
@@ -128,7 +128,7 @@ pub(crate) fn prepare_capture(
     Ok(Some(capture))
 }
 /// Start bounded replay of externally durable callbacks after startup.
-pub(crate) fn start_reconciler(
+pub fn start_reconciler(
     capture: Arc<StreamTokenAdmissionCaptureV1>,
     poll_interval: Duration,
     shutdown_signal: ShutdownSignal,
@@ -186,6 +186,7 @@ const fn is_transient(error: StreamTokenGatewayAdmissionErrorV1) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::sorafs::{
         capacity::ProviderId,
@@ -200,7 +201,6 @@ mod tests {
         ReputationJournalEnqueueOutcomeV1, ReputationNativeOutcomeAdmissionStateV1,
         ReputationRuntimeError, StreamTokenReputationAdmissionOutcomeV1,
     };
-    use super::*;
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(

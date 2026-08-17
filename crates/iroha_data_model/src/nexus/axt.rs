@@ -683,6 +683,12 @@ pub enum AxtHandleSequenceError {
 ///
 /// This deliberately rejects both stale values and caller-selected future values. The active
 /// manifest controls the era; accepted handles advance only the per-dataspace counter by one.
+///
+/// # Errors
+///
+/// Returns [`AxtHandleSequenceError::EraMismatch`] or
+/// [`AxtHandleSequenceError::SubNonceMismatch`] when the handle does not match the active policy,
+/// and [`AxtHandleSequenceError::CounterExhausted`] when the accepted counter cannot advance.
 pub fn next_axt_handle_sub_nonce(
     policy: &AxtPolicyEntry,
     handle: &AssetHandle,
@@ -1738,6 +1744,10 @@ mod tests {
         assert_eq!(AxtRejectReason::from_label("unknown"), None);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one canonical envelope fixture verifies the full nested wire shape and required commit height"
+    )]
     fn envelope_roundtrips_through_norito() {
         #[derive(Encode)]
         struct EnvelopeWithoutCommitHeight {
@@ -1855,6 +1865,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one policy-snapshot matrix covers canonical order, required fields, duplicates, and version binding"
+    )]
     fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
         #[derive(Encode)]
         struct SnapshotWithoutVersion {

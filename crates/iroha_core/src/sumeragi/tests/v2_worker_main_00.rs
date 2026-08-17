@@ -1,9 +1,7 @@
 use super::*;
 use crate::sumeragi::{
-    FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass, FairV2IngressPushDisposition,
-    FairV2IngressPushError, FairV2IngressSource, FairV2IngressWireKey, InboundBlockMessage,
-    fair_v2_ingress_admit_with_roster_for_test, fair_v2_ingress_is_certified_body_request,
-    fair_v2_ingress_required_capacity,
+    FairV2Ingress, FairV2IngressPushDisposition, InboundBlockMessage,
+    fair_v2_ingress_admit_with_roster_for_test,
     v2::AdapterEffect,
     v2_block_sync::tests::durable_history_fixture,
     v2_body_store::DurableBodyReceipt,
@@ -86,16 +84,6 @@ fn test_io_command_channel(
         Arc::clone(&admission),
     );
     (sender, receiver, admission)
-}
-fn assert_durable_body_receipt_matches(
-    receipt: &DurableBodyReceipt,
-    context: &wire::HeightContext,
-    manifest: &wire::PayloadManifest,
-) {
-    assert_eq!(receipt.context_id(), context.id());
-    assert_eq!(receipt.round(), manifest.round);
-    assert_eq!(receipt.subject(), manifest.subject);
-    assert_eq!(receipt.manifest_hash(), HashOf::new(manifest));
 }
 fn authenticated_serve_request(
     context: &wire::HeightContext,

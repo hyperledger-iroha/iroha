@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::DecodeAll as _;
-    use super::*;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
@@ -150,6 +150,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test exhaustively checks the first-release execution commitment shape"
+    )]
     fn execution_commitment_enforces_native_amx_manifest_shape_and_bound() {
         #[derive(Encode)]
         struct LegacyExecutionCommitment {
@@ -1215,6 +1219,10 @@ mod tests {
         assert_eq!(decoded.validate_version(), Ok(()));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps every consensus payload variant in one round-trip matrix"
+    )]
     fn every_v2_payload_variant_roundtrips() {
         let context = context(&[1, 1, 1, 1]);
         let prepare = qc(&context, 1, GlobalPhase::Prepare, vec![0, 1, 2]);

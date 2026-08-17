@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "LengthMismatch")]
     fn slice_roundtrip_helper_rejects_trailing_bytes() {
         let value = super::super::Log::new(crate::Level::INFO, "slice mutation".to_owned());
         let mut bytes = norito::codec::Encode::encode(&value);

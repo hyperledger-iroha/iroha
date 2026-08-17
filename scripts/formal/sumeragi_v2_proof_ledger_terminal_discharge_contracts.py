@@ -1885,28 +1885,6 @@ assert_eq!(reducer.volatile_prepare_counts(), (0, 1));
         "the delayed lower PrepareQC regression must prove a complete ignored stutter with no effects",
         errors,
     )
-    worker_path_source = sources.get(
-        "crates/iroha_core/src/sumeragi/v2_worker.rs"
-    )
-    if worker_path_source is not None:
-        worker_path, worker_source = worker_path_source
-        completion_projection = _require_qualified_rust_item(
-            worker_path,
-            worker_source,
-            "ProductionV2Services",
-            "certified_serve_predecessor_completion_evidence",
-            errors,
-            "non-consuming selected-Serve completion projection",
-        )
-        if completion_projection is not None and _token_sequence_count(
-            rust_code_tokens(completion_projection.body),
-            ("try_recv_completion_unacknowledged", "("),
-        ):
-            errors.append(
-                f"{worker_path}:{completion_projection.line}: selected-Serve "
-                "completion evidence must project the exact held offset "
-                "without consuming a completion"
-            )
     return errors
 
 

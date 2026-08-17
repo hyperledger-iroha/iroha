@@ -640,7 +640,6 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     assert!(!ingress_ready.load(Ordering::Acquire));
     let ingress_state = ingress.state.lock();
     assert!(!ingress_state.open);
-    assert!(ingress_state.certified_serve_gate.is_none());
     assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
     drop(ingress_state);
     assert!(!output_guard.restart_required());
@@ -1909,7 +1908,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 matches!(
                     &rejected_settlement,
                     ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
-                        if reason.contains("not a certified-body retention owner")
+                        if reason.contains("no certified retention authority")
                 ),
                 "unexpected rejected-Serve settlement: {rejected_settlement:?}"
             );
@@ -1922,7 +1921,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 |runner| {
                     match activated.drive_ingress_turn(runner) {
                         ProductionLifecycleIngressTurnV1::Selected(
-                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,
                         ) => true,
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                             drop(runner);
@@ -1948,43 +1947,31 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert!(!output_guard.restart_required());
 
             drop(auxiliary_hold);
-            let (admitted_turn, after_admitted_serve) = with_lifecycle_current_runner_turn_for_test(
+            let ((), after_admitted_serve) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
-                |runner| match activated.drive_ingress_turn(runner) {
-                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                |runner| {
+                    match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,
+                    ) => {}
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
                         panic!("released auxiliary capacity must admit exact Serve")
                     }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("released certified Serve must enter lifecycle dispatch directly")
+                    }
                     ProductionLifecycleIngressTurnV1::Selected(_) => {
                         panic!("released certified Serve selected the wrong outcome")
                     }
+                }
                 },
             );
             assert_eq!(after_admitted_serve, LifecycleRunnerRankTarget::Completion);
-            assert_eq!(
-                admitted_turn.physical_ordinal_for_test(),
-                admitted_serve_ordinal
-            );
-            assert!(admitted_turn.has_prepared_serve_for_test());
             assert_eq!(leader_wire_ingress.len(), 0);
-            assert_eq!(
-                activated
-                    .consume_prepared_ordinary_ingress_turn(
-                        &mut serve_runner,
-                        admitted_turn,
-                        &mut lane_work,
-                        kura.as_ref(),
-                        &local_signer,
-                        &mut block_sync_server,
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                    )
-                    .expect("consume exact admitted Serve handoff"),
-                super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
-            );
+            assert!(!output_guard.restart_required());
             let completion_deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 let (completed, _) = with_lifecycle_current_runner_turn_for_test(
@@ -1995,8 +1982,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                             ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted,
                         ) => true,
                         ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
-                        ProductionLifecycleCompletionTurnV1::Selected(_) => {
-                            panic!("current Serve completion selected the wrong lifecycle outcome")
+                        ProductionLifecycleCompletionTurnV1::Selected(selected) => {
+                            assert!(
+                                !selected.restart_required(),
+                                "current Serve completion requires lifecycle restart"
+                            );
+                            false
                         }
                     },
                 );

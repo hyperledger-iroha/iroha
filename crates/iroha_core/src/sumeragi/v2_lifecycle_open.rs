@@ -1,16 +1,12 @@
 //! Sealed durable-open and authenticated restart reconciliation.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
-use iroha_config::parameters::actual::SumeragiV2Config;
+use std::path::Path;
+
 use thiserror::Error;
 
-#[cfg(test)]
-use super::authority;
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
     DurablePayloadReference, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
@@ -439,6 +435,12 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// two-child projection remain one exclusive startup class. Both live
     /// children splice before the all-row census; unrelated durable carriers
     /// are preserved and authenticated independently.
+    // TODO: Either wire this combined first-release projection from cold
+    // startup or retire it after proving the split next-Sign form exhaustive.
+    #[expect(
+        dead_code,
+        reason = "first-release cold startup currently emits the split next-Sign carrier; retain the combined recovery constructor until the TODO is resolved"
+    )]
     #[allow(clippy::result_large_err)]
     pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup(
         ledger: LifecycleLedgerV1,
@@ -790,6 +792,10 @@ impl AuthenticatedLifecycleRecoveryCut {
             )
     }
     /// Revalidate both children of one frame-bound phase Prepare successor.
+    #[expect(
+        dead_code,
+        reason = "first-release cold startup currently emits the split next-Sign carrier; retain exact validation for the combined recovery shape until the TODO is resolved"
+    )]
     pub(super) fn owns_recovered_phase_broadcast_and_sign(
         &self,
         projection: &AuthenticatedRecoveredWalSignProjection,
@@ -839,7 +845,12 @@ impl AuthenticatedLifecycleRecoveryCut {
             && broadcast.owns_spliced_candidate(&self.candidates)
     }
     /// Revalidate both children of one frame-bound control Proposal successor.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // TODO: Wire this combined control projection from cold startup or retire it
+    // after proving the split next-Sign form exhaustive.
+    #[expect(
+        dead_code,
+        reason = "the combined control Broadcast-and-Sign cold-start seam remains intentionally dormant"
+    )]
     pub(super) fn owns_recovered_control_broadcast_and_sign(
         &self,
         control: &AuthenticatedRecoveredWalControlProjection,
@@ -1006,8 +1017,6 @@ pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
 pub(crate) struct LifecycleOpenError(LifecycleOpenErrorKind);
 #[derive(Debug, Error)]
 enum LifecycleOpenErrorKind {
-    #[error("verified height context cannot derive bounded lifecycle authority")]
-    InvalidAuthority,
     #[error("authenticated lifecycle recovery cut is inconsistent: {0}")]
     InvalidRecovery(&'static str),
     #[error(transparent)]
@@ -1289,28 +1298,6 @@ impl LifecycleCoordinator {
         }
         Ok(())
     }
-    /// Open the sole durable coordinator from a verified height context.
-    ///
-    /// The persisted ledger owns the ordinal high-water mark. Every live row
-    /// must join exactly one authenticated recovery candidate (ProducerTurn
-    /// rows join through their adjacent Serve), and every Serve row must join
-    /// its payload-store reference. Rebinding and payload-store-ahead terminal
-    /// cuts are persisted before this method returns. Authenticated payloads
-    /// with no ledger owner are then durably pruned through `payload_store`.
-    #[cfg(test)]
-    pub(crate) fn open_from_verified_height_context(
-        verified: &VerifiedHeightContext,
-        config: &SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        ledger_root: &Path,
-        payload_store: &mut CertifiedServePayloadStoreV1,
-        recovery: AuthenticatedLifecycleRecoveryCut,
-    ) -> Result<Self, LifecycleOpenError> {
-        let authority =
-            authority::production_authority(verified, config, reply_route_source_capacity)
-                .ok_or(LifecycleOpenErrorKind::InvalidAuthority)?;
-        Self::open_with_authority(authority, ledger_root, payload_store, recovery)
-    }
     /// Open with an already authenticated bounded episode authority.
     #[cfg(test)]
     pub(super) fn open_with_authority(
@@ -1343,6 +1330,7 @@ impl LifecycleCoordinator {
             .map_err(LifecycleOpenCommitError::into_error)
     }
     /// Complete recovery and rebinding without publishing either local store.
+    #[cfg(test)]
     pub(super) fn prepare_with_authority_borrowed(
         authority: AuthenticatedEpisodeAuthority,
         ledger_root: &Path,

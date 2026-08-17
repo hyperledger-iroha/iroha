@@ -19,9 +19,9 @@ pub enum SoftwareSignerPurposeV1 {
     GovernanceKeyTransition = 15,
     /// Immutable Governance DAG qualification archive.
     GovernanceQualificationArchive = 16,
-    /// Unsigned canonical PoTR receipt signed by the gateway key.
+    /// Unsigned canonical `PoTR` receipt signed by the gateway key.
     PotrGatewayReceipt = 4,
-    /// Unsigned canonical PoTR receipt signed by the provider key.
+    /// Unsigned canonical `PoTR` receipt signed by the provider key.
     PotrProviderReceipt = 5,
     /// Domain-separated governed billing-statement digest.
     BillingStatement = 6,
@@ -35,11 +35,11 @@ pub enum SoftwareSignerPurposeV1 {
     EvidenceCompactionArchive = 10,
     /// Canonical domain-prefixed stream-token body.
     StreamToken = 11,
-    /// Domain-separated PoP credential digest.
+    /// Domain-separated `PoP` credential digest.
     PopCredential = 12,
-    /// Domain-separated PoP commitment-root digest.
+    /// Domain-separated `PoP` commitment-root digest.
     PopCommitmentRoot = 13,
-    /// Domain-separated PoP revocation-list digest.
+    /// Domain-separated `PoP` revocation-list digest.
     PopRevocationList = 14,
 }
 impl SoftwareSignerPurposeV1 {

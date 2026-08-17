@@ -1883,21 +1883,39 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
         catalog_mcp_projection_decision(ENABLED_GROUPS, &Method::GET, "/v1/tests/mcp-featured",),
         Some(true)
     );
+    assert!(tool_requires_catalog_mcp_projection("torii.generated"));
+    assert!(tool_requires_catalog_mcp_projection("iroha.time.now"));
+    assert!(tool_requires_catalog_mcp_projection(
+        "iroha.ledger.state_proof"
+    ));
+    assert!(!tool_requires_catalog_mcp_projection("iroha.accounts.get"));
     let mut tools = vec![
         sample_tool_at(
-            "test.catalog_included",
+            "torii.catalog_included",
             Method::GET,
             "/v1/tests/mcp-included",
             ToolEffect::Read,
         ),
         sample_tool_at(
-            "test.catalog_excluded",
+            "torii.catalog_excluded",
             Method::POST,
             "/v1/tests/mcp-excluded",
             ToolEffect::Write,
         ),
         sample_tool_at(
-            "test.uncataloged",
+            "torii.uncataloged",
+            Method::GET,
+            "/v1/tests/uncataloged",
+            ToolEffect::Read,
+        ),
+        sample_tool_at(
+            "iroha.tests.catalog_excluded",
+            Method::POST,
+            "/v1/tests/mcp-excluded",
+            ToolEffect::Write,
+        ),
+        sample_tool_at(
+            "iroha.tests.uncataloged",
             Method::GET,
             "/v1/tests/uncataloged",
             ToolEffect::Read,
@@ -1915,8 +1933,12 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["test.catalog_included", "test.uncataloged"],
-        "purpose-built manual tools remain an explicit allowlist even when their HTTP family is not cataloged"
+        vec![
+            "torii.catalog_included",
+            "iroha.tests.catalog_excluded",
+            "iroha.tests.uncataloged",
+        ],
+        "generated tools fail closed while purpose-built aliases remain an explicit allowlist for mounted or uncataloged routes"
     );
     let mut enabled_tools = vec![sample_tool_at(
         "iroha.tests.featured",

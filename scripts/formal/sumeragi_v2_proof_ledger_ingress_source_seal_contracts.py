@@ -5,17 +5,11 @@
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
-    "fair_v2_ingress_is_certified_body_request": (
-        "749f33ce31fcfe4ecf84e2264c181b909d30043bb759a90cbf6e5ebb1a40d0e0"
-    ),
-    "fair_v2_ingress_serve_selector_projection": (
-        "948057ba574c9a36b6080131f5216bf4b85e93818065023d840982da125843d9"
-    ),
     "fair_v2_ingress_leader_wire_selector_projection": (
         "34eebea6c6b1a3aefeb68010a2ea367970cc3f16a7d5adf592e184bcc799201e"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
+        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "fair_v2_ingress_required_capacity": (
         "eec628b52b06d4e8d2238cc1d05f3b18a53347e186c438723fc4861d442db550"
@@ -588,7 +582,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "try_recv_if_at_checked_classified": (
-        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
+        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
     "dequeue_selected_locked": (
         "4c94e8f957bbf35bdc21167602d93646070dbb35806761a8068db8832be7fc31"

@@ -74,7 +74,13 @@ fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
     let network_id = test_network_id(0x35);
     let network = TransactionDomain::Network(network_id);
     let network_payload = norito::codec::Encode::encode(&network);
-    let mut expected_network = vec![0, 0, 0, 0, Hash::LENGTH as u8];
+    let mut expected_network = vec![
+        0,
+        0,
+        0,
+        0,
+        u8::try_from(Hash::LENGTH).expect("hash byte length fits the wire prefix"),
+    ];
     expected_network.extend_from_slice(network_id.as_bytes());
     assert_eq!(network_payload, expected_network);
     let network_bytes =
@@ -281,7 +287,7 @@ fn draft_privacy_payload() -> TransactionPayload {
 fn draft_zk_ace_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
-        let context = submission.envelope.statement.context().clone();
+        let context = *submission.envelope.statement.context();
         let authority = privacy_test_authority();
         submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
@@ -312,7 +318,7 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
 fn draft_vega_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
-        let context = submission.envelope.statement.context().clone();
+        let context = *submission.envelope.statement.context();
         let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
         submission.envelope.protocol_id = protocol_id;
         submission.envelope.proof_system_id =
@@ -359,7 +365,7 @@ fn draft_vega_privacy_payload() -> TransactionPayload {
 fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
-        let context = submission.envelope.statement.context().clone();
+        let context = *submission.envelope.statement.context();
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         submission.envelope.protocol_id = protocol_id;
         submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
@@ -790,7 +796,7 @@ fn transaction_payload_exposes_execution_identity_ttl_and_network() {
     .into();
     let time_to_live = Duration::from_secs(42);
     let mut builder = TransactionBuilder::new(
-        chain.clone(),
+        chain,
         authority.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1845,7 +1851,7 @@ fn transaction_builder_try_sign_matches_compatibility_sign() {
     let authority = AccountId::new(key_pair.public_key().clone());
     let make_builder = || {
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1999,23 +2005,27 @@ fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "authorization-sensitive wire".into())]);
-    let signed_a = builder.clone().sign_multisig([signer_a.private_key()]);
-    let signed_b = builder.sign_multisig([signer_b.private_key()]);
-    signed_a.verify_signature().expect("first proof is valid");
-    signed_b.verify_signature().expect("second proof is valid");
+    let first_proof = builder.clone().sign_multisig([signer_a.private_key()]);
+    let second_proof = builder.sign_multisig([signer_b.private_key()]);
+    first_proof
+        .verify_signature()
+        .expect("first proof is valid");
+    second_proof
+        .verify_signature()
+        .expect("second proof is valid");
     assert_eq!(
-        signed_a.hash(),
-        signed_b.hash(),
+        first_proof.hash(),
+        second_proof.hash(),
         "the transaction identity intentionally hashes only the shared payload"
     );
-    let wire_a = signed_a
+    let wire_a = first_proof
         .encode_wire_v1()
         .expect("first fixed V1 wire must encode");
-    let wire_b = signed_b
+    let wire_b = second_proof
         .encode_wire_v1()
         .expect("second fixed V1 wire must encode");
-    assert_eq!(wire_a, signed_a.encode_versioned());
-    assert_eq!(wire_b, signed_b.encode_versioned());
+    assert_eq!(wire_a, first_proof.encode_versioned());
+    assert_eq!(wire_b, second_proof.encode_versioned());
     assert_ne!(
         wire_a, wire_b,
         "different valid authorization proofs must produce different complete wire bytes"

@@ -912,21 +912,6 @@ where
         value.zeroize_sensitive();
     })
 }
-/// Read one bounded caller-owned archive and decode it with the named canonical profile.
-///
-/// Keeping the pointer copy and canonical decoder together prevents FFI wrappers from
-/// accidentally decoding an unbounded or layout-ambiguous byte slice.
-macro_rules! read_kagemusha_archive {
-    ($decoder:ident => $ty:ty, $ptr:expr, $len:expr, $maximum:expr) => {{
-        let bytes = unsafe { read_kagemusha_archive_bytes_bounded($ptr, $len, $maximum) }?;
-        $decoder::<$ty>(&bytes)
-    }};
-    (sensitive $ty:ty, $ptr:expr, $len:expr, $maximum:expr) => {{
-        let bytes =
-            Zeroizing::new(unsafe { read_kagemusha_archive_bytes_bounded($ptr, $len, $maximum) }?);
-        decode_canonical_kagemusha_sensitive_archive::<$ty>(&bytes)
-    }};
-}
 /// Read one bounded opaque archive without selecting a Norito schema.
 macro_rules! read_kagemusha_bytes {
     ($ptr:expr, $len:expr, $maximum:expr) => {{ unsafe { read_kagemusha_archive_bytes_bounded($ptr, $len, $maximum) } }};
@@ -1217,9 +1202,6 @@ fn parse_public_quantity(value: String) -> BridgeResult<Quantity> {
         return Err(BridgeError::Quantity);
     }
     Ok(quantity)
-}
-fn parse_private_key(bytes: &[u8]) -> BridgeResult<PrivateKey> {
-    parse_private_key_with_algorithm(bytes, Algorithm::Ed25519)
 }
 fn parse_private_key_with_algorithm(
     bytes: &[u8],
@@ -2574,9 +2556,6 @@ struct AssetInputPointers {
     ttl_present: c_uchar,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
-}
-unsafe fn gather_asset_tx_inputs(ptrs: AssetInputPointers) -> BridgeResult<AssetTxInputs> {
-    unsafe { gather_asset_tx_inputs_with_parser(ptrs, parse_private_key) }
 }
 unsafe fn gather_asset_tx_inputs_with_parser<F>(
     ptrs: AssetInputPointers,
@@ -14637,7 +14616,7 @@ mod kagemusha_bridge_tests {
                 0,
             );
             let context = HeightContext {
-                network_id: network_id.clone(),
+                network_id: *network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height,
                 epoch: 0,
@@ -29870,7 +29849,7 @@ mod tests {
             .name("privacy-catalog-ffi-null-small-stack-caller".to_owned())
             .stack_size(CALLER_STACK_BYTES)
             .spawn(|| {
-                let mut cleared_ptr = 1_usize as *mut c_uchar;
+                let mut cleared_ptr = ptr::dangling_mut::<c_uchar>();
                 let mut cleared_len = c_ulong::MAX;
                 assert_eq!(
                     unsafe {

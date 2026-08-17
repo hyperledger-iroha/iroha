@@ -4486,24 +4486,23 @@ mod tests {
                 &norito::to_bytes(&key).expect("encode key"),
             ))
             .expect("allocate key");
-        for syscall in [syscalls::SYSCALL_JSON_GET_QUANTITY] {
-            vm.set_register(10, json_ptr);
-            vm.set_register(11, key_ptr);
-            host.syscall(syscall, &mut vm).expect("get quantity");
-            let (some, words) = crate::sum::read_words(
-                &vm,
-                vm.register(10),
-                crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
-            )
-            .expect("quantity option");
-            assert!(some);
-            let tlv = vm.validate_tlv(words[0]).expect("quantity TLV");
-            assert_eq!(tlv.type_id, PointerType::Quantity);
-            let quantity = QuantityValueV1::decode_frame(tlv.payload)
-                .expect("decode quantity frame")
-                .into_quantity();
-            assert_eq!(quantity.to_string(), "1.25");
-        }
+        let syscall = syscalls::SYSCALL_JSON_GET_QUANTITY;
+        vm.set_register(10, json_ptr);
+        vm.set_register(11, key_ptr);
+        host.syscall(syscall, &mut vm).expect("get quantity");
+        let (some, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
+        )
+        .expect("quantity option");
+        assert!(some);
+        let tlv = vm.validate_tlv(words[0]).expect("quantity TLV");
+        assert_eq!(tlv.type_id, PointerType::Quantity);
+        let quantity = QuantityValueV1::decode_frame(tlv.payload)
+            .expect("decode quantity frame")
+            .into_quantity();
+        assert_eq!(quantity.to_string(), "1.25");
         for invalid in [
             r#"{"amount":"-1"}"#,
             r#"{"amount":"1.2500"}"#,

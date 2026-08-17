@@ -1988,7 +1988,7 @@ fn platform_no_follow_flag() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signer as _, SigningKey};
+    use ed25519_dalek::SigningKey;
     use tempfile::{NamedTempFile, TempDir, tempdir};
     const SMALL_ORDER_ED25519: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

@@ -545,6 +545,10 @@ pub struct PqMaspNoteActionRequestV1 {
     pub authorization_secret_key: Zeroizing<Vec<u8>>,
 }
 /// Closed dispatcher request shared by wallet adapters.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a variant would break the public Rust request API"
+)]
 pub enum PrivacyNativeActionRequestV1 {
     /// Governed ZK-ACE authorization transfer.
     ZkAce(ZkAceAuthorizationActionRequestV1),
@@ -2928,22 +2932,25 @@ mod tests {
     }
     #[test]
     fn transport_caps_are_nonzero_and_strictly_nested() {
-        assert!(PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1 > 0);
-        assert!(
-            PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1
-                < PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
-        );
-        assert!(
-            PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
-                < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
-        );
-        assert!(
-            PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1 < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
-        );
-        assert!(
-            PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
-                < PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1
-        );
+        const {
+            assert!(PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1 > 0);
+            assert!(
+                PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1
+                    < PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
+            );
+            assert!(
+                PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
+                    < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
+            );
+            assert!(
+                PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1
+                    < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
+            );
+            assert!(
+                PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
+                    < PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1
+            );
+        }
         assert_eq!(
             u64::try_from(PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1)
                 .expect("native action response cap fits u64"),

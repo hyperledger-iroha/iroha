@@ -11,14 +11,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs"
-MAX_SOURCE_LINES = 42_782
+MAX_SOURCE_LINES = 40_506
 
 REGION_START = """    #[derive(Clone, Copy)]
     enum FheInputAdmissionPayloadShape"""
 REGION_END = """    #[cfg(feature = "zk-stark")]
     #[test]
-    fn mutate_soracloud_state_accepts_registered_fhe_input_admission_proof"""
-REGION_HASH = "275d9fc409f8c25889e61922698ff32e9a07904c1e2be22e7ad7327ef4a94238"
+    fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof"""
+REGION_HASH = "79725ce363652dc2891ae82f88572123b98101014acb1a4465d5a5389b5dd32a"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -108,10 +108,9 @@ VERIFIER_MUTATION_TOKENS = (
 RUNNER_TOKENS = (
     "for &case in cases",
     "configure_fhe_input_admission_rejection_verifier",
-    "sample_bundle_with_state_binding",
-    "isi::DeploySoracloudService",
+    "deploy_fhe_job_test_service",
     "sample_fhe_input_admission_proof",
-    "sample_verified_fhe_input_admission_proof",
+    "sample_fhe_input_admission_binding_air_rejection_proof",
     "isi::MutateSoracloudState",
     "fhe_input_admission_proof: Some(admission_proof.clone())",
     "Some(Hash::new(&payload))",

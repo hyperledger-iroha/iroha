@@ -158,6 +158,35 @@ fn read_optional_bounded_regular_file_with_hook(
             format!("{subject} read limit overflows this platform"),
         )
     })?;
+    let bytes = read_bounded_snapshot_bytes(&mut file, read_capacity, max_bytes, subject)?;
+    after_read();
+    verify_snapshot_bytes_unchanged(&mut file, &bytes, subject)?;
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    let observed_len = u64::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{subject} byte count cannot be represented as u64"),
+        )
+    })?;
+    validate_direct_regular_file(&opened_after, subject)?;
+    validate_direct_regular_file(&named_after, subject)?;
+    if !metadata_identifies_same_file(&opened_before, &opened_after)
+        || !metadata_identifies_same_file(&opened_after, &named_after)
+        || opened_before.len() != opened_after.len()
+        || opened_after.len() != named_after.len()
+        || opened_after.len() != observed_len
+    {
+        return Err(changed(subject, "while being read"));
+    }
+    Ok(Some(bytes))
+}
+fn read_bounded_snapshot_bytes(
+    file: &mut fs::File,
+    read_capacity: usize,
+    max_bytes: usize,
+    subject: &'static str,
+) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(read_capacity).map_err(|_| {
         io::Error::new(
@@ -183,7 +212,13 @@ fn read_optional_bounded_regular_file_with_hook(
     if bytes.len() > max_bytes {
         return Err(too_large(subject, max_bytes));
     }
-    after_read();
+    Ok(bytes)
+}
+fn verify_snapshot_bytes_unchanged(
+    file: &mut fs::File,
+    bytes: &[u8],
+    subject: &'static str,
+) -> io::Result<()> {
     file.rewind()?;
     let mut compared = 0usize;
     let verification_limit = bytes.len().checked_add(1).ok_or_else(|| {
@@ -216,25 +251,7 @@ fn read_optional_bounded_regular_file_with_hook(
     if compared != bytes.len() {
         return Err(changed(subject, "during verification reread"));
     }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
-    let observed_len = u64::try_from(bytes.len()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{subject} byte count cannot be represented as u64"),
-        )
-    })?;
-    validate_direct_regular_file(&opened_after, subject)?;
-    validate_direct_regular_file(&named_after, subject)?;
-    if !metadata_identifies_same_file(&opened_before, &opened_after)
-        || !metadata_identifies_same_file(&opened_after, &named_after)
-        || opened_before.len() != opened_after.len()
-        || opened_after.len() != named_after.len()
-        || opened_after.len() != observed_len
-    {
-        return Err(changed(subject, "while being read"));
-    }
-    Ok(Some(bytes))
+    Ok(())
 }
 fn validate_direct_regular_file(metadata: &fs::Metadata, subject: &'static str) -> io::Result<()> {
     if metadata_is_link(metadata) || !metadata.is_file() {

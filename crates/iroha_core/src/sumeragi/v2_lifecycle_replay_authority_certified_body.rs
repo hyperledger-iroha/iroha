@@ -73,20 +73,6 @@ impl CertifiedFetchReplayEvidenceV1 {
             && certified_sources == &expected_sources
             && verified.verify_quorum_certificate(certificate).is_ok()
     }
-    /// Compare this complete canonical family with the exact installed Fetch.
-    pub(super) fn exactly_matches_fetch(
-        &self,
-        effect: &AdapterEffect,
-        response: &wire::CertifiedBodyResponse,
-        receipt: &DurableCertifiedFetchBodyReceipt,
-    ) -> bool {
-        if receipt.request_hash() != response.request_hash
-            || receipt.response_hash() != HashOf::new(response)
-        {
-            return false;
-        }
-        self.exactly_matches_fetch_body(effect, response, receipt.durable_body())
-    }
     fn exactly_matches_fetch_body(
         &self,
         effect: &AdapterEffect,
@@ -282,27 +268,6 @@ impl DurableCertifiedFetchReplayProjectionV1 {
     /// Exact manifest hash retained independently by the body-store receipt.
     pub(super) const fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.expected_manifest_hash
-    }
-    /// Recheck the exact runtime binding and durable body without exposing fields.
-    pub(super) fn exactly_matches_runtime(
-        &self,
-        effect: &AdapterEffect,
-        pending: &PendingRuntimeEffectBinding,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        pending.exactly_binds_adapter_effect(effect)
-            && pending.causal_lifecycle_key() == &self.causal_key
-            && pending.exact_effect_identity() == &self.effect_identity
-            && receipt.manifest_hash() == self.expected_manifest_hash
-            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
-                .map(DurablePayloadReference::BodyFrame)
-                == Some(self.payload)
-            && canonical_replay_authority(
-                replay_context(receipt.round()),
-                self.authority.source.clone(),
-                LifecycleStageKind::FetchBody,
-                ReplayPayloadBindingV1::from_payload(self.payload),
-            ) == Some(self.authority.clone())
     }
     /// Project the exact Ready recovery candidate named by one durable row.
     #[allow(clippy::too_many_arguments)]

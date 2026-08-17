@@ -297,12 +297,13 @@ fn scope_json_serialize_to(
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
     out.push('{')?;
-    let mut has_field = false;
-    if let Some(asset) = &scope.asset {
+    let mut has_field = if let Some(asset) = &scope.asset {
         out.push_str("\"asset\":")?;
         json::write_json_string_to(&asset.to_string(), out)?;
-        has_field = true;
-    }
+        true
+    } else {
+        false
+    };
     if let Some(dataspace) = scope.dataspace {
         if has_field {
             out.push(',')?;
@@ -316,7 +317,7 @@ fn scope_json_serialize_to(
             out.push(',')?;
         }
         out.push_str("\"method\":")?;
-        json::write_json_string_to(&method.to_string(), out)?;
+        json::write_json_string_to(method.as_ref(), out)?;
         has_field = true;
     }
     if let Some(program) = &scope.program {

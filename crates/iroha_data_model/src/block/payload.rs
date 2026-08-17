@@ -113,7 +113,7 @@ mod model {
         pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-        /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
+        /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
         /// This required V1 field stays last so its absence cannot alias a defaulted extension.
         pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
@@ -538,6 +538,12 @@ impl SignedBlock {
     ///
     /// The validation walks the retained tree in place and does not rebuild an
     /// entry-sized node vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
+    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
+    /// hash or leaf count differs from the canonical entrypoints.
     pub fn validate_entrypoint_merkle_cache(&self) -> Result<(), MerkleError> {
         let result = self.result.as_ref().ok_or_else(|| {
             MerkleError::InvalidLayout("block transaction results are missing".to_owned())
@@ -597,6 +603,12 @@ impl SignedBlock {
     ///
     /// The validation walks the retained tree in place and does not rebuild a
     /// result-sized node vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
+    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
+    /// hash or leaf count differs from the canonical transaction results.
     pub fn validate_result_merkle_cache(&self) -> Result<(), MerkleError> {
         let result = self.result.as_ref().ok_or_else(|| {
             MerkleError::InvalidLayout("block transaction results are missing".to_owned())
@@ -878,7 +890,7 @@ impl DoubleEndedIterator for EntrypointIterator<'_> {
         if let Some(entrypoint) = self
             .time_triggers
             .as_mut()
-            .and_then(|time_triggers| time_triggers.next_back())
+            .and_then(DoubleEndedIterator::next_back)
         {
             return Some(TransactionEntrypoint::from(entrypoint.clone()));
         }

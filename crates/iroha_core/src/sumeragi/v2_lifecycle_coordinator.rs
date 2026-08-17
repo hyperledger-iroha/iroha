@@ -196,8 +196,6 @@ pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     RecoveredWalVoteReplayEvidenceV1,
 };
-#[cfg(test)]
-pub(in crate::sumeragi) use scheduler_inputs::CertifiedServeSchedulerClaimErrorV1;
 pub(in crate::sumeragi) use scheduler_inputs::ProducerTurnSchedulerClaimErrorV1;
 #[allow(
     unused_imports,
@@ -214,8 +212,6 @@ pub(in crate::sumeragi) use scheduler_inputs::{
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
-    ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
-    ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
@@ -442,6 +438,7 @@ impl LifecycleCoordinator {
         self.active_context
     }
     /// Return the durable ordinal high-water mark.
+    #[cfg(test)]
     pub(crate) const fn high_water(&self) -> u128 {
         self.high_water
     }

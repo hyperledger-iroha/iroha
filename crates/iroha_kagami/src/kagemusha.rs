@@ -4,8 +4,7 @@ use crate::{ExplicitExitError, Outcome, RunArgs};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::smartcontracts::isi::offline::{
-    KagemushaReleaseCatalogV4,
-    isi::validate_offline_attestation_policy_for_release_activation,
+    KagemushaReleaseCatalogV4, isi::validate_offline_attestation_policy_for_release_activation,
 };
 use iroha_core::zk::kagemusha_artifact_v4::{
     kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
@@ -238,7 +237,7 @@ impl<T: Write> RunArgs<T> for Args {
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
-                    &memory_guard,
+                    memory_guard,
                 )?;
                 let report = verified.verification_report()?;
                 writeln!(writer, "{}", report.canonical_json()?)?;
@@ -253,7 +252,7 @@ impl<T: Write> RunArgs<T> for Args {
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
-                    &memory_guard,
+                    memory_guard,
                 )?;
                 let record = verified.promotion_record()?;
                 record.validate().map_err(|error| eyre!(error))?;
@@ -308,13 +307,13 @@ impl<T: Write> RunArgs<T> for Args {
                 )?;
             }
             Command::PrepareReleaseCircuitParamsV4(args) => {
-                prepare_release_circuit_params_v4(args, writer)?;
+                prepare_release_circuit_params_v4(&args, writer)?;
             }
             Command::PrepareTairaReleaseRosterV4(args) => {
-                taira::prepare_release_roster_v4(args, writer)?;
+                taira::prepare_release_roster_v4(&args, writer)?;
             }
             Command::PrepareTairaTestnetBaseGenesisV4(args) => {
-                taira::prepare_testnet_base_genesis_v4(args, writer)?;
+                taira::prepare_testnet_base_genesis_v4(&args, writer)?;
             }
         }
         Ok(())
@@ -336,7 +335,7 @@ struct ReleaseCircuitParamsReportV4 {
     step_ep: ReleaseCircuitParamsArtifactReportV4,
 }
 fn prepare_release_circuit_params_v4<T: Write>(
-    args: PrepareReleaseCircuitParamsV4Args,
+    args: &PrepareReleaseCircuitParamsV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     let output_dir = args
@@ -436,10 +435,7 @@ fn configured_device_attestation_policy(
     )?;
     let policy: OfflineDeviceAttestationPolicy = norito::json::from_slice(&raw)
         .wrap_err("failed to decode governed Offline device-attestation policy JSON")?;
-    validate_device_attestation_policy_for_atomic_activation(
-        &policy,
-        policy_evaluation_time_ms,
-    )?;
+    validate_device_attestation_policy_for_atomic_activation(&policy, policy_evaluation_time_ms)?;
     let canonical = norito::json::to_string(&policy)
         .wrap_err("failed to encode canonical Offline device-attestation policy JSON")?;
     let reparsed: OfflineDeviceAttestationPolicy = norito::json::from_str(&canonical)
@@ -469,11 +465,8 @@ fn validate_device_attestation_policy_for_atomic_activation(
     validate_atomic_activation_revocations(policy)?;
     validate_atomic_activation_ios_apps(policy)?;
     validate_atomic_activation_android_apps(policy)?;
-    validate_offline_attestation_policy_for_release_activation(
-        policy,
-        policy_evaluation_time_ms,
-    )
-    .map_err(|error| eyre!("consensus device-attestation policy validation failed: {error}"))?;
+    validate_offline_attestation_policy_for_release_activation(policy, policy_evaluation_time_ms)
+        .map_err(|error| eyre!("consensus device-attestation policy validation failed: {error}"))?;
     Ok(())
 }
 fn validate_atomic_activation_policy_shape(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
@@ -710,7 +703,7 @@ fn verify_release_directory_v4(
     policy_bytes: &[u8],
     benchmark_evidence_path: &Path,
     cryptographic_review_path: &Path,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<VerifiedReleaseV4> {
     let root = canonical_release_root(bundle_dir)?;
     let policy: KagemushaRecursiveSpendReleasePolicyV1 =
@@ -944,7 +937,7 @@ fn verify_qualification_receipt_v4(
     authenticated: &KagemushaAuthenticatedReleaseV4,
     candidate: &KagemushaRecursiveSpendCandidateV4,
     receipt: &KagemushaRecursiveSpendQualificationReceiptV4,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Outcome {
     let candidate_sha256 = candidate
         .sha256()
@@ -953,52 +946,52 @@ fn verify_qualification_receipt_v4(
         .wrap_err("failed to encode immutable V4 candidate manifest")?;
     let candidate_manifest_sha256 =
         kagemusha_recursive_spend_release_sha256(&candidate_manifest_bytes);
-    let eq_proving_key = kagemusha_artifact_descriptor_v4(
+    let vesta_proving_key = kagemusha_artifact_descriptor_v4(
         &candidate.manifest,
         KagemushaPastaCycleParityV1::StepEq,
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
     )
     .map_err(|error| eyre!(error))?;
-    let ep_proving_key = kagemusha_artifact_descriptor_v4(
+    let pallas_proving_key = kagemusha_artifact_descriptor_v4(
         &candidate.manifest,
         KagemushaPastaCycleParityV1::StepEp,
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
     )
     .map_err(|error| eyre!(error))?;
-    let eq_maximum = usize::try_from(eq_proving_key.size_bytes)
+    let vesta_maximum = usize::try_from(vesta_proving_key.size_bytes)
         .map_err(|_| eyre!("Kagemusha V4 Eq proving-key size does not fit this host"))?;
-    let ep_maximum = usize::try_from(ep_proving_key.size_bytes)
+    let pallas_maximum = usize::try_from(pallas_proving_key.size_bytes)
         .map_err(|_| eyre!("Kagemusha V4 Ep proving-key size does not fit this host"))?;
-    let eq_opened = open_regular_bounded(
+    let vesta_opened = open_regular_bounded(
         root,
-        &eq_proving_key.file_name,
-        eq_maximum,
+        &vesta_proving_key.file_name,
+        vesta_maximum,
         "Kagemusha V4 qualification Eq proving key",
     )?;
-    let ep_opened = open_regular_bounded(
+    let pallas_opened = open_regular_bounded(
         root,
-        &ep_proving_key.file_name,
-        ep_maximum,
+        &pallas_proving_key.file_name,
+        pallas_maximum,
         "Kagemusha V4 qualification Ep proving key",
     )?;
-    let eq_file = eq_opened
+    let vesta_file = vesta_opened
         .file
         .try_clone()
         .wrap_err("failed to duplicate Kagemusha V4 Eq proving-key handle")?;
-    let ep_file = ep_opened
+    let pallas_file = pallas_opened
         .file
         .try_clone()
         .wrap_err("failed to duplicate Kagemusha V4 Ep proving-key handle")?;
     let qualification_memory_contract =
-        KagemushaQualificationMemoryContractV4::for_operator(memory_guard);
+        KagemushaQualificationMemoryContractV4::for_operator(&memory_guard);
     verify_candidate_recursive_step_two_receipt_v4(
         candidate,
         candidate_sha256,
         candidate_manifest_sha256,
         receipt,
         &qualification_memory_contract,
-        eq_file,
-        ep_file,
+        vesta_file,
+        pallas_file,
         |parity, kind| {
             if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
                 return Err(
@@ -1029,8 +1022,8 @@ fn verify_qualification_receipt_v4(
         },
     )
     .map_err(|error| eyre!("Kagemusha V4 qualification proof verification failed: {error}"))?;
-    eq_opened.verify_unchanged()?;
-    ep_opened.verify_unchanged()?;
+    vesta_opened.verify_unchanged()?;
+    pallas_opened.verify_unchanged()?;
     Ok(())
 }
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
@@ -1067,10 +1060,10 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
 }
 fn insert_expected_release_file_v4(
     expected: &mut BTreeSet<String>,
-    file_name: String,
+    file_name: &str,
     role: &str,
 ) -> Outcome {
-    if !expected.insert(file_name.clone()) {
+    if !expected.insert(file_name.to_owned()) {
         bail!("Kagemusha V4 {role} aliases another release file as `{file_name}`");
     }
     Ok(())
@@ -1099,11 +1092,11 @@ fn verify_exact_inventory_v4(
         ),
         (PROMOTION_RECORD_FILE_NAME_V4, "promotion record"),
     ] {
-        insert_expected_release_file_v4(&mut expected, file_name.to_owned(), role)?;
+        insert_expected_release_file_v4(&mut expected, file_name, role)?;
     }
     insert_expected_release_file_v4(
         &mut expected,
-        manifest.topup_finality_roster_artifact.file_name.clone(),
+        &manifest.topup_finality_roster_artifact.file_name,
         "top-up finality roster",
     )?;
     for artifact in manifest
@@ -1113,7 +1106,7 @@ fn verify_exact_inventory_v4(
     {
         insert_expected_release_file_v4(
             &mut expected,
-            artifact.file_name.clone(),
+            &artifact.file_name,
             "authenticated artifact",
         )?;
     }
@@ -1386,6 +1379,14 @@ impl ReleaseCircuitParamsPublicationOutcomeV1 {
     }
 }
 #[cfg(unix)]
+fn stat_field_matches_v1<Actual, Expected>(actual: Actual, expected: Expected) -> bool
+where
+    Actual: TryInto<Expected>,
+    Expected: PartialEq,
+{
+    actual.try_into().ok() == Some(expected)
+}
+#[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PromotionDirectorySnapshotV1 {
     device: u64,
@@ -1549,13 +1550,13 @@ impl PinnedPromotionParentV1 {
             .ok_or_else(|| eyre!("promotion-record parent component is not a directory"))?;
             let stat_after = statat(&file, name, AtFlags::SYMLINK_NOFOLLOW)
                 .wrap_err("failed to re-inspect promotion-record parent component")?;
-            let stat_identity_matches = u64::try_from(stat_after.st_dev).ok()
-                == Some(next_snapshot.device)
-                && u64::try_from(stat_after.st_ino).ok() == Some(next_snapshot.inode)
-                && u32::try_from(stat_after.st_mode).ok() == Some(next_snapshot.mode)
-                && u32::try_from(stat_after.st_uid).ok() == Some(next_snapshot.uid)
-                && u32::try_from(stat_after.st_gid).ok() == Some(next_snapshot.gid)
-                && u64::try_from(stat_after.st_nlink).ok() == Some(next_snapshot.links);
+            let stat_identity_matches =
+                stat_field_matches_v1(stat_after.st_dev, next_snapshot.device)
+                    && stat_field_matches_v1(stat_after.st_ino, next_snapshot.inode)
+                    && stat_field_matches_v1(stat_after.st_mode, next_snapshot.mode)
+                    && stat_field_matches_v1(stat_after.st_uid, next_snapshot.uid)
+                    && stat_field_matches_v1(stat_after.st_gid, next_snapshot.gid)
+                    && stat_field_matches_v1(stat_after.st_nlink, next_snapshot.links);
             if !stat_identity_matches {
                 bail!("promotion-record parent component changed while it was pinned");
             }
@@ -1738,13 +1739,13 @@ where
     let after_publication = (|| -> Result<()> {
         let target = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
             .wrap_err("failed to inspect published promotion record")?;
-        if u64::try_from(target.st_dev).ok() != Some(snapshot.device)
-            || u64::try_from(target.st_ino).ok() != Some(snapshot.inode)
-            || u32::try_from(target.st_mode).ok() != Some(snapshot.mode)
-            || u32::try_from(target.st_uid).ok() != Some(snapshot.uid)
-            || u32::try_from(target.st_gid).ok() != Some(snapshot.gid)
-            || u64::try_from(target.st_nlink).ok() != Some(snapshot.links)
-            || u64::try_from(target.st_size).ok() != Some(snapshot.length)
+        if !stat_field_matches_v1(target.st_dev, snapshot.device)
+            || !stat_field_matches_v1(target.st_ino, snapshot.inode)
+            || !stat_field_matches_v1(target.st_mode, snapshot.mode)
+            || !stat_field_matches_v1(target.st_uid, snapshot.uid)
+            || !stat_field_matches_v1(target.st_gid, snapshot.gid)
+            || !stat_field_matches_v1(target.st_nlink, snapshot.links)
+            || !stat_field_matches_v1(target.st_size, snapshot.length)
         {
             bail!("published promotion record changed identity or custody");
         }
@@ -1765,25 +1766,25 @@ fn release_circuit_params_file_snapshot_matches_stat_v1(
     snapshot: PromotionFileSnapshotV1,
     stat: &rustix::fs::Stat,
 ) -> bool {
-    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
-        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
-        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
-        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
-        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
-        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
-        && u64::try_from(stat.st_size).ok() == Some(snapshot.length)
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
+        && stat_field_matches_v1(stat.st_mode, snapshot.mode)
+        && stat_field_matches_v1(stat.st_uid, snapshot.uid)
+        && stat_field_matches_v1(stat.st_gid, snapshot.gid)
+        && stat_field_matches_v1(stat.st_nlink, snapshot.links)
+        && stat_field_matches_v1(stat.st_size, snapshot.length)
 }
 #[cfg(unix)]
 fn release_circuit_params_directory_snapshot_matches_stat_v1(
     snapshot: PromotionDirectorySnapshotV1,
     stat: &rustix::fs::Stat,
 ) -> bool {
-    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
-        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
-        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
-        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
-        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
-        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
+        && stat_field_matches_v1(stat.st_mode, snapshot.mode)
+        && stat_field_matches_v1(stat.st_uid, snapshot.uid)
+        && stat_field_matches_v1(stat.st_gid, snapshot.gid)
+        && stat_field_matches_v1(stat.st_nlink, snapshot.links)
 }
 #[cfg(unix)]
 fn write_release_circuit_params_staged_file_v1(
@@ -2215,13 +2216,13 @@ mod tests {
         read_regular_bounded, roster_release_generations_match_v4, validate_artifacts_sequentially,
         validate_device_attestation_policy_for_atomic_activation,
     };
-    use iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1;
     #[cfg(unix)]
     use super::{
         DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
         ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
         write_release_circuit_params_directory_with_hooks_v1,
     };
+    use iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1;
     use iroha_data_model::offline::{
         KagemushaStepCircuitParamsV4, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
@@ -2389,7 +2390,7 @@ mod tests {
         let output_dir = parent.join("circuit-params-v4");
         let mut writer = std::io::BufWriter::new(Vec::new());
         prepare_release_circuit_params_v4(
-            PrepareReleaseCircuitParamsV4Args {
+            &PrepareReleaseCircuitParamsV4Args {
                 output_dir: output_dir.clone(),
             },
             &mut writer,
@@ -2458,7 +2459,7 @@ mod tests {
         )));
         let mut retry_report = std::io::BufWriter::new(Vec::new());
         let error = prepare_release_circuit_params_v4(
-            PrepareReleaseCircuitParamsV4Args { output_dir },
+            &PrepareReleaseCircuitParamsV4Args { output_dir },
             &mut retry_report,
         )
         .expect_err("closed publication must refuse to overwrite the complete directory");
@@ -2710,13 +2711,13 @@ mod tests {
         let mut expected = BTreeSet::new();
         insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "recursive-step-two-qualification-v4.norito",
             "qualification receipt",
         )
         .expect("first role owns its file name");
         let error = insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "recursive-step-two-qualification-v4.norito",
             "substituted artifact",
         )
         .expect_err("a descriptor cannot alias the fixed qualification receipt");
@@ -2756,7 +2757,13 @@ mod tests {
     #[test]
     fn atomic_activation_accepts_only_fail_closed_production_app_policy() {
         let policy = valid_device_attestation_policy();
-        assert!(validate_device_attestation_policy_for_atomic_activation(&policy).is_ok());
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(
+                &policy,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_ok()
+        );
         for mutate in [
             |policy: &mut OfflineDeviceAttestationPolicy| {
                 policy.require_android_app_policy = false;
@@ -2770,12 +2777,19 @@ mod tests {
         ] {
             let mut changed = policy.clone();
             mutate(&mut changed);
-            assert!(validate_device_attestation_policy_for_atomic_activation(&changed).is_err());
+            assert!(
+                validate_device_attestation_policy_for_atomic_activation(
+                    &changed,
+                    POLICY_EVALUATION_TIME_MS,
+                )
+                .is_err()
+            );
         }
     }
     #[test]
     fn atomic_activation_rejects_noncanonical_app_policy_text() {
-        let cases: [(&str, fn(&mut OfflineDeviceAttestationPolicy)); 8] = [
+        type PolicyMutation = fn(&mut OfflineDeviceAttestationPolicy);
+        let cases: [(&str, PolicyMutation); 8] = [
             ("padded iOS Team ID", |policy| {
                 policy.ios_apps[0].team_id = " YLWWUD25VZ".to_owned();
             }),
@@ -2806,7 +2820,11 @@ mod tests {
             let mut policy = valid_device_attestation_policy();
             mutate(&mut policy);
             assert!(
-                validate_device_attestation_policy_for_atomic_activation(&policy).is_err(),
+                validate_device_attestation_policy_for_atomic_activation(
+                    &policy,
+                    POLICY_EVALUATION_TIME_MS,
+                )
+                .is_err(),
                 "{context} must be rejected"
             );
         }
@@ -2817,27 +2835,49 @@ mod tests {
         let mut missing_platform = policy.clone();
         missing_platform.trusted_roots.pop();
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&missing_platform).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &missing_platform,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
         let mut duplicate_root = policy.clone();
         duplicate_root
             .trusted_roots
             .push(duplicate_root.trusted_roots[0].clone());
-        assert!(validate_device_attestation_policy_for_atomic_activation(&duplicate_root).is_err());
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(
+                &duplicate_root,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
+        );
         let mut unsorted_categories = policy.clone();
         unsorted_categories.ios_apps[0].allowed_validation_categories = vec![8, 7];
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&unsorted_categories).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &unsorted_categories,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
         let mut duplicate_signer = policy;
         duplicate_signer.android_apps[0]
             .signing_certificate_sha256
             .push(vec![0x11; 32]);
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&duplicate_signer).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &duplicate_signer,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the boundary test enumerates every governed collection and root cap with its exact plus-one rejection"
+    )]
     fn atomic_activation_policy_collection_and_root_caps_have_exact_boundaries() {
         let mut exact_roots = valid_device_attestation_policy();
         exact_roots.trusted_roots = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1)
@@ -2850,7 +2890,7 @@ mod tests {
                 bounded_trusted_root(platform, u8::try_from(index + 1).unwrap(), 2)
             })
             .collect();
-        assert_atomic_policy_valid(&exact_roots, "total trusted-root limit");
+        assert_atomic_policy_shape_valid(&exact_roots, "total trusted-root limit");
         let mut too_many_roots = exact_roots;
         too_many_roots
             .trusted_roots
@@ -2873,7 +2913,7 @@ mod tests {
                 2,
             )))
             .collect();
-        assert_atomic_policy_valid(&exact_platform_roots, "per-platform trusted-root limit");
+        assert_atomic_policy_shape_valid(&exact_platform_roots, "per-platform trusted-root limit");
         let mut too_many_platform_roots = exact_platform_roots;
         too_many_platform_roots
             .trusted_roots
@@ -2890,7 +2930,7 @@ mod tests {
             1,
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
         );
-        assert_atomic_policy_valid(&exact_der, "trusted-root DER limit");
+        assert_atomic_policy_shape_valid(&exact_der, "trusted-root DER limit");
         exact_der.trusted_roots[0].der.push(0);
         assert_atomic_policy_cap_rejected(
             &exact_der,
@@ -2907,7 +2947,7 @@ mod tests {
                 digest
             })
             .collect();
-        assert_atomic_policy_valid(&exact_revocations, "revocation limit");
+        assert_atomic_policy_shape_valid(&exact_revocations, "revocation limit");
         exact_revocations
             .revoked_certificate_sha256
             .push(vec![0xFF; 32]);
@@ -2921,7 +2961,7 @@ mod tests {
         exact_ios_apps.ios_apps = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1)
             .map(bounded_ios_app)
             .collect();
-        assert_atomic_policy_valid(&exact_ios_apps, "iOS app limit");
+        assert_atomic_policy_shape_valid(&exact_ios_apps, "iOS app limit");
         exact_ios_apps.ios_apps.push(bounded_ios_app(
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1,
         ));
@@ -2936,7 +2976,7 @@ mod tests {
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1)
             .map(bounded_android_app)
             .collect();
-        assert_atomic_policy_valid(&exact_android_apps, "Android app limit");
+        assert_atomic_policy_shape_valid(&exact_android_apps, "Android app limit");
         exact_android_apps.android_apps.push(bounded_android_app(
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         ));
@@ -2956,7 +2996,7 @@ mod tests {
                 .len(),
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1
         );
-        assert_atomic_policy_valid(&exact_categories, "iOS validation-category limit");
+        assert_atomic_policy_shape_valid(&exact_categories, "iOS validation-category limit");
         exact_categories.ios_apps[0]
             .allowed_validation_categories
             .push(11);
@@ -2971,7 +3011,7 @@ mod tests {
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1)
             .map(|index| format!("{index:04}"))
             .collect();
-        assert_atomic_policy_valid(&exact_versions, "iOS bundle-version count limit");
+        assert_atomic_policy_shape_valid(&exact_versions, "iOS bundle-version count limit");
         exact_versions.ios_apps[0]
             .allowed_bundle_versions
             .push(format!(
@@ -2987,7 +3027,7 @@ mod tests {
         let mut exact_version_bytes = valid_device_attestation_policy();
         exact_version_bytes.ios_apps[0].allowed_bundle_versions =
             vec!["1".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1)];
-        assert_atomic_policy_valid(&exact_version_bytes, "iOS bundle-version byte limit");
+        assert_atomic_policy_shape_valid(&exact_version_bytes, "iOS bundle-version byte limit");
         exact_version_bytes.ios_apps[0].allowed_bundle_versions[0].push('1');
         assert_atomic_policy_cap_rejected(
             &exact_version_bytes,
@@ -3000,7 +3040,7 @@ mod tests {
             ..=OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1)
             .map(|index| vec![u8::try_from(index).unwrap(); 32])
             .collect();
-        assert_atomic_policy_valid(&exact_signers, "Android signing-certificate limit");
+        assert_atomic_policy_shape_valid(&exact_signers, "Android signing-certificate limit");
         exact_signers.android_apps[0]
             .signing_certificate_sha256
             .push(vec![0xF0; 32]);
@@ -3013,7 +3053,7 @@ mod tests {
         let mut exact_team_id = valid_device_attestation_policy();
         exact_team_id.ios_apps[0].team_id =
             "A".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1);
-        assert_atomic_policy_valid(&exact_team_id, "iOS Team ID byte limit");
+        assert_atomic_policy_shape_valid(&exact_team_id, "iOS Team ID byte limit");
         exact_team_id.ios_apps[0].team_id.push('A');
         assert_atomic_policy_cap_rejected(
             &exact_team_id,
@@ -3024,7 +3064,7 @@ mod tests {
         let mut exact_bundle_id = valid_device_attestation_policy();
         exact_bundle_id.ios_apps[0].bundle_id =
             "a".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        assert_atomic_policy_valid(&exact_bundle_id, "iOS bundle ID byte limit");
+        assert_atomic_policy_shape_valid(&exact_bundle_id, "iOS bundle ID byte limit");
         exact_bundle_id.ios_apps[0].bundle_id.push('a');
         assert_atomic_policy_cap_rejected(
             &exact_bundle_id,
@@ -3035,7 +3075,7 @@ mod tests {
         let mut exact_package_name = valid_device_attestation_policy();
         exact_package_name.android_apps[0].package_name =
             "a".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        assert_atomic_policy_valid(&exact_package_name, "Android package-name byte limit");
+        assert_atomic_policy_shape_valid(&exact_package_name, "Android package-name byte limit");
         exact_package_name.android_apps[0].package_name.push('a');
         assert_atomic_policy_cap_rejected(
             &exact_package_name,
@@ -3052,7 +3092,7 @@ mod tests {
                 .len(),
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
         );
-        assert_atomic_policy_valid(&exact, "canonical policy byte limit");
+        assert_atomic_policy_shape_valid(&exact, "canonical policy byte limit");
         let mut over = exact;
         assert!(
             over.trusted_roots[3].der.len()

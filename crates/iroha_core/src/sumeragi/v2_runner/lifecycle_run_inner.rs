@@ -991,10 +991,13 @@ fn run_lifecycle_active_height(
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
-            if activated
-                .settle_producer_turn_after_local_proposal(&mut active_runner, attempted)
-                .is_err()
+            if let Err(error) =
+                activated.settle_producer_turn_after_local_proposal(&mut active_runner, attempted)
             {
+                iroha_logger::error!(
+                    failure = ?error.failure(),
+                    "ProducerTurn terminal settlement requires restart"
+                );
                 output_guard.close_admission_for_restart();
                 return Err(V2RunnerError::RestartRequired);
             }

@@ -105,17 +105,17 @@ pub fn decode_public_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError
 }
 /// Borrowed, allocation-free canonical public-key multihash components.
 #[cfg(not(feature = "ffi_import"))]
-pub(crate) struct BorrowedPublicKeyHex<'a> {
-    pub(crate) algorithm: Algorithm,
-    pub(crate) payload_hex: &'a str,
+pub struct BorrowedPublicKeyHex<'a> {
+    pub(super) algorithm: Algorithm,
+    pub(super) payload_hex: &'a str,
 }
 /// Longest canonical public-key literal accepted by the current protocol.
 #[cfg(not(feature = "ffi_import"))]
-pub(crate) const MAX_PUBLIC_KEY_LITERAL_BYTES: usize =
+pub const MAX_PUBLIC_KEY_LITERAL_BYTES: usize =
     28 + 1 + 2 * (2 + 2 + crate::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
 /// Parse canonical public-key multihash text without allocating payload or diagnostics.
 #[cfg(not(feature = "ffi_import"))]
-pub(crate) fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_>> {
+pub fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_>> {
     if s.len() > MAX_PUBLIC_KEY_LITERAL_BYTES {
         return None;
     }
@@ -194,12 +194,12 @@ fn decode_hex_pair(pair: &[u8], uppercase: bool) -> Option<u8> {
 }
 /// Decode one canonical uppercase public-key payload byte.
 #[cfg(not(feature = "ffi_import"))]
-pub(crate) fn decode_public_key_payload_byte(pair: &[u8]) -> Option<u8> {
+pub fn decode_public_key_payload_byte(pair: &[u8]) -> Option<u8> {
     decode_hex_pair(pair, true)
 }
 /// Return the public-key multicodec value without constructing a multihash.
 #[cfg(not(feature = "ffi_import"))]
-pub(crate) fn public_key_digest_function(algorithm: Algorithm) -> u64 {
+pub fn public_key_digest_function(algorithm: Algorithm) -> u64 {
     digest_function_public::encode(algorithm)
 }
 /// Decode a private key from either a bare multihash hex string or an

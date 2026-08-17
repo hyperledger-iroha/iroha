@@ -891,7 +891,7 @@ mod contract_address_tests {
             decoded,
             Err(norito::json::Error::DecodeResourceLimit)
         ));
-        assert!(usage.total_allocated_bytes() <= exact - 1);
+        assert!(usage.total_allocated_bytes() < exact);
     }
     #[cfg(feature = "json")]
     #[test]

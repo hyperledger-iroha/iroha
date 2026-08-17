@@ -465,7 +465,7 @@ fn validate_transaction_context_v1(
     }
     transaction_payload_without_instructions_v1(context)
         .map(|_| ())
-        .map_err(|_| ZkAcePrivacyActionBuildErrorV1::InvalidTransactionContext)
+        .map_err(|()| ZkAcePrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
 fn transaction_payload_without_instructions_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
@@ -538,10 +538,11 @@ fn placeholder_envelope_v1(
         proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
     }
 }
+#[expect(clippy::too_many_lines, reason = "ordered fail-closed proof assembly")]
 fn prepare_zk_ace_privacy_transfer_with_prover_v1<F>(
-    context: ZkAcePrivacyActionTransactionContextV1,
+    context: &ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
-    witness: ZkAcePrivacyWitnessV1,
+    witness: &ZkAcePrivacyWitnessV1,
     canonical_genesis_hash: [u8; 32],
     prove: F,
 ) -> Result<ZkAcePreparedPrivacyTransferV1, ZkAcePrivacyActionBuildErrorV1>
@@ -557,7 +558,7 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(ZkAcePrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    validate_transaction_context_v1(&context)?;
+    validate_transaction_context_v1(context)?;
     transfer
         .policy
         .validate()
@@ -594,7 +595,7 @@ where
     };
     let draft_statement = PrivacyStatementV1::ZkAcePqAuthorizationV0(native_statement.clone());
     let draft_payload =
-        transaction_payload_v1(&context, placeholder_envelope_v1(profile, draft_statement))?;
+        transaction_payload_v1(context, placeholder_envelope_v1(profile, draft_statement))?;
     let transaction_intent_digest = draft_payload
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::TransactionIntent)?;
@@ -618,7 +619,7 @@ where
     .map_err(|_| ZkAcePrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let public_inputs =
         ZkAcePrivacyPublicInputsV1::new(final_statement.clone(), canonical_genesis_hash);
-    let proof = prove(&public_inputs, &witness)?;
+    let proof = prove(&public_inputs, witness)?;
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     if proof_bytes != ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1 {
@@ -645,7 +646,7 @@ where
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
-    let final_payload = transaction_payload_v1(&context, final_envelope)?;
+    let final_payload = transaction_payload_v1(context, final_envelope)?;
     let validated_intent = final_payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::FinalIntentBinding)?;
@@ -681,6 +682,10 @@ where
 /// Fails closed before entropy use for invalid policy, context, witness
 /// binding, genesis, or governed artifacts; then performs native proving,
 /// intrinsic envelope validation, and final intent revalidation.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the owning convenience API keeps transfer inputs uniform"
+)]
 pub fn prepare_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Sized>(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -689,9 +694,9 @@ pub fn prepare_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Siz
     randomness: &mut R,
 ) -> Result<ZkAcePreparedPrivacyTransferV1, ZkAcePrivacyActionBuildErrorV1> {
     prepare_zk_ace_privacy_transfer_with_prover_v1(
-        context,
+        &context,
         transfer,
-        witness,
+        &witness,
         canonical_genesis_hash,
         |public_inputs, witness| {
             prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, randomness)
@@ -700,6 +705,14 @@ pub fn prepare_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Siz
 }
 /// Prepare and prove one canonical direct transfer with operating-system
 /// entropy, without receiving a signing key.
+///
+/// # Errors
+///
+/// Returns an error when context, policy, witness, proof, or envelope validation fails.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the owning convenience API keeps transfer inputs uniform"
+)]
 pub fn prepare_zk_ace_privacy_transfer_v1(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -707,14 +720,18 @@ pub fn prepare_zk_ace_privacy_transfer_v1(
     canonical_genesis_hash: [u8; 32],
 ) -> Result<ZkAcePreparedPrivacyTransferV1, ZkAcePrivacyActionBuildErrorV1> {
     prepare_zk_ace_privacy_transfer_with_prover_v1(
-        context,
+        &context,
         transfer,
-        witness,
+        &witness,
         canonical_genesis_hash,
         prove_zk_ace_privacy_v1,
     )
 }
 /// Sign an exact prepared ZK-ACE payload.
+///
+/// # Errors
+///
+/// Returns an error when the authority, signature, intent, or encoding is invalid.
 pub fn sign_prepared_zk_ace_privacy_transfer_v1(
     prepared: ZkAcePreparedPrivacyTransferV1,
     private_key: &PrivateKey,
@@ -760,6 +777,10 @@ pub fn sign_prepared_zk_ace_privacy_transfer_v1(
     })
 }
 /// Build, prove, bind, and sign with injected cryptographic randomness.
+///
+/// # Errors
+///
+/// Returns an error when preparation, proof generation, or signing fails.
 pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Sized>(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -779,6 +800,10 @@ pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 +
     sign_prepared_zk_ace_privacy_transfer_v1(prepared, private_key)
 }
 /// Build, prove, bind, and sign with operating-system entropy.
+///
+/// # Errors
+///
+/// Returns an error when preparation, proof generation, or signing fails.
 pub fn build_signed_zk_ace_privacy_transfer_v1(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -923,7 +948,8 @@ mod tests {
     impl ZkAceTryRngCoreV1 for TestRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            Ok(self.next_word() as u32)
+            let [b0, b1, b2, b3, _, _, _, _] = self.next_word().to_le_bytes();
+            Ok(u32::from_le_bytes([b0, b1, b2, b3]))
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(self.next_word())
@@ -1113,6 +1139,7 @@ mod tests {
         ));
     }
     #[test]
+    #[expect(clippy::too_many_lines, reason = "complete adversarial binding matrix")]
     fn prepared_action_is_exact_typed_two_pass_and_adversarially_bound() {
         let (transfer, witness) = transfer_and_witness();
         let identity_root = [0x11; 32];

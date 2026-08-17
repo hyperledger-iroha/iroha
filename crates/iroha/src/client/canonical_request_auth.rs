@@ -499,7 +499,7 @@ fn validate_canonical_request_account_encoded_size(account: &AccountId) -> Resul
                 .wrap_err("canonical request account contains a malformed public key")?;
             add(
                 &mut canonical_bytes,
-                if payload.len() <= usize::from(u8::MAX) {
+                if u8::try_from(payload.len()).is_ok() {
                     3
                 } else {
                     4

@@ -1,8 +1,6 @@
 //! Focused authority protocol, durable-state, and service tests.
 
 mod public_soak_native_tests;
-mod privacy_protocol_origin_service_tests;
-mod qualification_service_tests;
 
 use super::super::{
     SoftwareSignerKeyAlgorithmV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
@@ -23,8 +21,10 @@ use super::{
         decode_frame, encode_frame, qualify_response_digest,
     },
     service::{
-        GenericAuthorizationCrashPhaseV1, PublicSoakBindingCrashPhaseV1, TairaAuthorityErrorV1,
-        digest_parts_sha256,
+        AuthorityProcessIdentityModeV1, DeploymentFinalizationCrashPhaseV1,
+        GenericAuthorizationCrashPhaseV1, PublicSoakBindingCrashPhaseV1,
+        PublicSoakBindingProvisioningModeV1, TairaAuthorityErrorV1,
+        artifact_is_authority_immutable, digest_parts_sha256,
     },
     store::{PersistOutcomeV1, load_canonical_records, persist_canonical_once},
     transport::serve_one_for_test,
@@ -56,6 +56,37 @@ const TEST_NATIVE_RUN_NONCE_V1: [u8; 32] = [0xA5; 32];
 const TEST_NATIVE_CONTROLLER_HOST_ID_V1: &str = "native-evidence-host-test-v1";
 const TEST_NATIVE_CONTROLLER_INSTALLATION_ID_V1: &str =
     "native-evidence-controller-installation-test-v1";
+
+impl TairaAuthorityServiceV1 {
+    /// Provision a role with a synthetic service UID for the isolated in-process test harness.
+    pub(super) fn provision_for_test(
+        state_directory: impl Into<PathBuf>,
+        provisioning: TairaAuthorityProvisioningV1,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, TairaAuthorityErrorV1> {
+        Self::provision_inner(
+            state_directory.into(),
+            provisioning,
+            wrapping_key,
+            None,
+            None,
+            PublicSoakBindingProvisioningModeV1::Complete,
+            AuthorityProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+
+    /// Recover synthetic-UID role state owned by the current test process.
+    pub(super) fn open_for_test(
+        state_directory: impl Into<PathBuf>,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, TairaAuthorityErrorV1> {
+        Self::open_inner(
+            state_directory,
+            wrapping_key,
+            AuthorityProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+}
 
 fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(TEST_WRAPPING_KEY_V1).expect("fixture wrapping key")
@@ -315,7 +346,7 @@ fn read_only_descriptors(paths: &[&Path]) -> Vec<OwnedFd> {
         .map(|path| {
             let file = OpenOptions::new()
                 .read(true)
-                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
                 .open(path)
                 .expect("open fixture descriptor");
             OwnedFd::from(file)
@@ -577,7 +608,7 @@ fn direct_transport_round_trip(
     service: Arc<TairaAuthorityServiceV1>,
     administrator: bool,
     authenticated_uid: u32,
-    encoded_request: Vec<u8>,
+    encoded_request: &[u8],
 ) -> AuthorityFrameV1 {
     let (mut client, server) = UnixStream::pair().expect("local authority stream pair");
     client
@@ -589,7 +620,7 @@ fn direct_transport_round_trip(
     let length = u32::try_from(encoded_request.len()).expect("request frame length");
     client
         .write_all(&length.to_be_bytes())
-        .and_then(|()| client.write_all(&encoded_request))
+        .and_then(|()| client.write_all(encoded_request))
         .and_then(|()| client.flush())
         .expect("send direct authority frame");
     let mut prefix = [0_u8; 4];
@@ -631,6 +662,10 @@ fn role_registry_is_exact_and_stable() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end eight-role isolation regression"
+)]
 fn local_eight_role_service_transport_harness_is_fully_isolated() {
     let parent = temporary_parent();
     let (services, installations) = provision_eight_role_harness(parent.path());
@@ -678,7 +713,7 @@ fn local_eight_role_service_transport_harness_is_fully_isolated() {
             Arc::clone(service),
             false,
             binding.signer.client_uid,
-            encode_frame(
+            &encode_frame(
                 FRAME_QUALIFY_REQUEST_V1,
                 &QualifyRequestV1 {
                     binding_sha256: binding.sha256().expect("binding digest"),
@@ -706,7 +741,7 @@ fn local_eight_role_service_transport_harness_is_fully_isolated() {
             Arc::clone(service),
             true,
             binding.signer.administrator_uid,
-            encode_frame(
+            &encode_frame(
                 FRAME_ADMIN_REQUEST_V1,
                 &AuthorityAdminRequestV1 {
                     binding_sha256: binding.sha256().expect("binding digest"),
@@ -973,6 +1008,10 @@ fn provision_assign_authorize_retry_verify_and_recover() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "durable crash-boundary regression matrix"
+)]
 fn generic_authorization_recovers_each_durable_crash_boundary_after_run_expiry() {
     for (case, phase) in [
         (
@@ -1128,6 +1167,7 @@ fn generic_authorization_recovers_each_durable_crash_boundary_after_run_expiry()
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "cohesive assignment conflict matrix")]
 fn assignment_conflicts_and_run_windows_fail_closed() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);
@@ -1252,6 +1292,10 @@ fn assignment_conflicts_and_run_windows_fail_closed() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "native controller identity regression"
+)]
 fn native_assignment_authenticates_controller_identity_and_unique_run_nonce() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::NativeEvidence);
@@ -1406,17 +1450,16 @@ fn mutate_object_path(value: &mut Value, path: &[&str]) {
         .as_object_mut()
         .and_then(|object| object.get_mut(*leaf))
         .expect("mutation leaf field");
-    let replacement = if let Some(text) = value.as_str() {
-        Value::from(format!("{text}-mutated"))
-    } else if let Some(number) = value.as_u64() {
-        Value::from(number.checked_add(1).expect("fixture integer mutation"))
-    } else {
-        panic!("unsupported mutation scalar at {path:?}");
+    let replacement = match (value.as_str(), value.as_u64()) {
+        (Some(text), _) => Value::from(format!("{text}-mutated")),
+        (_, Some(number)) => Value::from(number.checked_add(1).expect("fixture integer mutation")),
+        _ => panic!("unsupported mutation scalar at {path:?}"),
     };
     *value = replacement;
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "signed sidecar binding regression")]
 fn native_signed_sidecars_bind_controller_claims_and_exact_generic_receipt() {
     let parent = temporary_parent();
     let native = super::native_evidence::tests::authority_service_fixture();
@@ -1536,6 +1579,10 @@ fn native_signed_sidecars_bind_controller_claims_and_exact_generic_receipt() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "descriptor integrity mutation matrix"
+)]
 fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);
@@ -1856,6 +1903,10 @@ fn public_soak_binding_anchor_recovers_both_write_ahead_crash_phases() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete binding and receipt mutation matrix"
+)]
 fn public_soak_binding_anchor_rejects_full_binding_and_receipt_mutations() {
     let parent = temporary_parent();
     let (service, input, anchor) = provision_public_soak_anchor_fixture(parent.path());
@@ -2385,6 +2436,10 @@ fn authority_open_rejects_a_truncated_audit_record() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "rotation and recovery security regression"
+)]
 fn rotation_invalidates_old_policy_and_revocation_survives_recovery() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);
@@ -2606,6 +2661,10 @@ fn canonical_frames_reject_truncation_wrong_magic_and_oversize() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "deploy disposition lifecycle regression"
+)]
 fn deploy_dry_run_does_not_consume_and_apply_and_finalize_are_once_only() {
     let parent = temporary_parent();
     let artifact = create_artifact(parent.path(), "deployment.json", b"deployment");
@@ -2699,7 +2758,7 @@ fn deploy_dry_run_does_not_consume_and_apply_and_finalize_are_once_only() {
     let after_finalize = service.provenance().expect("finalized provenance");
     assert_eq!(
         after_finalize.audit_sequence,
-        after_apply.audit_sequence + 1
+        after_apply.audit_sequence + 2
     );
 
     let finalize_replay = authorize(
@@ -2757,6 +2816,122 @@ fn deploy_dry_run_does_not_consume_and_apply_and_finalize_are_once_only() {
         sidecar_bytes(&recovered_replay, "durable_receipt"),
         final_receipt
     );
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "deployment finalization crash matrix"
+)]
+fn deployment_finalization_recovers_each_durable_crash_boundary() {
+    for (case, phase, committed_at_crash) in [
+        (
+            "finalize-crash-after-input",
+            DeploymentFinalizationCrashPhaseV1::AfterInputPersistence,
+            0,
+        ),
+        (
+            "finalize-crash-after-decision",
+            DeploymentFinalizationCrashPhaseV1::AfterDecisionSignerCommit,
+            1,
+        ),
+        (
+            "finalize-crash-after-receipt",
+            DeploymentFinalizationCrashPhaseV1::AfterDurableReceiptSignerCommit,
+            2,
+        ),
+    ] {
+        let parent = temporary_parent();
+        let artifact = create_artifact(parent.path(), "deployment.json", b"deployment");
+        let fixture = ClientRequestFixtureV1::new(
+            TairaAuthorityRoleV1::DeployIssuance,
+            case,
+            &[("deployment.json", b"deployment")],
+        );
+        let service = provision(parent.path(), fixture.role);
+        assign_active_run(&service, &fixture);
+
+        let apply_request = fixture.request_json_with_deploy(Some("apply"), None);
+        authorize(
+            &service,
+            &apply_request,
+            read_only_descriptors(&[&artifact]),
+            TEST_NOW_MILLIS_V1,
+        )
+        .expect("apply deployment before injected finalization crash");
+        let after_apply = service.provenance().expect("applied provenance");
+        let finalize_request =
+            fixture.request_json_with_deploy(Some("finalize"), Some(("success", [0x91; 32])));
+        service
+            .inject_deployment_finalization_crash_for_test(phase)
+            .expect("configure isolated finalization crash phase");
+        assert_eq!(
+            authorize(
+                &service,
+                &finalize_request,
+                Vec::new(),
+                TEST_NOW_MILLIS_V1 + 1,
+            ),
+            Err(TairaAuthorityErrorV1::State),
+            "finalization did not stop at {phase:?}"
+        );
+        assert_eq!(
+            service
+                .provenance()
+                .expect("crash-boundary provenance")
+                .audit_sequence,
+            after_apply.audit_sequence + committed_at_crash,
+            "unexpected signer progress at {phase:?}"
+        );
+
+        let blocked_assignment = ClientRequestFixtureV1::new(
+            TairaAuthorityRoleV1::DeployIssuance,
+            &format!("{case}-blocked"),
+            &[],
+        );
+        assert_eq!(
+            service.assign_run_json(
+                &blocked_assignment.assignment_json(
+                    &service,
+                    TEST_NOW_MILLIS_V1 - 1,
+                    TEST_NOW_MILLIS_V1,
+                    TEST_NOW_MILLIS_V1 + 60_000,
+                ),
+                TEST_NOW_MILLIS_V1,
+            ),
+            Err(TairaAuthorityErrorV1::Conflict),
+            "assign-run appended across incomplete finalization at {phase:?}"
+        );
+        drop(service);
+
+        let recovered =
+            TairaAuthorityServiceV1::open(state_directory(parent.path()), wrapping_key())
+                .expect("recover incomplete deployment finalization");
+        let recovered_provenance = recovered
+            .provenance()
+            .expect("recovered finalization provenance");
+        assert_eq!(
+            recovered_provenance.audit_sequence,
+            after_apply.audit_sequence + 2,
+            "recovery did not complete both finalization commits at {phase:?}"
+        );
+        let replay = authorize(
+            &recovered,
+            &finalize_request,
+            Vec::new(),
+            TEST_NOW_MILLIS_V1 + 2,
+        )
+        .expect("replay recovered finalization");
+        assert_eq!(replay.status, OperationStatusV1::Replayed);
+        assert_eq!(result_status(&replay), "replayed");
+        assert_eq!(
+            recovered
+                .provenance()
+                .expect("replayed finalization provenance"),
+            recovered_provenance,
+            "replay appended after recovered finalization at {phase:?}"
+        );
+    }
 }
 
 include!("tests/privacy_governance_tests.rs");

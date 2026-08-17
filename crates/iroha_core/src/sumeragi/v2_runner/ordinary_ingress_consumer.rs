@@ -31,8 +31,6 @@ pub(in crate::sumeragi) enum CurrentCertifiedServePreAdmissionV1 {
     AuthenticatedNegative {
         /// Exact request retained by the lifecycle payload/ledger owner.
         request: AuthenticatedCertifiedBodyRequest,
-        /// Stable diagnostic retained by the consumer.
-        reason: String,
     },
     /// Local ownership or authentication infrastructure failed closed.
     Service(String),
@@ -113,7 +111,6 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
     {
         return CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {
             request: authenticated,
-            reason: "certified body request was superseded by durable Decision".to_owned(),
         };
     }
     CurrentCertifiedServePreAdmissionV1::Authenticated {

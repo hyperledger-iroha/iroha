@@ -170,6 +170,7 @@ impl From<AuthenticatedBlockProofVerdictV1> for JsAuthenticatedBlockProofVerdict
 /// archive is size-checked before decoding and must be an exact canonical V1
 /// re-encoding. Cryptographic or binding failures reject the promise; a valid
 /// finality chain carrying mismatched block proofs resolves to `valid: false`.
+#[allow(clippy::trailing_empty_array, reason = "generated N-API callback ABI")]
 #[napi(js_name = "blockProofsVerifyAuthenticatedV1")]
 pub async fn block_proofs_verify_authenticated_v1(
     input: JsAuthenticatedBlockProofInputV1,
@@ -508,7 +509,7 @@ mod tests {
             Hash::new(&executed_block_wire),
         );
         let (artifact, finality_keys) =
-            finalized_artifact_for_block(&block, network_id, execution_commitment, None, 1);
+            finalized_artifact_for_block(&block, network_id, &execution_commitment, None, 1);
         let trusted_context_id = *artifact.context_id().0.as_ref();
         let finality = BridgeFinalityProof {
             version: BRIDGE_FINALITY_PROOF_VERSION_V2,
@@ -527,7 +528,7 @@ mod tests {
     fn finalized_artifact_for_block(
         block: &SignedBlock,
         network_id: NetworkId,
-        execution_commitment: ExecutionCommitment,
+        execution_commitment: &ExecutionCommitment,
         parent_commit_qc: Option<QuorumCertificate>,
         height: u64,
     ) -> (V2FinalityArtifact, Vec<KeyPair>) {
@@ -598,17 +599,17 @@ mod tests {
     fn signed_commit_qc(
         _context: &HeightContext,
         subject: BlockSubject,
-        execution_commitment: ExecutionCommitment,
+        execution_commitment: &ExecutionCommitment,
         round: ConsensusRound,
         keys: &[KeyPair],
     ) -> QuorumCertificate {
-        let signers = vec![0, 1, 2];
+        let signers = [0, 1, 2];
         let preimage = Vote {
             round,
             proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
-            execution_commitment,
+            execution_commitment: *execution_commitment,
             signer: 0,
             signature: Vec::new(),
         }
@@ -628,7 +629,7 @@ mod tests {
             proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
-            execution_commitment,
+            execution_commitment: *execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate fixture commit votes"),
@@ -696,7 +697,7 @@ mod tests {
                 .expect("successor fixture block wire length fits u64"),
             Hash::new(&executed_block_wire),
         );
-        let commit_qc = signed_commit_qc(&context, subject, execution_commitment, round, keys);
+        let commit_qc = signed_commit_qc(&context, subject, &execution_commitment, round, keys);
         let artifact = V2FinalityArtifact::new(
             context,
             subject,

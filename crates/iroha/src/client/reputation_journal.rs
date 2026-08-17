@@ -208,14 +208,17 @@ impl Client {
                 query_validation_error("invalid SoraFS reputation-journal event cursor", error)
             })?;
         }
-        if let (Some(expected), Some(after)) = (expected_finalized_cursor, after)
-            && (after.block_height > expected.height
-                || (after.block_height == expected.height
-                    && after.block_hash != expected.block_hash))
-        {
-            return Err(QueryError::Other(eyre!(
-                "SoraFS reputation-journal event cursor does not belong to the expected finalized view"
-            )));
+        if let (Some(expected), Some(after)) = (expected_finalized_cursor, after) {
+            let outside_expected_view = match after.block_height.cmp(&expected.height) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => after.block_hash != expected.block_hash,
+                std::cmp::Ordering::Less => false,
+            };
+            if outside_expected_view {
+                return Err(QueryError::Other(eyre!(
+                    "SoraFS reputation-journal event cursor does not belong to the expected finalized view"
+                )));
+            }
         }
         if limit == 0
             || usize::try_from(limit)
@@ -279,10 +282,10 @@ mod tests {
                 PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyRecordV1, ReputationJournalEntryV1,
-                ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-                ReputationJournalFinalizedEventPageV1, ReputationJournalPayloadV1,
-                StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
-                StreamTokenValidationStatusV1,
+                ReputationJournalEventIdV1, ReputationJournalFinalizedCursorV1,
+                ReputationJournalFinalizedEventCursorV1, ReputationJournalFinalizedEventPageV1,
+                ReputationJournalPayloadV1, StreamTokenValidationBindingV1,
+                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
         },
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
@@ -447,7 +450,7 @@ mod tests {
         );
         let wrong_authority = por_entry(&other, &policy);
         let mut malformed = canonical_por.clone();
-        malformed.event_id = Default::default();
+        malformed.event_id = ReputationJournalEventIdV1::default();
         for result in [
             client
                 .try_build_sorafs_reputation_journal_authority_policy_transaction(
@@ -514,6 +517,10 @@ mod tests {
         check(query);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the authenticated journal-query fixture audits all exact request and response bindings together"
+    )]
     fn typed_queries_are_authenticated_and_preserve_exact_fields() {
         let client = client_with_base_url(base_url());
         mark_data_model_compatible(&client);

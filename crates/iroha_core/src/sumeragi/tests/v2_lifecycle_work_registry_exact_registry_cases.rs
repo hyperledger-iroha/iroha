@@ -393,11 +393,445 @@ fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
     );
     assert_eq!(format!("{registry:?}"), before);
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(live_wal_pre_admission_surface_is_closed_and_has_one_apply_join);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(remote_proposal_replay_pre_admission_is_closed_exact_and_unwired);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(invalid_body_replay_pre_admission_is_closed_exact_and_unwired);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(live_validate_sign_join_is_linear_opaque_and_unwired_from_runner);
+#[test]
+fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("work registry has one production prefix");
+    let token = production
+        .split("pub(super) struct PreparedLiveWalReplayPreAdmission<'a>")
+        .nth(1)
+        .expect("live WAL pre-admission token has one declaration")
+        .split("/// Move-only Validate projection sealed under its closed durable Store parent.")
+        .next()
+        .expect("Store-to-Validate token follows live WAL token");
+    for required in [
+        "_persisted: SealedLiveWalPersistedEffectV1",
+        "LiveWalReplayPreAdmissionOrigin<'a>",
+        "Apply(PreparedValidatedBodyCompletion<'a>)",
+    ] {
+        assert!(
+            token.contains(required),
+            "live WAL token omitted {required}"
+        );
+    }
+    for required in [
+        "pub(super) fn seal_live_wal_apply(",
+        "retained_validated_receipt_is_exact()",
+        "project_validate_apply_successor",
+        "retained_apply_join_is_exact(&persisted)",
+    ] {
+        assert!(
+            production.contains(required),
+            "live WAL Apply join omitted {required}"
+        );
+    }
+    for forbidden in [
+        "#[derive(Clone",
+        "Option<SealedLiveWalPersistedEffectV1>",
+        "pub(super) fn effect(",
+        "pub(super) fn pending(",
+        "pub(super) fn receipt(",
+        "pub(super) fn source(",
+        "PayloadFree",
+        "seal_payload_free(",
+        "exactly_binds_payload_free_pending",
+        "into_parts",
+        "fn install(",
+        "fn commit(",
+    ] {
+        assert!(
+            !token.contains(forbidden),
+            "live WAL token exposed forbidden surface {forbidden}"
+        );
+    }
+    assert_eq!(
+        production.matches(".complete_exact_apply(").count(),
+        1,
+        "only the fixed retained-Validate join supplies an Apply receipt"
+    );
+    assert_eq!(
+        production.matches(".seal_live_wal_apply(").count(),
+        0,
+        "the inert prerequisite has no production admission caller"
+    );
+    for outside in [
+        reviewed_lifecycle_ledger_source_for_test(),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        assert!(!outside.contains("PreparedLiveWalReplayPreAdmission"));
+    }
+}
+#[test]
+fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("registry has one production prefix");
+    let token = production
+        .split("pub(super) struct PreparedDirectSignedReplayPreAdmission {")
+        .nth(1)
+        .expect("direct signed pre-admission token has one declaration")
+        .split("/// Closed concrete form of one fsynced recovered WAL `Sign` successor.")
+        .next()
+        .expect("recovered WAL carrier follows direct signed token");
+    for required in [
+        "effect: AdapterEffect",
+        "pending: PendingRuntimeEffectBinding",
+        "replay_evidence: DirectSignedReplayEvidenceV1",
+        "Broadcast(SignedBroadcastReplayEvidenceV1)",
+        "ReportEquivocation(SignedEquivocationReplayEvidenceV1)",
+        "pub(super) fn seal_exact(",
+        "SignedBroadcastReplayEvidenceV1::from_exact_effect(&effect, &pending)",
+        "SignedEquivocationReplayEvidenceV1::from_exact_effect(&effect, &pending)",
+        "evidence.exactly_matches_effect(&self.effect, &self.pending)",
+        "_effect: AdapterEffect",
+        "_pending: PendingRuntimeEffectBinding",
+    ] {
+        assert!(
+            token.contains(required),
+            "direct signed pre-admission token omitted {required}"
+        );
+    }
+    let declaration = token
+        .split('}')
+        .next()
+        .expect("direct signed token declaration is bounded");
+    assert!(!declaration.contains("Option<"));
+    assert!(!declaration.contains("derive(Clone"));
+    assert!(!declaration.contains("derive(Debug"));
+    for forbidden in [
+        "fn new(",
+        "fn from_parts(",
+        "fn into_parts(",
+        "fn effect(",
+        "fn pending(",
+        "fn replay_evidence(",
+        "fn install(",
+        "fn commit(",
+        "ConcreteLifecycleWorkRegistry",
+        ".entries",
+        "PendingAdapter {",
+    ] {
+        assert!(
+            !token.contains(forbidden),
+            "direct signed pre-admission token acquired forbidden authority {forbidden}"
+        );
+    }
+    assert_eq!(
+        production.matches("pub(super) fn seal_exact(").count(),
+        1,
+        "the token has one exact seal"
+    );
+    assert_eq!(
+        production
+            .matches("PreparedDirectSignedReplayPreAdmission::seal_exact(")
+            .count(),
+        0,
+        "the inert token must have no production caller"
+    );
+    for caller in [
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
+        include_str!("../v2_lifecycle_selector.rs"),
+        include_str!("../v2_lifecycle_concrete_admission.rs"),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        let caller = caller
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("caller production prefix is bounded");
+        assert!(!caller.contains("PreparedDirectSignedReplayPreAdmission"));
+    }
+}
+#[test]
+fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("work registry has one production prefix");
+    let token = production
+        .split("pub(super) struct PreparedRemoteProposalFetchReplayPreAdmission {")
+        .nth(1)
+        .expect("remote Proposal replay token has one declaration")
+        .split("/// Closed concrete form of one fsynced recovered WAL `Sign` successor.")
+        .next()
+        .expect("recovered WAL carrier follows remote Proposal replay tokens");
+    for required in [
+        "PreparedRemoteProposalStoreReplayPreAdmission",
+        "PreparedRemoteProposalStoredReplayPreAdmission",
+        "PreparedRemoteProposalValidateReplayPreAdmission",
+        "replay_evidence: RemoteProposalFetchReplayEvidenceV1",
+        "replay_evidence: RemoteProposalStoreReplayEvidenceV1",
+        "replay_evidence: RemoteProposalStoredReplayEvidenceV1",
+        "replay_evidence: RemoteProposalValidateReplayEvidenceV1",
+        "pub(super) fn seal_exact_fetch(",
+        "ownership.exact_remote_proposal_fetch_replay(&effect)",
+        "pub(super) fn project_store(",
+        ".project_exact_store(&effect, &pending)",
+        "pub(super) fn bind_durable_body(",
+        ".bind_durable_body(&effect, &durable_receipt)",
+        "pub(super) fn project_validate(",
+        ".project_exact_validate(",
+        "fn into_durable_validate_carrier(",
+        "replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(",
+        "_fetch: PreparedRemoteProposalFetchReplayPreAdmission",
+        "_store: PreparedRemoteProposalStoreReplayPreAdmission",
+        "_stored: PreparedRemoteProposalStoredReplayPreAdmission",
+        "_ownership: RuntimeEffectOwnership",
+    ] {
+        assert!(
+            token.contains(required),
+            "remote Proposal replay token omitted {required}"
+        );
+    }
+    for declaration in [
+        "PreparedRemoteProposalFetchReplayPreAdmission {",
+        "PreparedRemoteProposalStoreReplayPreAdmission {",
+        "PreparedRemoteProposalStoredReplayPreAdmission {",
+        "PreparedRemoteProposalValidateReplayPreAdmission {",
+    ] {
+        let declaration = token
+            .split(declaration)
+            .nth(1)
+            .expect("remote Proposal token declaration is present")
+            .split('}')
+            .next()
+            .expect("remote Proposal token declaration is bounded");
+        assert!(!declaration.contains("Option<"));
+        assert!(!declaration.contains("derive(Clone"));
+    }
+    for forbidden in [
+        "Decode",
+        "fn from_parts(",
+        "fn into_parts(",
+        "fn effect(",
+        "fn pending(",
+        "fn receipt(",
+        "fn source(",
+        "fn ingress(",
+        "fn proposal(",
+        "fn install(",
+        "fn commit(",
+        "ConcreteLifecycleWorkRegistry",
+        ".entries",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !token.contains(forbidden),
+            "remote Proposal replay token exposed forbidden surface {forbidden}"
+        );
+    }
+    assert_eq!(
+        production
+            .matches("PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(")
+            .count(),
+        0,
+        "the inert remote Proposal token has no production admission caller"
+    );
+    for caller in [
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
+        include_str!("../v2_lifecycle_selector.rs"),
+        include_str!("../v2_lifecycle_concrete_admission.rs"),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        let caller = caller
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("caller production prefix is bounded");
+        assert!(!caller.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
+    }
+}
+#[test]
+fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("work registry has one production prefix");
+    let token = production
+        .split("pub(super) struct PreparedInvalidBodyReportReplayPreAdmission")
+        .nth(1)
+        .expect("invalid-body replay token has one declaration")
+        .split("/// Ownership-preserving failure from the fixed Ready Validate adapter join.")
+        .next()
+        .expect("Ready Validate preview failure follows invalid-body replay");
+    for required in [
+        "registry: PreparedReadyDurableValidateExecution",
+        "adapter: PreparedInvalidBodyReportAdapterReplay",
+        "preview: PreparedReadyDurableValidateAdapterPreview",
+        "pub(super) fn seal_invalid_body_report_replay(",
+        "ReadyDurableValidateOutcomeKind::Rejected",
+        "BodyValidationRejectionIdentity::Rejected",
+        "let validate_origin = completion.incumbent.replay_evidence.clone()",
+        "adapter.seal_invalid_body_report_replay(",
+        "&completion.incumbent.effect",
+        "&completion.incumbent.pending",
+        "&completion.incumbent.durable_receipt",
+        "Err(adapter) =>",
+        "preview: Self",
+        "fn validates(&self)",
+        "pub(super) fn project_for_body_transition(",
+        "SealedInvalidBodyReportProjectionPermit",
+        ".project_invalid_body_report_candidate(",
+        "candidate.replay_authority_is_exact(active_context)",
+        "SealedInvalidBodyReportProjection::from_registry",
+    ] {
+        assert!(
+            token.contains(required),
+            "invalid-body replay token omitted {required}"
+        );
+    }
+    for forbidden in [
+        "derive(Clone",
+        "Decode",
+        "Option<InvalidBodyReport",
+        "fn into_parts(",
+        "fn effect(",
+        "fn pending(",
+        "fn receipt(",
+        "fn certificate(",
+        "fn source(",
+        "fn install(",
+        "fn commit(",
+        "fn candidate(",
+        "fn report_effect(",
+        "projection::admission_request",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !token.contains(forbidden),
+            "invalid-body replay token exposed forbidden surface {forbidden}"
+        );
+    }
+    assert_eq!(
+        production
+            .matches("adapter.seal_invalid_body_report_replay(")
+            .count(),
+        1,
+        "only the fixed Ready registry join may invoke the adapter seal"
+    );
+    for outside in [
+        reviewed_lifecycle_ledger_source_for_test(),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        let outside = outside
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("outside production prefix is bounded");
+        assert!(!outside.contains("PreparedInvalidBodyReportReplayPreAdmission"));
+        assert!(!outside.contains("InvalidBodyReportReplayEvidenceV1"));
+    }
+}
+#[test]
+fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("work registry has one production prefix");
+    let authority = production
+        .split("pub(in crate::sumeragi) struct ReadyValidateSignPredecessorAuthority")
+        .nth(1)
+        .expect("Validate Sign predecessor authority is declared")
+        .split("impl<'a> ReadyValidatedAdapterAuthority<'a>")
+        .next()
+        .expect("validated preview authority follows the Sign authority");
+    for required in [
+        "_linearity: ReadyValidateSignPredecessorLinearity",
+        "impl Drop for ReadyValidateSignPredecessorLinearity",
+        "pub(in crate::sumeragi) fn project_successor(\n        self,",
+        "project_validate_sign_prepare_successor",
+        "project_validate_sign_commit_successor_with_registered_prepare",
+    ] {
+        assert!(
+            authority.contains(required),
+            "Validate Sign predecessor authority omitted {required}"
+        );
+    }
+    for forbidden in [
+        "derive(Clone",
+        "derive(Copy",
+        "fn into_parts(",
+        "fn effect(",
+        "fn pending(",
+        "fn certificate(",
+    ] {
+        assert!(
+            !authority.contains(forbidden),
+            "Validate Sign predecessor authority exposed {forbidden}"
+        );
+    }
+    let join = production
+        .split("pub(super) fn seal_live_wal_validate_sign(")
+        .nth(1)
+        .expect("fixed Validate Sign join is declared")
+        .split("/// Consume only the exact Ready/rejected report preview")
+        .next()
+        .expect("invalid-body join follows the live Sign join");
+    for required in [
+        "registry.validate_sign_predecessor_authority()",
+        "adapter.bind_validate_sign_predecessor(predecessor)",
+        "adapter.append_live_wal()",
+        "ReadyDurableValidateSignPreAdmissionFailure::PreWal",
+        "ReadyDurableValidateSignPreAdmissionFailure::Wal",
+        "PreparedReadyDurableValidatePersistedSignPreAdmission",
+    ] {
+        assert!(
+            join.contains(required),
+            "fixed live Sign join omitted {required}"
+        );
+    }
+    for forbidden in [
+        "&AdapterEffect",
+        "&PendingRuntimeEffectBinding",
+        "&DurableBodyReceipt",
+        "QuorumCertificate",
+        "LiveWalFrameIdentity",
+        "fn into_parts(",
+        "fn commit(",
+        "fn install(",
+    ] {
+        assert!(
+            !join.contains(forbidden),
+            "fixed live Sign join exposed {forbidden}"
+        );
+    }
+    assert_eq!(
+        production
+            .matches("adapter.bind_validate_sign_predecessor(predecessor)")
+            .count(),
+        1,
+        "only the fixed Ready registry join binds the adapter Sign predecessor"
+    );
+    for caller in [
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        let caller = caller
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("caller production prefix is bounded");
+        assert!(!caller.contains("seal_live_wal_validate_sign"));
+        assert!(!caller.contains("PreparedReadyDurableValidatePersistedSignPreAdmission"));
+    }
+}
 #[test]
 fn sealed_validate_no_successor_branch_inventory_is_exact() {
     for publication in [
@@ -456,11 +890,21 @@ fn sealed_validate_no_successor_branch_inventory_is_exact() {
         }
     }
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(registry_remains_inert_and_scheduler_free);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(certified_fetch_execution_surface_is_borrow_bound_and_commit_free);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(durable_store_execution_surface_is_closed_borrow_bound_and_inert);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(durable_validate_execution_surface_is_closed_borrow_bound_and_inert);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    registry_remains_inert_and_scheduler_free
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    certified_fetch_execution_surface_is_borrow_bound_and_commit_free
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    durable_store_execution_surface_is_closed_borrow_bound_and_inert
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    durable_validate_execution_surface_is_closed_borrow_bound_and_inert
+);
 #[test]
 fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
     let source = reviewed_lifecycle_work_registry_source_for_test();

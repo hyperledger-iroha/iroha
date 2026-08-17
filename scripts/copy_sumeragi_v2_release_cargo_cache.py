@@ -22,7 +22,6 @@ import tarfile
 import unicodedata
 import zipfile
 
-
 MAXIMUM_RECORDS = 250_000
 MAXIMUM_FILE_BYTES = 4 * 1024 * 1024 * 1024
 MAXIMUM_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
@@ -172,17 +171,14 @@ CLI_COMPONENT_SHA256 = (
 )
 CLI_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
-
 class CacheCopyError(RuntimeError):
     """The inherited Cargo cache is unsafe, unstable, or too large."""
-
 
 def _unchanged(before: os.stat_result, after: os.stat_result) -> bool:
     return all(
         getattr(before, field) == getattr(after, field)
         for field in IDENTITY_FIELDS
     )
-
 
 def _same_directory(before: os.stat_result, after: os.stat_result) -> bool:
     return (
@@ -192,7 +188,6 @@ def _same_directory(before: os.stat_result, after: os.stat_result) -> bool:
         == (after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid)
     )
 
-
 def _same_directory_inode(before: os.stat_result, after: os.stat_result) -> bool:
     return (
         stat.S_ISDIR(before.st_mode)
@@ -201,7 +196,6 @@ def _same_directory_inode(before: os.stat_result, after: os.stat_result) -> bool
         == (after.st_dev, after.st_ino, after.st_uid, after.st_gid)
     )
 
-
 def _contained(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -209,21 +203,17 @@ def _contained(path: Path, root: Path) -> bool:
         return False
     return True
 
-
 def _overlap(left: Path, right: Path) -> bool:
     return left == right or _contained(left, right) or _contained(right, left)
-
 
 def _bounded_relative(relative: str) -> None:
     path = Path(relative)
     if len(path.parts) > MAXIMUM_DEPTH or len(relative.encode("utf-8")) > MAXIMUM_PATH_BYTES:
         raise CacheCopyError("cache input path exceeds its structural limit")
 
-
 def _normalized_absolute(path: Path, label: str) -> None:
     if not path.is_absolute() or Path(os.path.abspath(path)) != path:
         raise CacheCopyError(f"{label} must be absolute and normalized")
-
 
 _DIRECTORY_FLAGS = (
     os.O_RDONLY
@@ -231,7 +221,6 @@ _DIRECTORY_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
-
 
 def _open_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
     _normalized_absolute(path, label)
@@ -255,7 +244,6 @@ def _open_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
         raise CacheCopyError(f"{label} changed while opened")
     return descriptor, opened
 
-
 def _directory_entries(descriptor: int, label: str) -> tuple[str, ...]:
     names: list[str] = []
     try:
@@ -268,13 +256,11 @@ def _directory_entries(descriptor: int, label: str) -> tuple[str, ...]:
         raise CacheCopyError(f"could not enumerate {label}: {error}") from error
     return tuple(sorted(names))
 
-
 def _entry_stat(parent_fd: int, name: str, label: str) -> os.stat_result:
     try:
         return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except OSError as error:
         raise CacheCopyError(f"{label} is unavailable: {error}") from error
-
 
 def _optional_entry_stat(parent_fd: int, name: str, label: str) -> os.stat_result | None:
     try:
@@ -283,7 +269,6 @@ def _optional_entry_stat(parent_fd: int, name: str, label: str) -> os.stat_resul
         return None
     except OSError as error:
         raise CacheCopyError(f"{label} is unavailable: {error}") from error
-
 
 def _rename_with_flags_at(parent_fd: int, source: str, destination: str, flags: int) -> None:
     library = ctypes.CDLL(None, use_errno=True)
@@ -299,14 +284,11 @@ def _rename_with_flags_at(parent_fd: int, source: str, destination: str, flags: 
         number = ctypes.get_errno()
         raise OSError(number, os.strerror(number), destination)
 
-
 def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
     _rename_with_flags_at(parent_fd, source, destination, 4 if sys.platform == "darwin" else 1)
 
-
 def _rename_swap_at(parent_fd: int, left: str, right: str) -> None:
     _rename_with_flags_at(parent_fd, left, right, 2)
-
 
 def _owned_remove_entry(parent_fd: int, name: str, identity: tuple[int, int], label: str) -> bool:
     """Atomically quarantine one exact identity; never unlink an active name."""
@@ -331,13 +313,11 @@ def _owned_remove_entry(parent_fd: int, name: str, identity: tuple[int, int], la
         raise CacheCopyError(f"{label} replacement retained after quarantine")
     return True
 
-
 def _revalidate_entry(
     parent_fd: int, name: str, expected: os.stat_result, label: str
 ) -> None:
     if not _unchanged(expected, _entry_stat(parent_fd, name, label)):
         raise CacheCopyError(f"{label} was replaced during traversal")
-
 
 def _revalidate_path(path: Path, expected: os.stat_result, label: str) -> None:
     try:
@@ -347,7 +327,6 @@ def _revalidate_path(path: Path, expected: os.stat_result, label: str) -> None:
     if not _unchanged(expected, after):
         raise CacheCopyError(f"{label} was replaced during traversal")
 
-
 def _revalidate_directory_path(path: Path, expected: os.stat_result, label: str) -> None:
     try:
         after = path.lstat()
@@ -355,7 +334,6 @@ def _revalidate_directory_path(path: Path, expected: os.stat_result, label: str)
         raise CacheCopyError(f"{label} disappeared during traversal") from error
     if stat.S_ISLNK(after.st_mode) or not _same_directory(expected, after):
         raise CacheCopyError(f"{label} was replaced during traversal")
-
 
 def _safe_target_parts(parent_parts: tuple[str, ...], target: str, label: str) -> tuple[str, ...]:
     rendered = PurePosixPath(target)
@@ -374,7 +352,6 @@ def _safe_target_parts(parent_parts: tuple[str, ...], target: str, label: str) -
     if not parts:
         raise CacheCopyError(f"cache symlink target is unavailable: {label}")
     return tuple(parts)
-
 
 def _require_target(root_fd: int, parts: tuple[str, ...], label: str) -> None:
     descriptor = os.dup(root_fd)
@@ -399,7 +376,6 @@ def _require_target(root_fd: int, parts: tuple[str, ...], label: str) -> None:
     finally:
         os.close(descriptor)
 
-
 def _validate_symlink(
     parent_fd: int,
     name: str,
@@ -421,7 +397,6 @@ def _validate_symlink(
     ):
         raise CacheCopyError(f"cache symlink changed while inspected: {label}")
     return target
-
 
 def _preflight_directory(
     descriptor: int,
@@ -467,7 +442,6 @@ def _preflight_directory(
             raise CacheCopyError(f"cache entry is a forbidden special file: {child_label}")
     if _directory_entries(descriptor, f"cache directory {relative}") != names or not _unchanged(before, os.fstat(descriptor)):
         raise CacheCopyError(f"cache directory changed during preflight: {relative}")
-
 
 def _copy_regular(
     source_parent_fd: int,
@@ -560,7 +534,6 @@ def _copy_regular(
         "sha256": digest.hexdigest(),
     }
 
-
 def _copy_symlink(
     source_parent_fd: int,
     destination_parent_fd: int,
@@ -599,13 +572,11 @@ def _copy_symlink(
         "target": target,
     }
 
-
 def _path_is_omitted(path: str, omitted_paths: frozenset[str]) -> bool:
     return any(
         path == omitted or path.startswith(f"{omitted}/")
         for omitted in omitted_paths
     )
-
 
 def _copy_directory(
     source_fd: int,
@@ -722,7 +693,6 @@ def _copy_directory(
         if destination_fd >= 0:
             os.close(destination_fd)
 
-
 def _canonical_payload(document: dict[str, object]) -> bytes:
     payload = (
         json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
@@ -730,7 +700,6 @@ def _canonical_payload(document: dict[str, object]) -> bytes:
     if len(payload) > 256 * 1024 * 1024:
         raise CacheCopyError("Cargo cache inventory exceeds its size limit")
     return payload
-
 
 def _validator_invocation_value_sha256(kind: str, value: str | bool) -> str:
     payload = json.dumps(
@@ -740,7 +709,6 @@ def _validator_invocation_value_sha256(kind: str, value: str | bool) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
 
 def _validate_validator_invocation(
     value: object,
@@ -835,7 +803,6 @@ def _validate_validator_invocation(
     if hashlib.sha256(payload).hexdigest() != value["invocation_sha256"]:
         raise CacheCopyError("receipt validator invocation digest changed")
 
-
 def _publish_inventory(
     inventory_path: Path, payload: bytes
 ) -> tuple[os.stat_result, os.stat_result]:
@@ -911,7 +878,6 @@ def _publish_inventory(
             )
         os.close(parent_fd)
 
-
 def _remove_published(
     path: Path, identity: tuple[os.stat_result, os.stat_result] | None
 ) -> None:
@@ -929,12 +895,10 @@ def _remove_published(
     finally:
         os.close(parent_fd)
 
-
 def _remove_tree_at(
     parent_fd: int, name: str, expected: os.stat_result, label: str
 ) -> None:
     _owned_remove_entry(parent_fd, name, (expected.st_dev, expected.st_ino), label)
-
 
 def _remove_partial_roots(
     cargo_home: Path,
@@ -958,7 +922,6 @@ def _remove_partial_roots(
                 continue
     finally:
         os.close(home_fd)
-
 
 def _snapshot_regular(
     parent_fd: int,
@@ -1010,7 +973,6 @@ def _snapshot_regular(
         "size": total,
         "sha256": digest.hexdigest(),
     }
-
 
 def _snapshot_directory(
     root_fd: int,
@@ -1073,7 +1035,6 @@ def _snapshot_directory(
     if _directory_entries(directory_fd, f"private cache directory {relative_directory or '.'}") != names or not _unchanged(before, os.fstat(directory_fd)):
         raise CacheCopyError(f"private cache directory changed while read: {relative_directory or '.'}")
 
-
 def snapshot_cache(cargo_home: Path, inventory_path: Path) -> None:
     """Publish a canonical bounded inventory of every final cache entry."""
 
@@ -1115,7 +1076,6 @@ def snapshot_cache(cargo_home: Path, inventory_path: Path) -> None:
         raise
     finally:
         os.close(cargo_fd)
-
 
 def copy_cache(source_home: Path, cargo_home: Path, inventory_path: Path) -> None:
     """Copy registry/Git roots and publish their canonical input inventory."""
@@ -1242,7 +1202,6 @@ def copy_cache(source_home: Path, cargo_home: Path, inventory_path: Path) -> Non
             os.close(source_parent_fd)
         os.close(cargo_fd)
 
-
 def verify_cache_sources(
     source_home: Path, cargo_home: Path, inventory_path: Path,
 ) -> None:
@@ -1359,7 +1318,6 @@ def _hold_regular(
     _revalidate_held_regular(held)
     return held
 
-
 def _revalidate_held_regular(held: dict[str, object]) -> None:
     path, label = held["path"], held["label"]
     descriptor, parent_fd = held["descriptor"], held["parent_fd"]
@@ -1379,7 +1337,6 @@ def _revalidate_held_regular(held: dict[str, object]) -> None:
     parent_identity = held["parent_identity"]
     assert isinstance(parent_identity, os.stat_result)
     _revalidate_directory_path(path.parent, parent_identity, f"{label} parent")
-
 
 def _close_held_regular(held: dict[str, object]) -> None:
     os.close(held["descriptor"]); os.close(held["parent_fd"])
@@ -1403,7 +1360,6 @@ def _digest_regular(
 ) -> tuple[str, int, os.stat_result]:
     data, metadata = _read_regular(path, label, maximum_bytes=maximum_bytes)
     return hashlib.sha256(data).hexdigest(), len(data), metadata
-
 
 def _retained_tree(root: Path, excluded: set[Path]) -> tuple[list[dict[str, object]], int]:
     excluded_names = {path.name for path in excluded if path.parent == root}
@@ -1450,14 +1406,12 @@ def _retained_tree(root: Path, excluded: set[Path]) -> tuple[list[dict[str, obje
     _revalidate_directory_path(root, root_identity, "retained release root")
     return records, budget["bytes"]
 
-
 def _owned_remove_tree(parent_fd: int, name: str, label: str) -> None:
     expected = _entry_stat(parent_fd, name, label)
     if not stat.S_ISDIR(expected.st_mode) or stat.S_ISLNK(expected.st_mode) or expected.st_uid != os.geteuid():
         raise CacheCopyError(f"refusing to prune unsafe retained entry: {label}")
     if not _owned_remove_entry(parent_fd, name, (expected.st_dev, expected.st_ino), label):
         raise CacheCopyError(f"retained prune root was replaced: {label}")
-
 
 def _quiescent_remove_tree(root: Path, label: str) -> None:
     """Reclaim one quarantined tree after its owned child has naturally exited."""
@@ -1496,7 +1450,6 @@ def _quiescent_remove_tree(root: Path, label: str) -> None:
             entry.rmdir()
     root.rmdir()
 
-
 def _quiescent_remove_named(
     parent: Path, name: str, label: str, *, require_directory: bool = False,
 ) -> bool:
@@ -1527,7 +1480,6 @@ def _quiescent_remove_named(
     _revalidate_directory_path(parent, parent_identity, f"quiescent {label} parent")
     return True
 
-
 def cleanup_invocation(base: Path, root: Path, prefix: str) -> None:
     """Identity-delete one exact owner-private direct child of a trusted base."""
 
@@ -1536,7 +1488,6 @@ def cleanup_invocation(base: Path, root: Path, prefix: str) -> None:
     if root.parent != base or not root.name.startswith(prefix):
         raise CacheCopyError("refusing to remove an unsafe private invocation")
     _quiescent_remove_named(base, root.name, "private invocation", require_directory=True)
-
 
 def _stable_regular_digest(path: Path, label: str) -> tuple[str, int]:
     """Hash one stable owned regular file without retaining its payload."""
@@ -1579,7 +1530,6 @@ def _stable_regular_digest(path: Path, label: str) -> tuple[str, int]:
         if descriptor is not None:
             os.close(descriptor)
         os.close(parent_fd)
-
 
 def _validator_diagnostic_prefix(path: Path, name: str) -> tuple[bytes, dict[str, object]]:
     """Read only the stable bounded prefix of one completed validator stream."""
@@ -1638,7 +1588,6 @@ def _validator_diagnostic_prefix(path: Path, name: str) -> tuple[bytes, dict[str
             os.close(descriptor)
         os.close(parent_fd)
 
-
 def _validation_component(source: Path) -> dict[str, object]:
     """Load the exact authenticated receipt-validation helper component."""
 
@@ -1668,7 +1617,6 @@ def _validation_component(source: Path) -> dict[str, object]:
     exec(compile(payload, str(component), "exec"), namespace)
     return namespace
 
-
 def publish_validation_failure(
     invocation_root: Path,
     bootstrap_evidence: Path,
@@ -1691,15 +1639,11 @@ def publish_validation_failure(
         source_manifest_sha256, validator_exit_status,
     )
 
-
-
-
 def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
     implementation = _validation_component(source).get("_validation_ack")
     if not callable(implementation) or implementation is _validation_ack:
         raise CacheCopyError("validation acknowledgment component entry point is invalid")
     return implementation(ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256, candidate_root, scaling_evidence_manifest, expected_signer_fingerprint, expected_scaling_trial_harness_sha256, expected_scaling_configuration_sha256, expected_scaling_irohad_sha256, expected_scaling_iroha_cli_sha256)
-
 
 def seal_release_result(
     invocation_root: Path,
@@ -1913,7 +1857,6 @@ def seal_release_result(
         for held in reversed(held_files):
             _close_held_regular(held)
 
-
 def _verify_runtime_sources(
     roots: dict[str, Path], records: list[dict[str, object]],
     *,
@@ -2042,7 +1985,6 @@ def _verify_runtime_sources(
     if visited != set(by_path):
         raise CacheCopyError("runtime source inventory has unbound records")
 
-
 def _bind_runtime_destinations(
     inputs: list[dict[str, object]], outputs: list[dict[str, object]], *,
     update: bool, relocation: object | None = None,
@@ -2084,7 +2026,6 @@ def _bind_runtime_destinations(
         elif any(record.get(key) != value for key, value in expected.items()):
             raise CacheCopyError("runtime source destination provenance changed")
 
-
 _RELEASE_SHELL_UTILITY_NAMES = (
     "awk", "basename", "cat", "chmod", "cmp", "cp", "cut", "diff",
     "dirname", "env", "find", "grep", "ln", "ls", "mkdir", "mkfifo",
@@ -2105,14 +2046,12 @@ _PR_RUNTIME_NAMES = (
     *_RELEASE_SHELL_UTILITY_NAMES,
 )
 
-
 def _runtime_names(resolved: list[Path]) -> tuple[str, ...]:
     if len(resolved) == len(_RELEASE_RUNTIME_NAMES):
         return _RELEASE_RUNTIME_NAMES
     if len(resolved) == len(_PR_RUNTIME_NAMES):
         return _PR_RUNTIME_NAMES
     raise CacheCopyError("runtime source inputs are not exact")
-
 
 def _framework_python_closure(
     resolved: list[Path],
@@ -2281,7 +2220,6 @@ def _framework_python_closure(
         os.close(root_fd)
     return version_root, framework, stdlib_name
 
-
 def _framework_python_omitted_paths(stdlib_name: str) -> frozenset[str]:
     """Return paths excluded by the exact isolated framework-Python contract."""
 
@@ -2289,7 +2227,6 @@ def _framework_python_omitted_paths(stdlib_name: str) -> frozenset[str]:
     # unused location as a symlink into its mutable prefix, so it must not enter
     # the protected runtime or its source inventory.
     return frozenset({f"lib/{stdlib_name}/site-packages"})
-
 
 def _validate_framework_python_sources(
     version_root: Path, framework: str, stdlib_name: str,
@@ -2405,7 +2342,6 @@ def _validate_framework_python_sources(
     finally:
         os.close(root_fd)
 
-
 def _validate_framework_python_runtime_records(
     records: list[dict[str, object]], framework: str, stdlib_name: str,
 ) -> None:
@@ -2477,7 +2413,6 @@ def _validate_framework_python_runtime_records(
                     f"private runtime framework symlink target is unsafe: {path}"
                 )
 
-
 def _reject_framework_python_destination_overlap(
     version_root: Path, runtime_root: Path, inventory_path: Path,
 ) -> None:
@@ -2488,7 +2423,6 @@ def _reject_framework_python_destination_overlap(
         raise CacheCopyError(
             "Python framework source, private runtime, and inventory must be disjoint"
         )
-
 
 _FRAMEWORK_PYTHON_PROBE = """\
 import sys
@@ -2502,7 +2436,6 @@ if sys.path != [expected_zip, expected_stdlib, expected_dynload]:
 sys.stdout.buffer.write(sys.executable.encode('utf-8', 'surrogateescape') + b'\\n')
 """
 
-
 def _probe_framework_python_runtime(
     runtime_root: Path, stdlib_name: str,
 ) -> bytes:
@@ -2513,7 +2446,6 @@ def _probe_framework_python_runtime(
         probe_code=_FRAMEWORK_PYTHON_PROBE,
         error_type=CacheCopyError,
     )
-
 
 def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
     names = _runtime_names(resolved)
@@ -2544,7 +2476,6 @@ def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
             "lib": version_root / "lib",
         })
     return roots
-
 
 def verify_runtime_sources(
     sources: list[Path], runtime_root: Path, inventory_path: Path,
@@ -2640,7 +2571,6 @@ def verify_runtime_sources(
     ):
         raise CacheCopyError("private runtime changed after publication")
 
-
 def _seal_copied_tree(
     root: Path,
     label: str,
@@ -2692,7 +2622,6 @@ def _seal_copied_tree(
     if not _same_directory_inode(root_identity, observed) or stat.S_IMODE(observed.st_mode) != 0o500:
         raise CacheCopyError(f"{label} root changed while sealed")
 
-
 def _verify_private_bundle(
     source_root: Path, bundle_root: Path, inventory_path: Path,
 ) -> dict[str, object]:
@@ -2725,7 +2654,6 @@ def _verify_private_bundle(
     if type(inventory.get("record_count")) is not int or inventory["record_count"] != len(records) or type(inventory.get("file_bytes")) is not int or inventory["file_bytes"] != budget["bytes"] or inventory["records"] != sorted(records, key=lambda record: str(record["path"])):
         raise CacheCopyError("private bundle changed after publication")
     return inventory
-
 
 def copy_private_bundle(source_root: Path, bundle_root: Path, inventory_path: Path) -> None:
     """Copy, seal, and inventory one bounded path-withheld evidence bundle."""
@@ -2769,7 +2697,6 @@ def copy_private_bundle(source_root: Path, bundle_root: Path, inventory_path: Pa
     finally:
         os.close(source_fd); os.close(parent_fd)
 
-
 def _sdk_records_sha256(records: list[dict[str, object]]) -> str:
     """Digest one canonical path-free dependency member inventory."""
 
@@ -2777,7 +2704,6 @@ def _sdk_records_sha256(records: list[dict[str, object]]) -> str:
         records, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
 
 def _sdk_inventory_records_contract(
     value: object, label: str,
@@ -2880,7 +2806,6 @@ def _sdk_inventory_records_contract(
                 raise CacheCopyError(f"{label} symlink target is not inventoried")
     return value, file_bytes
 
-
 def _sdk_source_inventory_contract(
     value: object, label: str,
 ) -> tuple[list[dict[str, object]], int]:
@@ -2905,7 +2830,6 @@ def _sdk_source_inventory_contract(
     ):
         raise CacheCopyError(f"{label} accounting or digest is not exact")
     return records, file_bytes
-
 
 def _sdk_source_manifest(
     path: Path, expected_sha256: str,
@@ -3068,7 +2992,6 @@ def _sdk_source_manifest(
         raise CacheCopyError("release Gradle dependency closure must be version 9.3.0")
     return document, digest
 
-
 def _sdk_sources(
     manifest: dict[str, object], repository_root: Path,
 ) -> dict[str, Path]:
@@ -3092,7 +3015,6 @@ def _sdk_sources(
         "gradle/kotlin-gradle-wrapper.properties": repository_root / "kotlin/gradle/wrapper/gradle-wrapper.properties",
         "gradle/java-gradle-wrapper.properties": repository_root / "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
     }
-
 
 def _sdk_validate_manifest_source_inventories(
     manifest: dict[str, object], sources: dict[str, Path],
@@ -3146,7 +3068,6 @@ def _sdk_validate_manifest_source_inventories(
                 f"{label} differs from its protected complete member inventory"
             )
     _sdk_verify_swift_checkout_git(manifest, sources["swiftpm/cache"])
-
 
 def _sdk_verify_swift_checkout_git(
     manifest: dict[str, object], swift_cache: Path,
@@ -3221,7 +3142,6 @@ def _sdk_verify_swift_checkout_git(
                 "SwiftPM checkout is not the exact clean protected Git tree"
             )
 
-
 def _sdk_source_state(
     sources: dict[str, Path],
 ) -> tuple[list[dict[str, object]], int]:
@@ -3263,11 +3183,9 @@ def _sdk_source_state(
                 os.close(parent_fd)
     return sorted(records, key=lambda record: str(record["path"])), budget["bytes"]
 
-
 def _sdk_source_state_sha256(records: list[dict[str, object]]) -> str:
     payload = json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
-
 
 def _sdk_sanitized_snapshot(
     root: Path, label: str,
@@ -3296,7 +3214,6 @@ def _sdk_sanitized_snapshot(
         records.append({key: record[key] for key in keys})
     return sorted(records, key=lambda record: str(record["path"])), budget["bytes"]
 
-
 def _sdk_new_directory(parent_fd: int, name: str, label: str) -> tuple[int, os.stat_result]:
     if _optional_entry_stat(parent_fd, name, label) is not None:
         raise CacheCopyError(f"{label} already exists")
@@ -3312,7 +3229,6 @@ def _sdk_new_directory(parent_fd: int, name: str, label: str) -> tuple[int, os.s
         os.close(descriptor)
         raise CacheCopyError(f"{label} is not owner-private")
     return descriptor, opened
-
 
 def _sdk_copy_file(
     source: Path, destination_fd: int, destination_name: str, archive_name: str,
@@ -3332,7 +3248,6 @@ def _sdk_copy_file(
         ))
     finally:
         os.close(source_parent)
-
 
 def _sdk_copy_layout(
     sources: dict[str, Path], bundle_root: Path,
@@ -3380,7 +3295,6 @@ def _sdk_copy_layout(
         if not complete and created is not None and bundle_root.exists():
             _quiescent_remove_tree(bundle_root, "partial SDK dependency bundle")
 
-
 def _sdk_copy_work(bundle_root: Path, work_root: Path) -> os.stat_result:
     parent_fd, _ = _open_directory(work_root.parent, "SDK dependency work parent")
     root_fd: int | None = None
@@ -3417,7 +3331,6 @@ def _sdk_copy_work(bundle_root: Path, work_root: Path) -> os.stat_result:
         if not complete and created is not None and work_root.exists():
             _quiescent_remove_tree(work_root, "partial SDK dependency work root")
 
-
 def create_sdk_command_work(
     bundle_root: Path, command_work_root: Path,
 ) -> None:
@@ -3432,7 +3345,6 @@ def create_sdk_command_work(
     ):
         raise CacheCopyError("SDK command work root is not an exact disjoint sibling")
     _sdk_copy_work(bundle_root, command_work_root)
-
 
 def cleanup_sdk_command_work(
     bundle_root: Path, command_work_root: Path,
@@ -3454,7 +3366,6 @@ def cleanup_sdk_command_work(
         "SDK command work root",
         require_directory=True,
     )
-
 
 def _sdk_reject_path_disclosure(
     bundle_root: Path, records: list[dict[str, object]], sources: dict[str, Path],
@@ -3492,7 +3403,6 @@ def _sdk_reject_path_disclosure(
         finally:
             os.close(parent_fd)
 
-
 def _sdk_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
     payload, _ = _read_regular(path, label)
     try:
@@ -3502,7 +3412,6 @@ def _sdk_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
     if not isinstance(value, dict):
         raise CacheCopyError(f"{label} is not a JSON object")
     return value, payload
-
 
 def _sdk_gradle_distribution(
     bundle_root: Path, expected_sha256: str,
@@ -3627,7 +3536,6 @@ def _sdk_gradle_distribution(
     if not isinstance(launcher, dict) or int(str(launcher["mode"]), 8) & 0o111 == 0:
         raise CacheCopyError("extracted Gradle launcher is not executable")
     return cache_keys[0].name
-
 
 def _sdk_bindings(
     bundle_root: Path, manifest: dict[str, object],
@@ -3777,7 +3685,6 @@ def _sdk_bindings(
         },
     }
 
-
 def _sdk_publish_tar(
     bundle_root: Path, archive_path: Path, records: list[dict[str, object]],
 ) -> tuple[dict[str, object], tuple[os.stat_result, os.stat_result]]:
@@ -3898,7 +3805,6 @@ def _sdk_publish_tar(
         os.close(parent_fd)
         os.close(bundle_fd)
 
-
 def _sdk_verify_tar(
     archive_path: Path, archive_binding: dict[str, object],
     records: list[dict[str, object]],
@@ -3941,7 +3847,6 @@ def _sdk_verify_tar(
                         raise CacheCopyError("SDK dependency archive file bytes changed")
     except tarfile.TarError as error:
         raise CacheCopyError("SDK dependency archive is malformed") from error
-
 
 def _sdk_inventory(
     inventory_path: Path,
@@ -3991,7 +3896,6 @@ def _sdk_inventory(
             ):
                 raise CacheCopyError("SDK dependency member record is malformed")
     return document, payload
-
 
 def verify_sdk_dependencies(
     source_manifest: Path, expected_source_manifest_sha256: str,
@@ -4074,7 +3978,6 @@ def verify_sdk_dependencies(
             "records": work_records,
         }
         _publish_inventory(final_work_inventory, _canonical_payload(document))
-
 
 def copy_sdk_dependencies(
     source_manifest: Path, expected_source_manifest_sha256: str,
@@ -4177,7 +4080,6 @@ def copy_sdk_dependencies(
             if created is not None and (root.exists() or root.is_symlink()):
                 _quiescent_remove_tree(root, label)
         raise
-
 
 def _populate_runtime(
     runtime_root: Path, sources: list[Path], inventory_path: Path,
@@ -4440,7 +4342,6 @@ def _populate_runtime(
     )
     return _publish_inventory(inventory_path, _canonical_payload(document))
 
-
 def copy_runtime(runtime_root: Path, sources: list[Path], inventory_path: Path) -> None:
     """Create one owned runtime root without path-based check/create races."""
 
@@ -4480,7 +4381,6 @@ def copy_runtime(runtime_root: Path, sources: list[Path], inventory_path: Path) 
     finally:
         os.close(parent_fd)
 
-
 def _framework_python_runtime_inventory(
     runtime_root: Path,
     records: list[dict[str, object]],
@@ -4504,7 +4404,6 @@ def _framework_python_runtime_inventory(
         ),
         "relocation": relocation,
     }
-
 
 def verify_framework_python_runtime(
     runtime_root: Path, inventory_path: Path,
@@ -4626,7 +4525,6 @@ def verify_framework_python_runtime(
             "protected framework Python runtime changed after publication"
         )
     return inventory
-
 
 def copy_framework_python_runtime(
     runtime_root: Path, inventory_path: Path,
@@ -4940,7 +4838,6 @@ def main() -> int:
         verify_runtime_sources=verify_runtime_sources,
         verify_sdk_dependencies=verify_sdk_dependencies,
     )
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

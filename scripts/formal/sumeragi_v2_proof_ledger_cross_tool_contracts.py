@@ -1238,20 +1238,12 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolSourceItemSeal(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step",
-                        item_token_sha256="bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
+                        item_token_sha256="cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
                             "SerializedV2Runtime", "<", "D", ">",
                         ),),
                         required_expressions=(
-                            """
-                            if self
-                                .exact_serve_target_ordinal
-                                .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                            {
-                                self.exact_serve_predecessor_retry_attempted = true;
-                            }
-                            """,
                             """
                             if self
                                 .retained_response_predecessor_target_ordinal

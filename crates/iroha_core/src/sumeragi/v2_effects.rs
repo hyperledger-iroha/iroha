@@ -2545,7 +2545,7 @@ struct FetchCompletionPlan {
 }
 /// Closed executor-side retirement prepared for the coordinator-owned
 /// certified-Fetch completion path.
-///
+/// TODO: Wire ordinary certified-Fetch Phase B through the final runner.
 /// This plan reserves no legacy runtime command and mints no lifecycle
 /// ordinal. It freezes only existing exact request, Fetch, and body-pipeline
 /// indexes so the post-dequeue tail can retire them without another fallible
@@ -4136,14 +4136,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             ownership: FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key),
         });
         committed_status
-    }
-    /// Freeze the already-due timeout owner for production-ordering fixtures.
-    #[cfg(test)]
-    pub(crate) fn freeze_due_timeout_owner_for_test(
-        &mut self,
-        now: Instant,
-    ) -> Result<RuntimeLifecycleOwner, String> {
-        self.runtime.frozen_timeout_owner_for_test(now)
     }
     /// Whether production may consume and register another local proposal.
     ///

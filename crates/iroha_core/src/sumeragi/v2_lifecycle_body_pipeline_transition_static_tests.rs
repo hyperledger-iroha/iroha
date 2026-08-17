@@ -8,9 +8,6 @@ fn digest_from_hash(hash: &iroha_crypto::Hash) -> super::LifecycleDigest {
 mod static_tests {
     use super::super::{LifecycleDigest, LifecycleKey, LifecycleRound, LifecycleStage};
     use super::*;
-    use crate::sumeragi::v2_lifecycle_coordinator::{
-        reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-    };
     fn key(
         phase: LifecyclePhase,
         proposal_round: bool,
@@ -374,6 +371,10 @@ mod static_tests {
             &broadcast, &foreign
         ));
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(combined_recovered_sign_staging_is_two_child_affine_and_inert);
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(transition_surface_is_ordered_borrow_bound_and_inert);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        combined_recovered_sign_staging_is_two_child_affine_and_inert
+    );
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        transition_surface_is_ordered_borrow_bound_and_inert
+    );
 }

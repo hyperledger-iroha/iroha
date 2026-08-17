@@ -9,16 +9,18 @@ fn sorafs_appeal_finance_readback_filter_sets_query_params() {
 
 #[test]
 fn sorafs_appeal_pricing_readback_targets_endpoints() {
-    for (path, request) in [
+    type PricingReadRequest = fn(&Client) -> Result<Response<Vec<u8>>>;
+    let requests: [(&str, PricingReadRequest); 2] = [
         (
             "/v1/sorafs/appeals/pricing/config",
-            Client::get_sorafs_appeal_pricing_config as fn(&Client) -> _,
+            Client::get_sorafs_appeal_pricing_config,
         ),
         (
             "/v1/sorafs/appeals/pricing/status",
-            Client::get_sorafs_appeal_pricing_status as fn(&Client) -> _,
+            Client::get_sorafs_appeal_pricing_status,
         ),
-    ] {
+    ];
+    for (path, request) in requests {
         let (_, snapshot) = capture_sorafs_endpoint(StatusCode::OK, "{}", request);
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), path);
@@ -79,8 +81,9 @@ fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
 }
 
 fn settlement_payload(escrow_byte: &str, case_id: &str, outcome: &str) -> Vec<u8> {
+    let escrow_id_hex = escrow_byte.repeat(32);
     norito::json::to_vec(&norito::json!({
-        "escrow_id_hex": escrow_byte.repeat(32),
+        "escrow_id_hex": escrow_id_hex,
         "case_id": case_id,
         "outcome": outcome,
     }))
@@ -89,18 +92,19 @@ fn settlement_payload(escrow_byte: &str, case_id: &str, outcome: &str) -> Vec<u8
 
 #[test]
 fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
+    type SettlementRequest = fn(&Client, &[u8]) -> Result<Response<Vec<u8>>>;
+
     let payload = settlement_payload("22", "case-402", "frivolous");
-    let cases = [
+    let cases: [(StatusCode, &str, SettlementRequest); 2] = [
         (
             StatusCode::OK,
             "/v1/sorafs/appeals/finance/deposits/reconcile",
-            Client::post_sorafs_appeal_finance_deposit_reconcile_json as fn(&Client, &[u8]) -> _,
+            Client::post_sorafs_appeal_finance_deposit_reconcile_json,
         ),
         (
             StatusCode::ACCEPTED,
             "/v1/sorafs/appeals/finance/deposits/submit-settlement",
-            Client::post_sorafs_appeal_finance_deposit_submit_settlement_json
-                as fn(&Client, &[u8]) -> _,
+            Client::post_sorafs_appeal_finance_deposit_submit_settlement_json,
         ),
     ];
     for (status, path, request) in cases {
@@ -114,19 +118,22 @@ fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
 
 #[test]
 fn sorafs_appeal_finance_readback_targets_endpoints() {
+    type FinanceReadbackRequest =
+        fn(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>;
+
     let filter = SorafsAppealFinanceReadbackFilter { limit: Some(7) };
-    let cases = [
+    let cases: [(&str, FinanceReadbackRequest); 3] = [
         (
             "/v1/sorafs/appeals/finance/reports",
-            Client::get_sorafs_appeal_finance_reports as fn(&Client, _) -> _,
+            Client::get_sorafs_appeal_finance_reports,
         ),
         (
             "/v1/sorafs/appeals/finance/weekly-rollups",
-            Client::get_sorafs_appeal_finance_weekly_rollups as fn(&Client, _) -> _,
+            Client::get_sorafs_appeal_finance_weekly_rollups,
         ),
         (
             "/v1/sorafs/appeals/finance/settlement-receipts",
-            Client::get_sorafs_appeal_finance_settlement_receipts as fn(&Client, _) -> _,
+            Client::get_sorafs_appeal_finance_settlement_receipts,
         ),
     ];
     for (path, request) in cases {

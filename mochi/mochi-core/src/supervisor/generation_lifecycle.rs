@@ -99,10 +99,11 @@ impl Supervisor {
                 alias: alias.to_owned(),
             })?;
         self.refresh_peer_states();
-        let previously_running = self.peers[index]
-            .is_running()
-            .then(|| vec![alias.to_owned()])
-            .unwrap_or_default();
+        let previously_running = if self.peers[index].is_running() {
+            vec![alias.to_owned()]
+        } else {
+            Vec::new()
+        };
         let generation_transaction = GenerationTransaction::begin_replacing(
             self.paths.root(),
             Some(self.genesis.generation_id.clone()),

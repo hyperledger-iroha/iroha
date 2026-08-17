@@ -459,7 +459,14 @@ mod device_authority_p256_tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one redeem-result matrix exercises canonical layout, compression expansion, and proof-size limits"
+    )]
     fn redeem_result_rejects_alternate_layout_and_compressed_expansion_archives() {
+        const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+        const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
+
         let receiver_request =
             recipient_payment_request(&signing_key(15), 1_800_000_000_000, 1_800_000_030_000);
         let bundle = recipient_payment_bundle(&receiver_request);
@@ -542,8 +549,6 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
-        const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
-        const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
         let mut compressed_expansion_archive = canonical_request_archive;
         compressed_expansion_archive[NORITO_COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
         compressed_expansion_archive[NORITO_UNCOMPRESSED_LENGTH_OFFSET

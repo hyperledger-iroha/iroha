@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rayon::slice::ParallelSliceMut;
 
+use crate::AssignedValue;
 use crate::halo2_proofs::{
     circuit::{Cell, Region},
     plonk::{Assigned, Column, Fixed},
 };
-use crate::utils::halo2::{raw_assign_fixed, raw_constrain_equal, Halo2AssignedCell};
-use crate::AssignedValue;
-use crate::{ff::Field, ContextCell};
+use crate::utils::halo2::{Halo2AssignedCell, raw_assign_fixed, raw_constrain_equal};
+use crate::{ContextCell, ff::Field};
 
 pub use crate::EXTERNAL_CELL_TYPE_ID;
 
@@ -510,8 +510,8 @@ impl<F: Field + Ord> VirtualRegionManager<F> for SharedCopyConstraintManager<F> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::halo2_proofs::halo2curves::bn256::Fr;
     use crate::FIRST_PHASE_CELL_TYPE_ID;
+    use crate::halo2_proofs::halo2curves::bn256::Fr;
 
     fn equality(value: u64, context: usize, offset: usize) -> (Fr, ContextCell) {
         (

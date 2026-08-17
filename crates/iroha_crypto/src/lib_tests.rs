@@ -1909,7 +1909,7 @@ mod tests {
             decoded,
             Err(norito::json::Error::DecodeResourceLimit)
         ));
-        assert!(usage.total_allocated_bytes() <= exact - 1);
+        assert!(usage.total_allocated_bytes() < exact);
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]

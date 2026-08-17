@@ -144,10 +144,8 @@ fn validate_qualification_service_identity(
     if service_uid != 0 {
         return Err(TairaAuthorityErrorV1::Binding);
     }
-    // Unit tests exercise the service directly without opening production
-    // sockets.  Every production build must provision, recover, and report
-    // readiness for qualification only from a real root service process so
-    // its sandbox can drop to the unrelated host nobody identity.
+    // Tests call this service without sockets; production qualification must run as root
+    // before its sandbox drops to the unrelated host nobody identity.
     #[cfg(not(test))]
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(TairaAuthorityErrorV1::Binding);
@@ -184,6 +182,7 @@ impl AuthorityStateV1 {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(clippy::enum_variant_names, reason = "durable crash phases")]
 pub(super) enum GenericAuthorizationCrashPhaseV1 {
     AfterConsumptionPersistence,
     AfterEnvelopeSignerCommit,
@@ -192,6 +191,7 @@ pub(super) enum GenericAuthorizationCrashPhaseV1 {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(clippy::enum_variant_names, reason = "durable crash phases")]
 pub(super) enum DeploymentFinalizationCrashPhaseV1 {
     AfterInputPersistence,
     AfterDecisionSignerCommit,
@@ -199,7 +199,7 @@ pub(super) enum DeploymentFinalizationCrashPhaseV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PublicSoakBindingProvisioningModeV1 {
+pub(super) enum PublicSoakBindingProvisioningModeV1 {
     Complete,
     #[cfg(test)]
     CrashAfterInputPersistence,
@@ -208,7 +208,7 @@ enum PublicSoakBindingProvisioningModeV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthorityProcessIdentityModeV1 {
+pub(super) enum AuthorityProcessIdentityModeV1 {
     Enforce,
     #[cfg(test)]
     SyntheticTest,
@@ -248,6 +248,8 @@ impl std::fmt::Debug for TairaAuthorityServiceV1 {
 
 impl TairaAuthorityServiceV1 {
     /// Provision a new role directory, encrypted Ed25519 key, and genesis audit record.
+    /// # Errors
+    /// Returns an error when identity, binding, key, or durable-state validation fails.
     pub fn provision(
         state_directory: impl Into<PathBuf>,
         provisioning: TairaAuthorityProvisioningV1,
@@ -261,25 +263,6 @@ impl TairaAuthorityServiceV1 {
             None,
             PublicSoakBindingProvisioningModeV1::Complete,
             AuthorityProcessIdentityModeV1::Enforce,
-        )
-    }
-
-    /// Provision a role with a synthetic service UID for the isolated
-    /// in-process eight-role test harness.
-    #[cfg(test)]
-    pub(super) fn provision_for_test(
-        state_directory: impl Into<PathBuf>,
-        provisioning: TairaAuthorityProvisioningV1,
-        wrapping_key: SoftwareSignerWrappingKeyV1,
-    ) -> Result<Self, TairaAuthorityErrorV1> {
-        Self::provision_inner(
-            state_directory.into(),
-            provisioning,
-            wrapping_key,
-            None,
-            None,
-            PublicSoakBindingProvisioningModeV1::Complete,
-            AuthorityProcessIdentityModeV1::SyntheticTest,
         )
     }
 
@@ -380,7 +363,8 @@ impl TairaAuthorityServiceV1 {
         )
     }
 
-    fn provision_inner(
+    #[expect(clippy::too_many_lines, reason = "durable provisioning sequence")]
+    pub(super) fn provision_inner(
         state_directory: PathBuf,
         provisioning: TairaAuthorityProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
@@ -501,6 +485,8 @@ impl TairaAuthorityServiceV1 {
     }
 
     /// Open and fully recover one role directory and all immutable ledgers.
+    /// # Errors
+    /// Returns an error when durable state or signer provenance fails validation.
     pub fn open(
         state_directory: impl Into<PathBuf>,
         wrapping_key: SoftwareSignerWrappingKeyV1,
@@ -512,20 +498,8 @@ impl TairaAuthorityServiceV1 {
         )
     }
 
-    /// Recover synthetic-UID role state owned by the current test process.
-    #[cfg(test)]
-    pub(super) fn open_for_test(
-        state_directory: impl Into<PathBuf>,
-        wrapping_key: SoftwareSignerWrappingKeyV1,
-    ) -> Result<Self, TairaAuthorityErrorV1> {
-        Self::open_inner(
-            state_directory,
-            wrapping_key,
-            AuthorityProcessIdentityModeV1::SyntheticTest,
-        )
-    }
-
-    fn open_inner(
+    #[expect(clippy::too_many_lines, reason = "durable recovery sequence")]
+    pub(super) fn open_inner(
         state_directory: impl Into<PathBuf>,
         wrapping_key: SoftwareSignerWrappingKeyV1,
         process_identity_mode: AuthorityProcessIdentityModeV1,
@@ -671,6 +645,8 @@ impl TairaAuthorityServiceV1 {
     }
 
     /// Return the authenticated public binding for the active key generation.
+    /// # Errors
+    /// Returns an error when signer state or the derived binding is invalid.
     pub fn public_binding(&self) -> Result<TairaAuthorityPublicBindingV1, TairaAuthorityErrorV1> {
         let binding = TairaAuthorityPublicBindingV1 {
             magic: TAIRA_AUTHORITY_BINDING_MAGIC_V1,
@@ -878,6 +854,7 @@ impl TairaAuthorityServiceV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn ensure_public_soak_observation_binding_anchor(
         &self,
         observation: &TairaAuthorityPublicBindingV1,
@@ -980,10 +957,8 @@ impl TairaAuthorityServiceV1 {
             return Err(TairaAuthorityErrorV1::State);
         }
 
-        // A missing anchor is recoverable only at the two states reachable
-        // after the write-ahead input was fsynced: before its sign commit, or
-        // immediately after that exact commit.  Any other journal state is an
-        // incompatible mutation and must fail closed.
+        // A missing anchor is recoverable only before its sign commit or immediately after
+        // that exact commit. Any other post-fsync journal state must fail closed.
         if self.public_binding()? != input.replay_binding {
             return Err(TairaAuthorityErrorV1::State);
         }
@@ -1286,7 +1261,7 @@ impl TairaAuthorityServiceV1 {
                 Err(TairaAuthorityErrorV1::Conflict)
             };
         }
-        if state.has_incomplete_authorization() {
+        if state.has_incomplete_durable_operation() {
             return Err(TairaAuthorityErrorV1::Conflict);
         }
         if assignment.role == TairaAuthorityRoleV1::NativeEvidence {
@@ -1329,6 +1304,7 @@ impl TairaAuthorityServiceV1 {
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "cohesive authorization transaction")]
     pub(super) fn authorize_json(
         &self,
         request_json: &[u8],
@@ -1369,6 +1345,9 @@ impl TairaAuthorityServiceV1 {
                 result_json: authorization_result_json(existing, self.role, true)?,
             });
         }
+        if state.has_incomplete_deployment_finalization() {
+            return Err(TairaAuthorityErrorV1::Conflict);
+        }
         if state.consumptions.values().any(|consumption| {
             consumption.run_id != request.run_id
                 && !state.authorizations.contains_key(&consumption.operation_id)
@@ -1399,10 +1378,12 @@ impl TairaAuthorityServiceV1 {
         }
         let admitted_at_unix_millis = candidate_consumption.consumed_at_unix_millis;
         let binding = self.public_binding()?;
+        let assigned_artifact_manifest = assignment.artifact_manifest_sha256;
+        let request_matches_assignment = request.subject_sha256 == assignment.subject_sha256
+            && request.manifest_sha256 == assigned_artifact_manifest;
         if admitted_at_unix_millis < assignment.not_before_unix_millis
             || admitted_at_unix_millis >= assignment.expires_at_unix_millis
-            || request.subject_sha256 != assignment.subject_sha256
-            || request.manifest_sha256 != assignment.artifact_manifest_sha256
+            || !request_matches_assignment
             || assignment.key_revision != binding.signer.key_revision
             || assignment.policy_revision != binding.signer.policy_revision
             || assignment.policy_digest != binding.signer.policy_digest
@@ -1461,9 +1442,8 @@ impl TairaAuthorityServiceV1 {
             _ => None,
         };
         if self.role == TairaAuthorityRoleV1::PublicSoakReplayAdmission {
-            // The broker must authenticate the independently signed observation
-            // before the replay identifier is consumed durably.  Crash recovery
-            // checks it at the already-recorded admission time.
+            // Authenticate the independent observation before durable replay consumption;
+            // crash recovery checks it at the recorded admission time.
             self.verify_public_soak_replay_observation(&request, admitted_at_unix_millis)?;
         }
         let consumption = if let Some(existing) = existing_consumption {
@@ -1718,6 +1698,7 @@ impl TairaAuthorityServiceV1 {
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "durable finalization transaction")]
     fn complete_deployment_finalization(
         &self,
         input: &StoredDeploymentFinalizationInputV1,
@@ -1752,10 +1733,7 @@ impl TairaAuthorityServiceV1 {
             sequence if sequence == decision_sequence || sequence == durable_sequence => {
                 if !self
                     .signer
-                    .taira_journal_has_exact_commit(
-                        decision_operation,
-                        &decision_signing_payload,
-                    )
+                    .taira_journal_has_exact_commit(decision_operation, &decision_signing_payload)
                     .map_err(|_| TairaAuthorityErrorV1::State)?
                 {
                     return Err(TairaAuthorityErrorV1::State);
@@ -1842,12 +1820,8 @@ impl TairaAuthorityServiceV1 {
         )?;
 
         let authority_envelope_json = applied.authority_envelope_json.clone();
-        let durable_receipt_json = durable_receipt_json(
-            self.role,
-            &durable_claims,
-            &durable_receipt,
-            &input.binding,
-        )?;
+        let durable_receipt_json =
+            durable_receipt_json(self.role, &durable_claims, &durable_receipt, &input.binding)?;
         let result_json = deployment_finalization_result_json(
             input.operation_id,
             &authority_envelope_json,
@@ -1887,21 +1861,17 @@ impl TairaAuthorityServiceV1 {
                 Err(TairaAuthorityErrorV1::State)
             };
         }
-        if state
-            .deployment_finalizations
-            .keys()
-            .any(|operation_id| {
-                !state
-                    .deployment_finalization_inputs
-                    .contains_key(operation_id)
-            })
-        {
+        if state.deployment_finalizations.keys().any(|operation_id| {
+            !state
+                .deployment_finalization_inputs
+                .contains_key(operation_id)
+        }) {
             return Err(TairaAuthorityErrorV1::State);
         }
         let missing = state
             .deployment_finalization_inputs
             .keys()
-            .filter(|operation_id| !state.deployment_finalizations.contains_key(operation_id))
+            .filter(|operation_id| !state.deployment_finalizations.contains_key(*operation_id))
             .copied()
             .collect::<Vec<_>>();
         if missing.len() > 1 {
@@ -1943,6 +1913,7 @@ impl TairaAuthorityServiceV1 {
         Ok(())
     }
 
+    #[expect(clippy::too_many_lines, reason = "governance signing transaction")]
     fn issue_governance_transaction(
         &self,
         request: &ParsedClientRequestV1,
@@ -2248,6 +2219,7 @@ impl TairaAuthorityServiceV1 {
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "cohesive signed replay admission")]
     fn issue_public_soak_replay_admission(
         &self,
         request: &ParsedClientRequestV1,
@@ -2447,16 +2419,17 @@ impl TairaAuthorityServiceV1 {
             .authorizations
             .get(&request.base.operation_id)
             .ok_or(TairaAuthorityErrorV1::Rejected)?;
-        if stored.consumption.request_sha256 != request.base.request_sha256
+        let request_matches_consumption =
+            stored.consumption.request_sha256 == request.base.request_sha256;
+        if !request_matches_consumption
             || stored.authority_envelope_json != request.authority_envelope_json
             || stored.durable_receipt_json != request.durable_receipt_json
         {
             return Err(TairaAuthorityErrorV1::Conflict);
         }
         if self.role == TairaAuthorityRoleV1::PublicSoakReplayAdmission {
-            // Historical verification revalidates both signatures at the
-            // recorded admission time and deliberately does not mutate replay
-            // state.
+            // Historical verification revalidates both signatures at admission time without
+            // mutating replay state.
             self.verify_public_soak_replay_observation(
                 &request.base,
                 stored.admitted_at_unix_millis,
@@ -2470,6 +2443,7 @@ impl TairaAuthorityServiceV1 {
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "authority administration dispatch")]
     pub(super) fn administer(
         &self,
         command: AuthorityAdminCommandV1,
@@ -2507,7 +2481,7 @@ impl TairaAuthorityServiceV1 {
                         .state
                         .lock()
                         .map_err(|_| TairaAuthorityErrorV1::State)?;
-                    if state.has_incomplete_authorization() {
+                    if state.has_incomplete_durable_operation() {
                         return Err(TairaAuthorityErrorV1::Conflict);
                     }
                     if let Some(existing) = state.rotation_handoffs.get(&operation_id).cloned() {
@@ -2566,7 +2540,7 @@ impl TairaAuthorityServiceV1 {
                     .state
                     .lock()
                     .map_err(|_| TairaAuthorityErrorV1::State)?
-                    .has_incomplete_authorization()
+                    .has_incomplete_durable_operation()
                 {
                     return Err(TairaAuthorityErrorV1::Conflict);
                 }
@@ -2606,10 +2580,7 @@ impl TairaAuthorityServiceV1 {
             "service_uid".into(),
             Value::from(binding.signer.service_uid),
         );
-        object.insert(
-            "client_uid".into(),
-            Value::from(binding.signer.client_uid),
-        );
+        object.insert("client_uid".into(), Value::from(binding.signer.client_uid));
         object.insert(
             "status".into(),
             Value::from(if provenance.revoked {
@@ -2680,6 +2651,7 @@ fn rotation_operation_id(
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "cohesive signed rotation handoff")]
 fn stored_rotation_handoff(
     previous_binding: TairaAuthorityPublicBindingV1,
     successor: SoftwareSignerRotationSuccessorV1,
@@ -2884,7 +2856,7 @@ fn current_executable_sha256() -> Result<[u8; 32], TairaAuthorityErrorV1> {
     let path = std::env::current_exe().map_err(|_| TairaAuthorityErrorV1::State)?;
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| TairaAuthorityErrorV1::State)?;
     let before = file.metadata().map_err(|_| TairaAuthorityErrorV1::State)?;
@@ -2933,7 +2905,7 @@ fn encode_base64_standard(bytes: &[u8]) -> String {
 }
 
 fn decode_base64_standard(value: &str) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
-    if value.is_empty() || value.len() % 4 != 0 || !value.is_ascii() {
+    if value.is_empty() || !value.len().is_multiple_of(4) || !value.is_ascii() {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
     let decode = |byte: u8| -> Option<u8> {
@@ -3107,6 +3079,7 @@ fn verify_stored_authorization(
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "finalization receipt verification")]
 fn verify_stored_deployment_finalization(
     signer: &SoftwareSignerServiceV1,
     input: &StoredDeploymentFinalizationInputV1,
@@ -3301,6 +3274,7 @@ fn verify_generic_signed_sidecars(
     verify().map_err(|_| TairaAuthorityErrorV1::State)
 }
 
+#[expect(clippy::too_many_lines, reason = "governance sidecar verification")]
 fn verify_governance_single_commit_sidecars(
     signer: &SoftwareSignerServiceV1,
     request: &ParsedClientRequestV1,
@@ -3328,11 +3302,11 @@ fn verify_governance_single_commit_sidecars(
         .map_err(|_| TairaAuthorityErrorV1::State)?;
     let signature = Signature::try_from_bytes(&stored.envelope_receipt.signature)
         .map_err(|_| TairaAuthorityErrorV1::State)?;
-    let signed = builder.build_with_signature(signature);
-    signed
+    let verified_transaction = builder.build_with_signature(signature);
+    verified_transaction
         .verify_signature()
         .map_err(|_| TairaAuthorityErrorV1::State)?;
-    let signed_transaction = signed.encode_versioned();
+    let signed_transaction = verified_transaction.encode_versioned();
     let signed_transaction_sha256 = sha256(&signed_transaction);
 
     let receipt_value = parse_canonical_json(&stored.durable_receipt_json)?;
@@ -3440,7 +3414,8 @@ fn verify_governance_single_commit_sidecars(
         || required_str(receipt, "authority_public_key")? != binding.public_key.to_string()
         || required_str(receipt, "signed_transaction_norito_base64")?
             != encode_base64_standard(&signed_transaction)
-        || required_str(receipt, "transaction_hash_hex")? != hex::encode(signed.hash().as_ref())
+        || required_str(receipt, "transaction_hash_hex")?
+            != hex::encode(verified_transaction.hash().as_ref())
         || required_str(receipt, "response_attestation_base64")?
             != encode_base64_standard(&stored.envelope_receipt.response_attestation)
         || required_digest(receipt, "response_attestation_sha256")?
@@ -3485,8 +3460,7 @@ fn verify_governance_single_commit_sidecars(
     {
         return Err(TairaAuthorityErrorV1::State);
     }
-    // The executable digest is not a caller-selected authority, but it must
-    // remain a syntactically valid nonzero commitment in historical receipts.
+    // This non-authoritative executable digest must remain a valid nonzero commitment.
     required_digest(receipt, "broker_binary_sha256")?;
     Ok(())
 }
@@ -3603,12 +3577,14 @@ fn same_consumption_request(left: &ReplayConsumptionV1, right: &ReplayConsumptio
         && left.artifact_manifest_sha256 == right.artifact_manifest_sha256
 }
 
+#[expect(clippy::too_many_arguments, reason = "explicit ledger inventory")]
 fn validate_recovered_state(
     role: TairaAuthorityRoleV1,
     signer: &SoftwareSignerServiceV1,
     assignments: &BTreeMap<[u8; 32], StoredRunAssignmentV1>,
     consumptions: &BTreeMap<[u8; 32], ReplayConsumptionV1>,
     authorizations: &BTreeMap<[u8; 32], StoredAuthorizationV1>,
+    deployment_finalization_inputs: &BTreeMap<[u8; 32], StoredDeploymentFinalizationInputV1>,
     deployment_finalizations: &BTreeMap<[u8; 32], StoredDeploymentFinalizationV1>,
     rotation_handoffs: &BTreeMap<[u8; 32], StoredRotationHandoffV1>,
 ) -> Result<(), TairaAuthorityErrorV1> {
@@ -3670,43 +3646,28 @@ fn validate_recovered_state(
         }
         verify_stored_authorization(signer, role, authorization)?;
     }
-    if role != TairaAuthorityRoleV1::DeployIssuance && !deployment_finalizations.is_empty() {
+    if role != TairaAuthorityRoleV1::DeployIssuance
+        && (!deployment_finalization_inputs.is_empty() || !deployment_finalizations.is_empty())
+    {
         return Err(TairaAuthorityErrorV1::State);
     }
-    for (operation_id, finalization) in deployment_finalizations {
+    for (operation_id, input) in deployment_finalization_inputs {
         let authorization = authorizations
             .get(operation_id)
             .ok_or(TairaAuthorityErrorV1::State)?;
-        if finalization.operation_id != *operation_id
-            || finalization.apply_request_sha256 != authorization.consumption.request_sha256
-            || finalization.finalization_request_sha256 == [0; 32]
-            || finalization.result_sha256 == [0; 32]
-            || !matches!(
-                finalization.outcome.as_str(),
-                "success" | "rolled-back" | "rollback-failed"
-            )
-        {
+        if input.operation_id != *operation_id {
             return Err(TairaAuthorityErrorV1::State);
         }
-        finalization
-            .receipt
-            .verify_offline(
-                &finalization.receipt.provenance.binding,
-                digest_parts_sha256(DEPLOYMENT_FINALIZATION_OPERATION_DOMAIN_V1, &[operation_id]),
-                &finalization.signing_payload,
-                &finalization.receipt.signature,
-            )
-            .map_err(|_| TairaAuthorityErrorV1::Crypto)?;
-        signer
-            .verify_taira_journal_commit(
-                digest_parts_sha256(DEPLOYMENT_FINALIZATION_OPERATION_DOMAIN_V1, &[operation_id]),
-                &finalization.signing_payload,
-                &finalization.receipt,
-            )
-            .map_err(|_| TairaAuthorityErrorV1::State)?;
-        if parse_canonical_json(&finalization.result_json).is_err() {
-            return Err(TairaAuthorityErrorV1::State);
-        }
+        verify_deployment_finalization_input(input, authorization)?;
+    }
+    for (operation_id, finalization) in deployment_finalizations {
+        let input = deployment_finalization_inputs
+            .get(operation_id)
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        let authorization = authorizations
+            .get(operation_id)
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        verify_stored_deployment_finalization(signer, input, authorization, finalization)?;
     }
     if role == TairaAuthorityRoleV1::PrivacyGovernance && !rotation_handoffs.is_empty() {
         return Err(TairaAuthorityErrorV1::State);
@@ -3765,6 +3726,7 @@ fn parse_client_request(
     parse_client_request_with_schema(bytes, role, "iroha.taira.authority-client-request.v1")
 }
 
+#[expect(clippy::too_many_lines, reason = "exhaustive canonical request parser")]
 fn parse_client_request_with_schema(
     bytes: &[u8],
     role: TairaAuthorityRoleV1,
@@ -4161,18 +4123,12 @@ impl ValidatedArtifactsV1 {
             let metadata = file
                 .metadata()
                 .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
-            // The requesting client must not retain the ability to chmod or
-            // rewrite an admitted inode.  Only the operating-system trust
-            // root or this isolated authority service may own artifacts, and
-            // every write bit must already be cleared before validation.
+            // The client must not retain chmod/write authority over an admitted inode.
+            // Only the OS trust root or this isolated service may own immutable artifacts.
             if !metadata.is_file()
                 || metadata.nlink() != 1
                 || metadata.len() != expected.size
-                || !artifact_is_authority_immutable(
-                    metadata.uid(),
-                    metadata.mode(),
-                    service_uid,
-                )
+                || !artifact_is_authority_immutable(metadata.uid(), metadata.mode(), service_uid)
             {
                 return Err(TairaAuthorityErrorV1::Rejected);
             }
@@ -4209,7 +4165,7 @@ impl ValidatedArtifactsV1 {
     }
 }
 
-fn artifact_is_authority_immutable(owner_uid: u32, mode: u32, service_uid: u32) -> bool {
+pub(super) fn artifact_is_authority_immutable(owner_uid: u32, mode: u32, service_uid: u32) -> bool {
     (owner_uid == 0 || owner_uid == service_uid) && mode & 0o222 == 0
 }
 
@@ -4382,6 +4338,7 @@ fn validate_public_soak_observation_subject(
     Ok((completed_at, digest))
 }
 
+#[expect(clippy::too_many_lines, reason = "public-soak evidence validator")]
 fn validate_public_soak_subject_core(value: &Value) -> Result<[u8; 32], TairaAuthorityErrorV1> {
     let subject = exact_object(
         value,
@@ -4917,16 +4874,18 @@ fn deployment_finalization_input_matches_request(
     let Some(result) = &request.deployment_result else {
         return Ok(false);
     };
-    Ok(request.deploy_disposition == Some(DeployDispositionV1::Finalize)
-        && input.operation_id == request.operation_id
-        && input.run_id == request.run_id
-        && input.apply_request_sha256 == request.request_sha256
-        && input.finalization_request_sha256 == request.wire_request_sha256
-        && input.finalization_request_json == request.canonical_request_json
-        && input.subject_sha256 == request.subject_sha256
-        && input.artifact_manifest_sha256 == request.manifest_sha256
-        && input.outcome == result.outcome
-        && input.result_sha256 == result.result_sha256)
+    Ok(
+        request.deploy_disposition == Some(DeployDispositionV1::Finalize)
+            && input.operation_id == request.operation_id
+            && input.run_id == request.run_id
+            && input.apply_request_sha256 == request.request_sha256
+            && input.finalization_request_sha256 == request.wire_request_sha256
+            && input.finalization_request_json == request.canonical_request_json
+            && input.subject_sha256 == request.subject_sha256
+            && input.artifact_manifest_sha256 == request.manifest_sha256
+            && input.outcome == result.outcome
+            && input.result_sha256 == result.result_sha256,
+    )
 }
 
 fn deployment_finalization_decision_claims_json(

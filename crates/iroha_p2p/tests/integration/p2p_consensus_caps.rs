@@ -679,7 +679,7 @@ async fn crypto_caps_match_connects() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
     };
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (net1, _ch1) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
@@ -687,13 +687,13 @@ async fn crypto_caps_match_connects() {
         None,
         Some(caps.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -701,7 +701,7 @@ async fn crypto_caps_match_connects() {
         None,
         Some(caps.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,
@@ -731,7 +731,7 @@ async fn crypto_caps_mismatch_rejected() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
     };
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (net1, _ch1) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
@@ -739,13 +739,13 @@ async fn crypto_caps_mismatch_rejected() {
         None,
         Some(caps_enabled.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -753,7 +753,7 @@ async fn crypto_caps_mismatch_rejected() {
         None,
         Some(caps_disabled.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,
@@ -783,7 +783,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         require_sm_handshake_match: false,
         require_sm_openssl_preview_match: false,
     };
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (net1, _ch1) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
@@ -791,13 +791,13 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         None,
         Some(caps_enabled.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -805,7 +805,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         None,
         Some(caps_disabled.clone()),
         ShutdownSignal::new(),
-    )
+    ))
     .await
     {
         Ok(ok) => ok,

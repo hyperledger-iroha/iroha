@@ -1619,11 +1619,11 @@ mod tests {
         assert!(
             matches!(
                 error,
-                crate::Error::NoritoCodec(norito::core::Error::SequenceLengthExceeded { .. })
-                    | crate::Error::NoritoCodec(norito::core::Error::TotalElementsExceeded { .. })
-                    | crate::Error::NoritoCodec(
-                        norito::core::Error::TotalAllocationExceeded { .. }
-                    )
+                crate::Error::NoritoCodec(
+                    norito::core::Error::SequenceLengthExceeded { .. }
+                        | norito::core::Error::TotalElementsExceeded { .. }
+                        | norito::core::Error::TotalAllocationExceeded { .. }
+                )
             ),
             "expected a decode-budget rejection, got {error:?}"
         );

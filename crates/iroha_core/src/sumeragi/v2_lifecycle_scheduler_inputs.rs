@@ -3,7 +3,10 @@ use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
-    selector::PreparedCertifiedServeExactDequeueV1,
+    selector::{
+        PreparedCertifiedServeExactDequeueV1,
+        RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
+    },
     work_registry::{
         ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
         ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
@@ -25,8 +28,7 @@ use crate::sumeragi::{
         AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
         LifecycleIoCapacityReservation, LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus,
         ProductionV2Services, RecoveredCompletionCapacityProbeV1,
-        RecoveredDecisionApplyCapacityCaptureErrorV1, RecoveredDecisionApplyCapacityCaptureV1,
-        RecoveredDecisionFetchExactOutputCaptureV1, RecoveredLifecycleSignBroadcastOutputCaptureV1,
+        RecoveredLifecycleSignBroadcastOutputCaptureV1,
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
@@ -521,41 +523,6 @@ pub(crate) enum ProductionSchedulerInputsError {
         ordinal: u128,
     },
 }
-/// Result of one complete recovered Decision Apply claim-and-dispatch turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchV1 {
-    /// The same service had no free Consensus command position; nothing was claimed.
-    CapacityUnavailable,
-    /// The exact Apply lease now owns one queued dedicated worker command.
-    Queued {
-        /// Immutable lifecycle ordinal retained by both lease and command key.
-        ordinal: u128,
-    },
-}
-/// Closed failure before or during recovered Decision Apply dispatch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchErrorV1 {
-    /// The logical owner already latched a fail-closed condition.
-    CoordinatorFaulted(super::CoordinatorFault),
-    /// A prior turn still owns the sole active lease.
-    UnsettledLease(super::LeaseId),
-    /// The live runner turn did not name this height's Completion service point.
-    ForeignRunnerObservation,
-    /// The launched executor, worker, or body-store instance is not this owner.
-    ForeignServiceOwner,
-    /// The complete Ready census is not the sole exact recovered Apply carrier.
-    InvalidReadyCensus,
-    /// The closed recovered Apply registry attestation failed.
-    InvalidCarrier,
-    /// The worker could not retain the exact queue position.
-    Capacity(RecoveredDecisionApplyCapacityCaptureErrorV1),
-    /// Planning did not return the sole authenticated recovered Apply lease.
-    UnexpectedPlan,
-    /// The claimed row could not project its exact closed worker task.
-    DispatchProjection,
-    /// The reserved queue key and claimed carrier projection disagreed.
-    ReservedCommandMismatch,
-}
 /// Result of one complete lifecycle-owned recovered Sign claim and dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchV1 {
@@ -616,8 +583,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
     CoordinatorFaulted(super::CoordinatorFault),
     /// A prior turn still owns the sole live lease.
     UnsettledLease(super::LeaseId),
-    /// The borrow-bound runner cursor was not this height's Completion turn.
-    ForeignRunnerObservation,
     /// The service does not own this launched height's exact body-store worker.
     ForeignServiceOwner,
     /// Coordinator records and the reverse Ready index disagree.
@@ -626,43 +591,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
     InvalidCarrier,
     /// Planning did not return the authenticated Broadcast lease.
     UnexpectedPlan,
-}
-/// Result of one recovered Decision Fetch request-dispatch turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchV1 {
-    /// The exact-output corridor cannot own the fanout; nothing was claimed.
-    CapacityUnavailable,
-    /// Request/output ownership is installed and the coordinator lease remains Claimed.
-    Dispatched {
-        /// Immutable lifecycle ordinal shared by lease, carrier, and executor key.
-        ordinal: u128,
-    },
-}
-/// Closed failure before or during recovered Decision Fetch request dispatch.
-#[derive(Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchErrorV1 {
-    /// The logical owner already latched a fail-closed condition.
-    CoordinatorFaulted(super::CoordinatorFault),
-    /// A prior turn still owns the sole active lease.
-    UnsettledLease(super::LeaseId),
-    /// The borrow-bound runner cursor was not this height's Completion turn.
-    ForeignRunnerObservation,
-    /// The launched executor, worker, body store, or output guard is foreign.
-    ForeignServiceOwner,
-    /// The complete Ready census is not the sole recovered Decision Fetch.
-    InvalidReadyCensus,
-    /// The closed carrier or move-only request authority failed exact validation.
-    InvalidCarrier,
-    /// Fixed service signing or exact-output capture failed.
-    Service(String),
-    /// A conflicting or full executor request owner prevented pre-claim reservation.
-    Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
-    /// Planning did not return the exact Fetch lease.
-    UnexpectedPlan,
-    /// The claimed row could not rejoin its exact closed carrier.
-    DispatchProjection,
-    /// The reserved executor key and claimed carrier disagreed.
-    ReservedOwnerMismatch,
 }
 /// Result of one all-row recovered Completion capacity transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -810,14 +738,17 @@ pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
 /// Closed failure before recovered Decision Fetch Phase-A queue publication.
 #[must_use]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchPersistenceErrorV1 {
-    /// The outer current runner cursor was not this height's Ingress turn.
-    ForeignRunnerObservation,
     /// The active coordinator lease/carrier/request owner was not exact.
     InvalidClaimedCarrier,
     /// The selected response or service belonged to another height owner.
     ForeignOwner,
     /// Selector consumption failed and was restored into the queue reservation.
-    CommandPreparation(PreparedLifecycleIngressSelector),
+    CommandPreparation {
+        /// Typed selector/executor failure retained for retry diagnostics.
+        failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
+        /// Unchanged selector restored from the aborted capacity reservation.
+        prepared: PreparedLifecycleIngressSelector,
+    },
     /// The dedicated queue already owns this lifecycle key.
     InFlightSelectedWork(PreparedLifecycleIngressSelector),
     /// The exact task changed after capacity was retained.
@@ -935,13 +866,18 @@ pub(crate) enum ProductionIngressTurnPreparation {
 }
 /// Failure before a complete ingress-bearing scheduler precursor is sealed.
 #[must_use = "typed pre-plan rejection or fail-stop post-plan failure must be handled"]
-#[cfg_attr(not(test), allow(dead_code))]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(crate) enum ProductionIngressSchedulerInputsError {
     /// The owner already latched a fail-closed condition.
-    CoordinatorFaulted(super::CoordinatorFault),
+    CoordinatorFaulted {
+        /// Retained fail-closed coordinator classification.
+        _fault: super::CoordinatorFault,
+    },
     /// Another exact lease still owns coordinator execution.
-    UnsettledLease(super::LeaseId),
+    UnsettledLease {
+        /// Retained conflicting lease identity.
+        _lease: super::LeaseId,
+    },
     /// The executor mode observation belongs to another height context.
     ForeignModeObservation,
     /// The executor mode observation no longer equals the live executor state.
@@ -957,21 +893,30 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
     /// Direct Ready work must drain before the sole ingress wake is published.
     CompetingReadyWork,
     /// The selector could not be consumed into its exact persistence command.
-    CommandPreparation(PreparedLifecycleIngressSelector),
+    CommandPreparation {
+        /// Complete selector retained unchanged for rollback.
+        _prepared: PreparedLifecycleIngressSelector,
+    },
     /// The exact selected work id is already queued, active, or completion-pending.
-    InFlightSelectedWork(PreparedLifecycleIngressSelector),
+    InFlightSelectedWork {
+        /// Complete selector retained behind the duplicate fence.
+        _prepared: PreparedLifecycleIngressSelector,
+    },
     /// The consumed command no longer matched its reserved queue identity.
     InvalidReservedCommand,
     /// The sole prospective target did not produce its exact lease.
     UnexpectedPlan,
     /// Blocking the submitted lease violated coordinator invariants.
-    SettlementFault(super::CoordinatorFault),
+    SettlementFault {
+        /// Retained fail-closed settlement classification.
+        _fault: super::CoordinatorFault,
+    },
     /// The live service could not issue a capacity reservation or generation wait.
     Service {
         /// Closed reason the service rejected the capture.
-        failure: LifecycleIoCapacityCaptureFailure,
+        _failure: LifecycleIoCapacityCaptureFailure,
         /// Complete selector with its one-shot target restored.
-        prepared: PreparedLifecycleIngressSelector,
+        _prepared: PreparedLifecycleIngressSelector,
     },
 }
 /// Authenticate the complete subset of Ready work already owned directly by
@@ -1493,169 +1438,6 @@ impl ProductionLifecycleOwnerV1 {
             }
         }
     }
-    /// Reserve, claim, and queue the sole Ready recovered Decision Apply.
-    ///
-    /// This fixed transaction admits no selector or raw command fields. The
-    /// service locks the exact Consensus FIFO position first; only then does
-    /// the coordinator claim the registry-attested Apply and project its
-    /// move-only task. Queue publication consumes that borrow-bound projection
-    /// and arms the carrier's in-flight key in one infallible tail.
-    #[cfg(not(test))]
-    pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &V2EffectExecutor<SerializedV2Runtime>,
-        runner: LifecycleCurrentRunnerTurn<'_>,
-    ) -> Result<
-        ProductionRecoveredDecisionApplyDispatchV1,
-        ProductionRecoveredDecisionApplyDispatchErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignRunnerObservation);
-        }
-        self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
-    }
-    /// Exercise the exact recovered Apply dispatch with a fixture-owned runner snapshot.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &V2EffectExecutor<SerializedV2Runtime>,
-        runner: LifecycleRunnerRankSnapshot,
-    ) -> Result<
-        ProductionRecoveredDecisionApplyDispatchV1,
-        ProductionRecoveredDecisionApplyDispatchErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignRunnerObservation);
-        }
-        self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
-    }
-    pub(super) fn dispatch_recovered_decision_apply_with_runner_debt(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &V2EffectExecutor<SerializedV2Runtime>,
-        runner_debt: u64,
-    ) -> Result<
-        ProductionRecoveredDecisionApplyDispatchV1,
-        ProductionRecoveredDecisionApplyDispatchErrorV1,
-    > {
-        if let Some(fault) = self.coordinator.fault {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::CoordinatorFaulted(fault));
-        }
-        if let Some(lease) = self.coordinator.active_lease.as_ref() {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::UnsettledLease(lease.id));
-        }
-        let Some(body_store_identity) = self.body_store_identity.as_ref() else {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
-        };
-        if self.body_store.is_some()
-            || !services.matches_lifecycle_body_store(body_store_identity)
-            || !services.matches_lifecycle_executor_output_guard(executor)
-        {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
-        }
-        let mut ready = self.coordinator.ready_index.iter().copied();
-        let Some(ordinal) = ready.next() else {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
-        };
-        if ready.next().is_some() {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
-        }
-        if self
-            .coordinator
-            .records
-            .values()
-            .filter(|record| matches!(record.state, LifecycleState::Ready))
-            .map(|record| record.ordinal)
-            .collect::<BTreeSet<_>>()
-            != BTreeSet::from([ordinal])
-        {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
-        }
-        let attestation = self
-            .registry
-            .attest_ready_recovered_decision_apply(&self.coordinator, ordinal)
-            .map_err(|_| ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier)?;
-        if attestation.demand() != ReadyRecoveredDecisionApplyDemand::BoundedIo {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier);
-        }
-        let dispatch_key = attestation.dispatch_key();
-        let mode = executor.lifecycle_mode_rank_snapshot();
-        let context = self.verified.context();
-        if mode.height() != context.height
-            || mode.context_id() != context.id()
-            || !dispatch_key.matches_height_context(context)
-        {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
-        }
-        let capacity = services
-            .capture_recovered_decision_apply_capacity(dispatch_key)
-            .map_err(ProductionRecoveredDecisionApplyDispatchErrorV1::Capacity)?;
-        let RecoveredDecisionApplyCapacityCaptureV1::Reserved(reservation) = capacity else {
-            return Ok(ProductionRecoveredDecisionApplyDispatchV1::CapacityUnavailable);
-        };
-        let factory = AuthenticatedSchedulerInputsFactory::new();
-        let record = self
-            .coordinator
-            .records
-            .get(&ordinal)
-            .ok_or(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus)?;
-        let live_debts = [
-            mode.debt(),
-            reservation.authenticated_predecessor_debt(&factory),
-            0,
-            0,
-            0,
-            runner_debt,
-        ];
-        let row = authenticated_ready_row(
-            &factory,
-            record,
-            None,
-            Some(attestation),
-            None,
-            None,
-            live_debts,
-        )
-        .ok_or(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier)?;
-        let inputs = authenticated_scheduler_inputs(
-            factory,
-            BTreeMap::new(),
-            BTreeMap::from([(ordinal, row)]),
-        );
-        let lease = match self.coordinator.plan_turn(inputs) {
-            super::TurnPlan::Execute(lease)
-                if lease.ordinal() == ordinal
-                    && lease.work_class() == LifecycleWorkClass::Apply =>
-            {
-                lease
-            }
-            super::TurnPlan::Execute(_)
-            | super::TurnPlan::Waiting(_)
-            | super::TurnPlan::Idle
-            | super::TurnPlan::FailClosed(_) => {
-                return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::UnexpectedPlan);
-            }
-        };
-        let prepared = self
-            .registry
-            .prepare_recovered_decision_apply_dispatch(&self.coordinator, &lease)
-            .map_err(|_| ProductionRecoveredDecisionApplyDispatchErrorV1::DispatchProjection)?;
-        if !reservation.preflight(&prepared) {
-            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ReservedCommandMismatch);
-        }
-        reservation.commit(prepared);
-        Ok(ProductionRecoveredDecisionApplyDispatchV1::Queued { ordinal })
-    }
     /// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
     ///
     /// The current Completion cursor is borrow-bound. Worker capacity is
@@ -1860,48 +1642,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         reservation.commit(prepared);
         Ok(ProductionRecoveredLifecycleSignDispatchV1::Queued { ordinal })
-    }
-    /// Refanout one durable recovered signed Broadcast at the live Completion cursor.
-    #[cfg(not(test))]
-    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
-        &mut self,
-        services: &ProductionV2Services,
-        runner: LifecycleCurrentRunnerTurn<'_>,
-    ) -> Result<
-        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
-        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(
-                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignRunnerObservation,
-            );
-        }
-        self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
-    }
-    /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
-        &mut self,
-        services: &ProductionV2Services,
-        runner: LifecycleRunnerRankSnapshot,
-    ) -> Result<
-        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
-        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(
-                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignRunnerObservation,
-            );
-        }
-        self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
     }
     pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
         &mut self,
@@ -2224,274 +1964,6 @@ impl ProductionLifecycleOwnerV1 {
         // local actor admission is not a durable terminal receipt.
         Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
-    /// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.
-    ///
-    /// Exact-output ownership and the executor's vacant dedicated request slot
-    /// are both retained before planning. Success deliberately leaves the
-    /// coordinator lease Claimed: response persistence is a later Ingress turn,
-    /// and request retirement/Fetch-to-Store settlement remain restart-closed
-    /// work outside this bounded tranche.
-    #[cfg(not(test))]
-    pub(in crate::sumeragi) fn dispatch_recovered_decision_fetch(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-        runner: LifecycleCurrentRunnerTurn<'_>,
-    ) -> Result<
-        ProductionRecoveredDecisionFetchDispatchV1,
-        ProductionRecoveredDecisionFetchDispatchErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ForeignRunnerObservation);
-        }
-        self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
-    }
-    /// Exercise recovered Decision Fetch dispatch with a fixture-owned runner snapshot.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn dispatch_recovered_decision_fetch(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-        runner: LifecycleRunnerRankSnapshot,
-    ) -> Result<
-        ProductionRecoveredDecisionFetchDispatchV1,
-        ProductionRecoveredDecisionFetchDispatchErrorV1,
-    > {
-        let context = self.verified.context();
-        if runner.target() != LifecycleRunnerRankTarget::Completion
-            || runner.height() != context.height
-            || runner.context_id() != context.id()
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ForeignRunnerObservation);
-        }
-        self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
-    }
-    pub(super) fn dispatch_recovered_decision_fetch_with_runner_debt(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-        runner_debt: u64,
-    ) -> Result<
-        ProductionRecoveredDecisionFetchDispatchV1,
-        ProductionRecoveredDecisionFetchDispatchErrorV1,
-    > {
-        if let Some(fault) = self.coordinator.fault {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::CoordinatorFaulted(fault));
-        }
-        if let Some(lease) = self.coordinator.active_lease.as_ref() {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::UnsettledLease(lease.id));
-        }
-        let Some(body_store_identity) = self.body_store_identity.as_ref() else {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ForeignServiceOwner);
-        };
-        if self.body_store.is_some()
-            || !services.matches_lifecycle_body_store(body_store_identity)
-            || !services.matches_lifecycle_executor_output_guard(executor)
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ForeignServiceOwner);
-        }
-        let mut ready = self.coordinator.ready_index.iter().copied();
-        let Some(ordinal) = ready.next() else {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidReadyCensus);
-        };
-        if ready.next().is_some()
-            || self
-                .coordinator
-                .records
-                .values()
-                .filter(|record| matches!(record.state, LifecycleState::Ready))
-                .map(|record| record.ordinal)
-                .collect::<BTreeSet<_>>()
-                != BTreeSet::from([ordinal])
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidReadyCensus);
-        }
-        let mut attestation = self
-            .registry
-            .registry_mut()
-            .attest_ready_recovered_decision_fetch(&self.coordinator, ordinal)
-            .map_err(|_| ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidCarrier)?;
-        if attestation.demand()
-            != super::work_registry::ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidCarrier);
-        }
-        let dispatch_key = attestation.dispatch_key();
-        let mode = executor.lifecycle_mode_rank_snapshot();
-        let context = self.verified.context();
-        if mode.height() != context.height
-            || mode.context_id() != context.id()
-            || !dispatch_key.matches_height_context(context)
-        {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ForeignServiceOwner);
-        }
-        let authority = attestation.take_request_authority();
-        let owner = services
-            .authenticate_recovered_decision_fetch_request(authority)
-            .map_err(ProductionRecoveredDecisionFetchDispatchErrorV1::Service)?;
-        if owner.dispatch_key() != dispatch_key {
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidCarrier);
-        }
-        let output = services
-            .capture_recovered_decision_fetch_exact_output(&owner)
-            .map_err(ProductionRecoveredDecisionFetchDispatchErrorV1::Service)?;
-        let RecoveredDecisionFetchExactOutputCaptureV1::Reserved(output) = output else {
-            return Ok(ProductionRecoveredDecisionFetchDispatchV1::CapacityUnavailable);
-        };
-        let registration =
-            match executor.prepare_recovered_decision_fetch_request_registration(owner) {
-                Ok(registration) => registration,
-                Err(error) => {
-                    output.abort_before_claim();
-                    return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::Executor(
-                        error,
-                    ));
-                }
-            };
-        if registration.dispatch_key() != dispatch_key {
-            drop(registration);
-            output.abort_before_claim();
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ReservedOwnerMismatch);
-        }
-        let factory = AuthenticatedSchedulerInputsFactory::new();
-        let Some(record) = self.coordinator.records.get(&ordinal) else {
-            drop(registration);
-            output.abort_before_claim();
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidReadyCensus);
-        };
-        let live_debts = [mode.debt(), output.predecessor_debt(), 0, 0, 0, runner_debt];
-        let Some(row) = authenticated_ready_row(
-            &factory,
-            record,
-            None,
-            None,
-            None,
-            Some(attestation),
-            live_debts,
-        ) else {
-            drop(registration);
-            output.abort_before_claim();
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::InvalidCarrier);
-        };
-        let inputs = authenticated_scheduler_inputs(
-            factory,
-            BTreeMap::new(),
-            BTreeMap::from([(ordinal, row)]),
-        );
-        let lease = match self.coordinator.plan_turn(inputs) {
-            super::TurnPlan::Execute(lease)
-                if lease.ordinal() == ordinal
-                    && lease.work_class() == LifecycleWorkClass::Fetch =>
-            {
-                lease
-            }
-            super::TurnPlan::Execute(lease) => {
-                assert!(
-                    self.coordinator.rollback_unpublished_turn(&lease),
-                    "unexpected recovered Fetch plan must restore its unpublished claim"
-                );
-                drop(registration);
-                output.abort_before_claim();
-                return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::UnexpectedPlan);
-            }
-            super::TurnPlan::Waiting(_)
-            | super::TurnPlan::Idle
-            | super::TurnPlan::FailClosed(_) => {
-                drop(registration);
-                output.abort_before_claim();
-                return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::UnexpectedPlan);
-            }
-        };
-        let prepared = match self
-            .registry
-            .registry_mut()
-            .prepare_recovered_decision_fetch_dispatch(&self.coordinator, &lease, dispatch_key)
-        {
-            Ok(prepared) => prepared,
-            Err(_) => {
-                assert!(
-                    self.coordinator.rollback_unpublished_turn(&lease),
-                    "failed recovered Fetch projection must restore its unpublished claim"
-                );
-                drop(registration);
-                output.abort_before_claim();
-                return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::DispatchProjection);
-            }
-        };
-        if prepared.dispatch_key() != registration.dispatch_key() {
-            drop(prepared);
-            assert!(
-                self.coordinator.rollback_unpublished_turn(&lease),
-                "mismatched recovered Fetch owner must restore its unpublished claim"
-            );
-            drop(registration);
-            output.abort_before_claim();
-            return Err(ProductionRecoveredDecisionFetchDispatchErrorV1::ReservedOwnerMismatch);
-        }
-        let installed = registration.commit(prepared);
-        assert_eq!(installed, dispatch_key);
-        output.commit();
-        Ok(ProductionRecoveredDecisionFetchDispatchV1::Dispatched { ordinal })
-    }
-    /// Persist one selected recovered Decision Fetch response while retaining
-    /// its fair-ingress occurrence, request owner, carrier, and claimed lease.
-    #[cfg(not(test))]
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn persist_recovered_decision_fetch_response(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-        selector: PreparedLifecycleIngressSelector,
-        runner: LifecycleCurrentRunnerTurn<'_>,
-    ) -> Result<
-        ProductionRecoveredDecisionFetchPersistenceV1,
-        ProductionRecoveredDecisionFetchPersistenceErrorV1,
-    > {
-        let context = selector.context();
-        if runner.target() != LifecycleRunnerRankTarget::Ingress
-            || runner.height() != context.height()
-            || runner.context_id().0.as_ref() != context.id().as_bytes()
-            || context != self.coordinator.active_context
-        {
-            return Err(
-                ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation,
-            );
-        }
-        self.persist_recovered_decision_fetch_response_after_runner(services, executor, selector)
-    }
-    /// Exercise Phase A with a fixture-owned current Ingress snapshot.
-    #[cfg(test)]
-    #[allow(clippy::result_large_err)]
-    #[allow(
-        private_interfaces,
-        reason = "the crate-visible fixture intentionally returns Sumeragi-sealed persistence errors"
-    )]
-    pub(crate) fn persist_recovered_decision_fetch_response(
-        &mut self,
-        services: &ProductionV2Services,
-        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-        selector: PreparedLifecycleIngressSelector,
-        runner: LifecycleRunnerRankSnapshot,
-    ) -> Result<
-        ProductionRecoveredDecisionFetchPersistenceV1,
-        ProductionRecoveredDecisionFetchPersistenceErrorV1,
-    > {
-        let context = selector.context();
-        if runner.target() != LifecycleRunnerRankTarget::Ingress
-            || runner.height() != context.height()
-            || runner.context_id().0.as_ref() != context.id().as_bytes()
-            || context != self.coordinator.active_context
-        {
-            return Err(
-                ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation,
-            );
-        }
-        self.persist_recovered_decision_fetch_response_after_runner(services, executor, selector)
-    }
     #[allow(clippy::result_large_err)]
     pub(super) fn persist_recovered_decision_fetch_response_after_runner(
         &mut self,
@@ -2561,11 +2033,13 @@ impl ProductionLifecycleOwnerV1 {
         let task = match executor.prepare_recovered_decision_fetch_body_persistence(prepared) {
             Ok(task) => task,
             Err(error) => {
-                let prepared = reservation.abort_into_prepared(error.into_prepared());
+                let (failure, prepared) = error.into_parts();
+                let prepared = reservation.abort_into_prepared(prepared);
                 return Err(
-                    ProductionRecoveredDecisionFetchPersistenceErrorV1::CommandPreparation(
+                    ProductionRecoveredDecisionFetchPersistenceErrorV1::CommandPreparation {
+                        failure,
                         prepared,
-                    ),
+                    },
                 );
             }
         };
@@ -2660,14 +2134,12 @@ impl ProductionLifecycleOwnerV1 {
         runner_debt: u64,
     ) -> Result<ProductionIngressTurnPreparation, ProductionIngressSchedulerInputsError> {
         if let Some(fault) = self.coordinator.fault {
-            return Err(ProductionIngressSchedulerInputsError::CoordinatorFaulted(
-                fault,
-            ));
+            return Err(ProductionIngressSchedulerInputsError::CoordinatorFaulted {
+                _fault: fault,
+            });
         }
         if let Some(lease) = self.coordinator.active_lease.as_ref() {
-            return Err(ProductionIngressSchedulerInputsError::UnsettledLease(
-                lease.id,
-            ));
+            return Err(ProductionIngressSchedulerInputsError::UnsettledLease { _lease: lease.id });
         }
         let context = selector.context();
         if context != self.coordinator.active_context
@@ -2706,7 +2178,10 @@ impl ProductionLifecycleOwnerV1 {
             .map_err(|error| {
                 let failure = error.failure();
                 let prepared = error.into_prepared();
-                ProductionIngressSchedulerInputsError::Service { failure, prepared }
+                ProductionIngressSchedulerInputsError::Service {
+                    _failure: failure,
+                    _prepared: prepared,
+                }
             })?;
         let factory = AuthenticatedSchedulerInputsFactory::new();
         let (reservation, prepared) = match capacity.into_authenticated(&factory) {
@@ -2727,9 +2202,11 @@ impl ProductionLifecycleOwnerV1 {
         };
         if !reservation.preflight_selected_target_work_absent() {
             let prepared = reservation.abort_into_prepared(prepared);
-            return Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork(
-                prepared,
-            ));
+            return Err(
+                ProductionIngressSchedulerInputsError::InFlightSelectedWork {
+                    _prepared: prepared,
+                },
+            );
         }
         let positions = prepared.selected_positions().components();
         let live_debts = [
@@ -2758,9 +2235,9 @@ impl ProductionLifecycleOwnerV1 {
             Ok(task) => task,
             Err(error) => {
                 let prepared = reservation.abort_into_prepared(error.into_prepared());
-                return Err(ProductionIngressSchedulerInputsError::CommandPreparation(
-                    prepared,
-                ));
+                return Err(ProductionIngressSchedulerInputsError::CommandPreparation {
+                    _prepared: prepared,
+                });
             }
         };
         if !reservation.preflight_certified_fetch_body_persistence(&task) {
@@ -2789,9 +2266,7 @@ impl ProductionLifecycleOwnerV1 {
         self.coordinator
             .settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait));
         if let Some(fault) = self.coordinator.fault {
-            return Err(ProductionIngressSchedulerInputsError::SettlementFault(
-                fault,
-            ));
+            return Err(ProductionIngressSchedulerInputsError::SettlementFault { _fault: fault });
         }
         if self.coordinator.active_lease.is_some()
             || self
@@ -2801,9 +2276,9 @@ impl ProductionLifecycleOwnerV1 {
                 .is_none_or(|record| record.state != LifecycleState::Waiting(post_submit_wait))
         {
             self.coordinator.fault = Some(super::CoordinatorFault::InvalidSchedulerInputs);
-            return Err(ProductionIngressSchedulerInputsError::SettlementFault(
-                super::CoordinatorFault::InvalidSchedulerInputs,
-            ));
+            return Err(ProductionIngressSchedulerInputsError::SettlementFault {
+                _fault: super::CoordinatorFault::InvalidSchedulerInputs,
+            });
         }
         reservation.commit_certified_fetch_body_persistence(task);
         Ok(ProductionIngressTurnPreparation::Queued(

@@ -61,7 +61,7 @@ impl SoftwareSignerKeyEnvelopeAadV1 {
                 != self.algorithm.algorithm()
             || !self.role.allows_algorithm(self.algorithm)
             || public_key_digest(&self.public_key)
-                .map_err(|_| SoftwareSignerEnvelopeErrorV1::Invalid)?
+                .map_err(|()| SoftwareSignerEnvelopeErrorV1::Invalid)?
                 != self.public_key_digest
             || !valid_software_signer_handle(self.role, &self.handle)
         {
@@ -123,7 +123,7 @@ impl SoftwareSignerKeyEnvelopeV1 {
             magic: SIGNER_KEY_MAGIC_V1,
             version: SIGNER_PROTOCOL_VERSION_V1,
             algorithm: SoftwareSignerKeyAlgorithmV1::try_from(algorithm)
-                .map_err(|_| SoftwareSignerEnvelopeErrorV1::UnsupportedAlgorithm)?,
+                .map_err(|()| SoftwareSignerEnvelopeErrorV1::UnsupportedAlgorithm)?,
             private_payload,
         };
         let mut encoded_plaintext = norito::encode_canonical(&plaintext)
@@ -219,7 +219,7 @@ impl SoftwareSignerKeyEnvelopeV1 {
                 self.ciphertext.clone(),
             ),
         )
-        .map_err(|_| SoftwareSignerEnvelopeErrorV1::Invalid)
+        .map_err(|()| SoftwareSignerEnvelopeErrorV1::Invalid)
     }
     pub(super) const fn aad(&self) -> &SoftwareSignerKeyEnvelopeAadV1 {
         &self.aad

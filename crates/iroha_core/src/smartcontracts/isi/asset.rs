@@ -7140,6 +7140,34 @@ pub mod query {
             )
             .build(owner)
         }
+        fn build_restricted_rose_definition(
+            asset_definition_id: &AssetDefinitionId,
+            domain_id: &DomainId,
+        ) -> AssetDefinition {
+            AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
+            )
+            .build(&ALICE_ID)
+        }
+        fn wonderland_domain_id() -> DomainId {
+            DomainId::try_new("wonderland", "universal").expect("domain id")
+        }
+        fn wonderland_asset_definition_id(name: &str) -> AssetDefinitionId {
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                name.parse().unwrap(),
+            )
+        }
+        fn asset_route_test_state(world: World) -> State {
+            State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            )
+        }
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
         }
@@ -7160,27 +7188,14 @@ pub mod query {
         include!("asset/global_scope_rejection_tests.rs");
         #[test]
         fn transfer_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("xor");
+            let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let world = World::with([domain], [alice_account, bob_account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7206,23 +7221,12 @@ pub mod query {
         }
         #[test]
         fn transfer_global_asset_rejects_non_authoritative_dataspace_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("xor");
+            let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
             let world = World::with_assets(
@@ -7232,9 +7236,7 @@ pub mod query {
                 [source_asset],
                 [],
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7265,29 +7267,16 @@ pub mod query {
         }
         #[test]
         fn transfer_global_asset_rejects_before_implicit_receiver_creation_on_private_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("xor");
+            let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
             let world =
                 World::with_assets([domain], [alice_account], [asset_def], [source_asset], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7322,28 +7311,15 @@ pub mod query {
         }
         #[test]
         fn burn_global_asset_rejects_non_authoritative_dataspace_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("xor");
+            let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7370,22 +7346,11 @@ pub mod query {
         #[test]
         fn mint_global_asset_allows_universal_amx_route_for_non_universal_home() {
             let home_dataspace = DataSpaceId::new(7);
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("xor");
+            let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let mut world = World::with([domain], [account], [asset_def]);
             let alias: iroha_data_model::asset::AssetDefinitionAlias =
                 "xor#paynet".parse().expect("asset alias");
@@ -7401,9 +7366,7 @@ pub mod query {
                     bound_at_ms: 0,
                 },
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             block.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -7435,23 +7398,12 @@ pub mod query {
         }
         #[test]
         fn transfer_restricted_asset_rejects_cross_dataspace_scope() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset = Asset::new(
                 AssetId::with_scope(
                     asset_def_id.clone(),
@@ -7467,9 +7419,7 @@ pub mod query {
                 [source_asset],
                 [],
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7490,8 +7440,7 @@ pub mod query {
         }
         #[test]
         fn transfer_restricted_asset_rejects_destination_binding_outside_non_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let source_dataspace = DataSpaceId::new(7);
             let destination_dataspace = DataSpaceId::new(8);
             let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
@@ -7502,18 +7451,8 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -7530,9 +7469,7 @@ pub mod query {
             world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
             let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_store);
+            let mut state = asset_route_test_state(world);
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -7571,8 +7508,7 @@ pub mod query {
         }
         #[test]
         fn transfer_batch_rejects_destination_binding_outside_non_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let source_dataspace = DataSpaceId::new(7);
             let destination_dataspace = DataSpaceId::new(8);
             let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
@@ -7583,18 +7519,8 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -7611,9 +7537,7 @@ pub mod query {
             world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
             let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_store);
+            let mut state = asset_route_test_state(world);
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -7659,25 +7583,14 @@ pub mod query {
         include!("asset/transfer_batch_tests.rs");
         #[test]
         fn transfer_policy_rejects_explicit_destination_scope_outside_non_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let source_dataspace = DataSpaceId::new(7);
             let destination_dataspace = DataSpaceId::new(8);
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -7691,9 +7604,7 @@ pub mod query {
                 [source_asset],
                 [],
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7729,8 +7640,7 @@ pub mod query {
         }
         #[test]
         fn transfer_restricted_asset_uses_destination_dataspace_binding_and_policy() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let source_dataspace = DataSpaceId::new(7);
             let destination_dataspace = DataSpaceId::new(11);
             let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
@@ -7746,18 +7656,8 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let mut asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let mut asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let issuer_policy = AssetIssuerUsagePolicyV1 {
                 require_subject_binding: true,
                 subject_bindings: BTreeMap::from([
@@ -7865,9 +7765,7 @@ pub mod query {
                 .space_directory_manifests
                 .insert(uaid_alice, alice_set);
             world.space_directory_manifests.insert(uaid_bob, bob_set);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -7917,23 +7815,12 @@ pub mod query {
         #[test]
         fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
             let home_dataspace = DataSpaceId::new(7);
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    domain_id.clone(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -7961,9 +7848,7 @@ pub mod query {
                     bound_at_ms: 0,
                 },
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let catalog = DataSpaceCatalog::new(vec![
@@ -8025,8 +7910,7 @@ pub mod query {
         }
         #[test]
         fn transfer_restricted_asset_preserves_explicit_universal_source_scope() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let destination_dataspace = DataSpaceId::new(11);
             let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
                 iroha_crypto::Hash::new(b"uaid::bob-explicit-universal-scope"),
@@ -8036,18 +7920,8 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -8065,9 +7939,7 @@ pub mod query {
             let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
             world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
+            let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
@@ -8112,8 +7984,7 @@ pub mod query {
         }
         #[test]
         fn transfer_restricted_asset_rejects_ambiguous_destination_dataspace_binding() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain_id = wonderland_domain_id();
             let source_dataspace = DataSpaceId::new(7);
             let first_destination_dataspace = DataSpaceId::new(11);
             let second_destination_dataspace = DataSpaceId::new(12);
@@ -8130,18 +8001,8 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_def = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "rose".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .build(&ALICE_ID);
+            let asset_def_id = wonderland_asset_definition_id("rose");
+            let asset_def = build_restricted_rose_definition(&asset_def_id, &domain_id);
             let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -8163,9 +8024,7 @@ pub mod query {
             let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
             bob_bindings.bind_account(first_destination_dataspace, BOB_ID.clone());
             bob_bindings.bind_account(second_destination_dataspace, BOB_ID.clone());
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_store);
+            let mut state = asset_route_test_state(world);
             state
                 .world
                 .uaid_dataspaces

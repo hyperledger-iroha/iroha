@@ -552,8 +552,9 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "fn",
         "run_lifecycle_active_height",
         (
-            "try_begin_certified_serve_producer_episode()",
             ".service_kura_replica_advert_refresh_turn(Instant::now())",
+            "claim_producer_turn_for_local_proposal(&mut active_runner)",
+            "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
         ),
     ),
     (
@@ -561,8 +562,9 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "fn",
         "run_pending_active_height",
         (
-            "try_begin_certified_serve_producer_episode()",
+            "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
             ".service_kura_replica_advert_refresh_turn(Instant::now())",
+            "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)",
         ),
     ),
     (

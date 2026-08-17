@@ -981,6 +981,12 @@ impl<T> MerkleTree<T> {
     /// retained leaves and parent nodes in place and uses constant additional
     /// memory. The retained hash scheme determines whether logical leaves are
     /// application-domain separated or already SHA-256 leaf nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidLayout`] when the retained node layout is malformed, or
+    /// [`MerkleError::InconsistentCachedNodes`] when a leaf or parent differs from its canonical
+    /// hash, including when the supplied leaf count differs.
     pub fn validate_leaves<I>(&self, leaves: I) -> Result<(), MerkleError>
     where
         I: IntoIterator<Item = HashOf<T>>,

@@ -7814,9 +7814,8 @@ pub struct Settlement {
     pub router: Router,
 }
 /// User-level optional Kagemusha proof-release cache configuration.
-#[allow(clippy::struct_field_names)]
 #[derive(Debug, ReadConfig, Clone)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the kagemusha_ prefix is part of the public settlement configuration schema"
 )]
@@ -8438,9 +8437,9 @@ impl Streaming {
                 );
                 None
             }
-            (Some(_), true, None) | (None, true, None) => None,
+            (Some(_) | None, true, None) => None,
             (None, false, None) => Some(identity.clone()),
-            (Some(_), false, Some(_)) | (None, false, Some(_)) => {
+            (Some(_) | None, false, Some(_)) => {
                 unreachable!("an unconfigured private-key source cannot resolve")
             }
         }
@@ -12177,10 +12176,8 @@ pub struct Snapshot {
     /// Chunk size (bytes) used to derive Merkle proofs for snapshots.
     #[config(default = "defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES")]
     pub merkle_chunk_size_bytes: NonZeroUsize,
-    /// Maximum snapshot payload bytes buffered during startup.
-    ///
-    /// Snapshot authentication precedes JSON state construction, but restoration uses
-    /// additional transient memory beyond this on-disk byte bound.
+    /// Maximum authenticated snapshot bytes buffered during startup; restoration may
+    /// use additional transient memory beyond this on-disk bound.
     #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
     /// Typed decode and transient-allocation budgets for snapshot restoration.
@@ -12196,6 +12193,10 @@ pub struct Snapshot {
 }
 /// Strict typed-decoder and transient-allocation budgets for snapshot restoration.
 #[derive(Debug, Clone, Copy, ReadConfig)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public config keys share max_ prefix"
+)]
 pub struct SnapshotResourcePolicy {
     /// Maximum nesting depth admitted by the typed decoder.
     #[config(default = "defaults::snapshot::MAX_DECODE_DEPTH")]
@@ -12227,10 +12228,8 @@ impl Default for SnapshotResourcePolicy {
 impl SnapshotResourcePolicy {
     /// Validate resource-budget relationships against the enclosing payload bound.
     ///
-    /// The decoder cannot honor an individual-value budget larger than either
-    /// the authenticated payload or its total transient-allocation budget.
-    /// Keeping these relationships fail-closed also prevents a configuration
-    /// typo from silently weakening the smaller limit.
+    /// Relationships stay fail-closed so values cannot exceed the authenticated
+    /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
         if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
             return Err(format!(
@@ -31186,7 +31185,7 @@ mod duration_clamp_tests {
                 ));
                 match fs::create_dir(&path) {
                     Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => panic!("create test directory {}: {error}", path.display()),
                 }
             }
@@ -31536,7 +31535,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524288),
+                    Value::Integer(524_288),
                 ),
             ])),
         );

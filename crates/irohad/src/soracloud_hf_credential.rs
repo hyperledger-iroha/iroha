@@ -4,8 +4,8 @@
 //! policy digest. Bearer credentials and vendor connection material remain
 //! inside the deployment-owned provider, which executes the authenticated
 //! request without returning credential material to `irohad`.
-use std::{fmt, sync::Arc};
 use iroha_config::parameters::validate_production_runtime_handle;
+use std::{fmt, sync::Arc};
 const MAX_HF_INFERENCE_URL_BYTES_V1: usize = 8 * 1024;
 const MAX_HF_INFERENCE_HEADER_BYTES_V1: usize = 8 * 1024;
 const MAX_HF_INFERENCE_BODY_BYTES_V1: usize = 64 * 1024 * 1024;
@@ -344,6 +344,10 @@ pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
     /// Return the stable opaque production-provider handle.
     fn handle(&self) -> &str;
     /// Probe the exact public qualification and active/test posture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted probe failure when the provider cannot expose a stable qualification.
     fn qualification(
         &self,
     ) -> Result<
@@ -351,12 +355,20 @@ pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
         SoracloudHfCredentialProviderProbeErrorV1,
     >;
     /// Confirm that the backing credential is available without exposing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted probe failure when the backing credential is unavailable.
     fn check_readiness(&self) -> Result<(), SoracloudHfCredentialProviderProbeErrorV1>;
     /// Execute one bounded authenticated inference request.
     ///
     /// Implementations must authenticate only endpoints admitted by the exact
     /// qualified public policy, reject redirects or endpoint substitution, and
     /// keep request metadata, bodies, and credentials out of diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted operation failure when authentication or inference fails.
     fn execute_authenticated(
         &self,
         request: &SoracloudHfAuthenticatedInferenceRequestV1,
@@ -499,8 +511,8 @@ fn qualification_probe_error(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
     use super::*;
+    use std::sync::Mutex;
     const QUALIFICATION: SoracloudHfCredentialProviderQualificationV1 =
         SoracloudHfCredentialProviderQualificationV1::new(7, [0xA7; 32], true, false);
     struct TestProvider {
@@ -609,8 +621,7 @@ mod tests {
         assert_eq!(
             qualified
                 .execute_authenticated(&request)
-                .err()
-                .expect("drift must fail"),
+                .expect_err("drift must fail"),
             SoracloudHfCredentialProviderOperationErrorV1::QualificationChanged
         );
     }

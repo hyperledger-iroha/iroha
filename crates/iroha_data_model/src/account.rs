@@ -1487,7 +1487,7 @@ mod json_tests {
             decoded,
             Err(norito::json::Error::DecodeResourceLimit)
         ));
-        assert!(usage.total_allocated_bytes() <= exact - 1);
+        assert!(usage.total_allocated_bytes() < exact);
     }
     #[test]
     fn account_id_json_roundtrips_large_multisig_as_canonical_i105() {
@@ -1528,7 +1528,7 @@ mod json_tests {
             decoded,
             Err(norito::json::Error::DecodeResourceLimit)
         ));
-        assert!(usage.total_allocated_bytes() <= exact - 1);
+        assert!(usage.total_allocated_bytes() < exact);
     }
     #[test]
     fn account_id_json_rejects_legacy_norito_literal() {

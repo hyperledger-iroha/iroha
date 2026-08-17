@@ -106,6 +106,10 @@ fn json_string_field<'a>(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| eyre!("{context}.{key} must be a string"))
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the migration validates and rewrites one legacy asset in a single ordered fail-closed pass"
+)]
 fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Result<()> {
     let transactions = manifest
         .get_mut("transactions")
@@ -358,7 +362,7 @@ fn taira_release_roster_v4(
     Ok(roster)
 }
 pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
-    args: PrepareReleaseRosterV4Args,
+    args: &PrepareReleaseRosterV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     let config_bytes = super::read_external_bounded(
@@ -403,7 +407,7 @@ fn taira_base_verifier_records(
      -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
         let id = VerifyingKeyId::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND, role);
         let mut record = build(role, 1).map_err(|error| eyre!(error))?;
-        record.namespace = KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
+        KAGEMUSHA_VERIFIER_NAMESPACE.clone_into(&mut record.namespace);
         record.activation_height = Some(activation_height);
         record.withdraw_height = None;
         Ok((id, record))
@@ -437,7 +441,7 @@ struct TairaGenesisInventory {
     has_recursive_activation: bool,
 }
 impl TairaGenesisInventory {
-    fn from_genesis(genesis: &RawGenesisTransaction) -> Result<Self> {
+    fn from_genesis(genesis: &RawGenesisTransaction) -> Self {
         let ds_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
             .parse()
             .expect("static Taira offline alias");
@@ -515,7 +519,7 @@ impl TairaGenesisInventory {
                 _ => {}
             }
         }
-        Ok(inventory)
+        inventory
     }
 }
 fn register_account_if_missing(
@@ -573,9 +577,12 @@ struct TairaBaseGenesisReport {
     instructions_hash: String,
     output: String,
 }
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the base-genesis command keeps ordered source admission and append-only construction in one auditable transaction"
+)]
 pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
-    args: PrepareTestnetBaseGenesisV4Args,
+    args: &PrepareTestnetBaseGenesisV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     iroha_genesis::init_instruction_registry();
@@ -628,7 +635,7 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     let asset_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
         .parse()
         .expect("static Taira offline alias");
-    let mut inventory = TairaGenesisInventory::from_genesis(&genesis)?;
+    let mut inventory = TairaGenesisInventory::from_genesis(&genesis);
     // `irohad` creates the genesis signer account in the otherwise-empty
     // world before it executes height one. Treat that implicit account as
     // existing so this transaction cannot duplicate its registration.
@@ -666,12 +673,12 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             "source genesis already contains a recursive-release activation; reset from clean genesis"
         );
     }
-    if let Some(existing) = &inventory.ds_alias_binding {
-        if existing != &asset_definition_id {
-            bail!(
-                "source genesis binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to wrong asset `{existing}`"
-            );
-        }
+    if let Some(existing) = &inventory.ds_alias_binding
+        && existing != &asset_definition_id
+    {
+        bail!(
+            "source genesis binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to wrong asset `{existing}`"
+        );
     }
     if inventory.zk_assets.contains(&asset_definition_id) {
         bail!("source genesis already registers the Taira offline asset as a ZK asset");
@@ -924,8 +931,7 @@ mod tests {
             .expect("migrate checked-in Taira asset identity");
         let genesis: RawGenesisTransaction = norito::json::value::from_value(manifest)
             .expect("decode migrated checked-in Taira genesis");
-        let inventory =
-            TairaGenesisInventory::from_genesis(&genesis).expect("inventory migrated genesis");
+        let inventory = TairaGenesisInventory::from_genesis(&genesis);
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         assert_eq!(

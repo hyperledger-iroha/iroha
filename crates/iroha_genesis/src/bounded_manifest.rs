@@ -195,10 +195,7 @@ impl crate::RawGenesisTransaction {
         Ok(value)
     }
 }
-pub(super) fn read_genesis_ivm_bytecode(
-    path: &Path,
-    remaining_total_bytes: usize,
-) -> io::Result<Vec<u8>> {
+pub fn read_genesis_ivm_bytecode(path: &Path, remaining_total_bytes: usize) -> io::Result<Vec<u8>> {
     if remaining_total_bytes == 0 {
         return Err(genesis_artifact_too_large(
             "aggregate genesis IVM bytecode",

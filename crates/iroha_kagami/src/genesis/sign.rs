@@ -162,7 +162,7 @@ fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::Builder::new()
         .prefix(".genesis-identity-")
         .tempfile_in(parent)
@@ -548,15 +548,12 @@ fn build_signed_genesis(
                 da_proof_policies,
                 Some(confidential_policy_hash),
                 creation_time_ms,
-            )
-            .map_err(Into::into),
-        None => genesis
-            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-                genesis_key_pair,
-                da_proof_policies,
-                Some(confidential_policy_hash),
-            )
-            .map_err(Into::into),
+            ),
+        None => genesis.build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            genesis_key_pair,
+            da_proof_policies,
+            Some(confidential_policy_hash),
+        ),
     }
 }
 /// Bind the staged consensus context and sign the exact resulting manifest.
@@ -564,7 +561,7 @@ fn build_signed_genesis(
 /// Callers which publish both the manifest and signed block must persist the
 /// returned manifest so prepared-bundle admission can compare every
 /// instruction, including the derived consensus commitment.
-pub(crate) fn bind_and_sign_staged_sumeragi_v2_context(
+pub fn bind_and_sign_staged_sumeragi_v2_context(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -658,7 +655,7 @@ fn staged_sumeragi_v2_context_hashes(
 /// Prepared-bundle admission uses this path so every runtime config must
 /// reproduce the exact Nexus/AMX and execution-policy commitments signed into
 /// genesis without requiring or reloading the retired genesis private key.
-pub(crate) fn staged_signed_sumeragi_v2_context_hashes(
+pub fn staged_signed_sumeragi_v2_context_hashes(
     genesis: &RawGenesisTransaction,
     signed: &SignedBlock,
     config: &actual::Root,
@@ -1989,7 +1986,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("genesis sign fixture key generation should succeed")
     }
     fn valid_test_topology(count: usize) -> (Vec<PeerId>, Vec<String>) {
-        let materials = (0..count)
+        (0..count)
             .map(|_| {
                 let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
                 let pop = bls_normal_pop_prove(key_pair.private_key())
@@ -1998,8 +1995,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 let encoded_pop = format!("{}={}", peer.public_key(), hex::encode(pop));
                 (peer, encoded_pop)
             })
-            .collect::<Vec<_>>();
-        materials.into_iter().unzip()
+            .unzip()
     }
     fn valid_test_topology_entries(count: usize) -> Vec<GenesisTopologyEntry> {
         (0..count)

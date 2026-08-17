@@ -684,10 +684,12 @@ fn journal_policy_defaults_and_hard_limits_share_config_bounds() {
         usize::try_from(provider_attestation_journal_defaults::CHECKPOINT_MAX_BYTES.0)
             .expect("default checkpoint bound fits usize")
     );
-    assert!(
-        provider_attestation_journal_defaults::SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1
-            <= provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES
-    );
+    const {
+        assert!(
+            provider_attestation_journal_defaults::SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1
+                <= provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES
+        );
+    }
     assert!(
         provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES
             <= defaults.checkpoint_max_bytes
@@ -1057,10 +1059,11 @@ async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
     };
     let substituted_item = MusubiProviderAttestationInventoryItemV1::new(substituted_attestation)
         .expect("valid same-key substituted inventory item");
-    let mut entries = inventory.entries.lock().expect("inventory entries lock");
-    entries.clear();
-    entries.push((substituted_item, 8));
-    drop(entries);
+    {
+        let mut entries = inventory.entries.lock().expect("inventory entries lock");
+        entries.clear();
+        entries.push((substituted_item, 8));
+    }
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&fixture.request, &inventory)

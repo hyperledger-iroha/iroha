@@ -1600,7 +1600,7 @@ mod tests {
         );
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));
-            assert!(wire_id.ends_with(".v1"));
+            assert!(matches!(wire_id.rsplit_once('.'), Some((_, "v1"))));
             assert!(!wire_id.contains("zkAt"));
             assert!(!wire_id.contains("silent"));
             assert!(!wire_id.contains("penumbra"));

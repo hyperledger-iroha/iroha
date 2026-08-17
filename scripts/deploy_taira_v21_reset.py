@@ -249,25 +249,19 @@ DEPLOY_ISSUANCE_BARRIER = (
 class DeploymentError(RuntimeError):
     """Raised when an identity, safety, rollout, or rollback gate fails."""
 
-
 def _mark_deployment_outcome(
     error: BaseException, outcome: str
 ) -> BaseException:
     """Carry the authority's terminal rollback classification to the caller."""
-
     setattr(error, DEPLOYMENT_OUTCOME_ATTRIBUTE, outcome)
     return error
 
-
 def fail(message: str) -> NoReturn:
     """Raise one redaction-safe deployment refusal."""
-
     raise DeploymentError(message)
-
 
 def require_deploy_issuance_contracts() -> None:
     """Authenticate the fixed deploy-issuance binding and live service."""
-
     try:
         taira_authority_client.preflight("deploy-issuance")
     except taira_authority_client.TairaAuthorityClientError as error:
@@ -300,7 +294,6 @@ _DEPLOY_AUTHORITY = deploy_authority.DeploymentAuthorityProjection(
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Decode JSON while rejecting ambiguous duplicate object members."""
-
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -308,21 +301,17 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result[key] = value
     return result
 
-
 def require_sha256(value: object, label: str) -> str:
     """Require a lowercase SHA-256 literal."""
-
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
     return value
-
 
 def require_distinct_signing_fingerprints(
     release_fingerprint: object,
     qualification_fingerprint: object,
 ) -> tuple[str, str]:
     """Require separately pinned release and BOI qualification authorities."""
-
     release = require_sha256(release_fingerprint, "trusted signing fingerprint")
     qualification = require_sha256(
         qualification_fingerprint,
@@ -332,19 +321,15 @@ def require_distinct_signing_fingerprints(
         fail("release and BOI qualification signing identities must be distinct")
     return release, qualification
 
-
 def require_genesis_expected_hash(value: object) -> str:
     """Require one canonical Iroha hash suitable as a genesis trust root."""
-
     value = require_sha256(value, "genesis expected hash")
     if int(value[-2:], 16) & 1 == 0:
         fail("genesis expected hash must carry the Iroha marker bit")
     return value
 
-
 def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
-
     if (
         not isinstance(value, str)
         or COMMIT_RE.fullmatch(value) is None
@@ -353,12 +338,10 @@ def require_commit(value: object, label: str = "expected source commit") -> str:
         fail(f"{label} must be one full nonzero lowercase Git object id")
     return value
 
-
 def _run_bounded_macos_acl_command(
     program: Path, option: str, path: Path, label: str
 ) -> subprocess.CompletedProcess[bytes]:
     """Run one absolute macOS ACL tool with bounded time and retained output."""
-
     if not program.is_absolute() or program not in {
         MACOS_ACL_INSPECTOR,
         MACOS_ACL_CLEARER,
@@ -384,7 +367,6 @@ def _run_bounded_macos_acl_command(
         fail(f"macOS ACL command output exceeded its bound for {label}: {path}")
     return result
 
-
 def require_acl_free_path(
     path: Path,
     label: str,
@@ -392,7 +374,6 @@ def require_acl_free_path(
     descriptor: Optional[int] = None,
 ) -> os.stat_result:
     """Require a stable path, and on macOS prove it has no extended ACL."""
-
     before = path.lstat()
     if descriptor is not None and metadata_identity(
         os.fstat(descriptor)
@@ -418,10 +399,8 @@ def require_acl_free_path(
         fail(f"{label} name changed from its opened inode: {path}")
     return after
 
-
 def clear_owned_temporary_acl(path: Path, descriptor: int, label: str) -> None:
     """Clear inherited macOS ACLs only on one unpublished, owned temp inode."""
-
     before_path = path.lstat()
     before_opened = os.fstat(descriptor)
     if (
@@ -463,10 +442,8 @@ def clear_owned_temporary_acl(path: Path, descriptor: int, label: str) -> None:
         fail(f"{label} changed while its inherited ACL was cleared")
     require_acl_free_path(path, label, descriptor=descriptor)
 
-
 def canonical_path(path: Path, label: str) -> Path:
     """Require an existing absolute canonical path without aliases."""
-
     if not path.is_absolute():
         fail(f"{label} must be absolute")
     try:
@@ -477,10 +454,8 @@ def canonical_path(path: Path, label: str) -> Path:
         fail(f"{label} must be canonical and symlink-free: {path}")
     return path
 
-
 def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
     """Return stable regular-file identity fields used around reads."""
-
     return (
         info.st_dev,
         info.st_ino,
@@ -493,10 +468,8 @@ def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
         info.st_ctime_ns,
     )
 
-
 def growing_file_identity(info: os.stat_result) -> tuple[int, ...]:
     """Return identity fields that remain stable while a regular file grows."""
-
     return (
         info.st_dev,
         info.st_ino,
@@ -506,10 +479,8 @@ def growing_file_identity(info: os.stat_result) -> tuple[int, ...]:
         info.st_nlink,
     )
 
-
 def open_regular(path: Path, maximum_bytes: int) -> tuple[int, os.stat_result]:
     """Open one bounded single-link regular file without following links."""
-
     before = path.lstat()
     if (
         stat.S_ISLNK(before.st_mode)
@@ -528,10 +499,8 @@ def open_regular(path: Path, maximum_bytes: int) -> tuple[int, os.stat_result]:
         fail(f"file changed while it was opened: {path}")
     return descriptor, after
 
-
 def read_regular(path: Path, maximum_bytes: int) -> tuple[bytes, os.stat_result]:
     """Read a bounded regular file and recheck its complete identity."""
-
     descriptor, before = open_regular(path, maximum_bytes)
     try:
         chunks: list[bytes] = []
@@ -544,10 +513,8 @@ def read_regular(path: Path, maximum_bytes: int) -> tuple[bytes, os.stat_result]
         fail(f"file changed while it was read: {path}")
     return b"".join(chunks), after
 
-
 def sha256_regular(path: Path, maximum_bytes: int) -> tuple[str, os.stat_result]:
     """Hash a stable bounded regular file through a no-follow descriptor."""
-
     descriptor, before = open_regular(path, maximum_bytes)
     try:
         digest = hashlib.sha256()
@@ -560,10 +527,8 @@ def sha256_regular(path: Path, maximum_bytes: int) -> tuple[str, os.stat_result]
         fail(f"file changed while it was hashed: {path}")
     return digest.hexdigest(), after
 
-
 def parse_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
     """Decode one canonical JSON object without duplicate members."""
-
     try:
         payload = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
@@ -572,12 +537,10 @@ def parse_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
         fail(f"{label} must be a JSON object")
     return payload
 
-
 def require_private_entry(
     path: Path, owner_uid: int, owner_gid: int, *, directory: bool
 ) -> os.stat_result:
     """Require one owner-private bundle entry with a stable type and owner."""
-
     info = path.lstat()
     expected = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
     if (
@@ -591,20 +554,16 @@ def require_private_entry(
         fail(f"unsafe owner-private bundle entry: {path}")
     return info
 
-
 def require_exact_names(path: Path, expected: set[str], label: str) -> None:
     """Require a directory to contain an exact, alias-free name set."""
-
     actual = {entry.name for entry in path.iterdir()}
     if actual != expected:
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
         fail(f"{label} inventory is not exact (missing={missing}, extra={extra})")
 
-
 def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) -> int:
     """Reject aliases, special files, loose permissions, or an oversized bundle."""
-
     total = 0
     for current, directory_names, file_names in os.walk(bundle, followlinks=False):
         directory_names.sort()
@@ -623,7 +582,6 @@ def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) ->
             if total > MAX_BUNDLE_BYTES:
                 fail("reset bundle exceeds the bounded 64 GiB deployment corridor")
     return total
-
 
 CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
     (): {
@@ -659,10 +617,8 @@ TOML_ASSIGNMENT_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$")
 TOML_UNSIGNED_INTEGER_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 TOML_HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
-
 def _strip_toml_comment(line: str, label: str, line_number: int) -> str:
     """Strip a TOML comment without mistaking ``#`` inside a string."""
-
     quote: Optional[str] = None
     escaped = False
     index = 0
@@ -692,10 +648,8 @@ def _strip_toml_comment(line: str, label: str, line_number: int) -> str:
         fail(f"{label} has an unterminated string at line {line_number}")
     return line
 
-
 def _decode_toml_string(value: str, label: str, line_number: int) -> str:
     """Decode one single-line TOML basic or literal string."""
-
     if len(value) < 2 or value[0] not in ('"', "'"):
         fail(f"{label} has a malformed string at line {line_number}")
     quote = value[0]
@@ -743,12 +697,10 @@ def _decode_toml_string(value: str, label: str, line_number: int) -> str:
         index += width + 1
     fail(f"{label} has an unterminated string at line {line_number}")
 
-
 def _decode_projection_value(
     raw: str, value_type: str, label: str, line_number: int
 ) -> object:
     """Decode one required projected TOML scalar with no coercion."""
-
     value = raw.strip()
     if value_type == "string":
         return _decode_toml_string(value, label, line_number)
@@ -803,7 +755,6 @@ def _contains_quoted_managed_kagemusha_key(
 
 def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
     """Extract required and managed fail-closed validator fields."""
-
     projected: dict[str, Any] = {}
     current_table: tuple[str, ...] = ()
     seen_tables: set[tuple[str, ...]] = {()}
@@ -912,7 +863,6 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
                 fail(f"{label} has an ambiguous required table projection")
             destination = child
         destination[key] = value
-
     missing = [
         ".".join((*table, key))
         for table, fields in CONFIG_PROJECTION_FIELDS.items()
@@ -923,10 +873,8 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
         fail(f"{label} lacks required fields: {', '.join(sorted(missing))}")
     return projected
 
-
 def parse_toml(path: Path, owner_uid: int, owner_gid: int) -> dict[str, Any]:
     """Extract one bounded private validator config projection."""
-
     require_private_entry(path, owner_uid, owner_gid, directory=False)
     raw, _ = read_regular(path, MAX_CONFIG_BYTES)
     try:
@@ -935,10 +883,8 @@ def parse_toml(path: Path, owner_uid: int, owner_gid: int) -> dict[str, Any]:
         raise DeploymentError(f"validator config is not UTF-8: {path}") from error
     return parse_config_projection_text(text, f"validator config {path}")
 
-
 def address_port(value: object, label: str) -> int:
     """Extract the TCP port from one canonical ``addr:HOST:PORT#CRC`` literal."""
-
     if not isinstance(value, str) or not value.startswith("addr:") or "#" not in value:
         fail(f"{label} is not a canonical address literal")
     address = value[5:].split("#", 1)[0]
@@ -950,12 +896,10 @@ def address_port(value: object, label: str) -> int:
         fail(f"{label} TCP port is out of range")
     return port
 
-
 def require_manifest_hash(
     manifest: dict[str, Any], field: str, path: Path, maximum: int
 ) -> tuple[str, os.stat_result]:
     """Require a file digest to equal its reset-manifest binding."""
-
     expected = manifest.get(field)
     if not isinstance(expected, str):
         fail(f"reset manifest omitted {field}")
@@ -965,11 +909,9 @@ def require_manifest_hash(
         fail(f"reset manifest {field} does not match {path.name}")
     return actual, info
 
-
 @dataclasses.dataclass(frozen=True)
 class PeerPlan:
     """Authenticated per-validator runtime paths and identities."""
-
     number: int
     label: str
     slug: str
@@ -986,7 +928,6 @@ class PeerPlan:
     workdir_inode: int
     storage_device: int
     storage_inode: int
-
 
 @dataclasses.dataclass(frozen=True)
 class KagemushaExternalPathIdentity:
@@ -1074,7 +1015,6 @@ def receipt_signer_public_map(
 @dataclasses.dataclass(frozen=True)
 class KagemushaExternalReleasePlan:
     """Bounded external Kagemusha inputs observed without reading proving keys."""
-
     release_root: Path
     policy_path: Path
     artifact_dir: Path
@@ -1089,11 +1029,9 @@ class KagemushaExternalReleasePlan:
     protected_path_identities: tuple[KagemushaExternalPathIdentity, ...]
     bounded_material_present: bool
 
-
 @dataclasses.dataclass(frozen=True)
 class BundlePlan:
     """Complete authenticated dry-run result used by apply."""
-
     root: Path
     owner_uid: int
     owner_gid: int
@@ -1135,7 +1073,6 @@ def _canonical_kagemusha_config_projection_bytes(value: object) -> bytes:
 
 def _canonical_unresolved_absolute_path(value: object, label: str) -> Path:
     """Require one canonical absolute path without requiring it to exist yet."""
-
     if not isinstance(value, str):
         fail(f"{label} must be one canonical absolute path")
     path = Path(value)
@@ -1149,12 +1086,10 @@ def _canonical_unresolved_absolute_path(value: object, label: str) -> Path:
         fail(f"{label} must be one canonical non-root absolute path")
     return path
 
-
 def _validate_kagemusha_manifest_projection(
     manifest: dict[str, Any], bundle: Path
 ) -> tuple[Optional[dict[str, object]], Optional[str], Optional[str]]:
     """Authenticate the optional reset-manifest Kagemusha config projection."""
-
     named_fields = {
         key for key in manifest if isinstance(key, str) and key.startswith("kagemusha_")
     }
@@ -1173,7 +1108,6 @@ def _validate_kagemusha_manifest_projection(
             "reset manifest contains a partial Kagemusha projection; missing: "
             + ", ".join(missing)
         )
-
     release_root = _canonical_unresolved_absolute_path(
         manifest["kagemusha_release_root"],
         "reset manifest Kagemusha release root",
@@ -1197,7 +1131,6 @@ def _validate_kagemusha_manifest_projection(
         or any(ord(character) < 0x20 for character in authority)
     ):
         fail("reset manifest Kagemusha activation authority is noncanonical")
-
     projection = manifest["kagemusha_config_projection"]
     if not isinstance(projection, dict) or set(projection) != set(
         KAGEMUSHA_CONFIG_PROJECTION_KEYS
@@ -1228,12 +1161,10 @@ def _validate_kagemusha_manifest_projection(
         fail("reset manifest Kagemusha config projection SHA-256 is not canonical")
     return expected_projection, projection_sha256, expected_policy_sha256
 
-
 def _managed_kagemusha_offline_projection(
     projection: Optional[dict[str, object]],
 ) -> dict[str, object]:
     """Project reset-manifest field names onto settlement.offline names."""
-
     if projection is None:
         return {}
     return {
@@ -1351,18 +1282,15 @@ def _merge_kagemusha_path_identities(
 
 def _optional_external_lstat(path: Path) -> Optional[os.stat_result]:
     """Return metadata, or ``None`` when an external staging path is unavailable."""
-
     try:
         return path.lstat()
     except (FileNotFoundError, PermissionError):
         return None
 
-
 def _optional_bounded_external_digest(
     path: Path, maximum_bytes: int, label: str
 ) -> Optional[str]:
     """Hash one available canonical nonempty external regular file."""
-
     info = _optional_external_lstat(path)
     if info is None:
         return None
@@ -1380,7 +1308,6 @@ def _optional_bounded_external_digest(
         fail(f"{label} changed during external release validation")
     return digest
 
-
 def _inspect_kagemusha_manifest_directories(
     release_root: Path,
     artifact_dir: Path,
@@ -1392,7 +1319,6 @@ def _inspect_kagemusha_manifest_directories(
     tuple[KagemushaExternalPathIdentity, ...],
 ]:
     """Bind only bounded manifests and sidecars, never recursive artifact payloads."""
-
     info = _optional_external_lstat(artifact_dir)
     if info is None:
         return (), None, (), (), ()
@@ -1480,13 +1406,11 @@ def _inspect_kagemusha_manifest_directories(
         ),
     )
 
-
 def _inspect_kagemusha_external_release(
     projection: Optional[dict[str, object]],
     expected_policy_sha256: Optional[str],
 ) -> Optional[KagemushaExternalReleasePlan]:
     """Hash bounded external inputs when present; preserve unavailable as blocked."""
-
     if projection is None:
         return None
     assert expected_policy_sha256 is not None
@@ -1637,7 +1561,6 @@ def validate_config_projection(
     kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
-
     if (
         config.get("chain") != CHAIN_ID
         or config.get("chain_discriminant") != CHAIN_DISCRIMINANT
@@ -1708,7 +1631,6 @@ def validate_config_projection(
             "reset manifest"
         )
 
-
 def measure_read_only_fsync(path: Path, maximum_ms: int) -> float:
     """Measure a read-only directory fsync barrier without creating any file."""
 
@@ -1730,7 +1652,6 @@ def measure_read_only_fsync(path: Path, maximum_ms: int) -> float:
         )
     return elapsed
 
-
 def existing_ancestor(path: Path) -> Path:
     """Return the nearest existing ancestor of one absolute deployment path."""
 
@@ -1740,7 +1661,6 @@ def existing_ancestor(path: Path) -> Path:
             fail(f"deployment path has no existing ancestor: {path}")
         current = current.parent
     return current
-
 
 def require_filesystem_headroom(
     paths: Sequence[Path], minimum_free_bytes: int
@@ -1761,7 +1681,6 @@ def require_filesystem_headroom(
                 f"{minimum_free_bytes} are required"
             )
     return tuple(sorted(free_by_device.items()))
-
 
 def validate_bundle(
     bundle: Path,
@@ -1966,7 +1885,6 @@ def validate_bundle(
         kagemusha_external_release=kagemusha_external_release,
     )
 
-
 def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_result:
     """Require a root-owned path no runtime user can replace or rewrite."""
 
@@ -1991,7 +1909,6 @@ def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_res
             fail(f"root-controlled ancestor is not a directory: {component}")
         require_acl_free_path(component, "root-controlled path component")
     return path.lstat()
-
 
 def require_system_python_launcher(path: Path) -> os.stat_result:
     """Require the exact immutable macOS launcher, permitting its system hardlinks."""
@@ -2025,7 +1942,6 @@ def require_system_python_launcher(path: Path) -> os.stat_result:
         fail("system Python launcher changed during validation")
     return after
 
-
 @dataclasses.dataclass(frozen=True)
 class AdmissionPlan:
     """One complete archive verification bound to immutable deployment bytes."""
@@ -2057,7 +1973,6 @@ class AdmissionPlan:
     signer_fingerprint_sha256: str
     release_manifest_verifier_sha256: str
 
-
 @dataclasses.dataclass(frozen=True)
 class SourcePlan:
     """Authenticated release binary and supervisor source identities."""
@@ -2068,7 +1983,6 @@ class SourcePlan:
     supervisor_sha256: str
     python: Path
     python_identity: tuple[int, ...]
-
 
 def validate_supervisor_python(path: Path) -> tuple[Path, tuple[int, ...]]:
     """Resolve the system launcher to its root-controlled Python.app executable."""
@@ -2167,7 +2081,6 @@ def validate_supervisor_python(path: Path) -> tuple[Path, tuple[int, ...]]:
         fail("supervisor Python identity changed during validation")
     return runtime, metadata_identity(runtime_after)
 
-
 def validate_sources(
     args: argparse.Namespace,
     bundle: BundlePlan,
@@ -2206,7 +2119,6 @@ def validate_sources(
         python_identity=python_identity,
     )
 
-
 def _stable_admission_file(
     path: Path, label: str
 ) -> rollout_admission.StableFile:
@@ -2216,7 +2128,6 @@ def _stable_admission_file(
         return rollout_admission.stable_hash_path(path)
     except rollout_admission.ReleaseArtifactError as error:
         raise DeploymentError(f"cannot stably read {label}: {error}") from error
-
 
 def require_protected_replay_ledger(
     path: Path,
@@ -2250,7 +2161,6 @@ def require_protected_replay_ledger(
     ):
         fail("deployment admission replay ledger changed during validation")
     return snapshot
-
 
 def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     """Run the archive-only verifier with every independent trust input."""
@@ -2479,7 +2389,6 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         ),
     )
 
-
 def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
     """Reject candidate or qualified-BOI changes after successful verification."""
 
@@ -2512,7 +2421,6 @@ def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
             f"verified BOI admission evidence changed before rollout: {error}"
         ) from error
 
-
 def require_inputs_match_admission(
     bundle: BundlePlan,
     sources: SourcePlan,
@@ -2536,7 +2444,6 @@ def require_inputs_match_admission(
             "verified qualification receipt"
         )
 
-
 def require_admission_bound_inputs_unchanged(
     bundle: BundlePlan,
     sources: SourcePlan,
@@ -2556,7 +2463,6 @@ def require_admission_bound_inputs_unchanged(
         fail("receipt-bound binary, supervisor, or Python changed after admission")
     require_inputs_match_admission(bundle, sources, admission)
 
-
 @dataclasses.dataclass(frozen=True)
 class ProcessInfo:
     """Redaction-safe process identity used for exact parent/owner checks."""
@@ -2565,7 +2471,6 @@ class ProcessInfo:
     ppid: int
     uid: int
     argv: tuple[str, ...]
-
 
 def parse_darwin_procargs2(raw: bytes) -> tuple[str, ...]:
     """Parse one bounded ``KERN_PROCARGS2`` payload into its exact argv."""
@@ -2608,7 +2513,6 @@ def parse_darwin_procargs2(raw: bytes) -> tuple[str, ...]:
         fail("managed process native executable path differs from argv[0]")
     return argv
 
-
 def read_darwin_process_argv(pid: int) -> tuple[str, ...]:
     """Read one process argv through bounded, NUL-delimited Darwin sysctl data."""
 
@@ -2649,7 +2553,6 @@ def read_darwin_process_argv(pid: int) -> tuple[str, ...]:
         fail(f"native managed process argument payload grew during capture: pid {pid}")
     return parse_darwin_procargs2(buffer.raw[: actual.value])
 
-
 @dataclasses.dataclass(frozen=True)
 class RestartLogCursor:
     """Bounded append-only cursor for one authenticated supervisor log inode."""
@@ -2659,7 +2562,6 @@ class RestartLogCursor:
     offset: int
     guard_offset: int
     guard_sha256: str
-
 
 @dataclasses.dataclass(frozen=True)
 class OldManagedIdentity:
@@ -2673,7 +2575,6 @@ class OldManagedIdentity:
     pid_file_gid: int
     child_was_present: bool
 
-
 @dataclasses.dataclass(frozen=True)
 class PlistSnapshot:
     """Exact old LaunchDaemon bytes, ownership, and managed process identity."""
@@ -2684,7 +2585,6 @@ class PlistSnapshot:
     uid: int
     gid: int
     managed: OldManagedIdentity
-
 
 class SystemOps:
     """Small injectable boundary around launchd and process operations."""
@@ -2798,7 +2698,6 @@ class SystemOps:
         result = self.run(["/bin/ps", "-p", str(pid), "-o", "pid="])
         return result.returncode == 0 and bool(result.stdout.strip())
 
-
 def launchd_pid(record: Optional[str], label: str) -> int:
     """Extract one positive supervisor PID from launchd's printed record."""
 
@@ -2808,7 +2707,6 @@ def launchd_pid(record: Optional[str], label: str) -> int:
     if len(matches) != 1 or int(matches[0]) <= 1:
         fail(f"launchd job has no unique running supervisor PID: {label}")
     return int(matches[0])
-
 
 def required_option(argv: tuple[str, ...], option: str, label: str) -> str:
     """Return one exact option value from a managed supervisor command."""
@@ -2888,7 +2786,6 @@ def inspect_old_managed_identity(
         child_was_present=child_was_present,
     )
 
-
 def verify_old_managed_child(
     label: str,
     supervisor_pid: int,
@@ -2942,7 +2839,6 @@ def verify_old_managed_child(
         )
     return True
 
-
 def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
     """Require a restored old job to own its exact supervisor and child."""
 
@@ -2966,7 +2862,6 @@ def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
         ops,
         allow_absent=not expected.child_was_present,
     )
-
 
 def capture_old_cohort(
     ops: SystemOps,
@@ -3011,7 +2906,6 @@ def capture_old_cohort(
         )
     return tuple(snapshots)
 
-
 def wait_launchd_cohort_running(
     labels: Sequence[str], ops: SystemOps, timeout_seconds: float
 ) -> list[str]:
@@ -3030,7 +2924,6 @@ def wait_launchd_cohort_running(
             time.sleep(0.25)
     return sorted(pending)
 
-
 def fsync_directory(path: Path) -> None:
     """Durably flush one directory after a publication rename."""
 
@@ -3039,7 +2932,6 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
 
 def ensure_root_directory(path: Path, mode: int) -> None:
     """Create or validate a root-owned non-writable installation directory."""
@@ -3078,7 +2970,6 @@ def ensure_root_directory(path: Path, mode: int) -> None:
         fail(f"unsafe root installation directory: {path}")
     require_acl_free_path(path, "root installation directory")
 
-
 def ensure_runtime_directory(path: Path, uid: int, gid: int) -> None:
     """Create or validate one owner-private runtime state directory."""
 
@@ -3097,7 +2988,6 @@ def ensure_runtime_directory(path: Path, uid: int, gid: int) -> None:
     os.chown(path, uid, gid)
     os.chmod(path, 0o700)
     fsync_directory(path.parent)
-
 
 @contextlib.contextmanager
 def exclusive_deployment_lock() -> Any:
@@ -3138,7 +3028,6 @@ def exclusive_deployment_lock() -> Any:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
-
 
 def install_immutable(
     source: Path, destination: Path, expected_sha256: str
@@ -3212,7 +3101,6 @@ def install_immutable(
         )
     return published
 
-
 def atomic_replace_owned(
     path: Path, body: bytes, *, mode: int, uid: int, gid: int
 ) -> None:
@@ -3254,7 +3142,6 @@ def atomic_replace_owned(
         if temporary_created:
             temporary.unlink(missing_ok=True)
 
-
 @dataclasses.dataclass
 class AdmissionReceiptConsumption:
     """One protected receipt publication awaiting the irreversible cutover."""
@@ -3274,7 +3161,6 @@ class AdmissionReceiptConsumption:
         if published.payload != self.consumed_payload:
             fail("consumed admission receipt changed before rollout start")
         self.rollout_started = True
-
 
 def _restore_unstarted_receipt_consumption(
     transaction: AdmissionReceiptConsumption,
@@ -3299,7 +3185,6 @@ def _restore_unstarted_receipt_consumption(
     restored = require_protected_replay_ledger(transaction.admission.replay_ledger)
     if restored.payload != transaction.prior_payload:
         fail("admission replay ledger restoration did not persist exact prior bytes")
-
 
 @contextlib.contextmanager
 def consume_admission_receipt(
@@ -3372,7 +3257,6 @@ def consume_admission_receipt(
                     )
                 raise combined from rollback_error
         raise
-
 
 def render_plist(
     peer: PeerPlan,
@@ -3485,7 +3369,6 @@ def render_plist(
     }
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True)
 
-
 def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None:
     """Recheck every mutable bundle and bounded external release identity."""
 
@@ -3533,12 +3416,10 @@ def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None
             fail(f"fresh-reset runtime path changed {phase}: {peer.slug}")
     require_kagemusha_external_release_unchanged(bundle, phase=phase)
 
-
 def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
     """Recheck all mutable bundle inputs after preflight."""
 
     require_mutable_bundle_identities(bundle, phase="after preflight")
-
 
 def _drop_config_check_privileges(uid: int, gid: int) -> Callable[[], None]:
     """Return the sole child setup permitted for hostile binary config checks."""
@@ -3553,7 +3434,6 @@ def _drop_config_check_privileges(uid: int, gid: int) -> Callable[[], None]:
         os.umask(0o077)
 
     return drop
-
 
 def validate_installed_peer_configs(
     installed_binary: Path,
@@ -3716,7 +3596,6 @@ def parse_pid_file(path: Path, uid: int, gid: int) -> int:
         fail(f"managed PID file is invalid: {path}")
     return int(text)
 
-
 def expected_supervisor_argv(plist_body: bytes) -> tuple[str, ...]:
     """Return the exact generated supervisor argv from a plist."""
 
@@ -3730,7 +3609,6 @@ def expected_supervisor_argv(plist_body: bytes) -> tuple[str, ...]:
     ):
         fail("generated LaunchDaemon plist lacks exact ProgramArguments")
     return tuple(arguments)
-
 
 def verify_managed_peer(
     peer: PeerPlan,
@@ -3759,7 +3637,6 @@ def verify_managed_peer(
     ):
         fail(f"{peer.label} PID file does not name its exact managed validator child")
     return supervisor_pid, child_pid
-
 
 def _open_growing_regular(path: Path) -> tuple[int, os.stat_result]:
     """Open one single-link growing regular file without following aliases."""
@@ -3796,7 +3673,6 @@ def _open_growing_regular(path: Path) -> tuple[int, os.stat_result]:
         raise
     return descriptor, opened
 
-
 def _require_safe_restart_log_owner_mode(
     info: os.stat_result, owner_uid: int, owner_gid: int
 ) -> None:
@@ -3808,7 +3684,6 @@ def _require_safe_restart_log_owner_mode(
         or stat.S_IMODE(info.st_mode) not in {0o600, 0o640, 0o644}
     ):
         fail("restart supervisor log has an unsafe owner or mode")
-
 
 def _pread_exact(descriptor: int, offset: int, length: int) -> bytes:
     """Read exactly one bounded region without changing a shared file offset."""
@@ -3829,7 +3704,6 @@ def _pread_exact(descriptor: int, offset: int, length: int) -> bytes:
         chunks.append(chunk)
         consumed += len(chunk)
     return b"".join(chunks)
-
 
 def bind_restart_log_cursor(
     path: Path, owner_uid: int, owner_gid: int
@@ -3859,7 +3733,6 @@ def bind_restart_log_cursor(
         )
     finally:
         os.close(descriptor)
-
 
 def read_restart_log_delta(cursor: RestartLogCursor) -> bytes:
     """Read a bounded post-cursor delta from the same append-only log inode."""
@@ -3894,7 +3767,6 @@ def read_restart_log_delta(cursor: RestartLogCursor) -> bytes:
     finally:
         os.close(descriptor)
 
-
 def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
     """Require exactly one snapshot restore and forbid empty-state fallback."""
 
@@ -3903,7 +3775,6 @@ def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
         fail("managed validator restart entered a snapshot fallback path")
     if delta.count(SNAPSHOT_LOAD_SUCCESS_MARKER) != 1:
         fail("managed validator restart did not load exactly one state snapshot")
-
 
 def restart_proof(
     bundle: BundlePlan,
@@ -3995,7 +3866,6 @@ def restart_proof(
         fail("managed validator snapshot-backed restart exceeded 45 seconds")
     return RestartProofResult(fleet=advanced, duration_ms=duration_ms)
 
-
 def rollback_cohort(snapshots: Sequence[PlistSnapshot], ops: SystemOps) -> None:
     """Unload any new jobs, restore every old plist, and reload all four old jobs."""
 
@@ -4037,7 +3907,6 @@ def rollback_cohort(snapshots: Sequence[PlistSnapshot], ops: SystemOps) -> None:
     errors.extend(f"verify:{label}" for label in sorted(pending))
     if errors:
         fail("four-job rollback was incomplete: " + ", ".join(errors))
-
 
 def install_runtime_layout(bundle: BundlePlan) -> Path:
     """Create the root-controlled parent and owner-private reset runtime leaf."""
@@ -4387,7 +4256,6 @@ def apply_reset(
     )
     return report
 
-
 def build_parser() -> argparse.ArgumentParser:
     """Build the exact single-command dry-run/apply interface."""
 
@@ -4461,7 +4329,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--apply", action="store_true")
     return parser
 
-
 def validate_arguments(args: argparse.Namespace) -> None:
     """Validate scalar inputs before reading deployment paths."""
 
@@ -4514,7 +4381,6 @@ def validate_arguments(args: argparse.Namespace) -> None:
         if not operator_private_key_file.is_absolute():
             fail("--operator-private-key-file must be an absolute runtime-only path")
 
-
 def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     """Require the controller-provided non-root identity before root verification."""
 
@@ -4550,7 +4416,6 @@ _deploy_authority_subject = _DEPLOY_AUTHORITY.subject
 _deploy_authority_artifacts = _DEPLOY_AUTHORITY.artifacts
 
 _deploy_result_sha256 = _DEPLOY_AUTHORITY.result_sha256
-
 
 def _authorize_deploy_lease(
     admission: AdmissionPlan,
@@ -4603,7 +4468,6 @@ def _finalize_deploy_lease(
             "deploy-issuance authority could not persist the terminal result: "
             f"{error}"
         ) from error
-
 
 def _execute_after_provisioned_authority_contracts(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
@@ -4808,7 +4672,6 @@ def _execute_after_provisioned_authority_contracts(
         )
         return report
 
-
 def execute(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
@@ -4816,7 +4679,6 @@ def execute(
 
     require_deploy_issuance_contracts()
     return _execute_after_provisioned_authority_contracts(args, ops=ops)
-
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Run the controller and emit only one redaction-safe JSON summary."""
@@ -4829,7 +4691,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     print(json.dumps(report, ensure_ascii=True, sort_keys=True))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

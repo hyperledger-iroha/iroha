@@ -396,6 +396,10 @@ fn reputation_retention_projection_rejects_test_marked_and_stale_bindings() {
     }
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test audits the complete public Governance DAG service projection"
+)]
 fn governance_service_catalog_projects_only_exact_public_provider_bindings() {
     let mut config = default_runtime_config();
     configure_governance_service(&mut config);
@@ -526,7 +530,7 @@ fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
             IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
         ]
     );
-    let ipfs = signed_head
+    let ipfs_ingress = signed_head
         .iter()
         .find(|binding| {
             binding.slot() == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
@@ -534,7 +538,7 @@ fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
         .and_then(IrohaRuntimeProviderBindingV1::governance_request_ingress_binding)
         .expect("standalone IPFS ingress binding");
     assert_eq!(
-        ipfs.max_body_bytes(),
+        ipfs_ingress.max_body_bytes(),
         sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(request_max)
             .expect("test IPFS wire bound")
     );
@@ -551,15 +555,16 @@ fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
             .iter()
             .all(|binding| { binding.slot() != IrohaRuntimeProviderSlotV1::GovernanceDagSigner })
     );
-    let ipns = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
+    let ipns_bindings = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
         &chain_id,
         network_id,
         &governance_service_view("ipns"),
     )
     .expect("project IPNS standalone service bindings");
-    assert_eq!(ipns.network_id(), &network_id);
+    assert_eq!(ipns_bindings.network_id(), &network_id);
     assert_eq!(
-        ipns.iter()
+        ipns_bindings
+            .iter()
             .map(IrohaRuntimeProviderBindingV1::slot)
             .collect::<Vec<_>>(),
         vec![

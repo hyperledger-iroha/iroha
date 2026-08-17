@@ -337,6 +337,10 @@ fn native_signing_and_recovery_cover_ed25519_and_ml_dsa() {
     }
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the service boundary matrix exercises every role, purpose, algorithm, and public identity"
+)]
 fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identities() {
     let governance_parent = temporary_parent();
     let governance = provision(
@@ -590,6 +594,10 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the promotion test keeps byte-exact signing and algorithm rejection assertions together"
+)]
 fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
     let parent = temporary_parent();
     let service = provision(

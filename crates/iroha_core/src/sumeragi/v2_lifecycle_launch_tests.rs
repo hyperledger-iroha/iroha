@@ -1325,6 +1325,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "BlockSignaturePolicy::GenesisAuthority(",
             "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
+            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
             "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
             "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
             "let mut activated = launched",
@@ -1827,7 +1828,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let refanout = source_region(
         scheduler_source,
         "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-        "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+        "pub(super) fn persist_recovered_decision_fetch_response_after_runner(",
     );
     assert_source_tokens_in_order(
         refanout,
@@ -1999,80 +2000,94 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
 }
 
 #[test]
-fn recovered_decision_fetch_dispatch_reserves_capacity_before_claim_and_failures_leave_no_mutation()
-{
+fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
-        .split_once("fn dispatch_recovered_decision_fetch_with_runner_debt(")
-        .expect("recovered Fetch has one request-dispatch transaction")
+        .split_once("fn dispatch_recovered_completion_with_runner_debt(")
+        .expect("recovered Completion has one composite dispatch transaction")
         .1
-        .split_once("/// Persist one selected recovered Decision Fetch response")
-        .expect("request dispatch stays a bounded source region")
+        .split_once(
+            "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
+        )
+        .expect("composite dispatch stays a bounded source region")
         .0;
-    let output = dispatch
-        .find("capture_recovered_decision_fetch_exact_output(&owner)")
-        .expect("exact output is captured");
-    let executor = dispatch
-        .find("prepare_recovered_decision_fetch_request_registration(owner)")
-        .expect("executor vacancy is reserved");
+    let census = dispatch
+        .find("capture_recovered_completion_capacity_census(probes)")
+        .expect("the joint physical census is captured");
     let claim = dispatch
         .find("self.coordinator.plan_turn(inputs)")
         .expect("coordinator claim exists");
+    let output = dispatch
+        .find("census.select_fetch(ordinal)")
+        .expect("the selected Fetch owns exact output");
+    let executor = dispatch
+        .find("prepare_recovered_decision_fetch_request_registration(owner)")
+        .expect("executor vacancy is reserved");
+    let registry = dispatch
+        .find("prepare_recovered_decision_fetch_dispatch(")
+        .expect("the claimed row projects its exact task");
     let commit = dispatch
         .find("registration.commit(prepared)")
         .expect("request owner has one commit tail");
-    assert!(output < executor && executor < claim && claim < commit);
-    assert!(dispatch.contains("output.abort_before_claim();"));
-    assert!(dispatch.contains("rollback_unpublished_turn(&lease)"));
+    let publication = dispatch
+        .find("output.commit();")
+        .expect("exact output publishes after request installation");
+    assert!(
+        census < claim
+            && claim < output
+            && output < executor
+            && executor < registry
+            && registry < commit
+            && commit < publication
+    );
 }
 
 #[test]
-fn recovered_decision_fetch_queue_parks_generic_drain_and_extracts_only_dedicated_completion() {
+fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completion_classifier() {
     let worker = include_str!("v2_worker.rs");
     let generic = worker
         .split_once("fn take_io_completion(")
         .expect("generic completion selector exists")
         .1
-        .split_once("fn take_recovered_decision_apply_completion(")
+        .split_once("fn take_recovered_lifecycle_sign_completion(")
         .expect("generic selector stays bounded")
         .0;
     assert!(generic.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)"));
     assert!(generic.contains("self.held_io_completion = Some(completion);"));
-    let dedicated = worker
-        .split_once("fn take_recovered_decision_fetch_body_completion(")
-        .expect("dedicated recovered Fetch extractor exists")
+    let classifier = worker
+        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .expect("unified recovered lifecycle classifier exists")
         .1
-        .split_once("fn take_next_completion(")
-        .expect("dedicated extractor stays bounded")
+        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .expect("unified classifier stays bounded")
         .0;
-    assert!(dedicated.contains("RecoveredDecisionFetchBodyPersisted"));
+    assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
+    assert!(classifier.contains("RecoveredLifecycleCompletionTakeV1::DecisionFetch("));
     assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
     assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
-    assert!(worker.contains("drain_recovered_decision_fetch_body_completion"));
+    assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));
 }
 
 #[test]
-fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation() {
+fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-    let wrapper = scheduler
-        .split_once("pub(crate) fn persist_recovered_decision_fetch_response(")
-        .expect("production Phase-A wrapper exists")
+    let ingress_turn = driver
+        .split_once("pub(in crate::sumeragi) fn drive_ingress_turn")
+        .expect("unified ingress driver exists")
         .1
-        .split_once("/// Exercise Phase A with a fixture-owned current Ingress snapshot.")
-        .expect("production cursor check stays isolated")
+        .split_once("fn drive_recovered_ingress_selector")
+        .expect("runner validation precedes the recovered Phase-A helper")
         .0;
-    let cursor = wrapper
-        .find("runner.target() != LifecycleRunnerRankTarget::Ingress")
-        .expect("Phase A requires the Ingress cursor");
-    let reject = wrapper
-        .find("ForeignRunnerObservation")
-        .expect("foreign cursor rejects explicitly");
-    let handoff = wrapper
-        .find("persist_recovered_decision_fetch_response_after_runner")
-        .expect("mutation lives behind cursor validation");
-    assert!(cursor < reject && reject < handoff);
-    assert!(!wrapper[..handoff].contains("capture_lifecycle_capacity_rank"));
-    assert!(!wrapper[..handoff].contains("prepare_recovered_decision_fetch_response_claim"));
+    let cursor = ingress_turn
+        .find("if !self.runner_turn_matches(")
+        .expect("the driver validates the borrow-bound runner");
+    let handoff = ingress_turn
+        .find("self.drive_recovered_ingress_selector(selector, runner)")
+        .expect("the validated runner enters recovered Phase A");
+    assert!(cursor < handoff);
+    assert!(driver.contains("persist_recovered_decision_fetch_response_after_runner("));
+    assert!(!scheduler.contains("fn persist_recovered_decision_fetch_response("));
 }
 
 #[test]

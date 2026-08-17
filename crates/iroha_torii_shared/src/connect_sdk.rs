@@ -348,6 +348,10 @@ pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
 /// The preimage binds the exact deployment, all application constraints, and
 /// the relay authorization established when the one-shot session was created.
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the public shared Connect V1 helper keeps every signature-bound field explicit; grouping them would break SDK callers"
+)]
 pub fn build_approve_preimage(
     constraints: &Constraints,
     sid: &[u8; 32],
@@ -385,6 +389,10 @@ pub fn build_approve_preimage(
 ///
 /// Returns a stable error when the redundant signature algorithm disagrees
 /// with the account key or when cryptographic verification fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the public verifier mirrors all signature-bound Connect V1 fields plus the signatory and signature; grouping them would break SDK callers"
+)]
 pub fn verify_wallet_approval_signature(
     account_signatory: &PublicKey,
     constraints: &Constraints,
@@ -695,6 +703,10 @@ mod approve_preimage_tests {
         )))
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cohesive canonical approval fixture verification"
+    )]
     fn canonical_approval_fixture_verifies_end_to_end() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
             "../../../fixtures/connect/session_vectors.json"

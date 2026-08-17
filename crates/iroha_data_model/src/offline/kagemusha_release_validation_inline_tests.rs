@@ -79,8 +79,7 @@ fn v4_release_record_binds_promotion_build_provenance_to_manifest() {
         .manifest
         .canonical_sha256()
         .expect("canonical release-record manifest");
-    record.promotion_record.release_attestation_sha256 =
-        record.manifest.release_attestation_sha256;
+    record.promotion_record.release_attestation_sha256 = record.manifest.release_attestation_sha256;
     record
         .validate_structure()
         .expect("structurally valid release record before provenance mutation");
@@ -221,6 +220,10 @@ fn v4_activation_verifier_record_requires_exact_release_identity() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the release-identity regression keeps the complete V5 activation fixture and mutations together"
+)]
 fn v5_activation_verifier_record_requires_exact_release_identity() {
     let key = VerifyingKeyBox::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),

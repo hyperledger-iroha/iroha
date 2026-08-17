@@ -48,11 +48,11 @@ pub(super) fn validate_semantic_release_lock(
     abi: &MusubiAbiBindingV1,
     dependencies: &[MusubiDependencyReqV1],
     exports: &[Name],
-    interface_digest: MusubiContentDigestV1,
     metadata: &MusubiReleaseMetadataV1,
-    verification_lock_digest: MusubiVerificationLockDigestV1,
+    digests: (MusubiContentDigestV1, MusubiVerificationLockDigestV1),
     verification_lock: &MusubiVerificationLockV1,
 ) -> Result<(), ParseError> {
+    let (interface_digest, verification_lock_digest) = digests;
     validate_semantic_release_fields(
         release,
         abi,

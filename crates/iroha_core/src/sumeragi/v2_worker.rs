@@ -128,7 +128,6 @@ use iroha_p2p::{
         reliable_progress_class,
     },
 };
-use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     num::NonZeroUsize,
@@ -1128,9 +1127,6 @@ impl V2IoAdmission {
             V2IoAdmissionClass::Control => self.capacity,
         }
     }
-    fn has_capacity(&self, class: V2IoAdmissionClass) -> bool {
-        self.queued.load(AtomicOrdering::Acquire) < self.limit(class)
-    }
     /// Return the exact physical admission count while the queue state is locked.
     fn queued(&self) -> usize {
         self.queued.load(AtomicOrdering::Acquire)
@@ -1470,7 +1466,6 @@ struct V2IoCommandQueueState {
 /// work and pending delivery, making retransmission idempotent without debt.
 struct V2IoCommandQueue {
     capacity: usize,
-    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     admission: Arc<V2IoAdmission>,
     state: Mutex<V2IoCommandQueueState>,
     ready: Condvar,
@@ -1866,23 +1861,15 @@ impl LifecycleIoCapacityReservation<'_> {
             .complete();
     }
 }
-/// Locked Consensus capacity held until a recovered Apply dispatch enters FIFO.
+/// Locked Consensus capacity until a recovered Apply dispatch enters FIFO.
 #[must_use = "the recovered Decision Apply reservation must commit its prepared dispatch"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
     queue: &'a V2IoCommandQueue,
     state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
     operation: Option<ConsensusFailStopOperation<'a>>,
     key: RecoveredDecisionApplyDispatchKeyV1,
-    predecessor_debt: u64,
 }
 impl RecoveredDecisionApplyCapacityReservationV1<'_> {
-    /// Return the exact frozen predecessor debt only to scheduler authority.
-    pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
-        &self,
-        _factory: &AuthenticatedSchedulerInputsFactory,
-    ) -> u64 {
-        self.predecessor_debt
-    }
     /// Recheck that the claimed registry projection names this exact reservation.
     pub(in crate::sumeragi) fn preflight(
         &self,
@@ -1947,28 +1934,6 @@ impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
             self.queue.ready.notify_all();
         }
     }
-}
-/// Typed capacity result for the recovered Decision Apply Consensus lane.
-#[must_use = "the recovered Decision Apply capacity result must be consumed"]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureV1<'a> {
-    /// The exact queue cut is reserved and ready for registry projection commit.
-    Reserved(RecoveredDecisionApplyCapacityReservationV1<'a>),
-    /// No Consensus position was available at the current release generation.
-    Unavailable,
-}
-/// Closed failure before recovered Decision Apply capacity can be retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
-    /// The dispatch key belongs to another immutable height context.
-    ForeignContext,
-    /// The height-local worker command corridor is closed.
-    Disconnected,
-    /// Canonical output admission already requires restart.
-    OutputClosed,
-    /// The exact queue position is not representable in the scheduler rank.
-    PositionOverflow,
-    /// The same closed carrier already owns queued, active, or pending work.
-    AlreadyDispatched,
 }
 /// Locked Consensus capacity for one exact lifecycle-owned recovered Sign.
 #[must_use = "the recovered Sign reservation must commit its prepared dispatch"]
@@ -2210,7 +2175,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         else {
             return Err(self);
         };
-        let mut state = self
+        let state = self
             .state
             .take()
             .expect("selected recovered Apply retains the worker queue cut");
@@ -2232,7 +2197,6 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
             state: Some(state),
             operation: Some(operation),
             key,
-            predecessor_debt: self.worker_predecessor_debt,
         })
     }
 
@@ -2248,7 +2212,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         else {
             return Err(self);
         };
-        let mut state = self
+        let state = self
             .state
             .take()
             .expect("selected recovered Sign retains the worker queue cut");
@@ -2308,7 +2272,6 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
                 operation: Some(operation),
                 pending: Some(pending),
                 fanout,
-                predecessor_debt: self.output_predecessor_debt,
             },
         ))
     }
@@ -2488,8 +2451,7 @@ fn v2_io_command_channel(
     _observer_per_source_capacity: usize,
     admission: Arc<V2IoAdmission>,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
-    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-    build_v2_io_command_channel(capacity, admission, lifecycle_ordinals)
+    build_v2_io_command_channel(capacity, admission)
 }
 pub(super) fn certified_serve_family_capacity(
     roster_serve_capacity: usize,
@@ -2515,11 +2477,9 @@ pub(super) fn certified_serve_family_capacity(
 fn build_v2_io_command_channel(
     capacity: usize,
     admission: Arc<V2IoAdmission>,
-    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
     let queue = Arc::new(V2IoCommandQueue {
         capacity,
-        lifecycle_ordinals,
         admission,
         state: Mutex::new(V2IoCommandQueueState {
             commands: VecDeque::with_capacity(capacity.min(1_024)),
@@ -2609,46 +2569,6 @@ impl V2IoCommandQueue {
             },
         ))
     }
-    fn capture_recovered_decision_apply_capacity<'a>(
-        self: &'a Arc<Self>,
-        operation: ConsensusFailStopOperation<'a>,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-    ) -> Result<
-        RecoveredDecisionApplyCapacityCaptureV1<'a>,
-        RecoveredDecisionApplyCapacityCaptureErrorV1,
-    > {
-        let state = self.lock();
-        if !state.sender_open || !state.receiver_open {
-            drop(operation);
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected);
-        }
-        if state.recovered_decision_applies.contains_key(&key) {
-            drop(operation);
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::AlreadyDispatched);
-        }
-        let predecessor_debt = match u64::try_from(state.commands.len()) {
-            Ok(debt) => debt,
-            Err(_) => {
-                drop(operation);
-                return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::PositionOverflow);
-            }
-        };
-        if state.commands.len() >= self.capacity
-            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
-        {
-            operation.complete();
-            return Ok(RecoveredDecisionApplyCapacityCaptureV1::Unavailable);
-        }
-        Ok(RecoveredDecisionApplyCapacityCaptureV1::Reserved(
-            RecoveredDecisionApplyCapacityReservationV1 {
-                queue: self.as_ref(),
-                state: Some(state),
-                operation: Some(operation),
-                key,
-                predecessor_debt,
-            },
-        ))
-    }
     fn capture_recovered_lifecycle_sign_capacity<'a>(
         self: &'a Arc<Self>,
         operation: ConsensusFailStopOperation<'a>,
@@ -2695,13 +2615,6 @@ impl V2IoCommandQueue {
             && self.admission.queued() < self.admission.limit(V2IoAdmissionClass::Consensus)
     }
 
-    fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
-        let state = self.lock();
-        state.sender_open
-            && state.receiver_open
-            && state.commands.len() < self.capacity
-            && self.admission.has_capacity(class)
-    }
     fn try_send_as(
         &self,
         class: V2IoAdmissionClass,
@@ -4092,20 +4005,10 @@ impl V2CompletionDrainOutcome {
         (self.serviced, self.certified_fetch_body)
     }
 }
-/// Owner-only result of draining at most one recovered Decision Apply completion.
-#[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
-    completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
-}
 /// Owner-only drain of at most one guarded recovered Sign completion.
 #[must_use = "a recovered Sign drain remains parked under its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
     completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
-}
-/// Owner-only drain of at most one guarded recovered Fetch body completion.
-#[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
-pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
-    completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
 }
 /// Owner-only drain of at most one lifecycle-owned Certified-Serve completion.
 #[must_use = "a Certified-Serve completion must remain parked under its lifecycle owner"]
@@ -4113,8 +4016,12 @@ pub(in crate::sumeragi) struct LifecycleCertifiedServeCompletionDrainV1 {
     completion: Option<PreparedLifecycleCertifiedServeCompletionV1>,
 }
 
-/// Opaque one-shot completion head: ordinary work is restored before
-/// `PassThrough`, while recovered variants transfer only their typed guard.
+/// Opaque result of taking the physical completion head exactly once.
+///
+/// Ordinary I/O and local reconstruction work is never exposed. An ordinary
+/// I/O head is restored into the service's sole held slot before
+/// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
+/// Recovered variants transfer only their guarded, class-specific owner.
 #[allow(variant_size_differences)]
 #[must_use = "a selected recovered completion must remain lifecycle-owned"]
 pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
@@ -4132,14 +4039,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
     CertifiedServe(PreparedLifecycleCertifiedServeCompletionV1),
 }
 
-impl RecoveredDecisionFetchBodyCompletionDrainV1 {
-    /// Consume the drain result into its optional guarded persistence completion.
-    pub(in crate::sumeragi) fn into_completion(
-        self,
-    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
-        self.completion
-    }
-}
 impl LifecycleCertifiedServeCompletionDrainV1 {
     /// Consume the drain result into its optional guarded Serve completion.
     pub(in crate::sumeragi) fn into_completion(
@@ -4153,14 +4052,6 @@ impl RecoveredLifecycleSignCompletionDrainV1 {
     pub(in crate::sumeragi) fn into_completion(
         self,
     ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
-        self.completion
-    }
-}
-impl RecoveredDecisionApplyCompletionDrainV1 {
-    /// Consume the drain result into its optional exact owner completion.
-    pub(in crate::sumeragi) fn into_completion(
-        self,
-    ) -> Option<PreparedRecoveredDecisionApplyCompletionV1> {
         self.completion
     }
 }
@@ -4379,7 +4270,6 @@ impl V2IoHandle {
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
-        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
         let admission = Arc::new(V2IoAdmission::new(
@@ -4391,7 +4281,7 @@ impl V2IoHandle {
             return Err("Sumeragi v2 observer Serve capacity must be non-zero".to_owned());
         }
         let (command_tx, command_rx) =
-            build_v2_io_command_channel(capacity, Arc::clone(&admission), lifecycle_ordinals);
+            build_v2_io_command_channel(capacity, Arc::clone(&admission));
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
@@ -4773,10 +4663,6 @@ impl V2IoHandle {
         command: V2IoCommand,
     ) -> Result<(), V2IoTrySendError> {
         self.command_tx.try_send_as(class, command)
-    }
-    #[cfg(test)]
-    fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
-        self.command_tx.queue.can_enqueue_as(class)
     }
     fn cancel(
         &self,
@@ -10860,28 +10746,20 @@ impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
         operation.complete();
     }
 }
-/// Result of reserving exact output for one recovered Decision Fetch request.
-pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service> {
-    /// The bounded corridor cannot own this fanout yet; nothing was claimed.
-    Unavailable,
-    /// The same corridor mutex and fail-stop permit remain retained through claim.
-    Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
-}
-/// Borrow-bound pre-claim output reservation armed after preencoding, topology,
-/// rollover, and capacity checks; recoverable abort consumes its typed method.
+/// Borrow-bound exact-output reservation retained before coordinator claim.
+///
+/// Preencoding, topology construction, rollover validation, and `can_enqueue`
+/// all precede scheduler planning. Dropping an armed reservation closes output;
+/// recoverable pre-claim failures must consume [`Self::abort_before_claim`].
 #[must_use = "exact recovered Fetch output must commit or use its typed pre-claim abort"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {
     operation: Option<ConsensusFailStopOperation<'service>>,
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     fanout: Option<PendingExactFanout>,
-    predecessor_debt: u64,
 }
 impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
-    /// Exact retained output-prefix debt used by the authenticated scheduler row.
-    pub(in crate::sumeragi) const fn predecessor_debt(&self) -> u64 {
-        self.predecessor_debt
-    }
-    /// Release an unchanged pre-claim reservation without fail-stopping output.
+    /// Test-only release of an unchanged pre-claim reservation.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn abort_before_claim(mut self) {
         drop(self.pending.take());
         self.operation
@@ -11311,45 +11189,6 @@ impl ProductionV2Services {
         };
         operation.complete();
         Ok(owner)
-    }
-    /// Reserve exact output for an already fixed-signature recovered request.
-    pub(in crate::sumeragi) fn capture_recovered_decision_fetch_exact_output(
-        &self,
-        owner: &RecoveredDecisionFetchRequestOwnerV1,
-    ) -> Result<RecoveredDecisionFetchExactOutputCaptureV1<'_>, String> {
-        if !owner.validates_exact_executor_context(&self.context, &self.local_peer)
-            || self.exact_output_handoff_owner.is_sealed()
-        {
-            return Err(
-                "recovered Decision Fetch output belongs to another service cut".to_owned(),
-            );
-        }
-        let fanout = self.recovered_decision_fetch_fanout(owner)?;
-        let operation = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "recovered Decision Fetch exact output requires restart".to_owned())?;
-        let pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err("recovered Decision Fetch output sealed during capture".to_owned());
-        }
-        let predecessor_debt = u64::try_from(pending.fanouts.len())
-            .map_err(|_| "recovered Decision Fetch output debt overflowed".to_owned())?;
-        if let Some(fanout) = fanout.as_ref()
-            && !pending.can_enqueue(fanout)?
-        {
-            drop(pending);
-            operation.complete();
-            return Ok(RecoveredDecisionFetchExactOutputCaptureV1::Unavailable);
-        }
-        Ok(RecoveredDecisionFetchExactOutputCaptureV1::Reserved(
-            RecoveredDecisionFetchExactOutputReservationV1 {
-                operation: Some(operation),
-                pending: Some(pending),
-                fanout,
-                predecessor_debt,
-            },
-        ))
     }
     fn recovered_decision_fetch_fanout(
         &self,
@@ -11797,32 +11636,11 @@ impl ProductionV2Services {
             }
         }
     }
-    /// Reserve Consensus I/O before recovered-Apply claim, accepting only the
-    /// registry projection with the same opaque key.
-    pub(in crate::sumeragi) fn capture_recovered_decision_apply_capacity<'a>(
-        &'a self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-    ) -> Result<
-        RecoveredDecisionApplyCapacityCaptureV1<'a>,
-        RecoveredDecisionApplyCapacityCaptureErrorV1,
-    > {
-        if !key.matches_height_context(&self.context) {
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::ForeignContext);
-        }
-        let io = self
-            .io
-            .as_ref()
-            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected)?;
-        let operation = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::OutputClosed)?;
-        io.command_tx
-            .queue
-            .capture_recovered_decision_apply_capacity(operation, key)
-    }
-    /// Reserve Consensus before recovered-Sign claim for the matching registry
-    /// key, releasing capacity on every pre-commit error.
+    /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
+    ///
+    /// This happens before coordinator claim. The locked reservation accepts
+    /// only a borrow-bound registry projection with the same class-sensitive
+    /// key and releases all capacity automatically on every pre-commit error.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_capacity<'a>(
         &'a self,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -11889,7 +11707,6 @@ impl ProductionV2Services {
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
-        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
         kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
@@ -11926,7 +11743,6 @@ impl ProductionV2Services {
             consensus_io_capacity,
             auxiliary_io_capacity,
             orphan_chunk_capacity,
-            lifecycle_ordinals,
             output_guard,
             leader_wire_ingress,
             kura_replica_advert_refresh,
@@ -11956,7 +11772,6 @@ impl ProductionV2Services {
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
-        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
         kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
@@ -11989,7 +11804,6 @@ impl ProductionV2Services {
             consensus_io_capacity,
             auxiliary_io_capacity,
             orphan_chunk_capacity,
-            lifecycle_ordinals,
             output_guard,
             leader_wire_ingress,
             kura_replica_advert_refresh,
@@ -12016,7 +11830,6 @@ impl ProductionV2Services {
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
-        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
         kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
@@ -12095,7 +11908,6 @@ impl ProductionV2Services {
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
-            lifecycle_ordinals,
             Arc::clone(&output_guard),
         )?;
         let mut service = Self {
@@ -13339,33 +13151,6 @@ impl ProductionV2Services {
             ownership_position,
         })
     }
-    fn take_recovered_decision_apply_completion(&mut self) -> IoCompletionTake {
-        if let Some(completion) = self.held_io_completion.take() {
-            if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
-                return IoCompletionTake::ready(PendingServiceCompletion::Io {
-                    completion,
-                    ownership_position: 0,
-                });
-            }
-            self.held_io_completion = Some(completion);
-            return IoCompletionTake::unavailable();
-        }
-        let Some(io) = self.io.as_ref() else {
-            return IoCompletionTake::unavailable();
-        };
-        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-            return IoCompletionTake::unavailable();
-        };
-        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
-            IoCompletionTake::ready(PendingServiceCompletion::Io {
-                completion,
-                ownership_position: 0,
-            })
-        } else {
-            self.held_io_completion = Some(completion);
-            IoCompletionTake::unavailable()
-        }
-    }
     fn take_recovered_lifecycle_sign_completion(&mut self) -> IoCompletionTake {
         if let Some(completion) = self.held_io_completion.take() {
             if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
@@ -13384,39 +13169,6 @@ impl ProductionV2Services {
             return IoCompletionTake::unavailable();
         };
         if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
-            IoCompletionTake::ready(PendingServiceCompletion::Io {
-                completion,
-                ownership_position: 0,
-            })
-        } else {
-            self.held_io_completion = Some(completion);
-            IoCompletionTake::unavailable()
-        }
-    }
-    fn take_recovered_decision_fetch_body_completion(&mut self) -> IoCompletionTake {
-        if let Some(completion) = self.held_io_completion.take() {
-            if matches!(
-                &completion,
-                V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
-            ) {
-                return IoCompletionTake::ready(PendingServiceCompletion::Io {
-                    completion,
-                    ownership_position: 0,
-                });
-            }
-            self.held_io_completion = Some(completion);
-            return IoCompletionTake::unavailable();
-        }
-        let Some(io) = self.io.as_ref() else {
-            return IoCompletionTake::unavailable();
-        };
-        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-            return IoCompletionTake::unavailable();
-        };
-        if matches!(
-            &completion,
-            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
-        ) {
             IoCompletionTake::ready(PendingServiceCompletion::Io {
                 completion,
                 ownership_position: 0,
@@ -13603,37 +13355,13 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_with_lifecycle(executor)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-    /// Drain only a recovered Decision Apply head; any other completion stays
-    /// held for the ordinary single-FIFO drain.
-    pub(in crate::sumeragi) fn drain_recovered_decision_apply_completion(
-        &mut self,
-    ) -> Result<RecoveredDecisionApplyCompletionDrainV1, String> {
-        if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
-        }
-        let take = self.take_recovered_decision_apply_completion();
-        let Some(PendingServiceCompletion::Io {
-            completion: V2IoCompletion::RecoveredDecisionApply(guarded),
-            ownership_position: _,
-        }) = take.completion
-        else {
-            return Ok(RecoveredDecisionApplyCompletionDrainV1 { completion: None });
-        };
-        let key = guarded.result().dispatch_key();
-        let work_ack = self
-            .io
-            .as_ref()
-            .ok_or_else(|| {
-                "recovered Decision Apply completion lost its I/O service owner".to_owned()
-            })?
-            .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))?;
-        Ok(RecoveredDecisionApplyCompletionDrainV1 {
-            completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
-        })
-    }
-
-    /// Atomically classify the oldest completion: ordinary/local heads pass
-    /// through untouched; recovered heads transfer one guard and rotate once.
+    /// Take and classify the oldest Completion-lane owner in one operation.
+    ///
+    /// This is the lifecycle driver's sole physical-head classifier. It does
+    /// not probe three mutually exclusive drains. A pending local completion,
+    /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
+    /// or ownership-position removal. A recovered result transfers exactly its
+    /// dedicated guarded token and advances completion-source rotation once.
     pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(
         &mut self,
     ) -> Result<RecoveredLifecycleCompletionTakeV1, String> {
@@ -13767,37 +13495,7 @@ impl ProductionV2Services {
             completion: Some(completion),
         })
     }
-    /// Drain only the oldest lifecycle-owned recovered Fetch body completion.
-    /// Generic completion service retains this family at the physical head.
-    pub(in crate::sumeragi) fn drain_recovered_decision_fetch_body_completion(
-        &mut self,
-    ) -> Result<RecoveredDecisionFetchBodyCompletionDrainV1, String> {
-        if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
-        }
-        let take = self.take_recovered_decision_fetch_body_completion();
-        let Some(PendingServiceCompletion::Io {
-            completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded),
-            ownership_position,
-        }) = take.completion
-        else {
-            return Ok(RecoveredDecisionFetchBodyCompletionDrainV1 { completion: None });
-        };
-        let completion = self
-            .io
-            .as_ref()
-            .and_then(|io| {
-                io.prepare_recovered_decision_fetch_body_completion(guarded, ownership_position)
-            })
-            .ok_or_else(|| {
-                "recovered Decision Fetch body completion lost its exact dedicated owner".to_owned()
-            })?;
-        Ok(RecoveredDecisionFetchBodyCompletionDrainV1 {
-            completion: Some(completion),
-        })
-    }
-    /// Drain only the oldest lifecycle-owned Certified-Serve completion.
-    /// Every other physical head is restored to the sole held slot unchanged.
+    /// Drain the oldest lifecycle Serve; restore every other head unchanged.
     pub(in crate::sumeragi) fn drain_lifecycle_certified_serve_completion(
         &mut self,
     ) -> Result<LifecycleCertifiedServeCompletionDrainV1, String> {
@@ -13825,9 +13523,14 @@ impl ProductionV2Services {
             completion: Some(completion),
         })
     }
-    /// Drain ordinary completion and return a persisted Fetch body to its owner.
-    /// TODO: Route this typed outcome through the final coordinator/registry once
-    /// restart can rebuild Ready-Fetch or durably advance to Store.
+    /// Drain the ordinary bounded completion source while returning a
+    /// persisted certified-Fetch body directly to its serialized owner.
+    ///
+    /// TODO: Give the final runner one `LifecycleCoordinator`/registry owner and
+    /// consume this typed outcome only after restart recovery can rebuild the
+    /// exact Ready-Fetch response occurrence from a typed durable locator (or
+    /// this transaction durably advances directly to the BodyFrame-bound Store
+    /// stage). Until then, the count-only caller fail-stops on this outcome.
     pub(crate) fn drain_completions_with_lifecycle<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -16043,6 +15746,8 @@ include!("v2_worker/effect_services_impl.rs");
 /// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
 pub(super) mod tests {
+    use norito::codec::Encode as _;
+
     include!("tests/v2_worker_main_00.rs");
     include!("tests/v2_worker_main_01.rs");
     include!("tests/v2_worker_lifecycle_capacity_cases.rs");

@@ -1,4 +1,4 @@
-//! Purpose-separated adapters for detached SoraFS runtime signing roles.
+//! Purpose-separated adapters for detached `SoraFS` runtime signing roles.
 use super::{
     adapter::ExternalSoftwareSignerAdapterErrorV1,
     protocol::{
@@ -134,6 +134,9 @@ pub struct ExternalSoftwareSignerGovernanceDagAdapterV1 {
 }
 impl ExternalSoftwareSignerGovernanceDagAdapterV1 {
     /// Construct an exact Governance DAG signer binding.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the publisher binding is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
         publisher_peer_id: Vec<u8>,
@@ -253,7 +256,7 @@ impl sorafs_node::GovernanceDagRuntimeSigner for ExternalSoftwareSignerGovernanc
             .map_err(|_| REDACTED_SIGNER_FAILURE_V1.to_owned())
     }
 }
-/// External software signer for gateway-side PoTR receipts.
+/// External software signer for gateway-side `PoTR` receipts.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPotrGatewayAdapterV1 {
     signer: DetachedSignerClientV1,
@@ -261,6 +264,9 @@ pub struct ExternalSoftwareSignerPotrGatewayAdapterV1 {
 }
 impl ExternalSoftwareSignerPotrGatewayAdapterV1 {
     /// Construct one exact gateway signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the gateway identity is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
         signer_id: [u8; 32],
@@ -313,7 +319,7 @@ impl iroha_torii::sorafs::PotrGatewaySignerV1 for ExternalSoftwareSignerPotrGate
             .map_err(map_potr_error)
     }
 }
-/// External software signer for provider-side PoTR receipts.
+/// External software signer for provider-side `PoTR` receipts.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPotrProviderAdapterV1 {
     signer: DetachedSignerClientV1,
@@ -322,6 +328,9 @@ pub struct ExternalSoftwareSignerPotrProviderAdapterV1 {
 }
 impl ExternalSoftwareSignerPotrProviderAdapterV1 {
     /// Construct one exact provider signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or either provider identity is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
         signer_id: [u8; 32],
@@ -396,6 +405,9 @@ pub struct ExternalSoftwareSignerBillingStatementAdapterV1 {
 }
 impl ExternalSoftwareSignerBillingStatementAdapterV1 {
     /// Construct one exact billing statement signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the billing signer identity is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
         signer_id: String,
@@ -498,6 +510,9 @@ pub struct ExternalSoftwareSignerEvidenceViewerAdapterV1 {
 }
 impl ExternalSoftwareSignerEvidenceViewerAdapterV1 {
     /// Construct one exact evidence-viewer signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the evidence-viewer binding is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
@@ -576,6 +591,9 @@ pub struct ExternalSoftwareSignerStreamTokenAdapterV1 {
 }
 impl ExternalSoftwareSignerStreamTokenAdapterV1 {
     /// Construct one exact stream-token signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the stream-token binding is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
@@ -624,13 +642,16 @@ impl iroha_torii::sorafs::StreamTokenRuntimeSigner for ExternalSoftwareSignerStr
             .map_err(map_stream_error)
     }
 }
-/// External software signer for PoP credential/root/revocation digests.
+/// External software signer for `PoP` credential/root/revocation digests.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPopIssuerAdapterV1 {
     signer: DetachedSignerClientV1,
 }
 impl ExternalSoftwareSignerPopIssuerAdapterV1 {
-    /// Construct one exact PoP issuer signer.
+    /// Construct one exact `PoP` issuer signer.
+    ///
+    /// # Errors
+    /// Returns an error when qualification or the issuer identity is not exact.
     pub fn try_new(
         client: SoftwareSignerClientV1,
         issuer_id: String,
@@ -694,7 +715,7 @@ impl sorafs_node::pop_credentials::PopIssuerSigner for ExternalSoftwareSignerPop
             .map_err(|_| REDACTED_SIGNER_FAILURE_V1.to_owned())
     }
 }
-/// PoP registry decorator that replaces only the issuer signer.
+/// `PoP` registry decorator that replaces only the issuer signer.
 pub struct ExternalSoftwareSignerPopRegistryV1 {
     base: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
     issuer_signer: Arc<ExternalSoftwareSignerPopIssuerAdapterV1>,
@@ -709,7 +730,10 @@ impl fmt::Debug for ExternalSoftwareSignerPopRegistryV1 {
     }
 }
 impl ExternalSoftwareSignerPopRegistryV1 {
-    /// Compose an existing coherent PoP registry with one isolated signer.
+    /// Compose an existing coherent `PoP` registry with one isolated signer.
+    ///
+    /// # Errors
+    /// Returns an error when the registry or isolated signer changes qualification.
     pub fn try_new(
         base: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
         issuer_signer: Arc<ExternalSoftwareSignerPopIssuerAdapterV1>,

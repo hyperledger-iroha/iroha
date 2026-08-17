@@ -1580,7 +1580,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "observe_effects": (
         "23d97acae28bbe7990bc3316cb6f38f38c412511f4613657a842e12f9a5517a7"
     ),
-    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
+    "step": "cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),

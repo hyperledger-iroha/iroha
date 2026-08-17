@@ -185,8 +185,12 @@ pub(super) enum PrivacyGovernanceSemanticErrorV1 {
 ///
 /// The authenticated kernel peer UID is checked before request parsing.  The caller
 /// must eventually obtain it from the accepted Unix peer credentials, never from the
-/// request body.  This function has no production caller until the separately built
-/// retained genesis signer and same-key finalization transition are source-closed.
+/// request body. The feature-gated Taira authority is the only production caller;
+/// this module itself retains no key material, transport, or signing surface.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fail-closed request validator keeps the complete authenticated contract in one auditable sequence"
+)]
 pub(super) fn validate_privacy_governance_request_v1(
     request_bytes: &[u8],
     authenticated_kernel_peer_uid: u32,
@@ -635,7 +639,7 @@ fn validate_expected_context(
         expected.compiled_profile_sha256,
         expected.run_nonce_sha256,
     ];
-    if required_digests.iter().any(|digest| is_zero(digest))
+    if required_digests.iter().any(is_zero)
         || is_zero(&expected.dpn_validator_release_commit)
         || is_zero(&expected.source_commit)
         || is_zero(expected.network_id.as_bytes())
@@ -748,7 +752,7 @@ fn validate_transaction_payload(
         ));
     }
     if payload.creation_time_ms != expected.issued_at_unix_millis
-        || payload.time_to_live_ms.map(|ttl| ttl.get())
+        || payload.time_to_live_ms.map(std::num::NonZero::get)
             != Some(expected.expires_at_unix_millis - expected.issued_at_unix_millis)
         || payload.nonce != Some(expected.transaction_nonce)
     {
@@ -916,7 +920,7 @@ fn required_empty_array(
     object
         .get(field)
         .and_then(Value::as_array)
-        .map(|value| value.is_empty())
+        .map(Vec::is_empty)
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
 fn required_empty_object(
@@ -926,7 +930,7 @@ fn required_empty_object(
     object
         .get(field)
         .and_then(Value::as_object)
-        .map(|value| value.is_empty())
+        .map(Map::is_empty)
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
 fn required_sha256(
@@ -1252,6 +1256,10 @@ mod tests {
         };
         (lifecycle.proposed_at_height, lifecycle.activate_at_height)
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the canonical governance request fixture mirrors every authenticated production field"
+    )]
     fn request_value_with_payload(
         context: &PrivacyGovernanceExpectedContextV1,
         payload_bytes: &[u8],
@@ -1564,6 +1572,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the coercion corpus exercises one cohesive canonical-request rejection matrix"
+    )]
     fn canonical_request_rejects_coercion_duplicates_and_recomputed_self_hashes() {
         let context = fixture_context();
         let request = valid_request(&context);
@@ -1727,9 +1739,15 @@ mod tests {
         );
         let mut payload = original.clone();
         payload.domain = TransactionDomain::Genesis;
-        assert!(
-            TransactionBuilder::from_payload(payload).is_err(),
-            "the transaction codec must reject a genesis-domain governance payload"
+        let bytes = TransactionBuilder::from_genesis_payload(payload)
+            .expect("hostile genesis payload remains structurally encodable")
+            .encode_payload();
+        let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
+        replace_payload(&mut value, &bytes);
+        let hostile = reseal_request_id(&mut value);
+        assert_eq!(
+            validate(&hostile, &context),
+            Err(PrivacyGovernanceSemanticErrorV1::TransactionPayload)
         );
         let mut attacks = Vec::new();
         let mut payload = original.clone();

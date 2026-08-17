@@ -172,6 +172,33 @@ fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2
     block_ingress.close();
 }
 
+#[cfg(test)]
+fn open_ingress_for_active_height(
+    output_guard: &ConsensusOutputGuard,
+    ingress_ready: &AtomicBool,
+    block_ingress: &FairV2Ingress,
+    activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
+) -> Result<(), V2RunnerError> {
+    let Some(ingress_activation) = output_guard.begin_fail_stop_operation() else {
+        return Err(V2RunnerError::RestartRequired);
+    };
+    if let Some((activation, successor)) = activation.as_ref() {
+        activation.preflight_ingress_open(successor)?;
+    }
+    block_ingress.open().map_err(ingress_capacity_error)?;
+    if let Some((activation, successor)) = activation
+        && let Err(error) = activation.publish(successor)
+    {
+        close_ingress_for_rollover(ingress_ready, block_ingress);
+        return Err(error);
+    }
+    // Keep readiness false across the fallible successor publication so no
+    // ingress can be accepted and then discarded on reauthentication failure.
+    ingress_ready.store(true, Ordering::Release);
+    ingress_activation.complete();
+    Ok(())
+}
+
 fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
     if error.is_bytes() {
         V2RunnerError::IngressByteCapacity {

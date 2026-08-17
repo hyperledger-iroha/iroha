@@ -4,7 +4,7 @@ fn symbol(index: u8) -> char {
     char::from(ALPHABET[usize::from(index)])
 }
 /// Encodes bytes with the RFC 4648 standard alphabet and mandatory padding.
-pub(super) fn encode(bytes: &[u8]) -> String {
+pub fn encode(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3).saturating_mul(4));
     let mut chunks = bytes.chunks_exact(3);
     for chunk in &mut chunks {

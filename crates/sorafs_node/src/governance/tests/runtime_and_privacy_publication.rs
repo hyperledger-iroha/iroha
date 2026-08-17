@@ -80,9 +80,12 @@ fn runtime_dag_producer_bounds_accept_exact_limits_and_reject_successors() {
         head_limit + index_limit + 64 * 1024 < GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_MAX_BYTES_V1,
         "the committed mirror must admit maximum head/index bytes plus codec overhead"
     );
-    assert!(
-        GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES
-    );
+    const {
+        assert!(
+            GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
+                > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES
+        );
+    }
     validate_runtime_dag_producer_entry_count(
         GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1,
         u64::try_from(GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1).expect("entry cap fits u64"),

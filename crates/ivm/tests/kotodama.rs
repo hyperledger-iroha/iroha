@@ -1078,8 +1078,8 @@ fn statement_call_sugar_is_rejected() {
     }
 }
 #[test]
-fn pointer_constructors_accept_string_variables() {
-    // Use variables bound to string literals; constructors should work
+fn non_json_pointer_constructors_accept_string_variables() {
+    // Non-JSON constructors accept string variables; Json::parse remains literal-only.
     let src = include_str!("../fixtures/koto_v1/kotodama/032.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
@@ -1121,6 +1121,7 @@ fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
             .expect_err("non-canonical pointer conversion must be rejected");
         assert!(
             error.contains("expects string")
+                || error.contains("E_JSON_LITERAL_REQUIRED")
                 || error.contains("method aliases were removed")
                 || error.contains("compiler-internal")
                 || error.contains("unknown function or builtin"),

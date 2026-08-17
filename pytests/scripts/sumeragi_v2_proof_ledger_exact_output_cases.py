@@ -2018,44 +2018,6 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn serve_certified_request_on_routes(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(&admission.request.requester))",
-            "|| false",
-            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn serve_certified_request_on_routes(",
-            "|| reply_routes.semantic_target() != &admission.request.requester",
-            "|| false",
-            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(",
-            ".merge_downstream_with_observed_receipt(ingress_ownership, receipt)",
-            ".merge_downstream(ingress_ownership)\n"
-            "                .then_some(route_candidate)",
-            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(\n"
-            "        &self,\n"
-            "        admission: &CertifiedServeAdmission,\n"
-            "        reply_routes: NetworkReplyRoutes,\n"
-            "        ingress_ownership: FairV2IngressOwnershipEvidence,\n"
-            "    ) -> Result<CertifiedServeCommit, String> {\n"
-            "        self.queue",
-            "self.queue\n"
-            "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "let _ = reply_routes.clone().merge_observed_with_receipt(&reply_routes);\n"
-            "        self.queue\n"
-            "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "the exact Serve retry and reply-target plan must be the worker-side observed-history reconciliation seams",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "pub(crate) fn post_to_peer_on_reply_routes(",
             "if reply_routes.semantic_target() != &peer",
             "if false",
@@ -2108,13 +2070,6 @@
         (
             "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
             "fn drain_v2_ingress(",
-            "if turn == OuterIngressTurn::Runtime {",
-            "if false && turn == OuterIngressTurn::Runtime {",
-            "an admitted or provisional exact Serve must suppress every later runtime-producer turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
             ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {",
             ".try_recv_if_at_checked_classified(|inbound| {",
             "ingress drain must use the gate-bound checked selector",
@@ -2125,46 +2080,6 @@
             "|| !ownership.matches_semantic_origin(Some(sender))",
             "|| false",
             "shared current Serve classification must bind transport ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "fn authorize_current_certified_serve_pre_dequeue<",
-            "return ProductionCurrentCertifiedServePreparationV1::Retain;",
-            "return ProductionCurrentCertifiedServePreparationV1::Prepared(\n"
-            "                    ProductionPreparedCertifiedServeV1::Service(String::new()),\n"
-            "                );",
-            "shared current Serve authorization must stage a negative or reserve/coalesce",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "prepared_serve = Some(prepared);",
-            "drop(prepared);",
-            "exact Serve ingress must delegate authentication and durable preparation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "fn consume_prepared_dequeued_v2_ingress(",
-            "None => {\n"
-            "                            return Err(V2RunnerError::Service(",
-            "None => {\n"
-            "                            continue;\n"
-            "                            return Err(V2RunnerError::Service(",
-            "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {",
-            "queue: Arc::clone(&self.command_tx.queue),",
-            "queue: Arc::new(V2IoCommandQueue::default()),",
-            "the I/O handle must expose a gate over its exact command queue rather than a detached reservation owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {",
-            ".map(V2IoHandle::certified_serve_ingress_gate)",
-            ".map(|_| panic!(\"detached gate\"))",
-            "production services must bind ingress to the live I/O handle's exact Serve queue",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",

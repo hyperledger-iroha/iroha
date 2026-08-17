@@ -353,6 +353,7 @@ fn admitted_decided_recovery_request(
             .collect(),
     )
 }
+#[test]
 fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims() {
     assert!(matches!(
         classify_kura_replica_advert_admission_error(

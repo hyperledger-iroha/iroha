@@ -657,8 +657,9 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_transactions_submit_and_wait_tool());
     tools.push(iroha_transactions_wait_tool());
     tools.push(iroha_transactions_status_tool());
-    // Manual tools share the same projection boundary as OpenAPI-derived tools.
-    // Keep this final guard so a custom dispatcher cannot bypass the catalog.
+    // Generated tools and the explicitly non-projected diagnostic/ledger-proof
+    // mirrors require MCP projection. Other purpose-built aliases form the
+    // separate explicit allowlist, while still following catalog feature gates.
     retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     apply_catalog_operator_effects_to_manual_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     apply_catalog_auth_schemas_to_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
@@ -2635,43 +2636,7 @@ fn catalog_method(method: &Method) -> Option<CatalogHttpMethod> {
         _ => None,
     }
 }
-/// Return the explicit MCP decision for a cataloged method/path pair.
-///
-/// `None` means the operation is not represented by one of `groups`. Callers
-/// which generate tools must treat that as deny: OpenAPI presence alone is not
-/// authorization to expose a route through MCP.
-fn catalog_mcp_projection_decision(
-    groups: &[CatalogProjectionGroup],
-    method: &Method,
-    path: &str,
-) -> Option<bool> {
-    let method = catalog_method(method)?;
-    for group in groups {
-        let catalog = RouteCatalog::new(group.routes);
-        let is_cataloged = catalog
-            .routes()
-            .iter()
-            .any(|route| route.method() == method && route.path() == path);
-        if !is_cataloged {
-            continue;
-        }
-        return Some(
-            catalog
-                .project(CatalogProjection::Mcp, group.enabled_features)
-                .into_iter()
-                .any(|route| route.method() == method && route.path() == path),
-        );
-    }
-    None
-}
-fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {
-    tools.retain(|tool| {
-        !matches!(
-            catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str()),
-            Some(false)
-        )
-    });
-}
+include!("mcp/catalog_projection.rs");
 fn apply_catalog_operator_effects_to_manual_tools(
     tools: &mut [ToolSpec],
     groups: &[CatalogProjectionGroup],

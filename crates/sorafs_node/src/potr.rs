@@ -1805,8 +1805,6 @@ mod tests {
         compute_proposal_digest,
         potr::{POTR_RECEIPT_VERSION_V1, PotrStatus, sign_potr_receipt_v1},
     };
-    #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     use std::{
         collections::BTreeMap,
         path::Path,

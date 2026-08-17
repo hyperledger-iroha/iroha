@@ -45,6 +45,10 @@ pub enum Error {
         reason: String,
     },
     /// Prepared validator {index} has an invalid SoraNet transport identity: {reason}.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     InvalidPreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
@@ -52,6 +56,10 @@ pub enum Error {
         reason: String,
     },
     /// Prepared validator {index} repeats another validator's SoraNet transport identity.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     DuplicatePreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
@@ -94,6 +102,10 @@ pub enum Error {
         target: String,
     },
     /// Prepared validator {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     InvalidPreparedPorts {
         /// Zero-based validator index.
         index: usize,
@@ -147,7 +159,7 @@ pub struct PreparedValidator {
     pub api_port: u16,
     /// Validator signing identity.
     pub key_pair: iroha_crypto::KeyPair,
-    /// Dedicated Ed25519 SoraNet transport public identity from the admitted runtime config.
+    /// Dedicated Ed25519 `SoraNet` transport public identity from the admitted runtime config.
     pub soranet_transport_public_key: iroha_crypto::PublicKey,
     /// BLS proof of possession committed by the signed genesis topology.
     pub pop: Vec<u8>,
@@ -400,6 +412,10 @@ impl PeerSettings {
             prepared_runtime: None,
         })
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "prepared-bundle validation is one ordered fail-closed admission transaction"
+    )]
     fn prepared(
         chain: iroha_data_model::ChainId,
         validators: Vec<PreparedValidator>,
@@ -584,6 +600,10 @@ impl<'a> Swarm<'a> {
     /// [`Self::from_prepared`] so the validator roster and signed artifacts come from one
     /// authoritative prepared bundle.
     #[allow(clippy::missing_errors_doc)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "preserve the established public deterministic-development constructor"
+    )]
     pub fn deterministic_dev(
         count: std::num::NonZeroU16,
         seed: &[u8],

@@ -18,6 +18,11 @@ use std::sync::Arc;
 struct DeploymentRegistry;
 struct ExternalMusubiPublicationFactory;
 struct ExternalMusubiPublicationRunner;
+type CombinedPublicationLauncher = fn(
+    BuildLine,
+    &dyn IrohaRuntimeProviderRegistryV1,
+    Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
+) -> ReportResult<(), MainError>;
 impl MusubiPublicationPrivateServiceRunnerV1 for ExternalMusubiPublicationRunner {
     fn serve(
         self: Box<Self>,
@@ -141,11 +146,7 @@ fn external_crate_can_implement_factory_and_name_publication_launchers() {
         BuildLine,
         Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
     ) -> ReportResult<(), MainError> = irohad::run_with_musubi_publication;
-    let combined_launcher: fn(
-        BuildLine,
-        &dyn IrohaRuntimeProviderRegistryV1,
-        Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
-    ) -> ReportResult<(), MainError> =
+    let combined_launcher: CombinedPublicationLauncher =
         irohad::run_with_runtime_provider_registry_and_musubi_publication;
     let factory: Box<dyn MusubiPublicationPrivateServiceFactoryV1> =
         Box::new(ExternalMusubiPublicationFactory);

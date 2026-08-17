@@ -174,7 +174,7 @@ impl PredicateJson {
     fn sort_in_place(&mut self) {
         stable_insertion_sort_by(&mut self.equals, |left, right| left.field.cmp(&right.field));
         stable_insertion_sort_by(&mut self.r#in, |left, right| left.field.cmp(&right.field));
-        stable_insertion_sort_by(&mut self.exists, |left, right| left.cmp(right));
+        stable_insertion_sort_by(&mut self.exists, Ord::cmp);
     }
     /// Build predicate from JSON value.
     ///
@@ -411,8 +411,9 @@ impl JsonSerialize for PredicateJson {
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
         out.push('{')?;
-        let mut wrote_section = false;
-        if !self.equals.is_empty() {
+        let mut wrote_section = if self.equals.is_empty() {
+            false
+        } else {
             out.push_str("\"equals\":[")?;
             out.begin_container()?;
             let mut previous = None;
@@ -436,8 +437,8 @@ impl JsonSerialize for PredicateJson {
             }
             out.push(']')?;
             out.end_container();
-            wrote_section = true;
-        }
+            true
+        };
         if !self.exists.is_empty() {
             if wrote_section {
                 out.push(',')?;

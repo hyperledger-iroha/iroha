@@ -174,10 +174,6 @@ impl RuntimeLifecycleOrdinalSource {
         let current = (*next).ok_or(EnqueueError::FailClosed)?;
         commit(current)
     }
-    /// Return whether two handles share the same actor-global ordinal source.
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.next, &other.next)
-    }
     fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
         let mut next = self.lock_next()?;
         let reserved = Self::prospective_range(*next, count)?;
@@ -222,13 +218,6 @@ impl RuntimeLifecycleOrdinalSource {
         }
         self.lock_next()
             .map(|next| (*next).is_some_and(|next| ordinal < next))
-    }
-    #[cfg(test)]
-    pub(crate) fn exhaust_for_test(&self) {
-        *self
-            .next
-            .lock()
-            .expect("test lifecycle ordinal source is not poisoned") = None;
     }
 }
 /// Derive the deadline for one certified view from the immutable base timeout.

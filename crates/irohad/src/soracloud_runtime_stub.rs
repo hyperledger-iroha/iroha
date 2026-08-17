@@ -1,4 +1,3 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
 use iroha_core::{
     queue::Queue,
     soracloud_runtime::{
@@ -13,6 +12,7 @@ use iroha_core::{
 use iroha_data_model::prelude::AccountId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use parking_lot::RwLock;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::task;
 #[derive(Clone)]
 pub struct SoracloudRuntimeManagerConfig {
@@ -56,6 +56,10 @@ impl QueuedSoracloudRuntimeMutationSink {
     /// This constructor currently cannot fail. It keeps the production
     /// launcher's fallible signature so feature selection cannot bypass its
     /// signer checks.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the stub preserves the embedded runtime's fallible constructor contract"
+    )]
     pub(crate) fn new(
         _queue: Arc<Queue>,
         _state: Arc<State>,
@@ -120,6 +124,10 @@ impl SoracloudRuntimeManager {
     /// The stub currently has no fallible initialization, but returns the same
     /// result shape as the embedded runtime so launcher startup remains
     /// feature-independent and fail-closed.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the stub preserves the embedded runtime's fallible startup contract"
+    )]
     pub fn start(
         self,
         shutdown_signal: ShutdownSignal,

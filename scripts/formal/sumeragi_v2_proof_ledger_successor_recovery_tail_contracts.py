@@ -2304,7 +2304,6 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "Some(retirement)",
             "assert!(!ingress_ready.load(Ordering::Acquire))",
             "assert!(!ingress_state.open)",
-            "assert!(ingress_state.certified_serve_gate.is_none())",
             "assert!(ingress_state.leader_wire_lifecycle_gate.is_none())",
             "assert!(!output_guard.restart_required())",
             "assert!(crate::sumeragi::status::v2_status().is_none())",
@@ -2759,10 +2758,9 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "!ownership.matches_semantic_origin(Some(sender))",
             "!ownership.matches_reply_routes(Some(reply_routes))",
             "authenticate(request.clone(), sender)",
-            "CertifiedServeNegativeOutcome::InvalidCertificate",
+            "CurrentCertifiedServePreAdmissionV1::Negative",
             "certified_body_request_is_superseded_after_decision(",
-            "authenticated.request_hash()",
-            "CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided)",
+            "CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative",
             "CurrentCertifiedServePreAdmissionV1::Authenticated",
         ),
     )
@@ -2778,7 +2776,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         pre_admission_tokens = rust_code_tokens(serve_pre_admission.source)
         for token, count in (
             ("CurrentCertifiedServePreAdmissionV1::Service(", 9),
-            ("CurrentCertifiedServePreAdmissionV1::Negative", 2),
+            ("CurrentCertifiedServePreAdmissionV1::Negative", 1),
         ):
             observed = _token_sequence_count(
                 pre_admission_tokens, rust_code_tokens(token)
@@ -2801,132 +2799,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "dequeue",
         ),
     )
-    serve_authorization = item(
-        "ordinary_consumer", "authorize_current_certified_serve_pre_dequeue"
-    )
-    require_order(
-        "ordinary_consumer",
-        serve_authorization,
-        "shared current Serve durable preparation before dequeue",
-        (
-            "CurrentCertifiedServePreAdmissionV1::Service(reason)",
-            "CurrentCertifiedServePreAdmissionV1::Negative",
-            "authorizer.stage_negative(request_hash, outcome)",
-            "CurrentCertifiedServePreAdmissionV1::Authenticated",
-            "authorizer.prepare_exact(&authenticated_via, request)",
-            "CertifiedServePrepareError::Backpressure",
-            "ProductionCurrentCertifiedServePreparationV1::Retain",
-            "CertifiedServePrepareError::Rejected(reason)",
-            "CertifiedServePrepareError::Service(reason)",
-            "ProductionCurrentCertifiedServePreparationV1::Prepared(prepared)",
-        ),
-    )
-    require_tokens(
-        "ordinary_consumer",
-        serve_authorization,
-        "shared current Serve admitted/rejected/service transfer",
-        (
-            "ProductionPreparedCertifiedServeV1::Admitted(admission)",
-        ),
-    )
-    if serve_authorization is not None:
-        authorization_tokens = rust_code_tokens(serve_authorization.source)
-        for token, count in (
-            ("ProductionPreparedCertifiedServeV1::Rejected(reason)", 2),
-            ("ProductionPreparedCertifiedServeV1::Service(reason)", 3),
-        ):
-            observed = _token_sequence_count(
-                authorization_tokens, rust_code_tokens(token)
-            )
-            if observed != count:
-                errors.append(
-                    f"{paths['ordinary_consumer']}:{serve_authorization.line}: "
-                    f"shared current Serve authorizer must contain {token!r} "
-                    f"exactly {count} time(s); found {observed}"
-                )
-    reject_tokens(
-        "ordinary_consumer",
-        serve_authorization,
-        "current Serve authorizer owns no physical queue mutation",
-        ("try_recv", "dequeue", "FairIngressTurnCut", "PreparedDequeuedV2IngressV1"),
-    )
-    production_authorizer_source = sources["ordinary_consumer"]
-    production_authorizer_start = production_authorizer_source.find(
-        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services"
-    )
-    production_authorizer_end = production_authorizer_source.find(
-        "/// Authenticate one current-height Certified-Serve carrier",
-        production_authorizer_start,
-    )
-    production_authorizer = (
-        production_authorizer_source[
-            production_authorizer_start:production_authorizer_end
-        ]
-        if production_authorizer_start >= 0
-        and production_authorizer_end > production_authorizer_start
-        else ""
-    )
-    for required in (
-        "type Admission = CertifiedServeAdmission;",
-        "self.stage_certified_serve_rejection(request_hash, outcome)",
-        "self.prepare_certified_request(authenticated_via, request)",
-    ):
-        if required not in production_authorizer:
-            errors.append(
-                f"{paths['ordinary_consumer']}: production current Serve "
-                f"authorizer omits {required!r}"
-            )
-
-    serve = item("driver", "prepare_and_dequeue_current_certified_serve")
-    require_order(
-        "driver",
-        serve,
-        "stateful selected Serve fail-stop transaction",
-        (
-            "output_guard.begin_fail_stop_operation()",
-            "prepare_current_certified_serve_pre_admission(",
-            "executor.authenticate_certified_body_request(",
-            "authorize_current_certified_serve_pre_dequeue(prepared, services)",
-            "ProductionCurrentCertifiedServePreparationV1::Retain",
-            "operation.complete()",
-            "drop(cut)",
-            "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
-            "cut.dequeue_exact_retaining()",
-            "prepared_ordinary_ingress_turn(",
-            "Some(prepared)",
-        ),
-    )
-    require_tokens(
-        "driver",
-        serve,
-        "selected Serve shared prepared transfer",
-        (
-            """
-prepare_current_certified_serve_pre_admission(
-    cut.selected_occurrence().inbound(),
-    executor.context().height,
-    terminal_subject,
-    |request, sender| {
-        executor
-            .authenticate_certified_body_request(request, sender)
-            .map_err(|error| error.to_string())
-    },
-)
-""",
-            "ProductionCurrentCertifiedServePreparationV1::Prepared(prepared)",
-            "drop(operation); drop(retained); drop(runner)",
-        ),
-    )
-    reject_tokens(
-        "driver",
-        serve,
-        "selected Serve delegates durable preparation to the shared owner",
-        (
-            "services.stage_certified_serve_rejection(",
-            "services.prepare_certified_request(",
-        ),
-    )
-
     token_source = sources["driver"]
     token_start = token_source.find(
         "pub(in crate::sumeragi) struct ProductionPreparedOrdinaryIngressTurnV1"
@@ -3210,8 +3082,10 @@ prepare_current_certified_serve_pre_admission(
         "current certified Serve rejection must own ingress",
         "backpressured certified Serve remains lifecycle-owned",
         "released auxiliary capacity must admit exact Serve",
+        "released certified Serve must enter lifecycle dispatch directly",
         "ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)",
-        "consume exact admitted Serve handoff",
+        "current Serve completion requires lifecycle restart",
+        "completed Serve must release one adjacent ProducerTurn",
         "drain_lifecycle_v2_ingress(",
         "drain one exact lifecycle-owned ordinary batch",
     ):
@@ -3334,7 +3208,7 @@ prepare_current_certified_serve_pre_admission(
             "FairV2IngressDequeueDisposition::RetireObsolete",
             "wire::ConsensusMessageV2Payload::Proposal(proposal)",
             "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
-            "ProductionPreparedCertifiedServeV1::Admitted(admission)",
+            "ProductionPreparedCertifiedServeV1::Rejected(reason)",
             "wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)",
             "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
             "wire::ConsensusMessageV2Payload::CommitCertificateRequest(request)",
@@ -3343,17 +3217,6 @@ prepare_current_certified_serve_pre_admission(
     )
     if ordinary_consumer is not None:
         ordinary_tokens = rust_code_tokens(ordinary_consumer.source)
-        for token in (
-            "ProductionPreparedCertifiedServeV1::Rejected(reason)",
-            "ProductionPreparedCertifiedServeV1::Service(reason)",
-        ):
-            observed = _token_sequence_count(ordinary_tokens, rust_code_tokens(token))
-            if observed != 2:
-                errors.append(
-                    f"{paths['ordinary_consumer']}:{ordinary_consumer.line}: single "
-                    f"exact ordinary post-dequeue runner tail must contain {token!r} "
-                    f"exactly twice; found {observed}"
-                )
         for forbidden in ("FnOnce", "callback", "into_parts("):
             if forbidden in ordinary_consumer.source:
                 errors.append(
@@ -3365,132 +3228,82 @@ prepare_current_certified_serve_pre_admission(
     require_order(
         "runner",
         legacy_drain,
-        "legacy and lifecycle ordinary ingress share one post-dequeue tail",
+        "decided-lane drain retains current Serve for the lifecycle coordinator",
         (
-            "prepare_current_certified_serve_pre_admission(",
-            "executor.authenticate_certified_body_request(request, sender)",
-            "authorize_current_certified_serve_pre_dequeue(",
-            "ProductionCurrentCertifiedServePreparationV1::Retain",
+            "let prepared_serve = None",
+            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(",
+            "let current_serve = matches!(",
+            "if current_serve",
+            "return false",
             "PreparedDequeuedV2IngressV1::new(",
             "consume_prepared_dequeued_v2_ingress(",
-            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
-            "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
         ),
     )
-    reject_tokens(
-        "runner",
-        legacy_drain,
-        "ordinary drain delegates durable Serve preparation",
-        (
-            "services.stage_certified_serve_rejection(",
-            "services.prepare_certified_request(",
-        ),
-    )
-    require_tokens(
-        "runner",
-        legacy_drain,
-        "ordinary drain delegates the exact current Serve subject and authenticator",
-        (
-            """
-ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-    inbound,
-    executor.context().height,
-    terminal_subject,
-    |request, sender| {
-        executor
-            .authenticate_certified_body_request(request, sender)
-            .map_err(|error| error.to_string())
-    },
-)
-""",
-        ),
-    )
+
     decided_pre_admission = item("runner", "prepare_decided_lane_recovery_ingress")
     require_order(
         "runner",
         decided_pre_admission,
-        "terminal recovery shares the current Serve classifier",
+        "terminal recovery classifies current Serve as retained",
         (
-            "message.validate_version().is_err()",
-            "prepare_current_certified_serve_pre_admission(",
+            "inbound.message().is_lane_local()",
+            "BlockMessage::V2(message)",
+            "ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
             "request.round.height < active_height",
             "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
-            "request.round.height > active_height",
+            "request.round.height == active_height",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
             "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
-            "prepare_current_certified_serve_pre_admission(",
         ),
     )
     reject_tokens(
         "runner",
         decided_pre_admission,
-        "terminal recovery delegates current Serve ownership classification",
+        "terminal recovery classifier owns no current-Serve authentication or dequeue",
         (
-            "inbound.reply_routes()",
-            "inbound.ingress_ownership()",
-            "ownership.matches_message(",
-            "CertifiedServeNegativeOutcome::InvalidCertificate",
-            "CertifiedServeNegativeOutcome::SupersededByDurableDecision",
+            "prepare_current_certified_serve_pre_admission(",
+            "authenticate_certified_body_request(",
+            "try_recv",
         ),
     )
-    if decided_pre_admission is not None:
-        terminal_call = rust_code_tokens(
-            """
-ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-    inbound,
-    active_height,
-    Some(decided_subject),
-    authenticate,
-)
-"""
-        )
-        observed = _token_sequence_count(
-            rust_code_tokens(decided_pre_admission.source), terminal_call
-        )
-        if observed != 2:
-            errors.append(
-                f"{paths['runner']}:{decided_pre_admission.line}: terminal "
-                "recovery must bind both invalid-version and current-height "
-                f"Serve classifiers to the durable Decision; found {observed}"
-            )
     decided_authorization = item("runner", "authorize_decided_lane_recovery_drain")
     require_order(
         "runner",
         decided_authorization,
-        "terminal recovery translates only the shared durable preparation",
+        "terminal recovery denies current-Serve dequeue authority",
         (
-            "DecidedLaneRecoveryIngressPreparation::CurrentServe(prepared)",
-            "authorize_current_certified_serve_pre_dequeue(",
-            "ProductionCurrentCertifiedServePreparationV1::Retain",
+            "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
+            "DecidedLaneRecoveryDrainAuthorization::HistoricalServe",
+            "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
+            "DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
             "DecidedLaneRecoveryDrainDecision::Retain",
-            "ProductionPreparedCertifiedServeV1::Admitted",
-            "DecidedLaneRecoveryCurrentDrain::Admitted(admission)",
-            "ProductionPreparedCertifiedServeV1::Rejected",
-            "DecidedLaneRecoveryCurrentDrain::Rejected(reason)",
-            "ProductionPreparedCertifiedServeV1::Service(reason)",
-            "DecidedLaneRecoveryDrainDecision::FailClosed(reason)",
         ),
     )
     reject_tokens(
         "runner",
         decided_authorization,
-        "terminal recovery cannot shadow shared durable Serve authorization",
-        ("authorizer.stage_negative(", "authorizer.prepare_exact("),
+        "terminal recovery cannot mint coordinator-owned Serve authority",
+        (
+            "ProductionPreparedCertifiedServeV1",
+            "CertifiedServeAdmission",
+            "prepare_exact(",
+        ),
     )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(
         "runner",
         decided_drain,
-        "live terminal drain authenticates before checked authorization",
+        "live terminal drain retains current Serve before checked dequeue",
         (
             "receiver.try_recv_if_checked(",
-            "prepare_decided_lane_recovery_ingress(",
-            "executor.context().height",
-            "decided_subject",
-            "executor.authenticate_certified_body_request(request, sender)",
-            "authorize_decided_lane_recovery_drain(preparation, services)",
-            "DecidedLaneRecoveryDrainDecision::Retain",
+            "prepare_decided_lane_recovery_ingress(inbound, executor.context().height)",
+            "authorize_decided_lane_recovery_drain(preparation)",
+            "DecidedLaneRecoveryDrainDecision::Retain => false",
             "DecidedLaneRecoveryDrainDecision::Authorized(candidate)",
-            "DecidedLaneRecoveryDrainDecision::FailClosed(reason)",
+            "authorization.replace(candidate)",
+            "ProductionDecidedLaneRecoveryDrainCommitter",
+            "commit_decided_lane_recovery_drain(authorization, &mut committer)",
         ),
     )
     lifecycle_consumer = item("driver", "consume_prepared_ordinary_ingress_turn")
@@ -3520,14 +3333,13 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
         "activated lifecycle ordinary Completion/Runtime/Ingress batch",
         (
             "executor.has_retained_certified_body_response()",
-            "services.lifecycle_output_guard()",
             "outer_ingress_turns(limit, context_id, height)",
             "LifecycleRunnerRankTarget::Completion",
-            "services.certified_serve_barrier_request_hash()",
             "activated.drive_completion_turn(current_turn, lane_work)",
             "services.drain_completions(executor)?",
+            "completion_selection_stops_batch(&selected)",
+            "return Ok(())",
             "LifecycleRunnerRankTarget::Runtime",
-            "services.certified_serve_barrier()",
             "advance_executor(receiver, executor, services, 1)?",
             "LifecycleRunnerRankTarget::Ingress",
             "activated.drive_ingress_turn(current_turn)",
@@ -3540,10 +3352,13 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
         "activated lifecycle ordinary batch selected outcomes",
         (
             "ProductionLifecycleCompletionTurnV1::PassThrough(ordinary_turn,)",
-            "ProductionLifecycleCompletionTurnV1::Selected(_selected,)",
+            "ProductionLifecycleCompletionTurnV1::Selected(selected,)",
+            "selected.restart_required()",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
             "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal",
             "ProductionLifecycleIngressSelectionV1::CapacityPending",
             "ProductionLifecycleIngressSelectionV1::Retry",
             "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
@@ -3563,11 +3378,11 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
                     "activated lifecycle ordinary batch exposes obsolete or "
                     f"caller-substitutable surface {forbidden!r}"
                 )
-    if sources["lifecycle_run_inner"].count("drain_lifecycle_v2_ingress(") != 2:
+    if sources["lifecycle_run_inner"].count("drain_lifecycle_v2_ingress(") != 1:
         errors.append(
             f"{paths['lifecycle_run_inner']}: activated lifecycle loop must route "
-            "exactly its Serve-barrier and main ordinary batches through the "
-            "shared lifecycle height driver"
+            "exactly its main ordinary batch through the shared lifecycle "
+            "height driver"
         )
 
     preactivation_start = sources["runner"].find(
@@ -3893,8 +3708,9 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
         "lifecycle live-height finalization and successor storage handoff",
         (
             "drain_lifecycle_v2_ingress(",
+            "claim_producer_turn_for_local_proposal(&mut active_runner)",
+            "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
             "finalize_lifecycle_height(",
-            "Some(certified_serve_producer_episode)",
             "DurableV2PredecessorIdentity::authenticate(artifact, receipt)",
             "build_verified_successor(",
             "into_parts_with_lifecycle_storage_authority(",
@@ -3907,7 +3723,6 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
         "lifecycle finalization output/store/cleanup transaction",
         (
             "activated.into_finalized_rollover(active_runner)",
-            "drop(producer_episode)",
             "finalized.finality()",
             "prepare_successor(receipt, artifact, &mut lane_work)",
             "finalized.rollover_outputs(",
@@ -3918,17 +3733,19 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
     require_order(
         "lifecycle_run_inner",
         lifecycle_active,
-        "certified-Serve producer episode spans the complete live runner turn",
+        "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let certified_serve_barrier = services.certified_serve_barrier()",
             "service_retained_certified_response(",
-            "service_certified_serve_barrier( certified_serve_barrier,",
-            "let certified_serve_producer_episode = activated.with_runner_runtime(",
             "let ready_to_finish = activated.with_runner_runtime(",
+            "claim_producer_turn_for_local_proposal(&mut active_runner)",
+            "if !ready_to_finish || producer_turn.is_some()",
+            "schedule_local_proposal(",
+            "dispatch_lane_work_effects(",
+            "if let Some(claimed) = producer_turn",
+            "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
+            "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
             "if ready_to_finish",
             "finalize_lifecycle_height(",
-            "Some(certified_serve_producer_episode)",
-            "schedule_local_proposal(",
         ),
     )
     if lifecycle_active is not None and "V2IngressDrainMode::Ordinary" in lifecycle_active.source:
@@ -4623,9 +4440,7 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
             "executor.lifecycle_live_clocks_are_unarmed()",
             "if !finalize",
             ".into_clean_shutdown(&mut active_runner)",
-            "services.try_begin_certified_serve_producer_episode()",
             ".into_finalized_rollover(&mut active_runner)",
-            "drop(producer_episode)",
             ".rollover_outputs(&mut active_runner, lane_work, &successor, 64)",
             ".retire_lifecycle_stores()",
             "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",

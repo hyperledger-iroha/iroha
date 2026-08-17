@@ -27,20 +27,20 @@ const TOOL_LIST_PAGE_LIMIT: usize = 128;
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
-        query,
+        LiveQueryStore::start_test(),
+        cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
-        iroha_torii::test_utils::signed_query_network_id(),
+        *state.network_id_ref(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -362,16 +362,15 @@ async fn assert_mcp_alias_dispatch(case: McpAliasDispatchCase) {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     let app = build_router(cfg);
-    let arguments = case.arguments.into_json();
     let (status, call) = post_mcp(
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": case.request_id,
+            "id": { case.request_id },
             "method": "tools/call",
             "params": {
-                "name": case.tool_name,
-                "arguments": arguments
+                "name": { case.tool_name },
+                "arguments": { case.arguments.into_json() }
             }
         }),
     )
@@ -382,14 +381,15 @@ async fn assert_mcp_alias_dispatch(case: McpAliasDispatchCase) {
             context,
             status_context,
         } => {
-            assert!(tool_is_error(&call), "{context}");
+            assert_tool_error(&call, context);
             let structured = structured_content(&call);
             assert!(
                 structured
                     .get("status")
                     .and_then(Value::as_u64)
-                    .is_some_and(|status| status >= 400),
-                "{status_context}"
+                    .is_some_and(|status| status >= 400)
+                    || structured.get("code").and_then(Value::as_str) == Some(status_context),
+                "{context}: {status_context}"
             );
         }
         McpAliasDispatchExpectation::Success { context } => {
@@ -2363,14 +2363,13 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.runtime.upgrades.cancel"),
         "expected agent-friendly runtime upgrades-cancel MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
-        "expected operator-exposed sumeragi pacemaker MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.phases"),
-        "expected operator-exposed sumeragi phases MCP tool"
-    );
+    for name in ["iroha.sumeragi.pacemaker", "iroha.sumeragi.phases"] {
+        assert_eq!(
+            names.iter().any(|candidate| candidate == name),
+            cfg!(feature = "telemetry"),
+            "telemetry-backed operator alias must follow its compiled feature gate: {name}"
+        );
+    }
     for retired_name in [
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",
@@ -3053,17 +3052,12 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query()
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid hash should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid transaction hash query to be rejected"
+    assert_tool_error(&call, "invalid hash should be marked as MCP tool error");
+    assert_eq!(
+        structured_content(&call)
+            .get("code")
+            .and_then(Value::as_str),
+        Some("tool_execution_error")
     );
 }
 mcp_alias_dispatch_test! {
@@ -3073,7 +3067,7 @@ mcp_alias_dispatch_test! {
         "iroha.transactions.status",
         InvalidHash,
         "invalid flat hash should be marked as MCP tool error",
-        "expected invalid flat hash to be rejected",
+        "tool_execution_error",
     )
 }
 mcp_alias_dispatch_test! {
@@ -3083,7 +3077,7 @@ mcp_alias_dispatch_test! {
         "iroha.transactions.status",
         InvalidTransactionHash,
         "invalid transaction_hash alias should be marked as MCP tool error",
-        "expected invalid transaction_hash alias to be rejected",
+        "tool_execution_error",
     )
 }
 #[tokio::test]
@@ -3110,17 +3104,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash()
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid flat hash should be marked as MCP tool error for transaction wait alias"
+    assert_tool_error(
+        &call,
+        "invalid flat hash should be marked as MCP tool error for transaction wait alias",
     );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid flat hash to be rejected by transaction wait alias"
+    assert_eq!(
+        structured_content(&call)
+            .get("code")
+            .and_then(Value::as_str),
+        Some("tool_execution_error")
     );
 }
 #[tokio::test]
@@ -3150,17 +3142,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_trans
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid query.transaction_hash alias should be marked as MCP tool error for transaction wait alias"
+    assert_tool_error(
+        &call,
+        "invalid query.transaction_hash alias should be marked as MCP tool error for transaction wait alias",
     );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid query.transaction_hash alias to be rejected by transaction wait alias"
+    assert_eq!(
+        structured_content(&call)
+            .get("code")
+            .and_then(Value::as_str),
+        Some("tool_execution_error")
     );
 }
 mcp_alias_dispatch_test! {

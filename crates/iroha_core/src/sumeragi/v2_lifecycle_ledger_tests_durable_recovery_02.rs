@@ -1307,6 +1307,10 @@ fn fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait() {
     let Ok(waiting_continuation) = waiting_outcome.into_safe_continuation() else {
         panic!("proven Pending rollback must release the selector continuation")
     };
+    assert!(matches!(
+        waiting_continuation.decision(),
+        Some(super::super::super::AdmissionDecision::WaitForCapacity(_))
+    ));
     assert!(
         waiting_continuation
             .into_target()

@@ -217,7 +217,7 @@ impl AdminAuthorization {
         let token = std::str::from_utf8(bytes).map_err(|_| {
             ConfigError::Admin("admin authentication token must be valid UTF-8".to_string())
         })?;
-        let token = token.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+        let token = token.trim_end_matches(['\r', '\n']);
         if !(32..=256).contains(&token.len()) {
             return Err(ConfigError::Admin(
                 "admin authentication token must contain 32 to 256 bytes".to_string(),
@@ -3128,6 +3128,10 @@ impl RelayRuntime {
             }
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tunnel handoff binds one authenticated connection and session context"
+    )]
     async fn serve_vpn_backend_tunnel_stream<S>(
         connection: Connection,
         remote: SocketAddr,

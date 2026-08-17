@@ -1667,7 +1667,7 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_traits::{One, ToPrimitive, Zero as _};
+    use num_traits::{One, ToPrimitive};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use std::{hint::black_box, time::Instant};
     const LEGACY_HMAC_BLOCK_LEN: usize = 64;

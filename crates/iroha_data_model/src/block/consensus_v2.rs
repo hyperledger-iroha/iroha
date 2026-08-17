@@ -253,7 +253,7 @@ impl DualQuorum {
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<(), ValidationError> {
-        let signed_count = self.validate_signer_set(signers, roster)?;
+        let signed_count = Self::validate_signer_set(signers, roster)?;
         if signed_count < self.min_signers {
             return Err(ValidationError::InsufficientSignerCount);
         }
@@ -264,7 +264,7 @@ impl DualQuorum {
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<(), ValidationError> {
-        let signed_count = self.validate_signer_set(signers, roster)?;
+        let signed_count = Self::validate_signer_set(signers, roster)?;
         if signed_count != self.min_signers {
             return Err(ValidationError::SignerCountMismatch {
                 expected: self.min_signers,
@@ -274,7 +274,6 @@ impl DualQuorum {
         Ok(())
     }
     fn validate_signer_set(
-        &self,
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<u32, ValidationError> {

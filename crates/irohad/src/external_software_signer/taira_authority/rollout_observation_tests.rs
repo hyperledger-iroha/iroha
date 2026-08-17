@@ -236,6 +236,10 @@ fn restart(wave_index: usize, stopped: u64, sentinel: u64) -> Value {
     ])
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the cohesive fixture constructs one complete rollout observation"
+)]
 fn valid_observation_for_case(case: &str) -> Value {
     let mut candidate = candidate();
     let candidate_object = candidate.as_object_mut().expect("candidate object");
@@ -491,7 +495,7 @@ fn valid_observation() -> Value {
     valid_observation_for_case("validator-unit")
 }
 
-pub(crate) fn valid_subject_for_case(case: &str) -> Value {
+pub fn valid_subject_for_case(case: &str) -> Value {
     object([
         ("authority_schema", Value::from(AUTHORITY_SCHEMA_V1)),
         ("observation", valid_observation_for_case(case)),

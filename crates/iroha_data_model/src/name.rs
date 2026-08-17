@@ -446,7 +446,7 @@ mod tests {
     fn norito_decoders_cannot_bypass_name_validation() {
         for invalid in [
             "nul\0suffix".to_owned(),
-            format!("bidi\u{202E}suffix"),
+            "bidi\u{202E}suffix".to_owned(),
             "x".repeat(MAX_NAME_BYTES + 1),
         ] {
             let forged = Name(ConstString::from(invalid.as_str()));

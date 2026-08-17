@@ -11561,8 +11561,9 @@ pub struct JsTransactionPayload {
     /// Iroha transaction prehash signed by an external signer.
     pub payload_hash: Buffer,
 }
-/// Exact unsigned transaction draft used by the fee quote-to-sign flow.
+/// Exact unsigned transaction draft whose field prefixes are the published JavaScript API.
 #[napi(object)]
+#[expect(clippy::struct_field_names)]
 pub struct JsTransactionPayloadDraft {
     /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
     pub payload_json: String,
@@ -12010,8 +12011,7 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
     }
     Ok(quantity)
 }
-/// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
-/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
+/// Finalize a signed transaction; its payload binds the exact `NetworkId`, not the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn finalize_signed_transaction(
@@ -12289,7 +12289,7 @@ fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent)
     draft.has_same_payer_and_gas_bound(quoted)
 }
 /// Replace only an unsigned payload's fee limits with the quote result and sign it.
-/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
+/// The payload must bind the caller's exact expected `NetworkId` and cannot use the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_transaction_payload(
@@ -12330,7 +12330,7 @@ pub fn sign_quoted_transaction_payload(
     })
 }
 /// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
-/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
+/// The payload must bind the caller's exact expected `NetworkId` and cannot use the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_ivm_proved_transaction_payload(
@@ -13247,7 +13247,7 @@ mod tests {
         );
     }
     use super::*;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         HasMetadata,

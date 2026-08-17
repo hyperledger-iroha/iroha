@@ -168,7 +168,7 @@ impl Drop for RuntimeProviderBrokerCallPermitV1 {
 /// Construction performs no I/O. The registry connects to the fixed local
 /// endpoint only when the validated public binding catalog is non-empty.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct StockRuntimeProviderBrokerRegistryV1;
+pub struct StockRuntimeProviderBrokerRegistryV1;
 impl StockRuntimeProviderBrokerRegistryV1 {
     /// Construct the stock registry without connecting to the broker.
     #[must_use]
@@ -454,6 +454,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     /// Exact stable production handle served by this backend.
     fn handle(&self) -> &str;
     /// Return the current independently administered public qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable registry error when the backend cannot prove its current qualification.
     fn qualification(
         &self,
     ) -> Result<
@@ -461,6 +465,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
     /// Return the exact current public issuer, policy, and lifetime bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable registry error when the current bindings cannot be read or validated.
     fn bindings(
         &self,
     ) -> Result<
@@ -468,6 +476,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
     /// Authenticate opaque bearer bytes for one exact action/body/height binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an authentication error when the credential or its request binding is invalid.
     fn authenticate(
         &self,
         opaque_credential: &[u8],
@@ -479,6 +491,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticationErrorV1,
     >;
     /// Prepare one native canonical `ILA1` candidate without replay-state mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted backend error when validation or authorization preparation fails.
     fn prepare_authorization(
         &self,
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -496,6 +512,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     /// Native implementations use core's
     /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a public-only validation is
     /// not sufficient private-key/provider-bound readiness check for this operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted backend error when the request is invalid or provider validation fails.
     fn validate_request(
         &self,
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -507,6 +527,10 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         current_height: u64,
     ) -> Result<[u8; 32], BootleLanternIssuanceBrokerBackendErrorV1>;
     /// Repeat validation and issue one canonical response after Torii's exact claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted backend error when validation or issuance fails.
     fn issue_validated(
         &self,
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -707,11 +731,11 @@ define_runtime_provider_backends_v1! {
         optional billing_acknowledgement_authority: Arc< dyn sorafs_node::hedging_billing_service:: BillingStatementAcknowledgementAuthority, > => pub fn with_billing_acknowledgement_authority(authority);
         /// Attach the sealed monotonic billing epoch-witness store.
         optional billing_epoch_witness_store: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore> => pub fn with_billing_epoch_witness_store(store);
-        /// Attach the deployment-owned PoP private-runtime provider registry.
+        /// Attach the deployment-owned `PoP` private-runtime provider registry.
         optional pop_credential_provider_registry: Arc< dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1, > => pub fn with_pop_credential_provider_registry(registry);
-        /// Attach the independently administered PoTR gateway Ed25519 signer.
+        /// Attach the independently administered `PoTR` gateway Ed25519 signer.
         optional potr_gateway_signer: Arc<dyn iroha_torii::sorafs::PotrGatewaySignerV1> => pub fn with_potr_gateway_signer(signer);
-        /// Attach the independently administered PoTR provider ML-DSA-65 signer.
+        /// Attach the independently administered `PoTR` provider ML-DSA-65 signer.
         optional potr_provider_signer: Arc<dyn iroha_torii::sorafs::PotrProviderSignerV1> => pub fn with_potr_provider_signer(signer);
         /// Attach the deployment-owned authenticated ACME client.
         optional gateway_acme_client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient> => pub fn with_gateway_acme_client(client);
@@ -719,7 +743,7 @@ define_runtime_provider_backends_v1! {
         optional gateway_compliance_feed_transport: Arc< dyn iroha_torii::sorafs::gateway:: GatewayComplianceFeedTransport, > => pub fn with_gateway_compliance_feed_transport(transport);
         /// Attach the deployment-owned authenticated finalized-PoR replay archive.
         optional por_finalized_replay_archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1> => pub fn with_por_finalized_replay_archive(archive);
-        /// Attach the deployment-owned evidence-viewer WebAuthn boundary.
+        /// Attach the deployment-owned evidence-viewer `WebAuthn` boundary.
         optional evidence_viewer_webauthn: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1> => pub fn with_evidence_viewer_webauthn(boundary);
         /// Attach the deployment-owned evidence-viewer rotating-grant authority.
         optional evidence_viewer_grants: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1> => pub fn with_evidence_viewer_grants(boundary);

@@ -714,11 +714,12 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             ownership_position,
         )
         .expect("acknowledge the ordinary predecessor only");
-    let retained = service
-        .drain_recovered_decision_fetch_body_completion()
-        .expect("extract only the dedicated recovered Fetch completion")
-        .into_completion()
-        .expect("the parked completion retains its exact queue owner");
+    let RecoveredLifecycleCompletionTakeV1::DecisionFetch(retained) = service
+        .take_next_recovered_lifecycle_completion()
+        .expect("classify the parked recovered Fetch completion")
+    else {
+        panic!("the unified completion classifier must retain the recovered Fetch owner");
+    };
     assert_eq!(
         command_rx
             .queue

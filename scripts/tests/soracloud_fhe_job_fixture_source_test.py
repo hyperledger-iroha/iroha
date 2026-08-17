@@ -12,6 +12,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs"
+INITIAL_FIXTURE_SOURCE = SOURCE.with_name("soracloud_initial_fixture_tests.rs")
+INITIAL_FIXTURE_INCLUDE = '    include!("soracloud_initial_fixture_tests.rs");'
 PREIMAGE_BLOB = "3592edfb43e7a452e159367335335b193e3c7e04"
 PREIMAGE_SHA256 = "a425fa60502c060eb90a6f1732a7ec9065e063b04ac3ef3f0435216e42bc8e33"
 PREIMAGE_LINES = 42_294
@@ -24,31 +26,31 @@ HELPER_SHA256 = "906a3cc8ffca6eb145ab140fd694746eabbf8789edb9bbe0fe8af3d1bf407f3
 
 PROTECTED_FUNCTION_SHA256 = {
     "checkpoint_soracloud_training_job_updates_authoritative_state":
-        "248dd3067ca18d4be5a3fa7b08e490b62fd89d05ad4bb8c164c3d3b481572aff",
+        "c21e68f804ff321a66e0f7c2dca7ad2a7c5f7e1226578a1f7b03f485f0458058",
     "deploy_uploaded_model_service":
         "71dae94d8432ccc7139b7420adb4152da8d427792443a36e39a6340ea2d58430",
     "load_soracloud_fhe_inputs_rejects_bounded_noise_public_key_digest_mismatch":
         "22647f5a5513cdee62fea16c131d73d3292c8d8af0d416fa8869f25d6727c9a5",
     "model_weight_lifecycle_updates_authoritative_registry_state":
-        "a5084222927c410afc814e8b268666fed60e7a2c0d5eb69a6d588e8aa887d9c0",
-    "mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof":
-        "6ba9571c584278d9ef03d655ce6c0dd8a470162bce8bdc1bcd762757340124c3",
-    "mutate_soracloud_state_accepts_registered_fhe_input_admission_proof":
-        "ba8431f72de422c3f4d357f967645b3f174c2a599c89e5da6d85bb4fae4fa579",
+        "2eda1344ae4f23d7089f97eb9a10bc7ea0d42ba865bbdbef41303ebde2e92c1e",
+    "mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof":
+        "6c29dacac1dd354a8e113a7c02d8bee1fb5d9bbfccc1078a0ffcf9f56a06c598",
+    "mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof":
+        "88c5a81d893273babd9c11dda2d4583b1867cb0857ebc181509f4c14d5b6eacc",
     "mutate_soracloud_state_rejects_malformed_fhe_payload_without_optional_proof":
         "e2ef269a57deb3ef12e96261fea2303e3c809ab3aefe573a3d88149333ba7d00",
     "register_soracloud_model_artifact_records_authoritative_state":
-        "a00383f1e6bca340e21d3f752817c7c953f2b12f7e59fa8bf2aca3eca65b7e1b",
+        "fbff67f8c870bee71e1d3788f126e5390bae70f94b0ab28fe97dae439e16605e",
     "retry_soracloud_training_job_records_retry_pending_state":
-        "5562822c373bdcb3075b0621cd36fabf68cede0a31c9bf43c2a2952103952b15",
+        "7ad5e6128a2c157752fad2eafc383ccc594647b81b7572e0cf0d2afc2b79c9dc",
     "run_fhe_input_admission_rejection_cases":
-        "aafcca6ff16f53df42f0b062e29d13300b4f28a6ffe57205622abcffc251f084",
-    "run_soracloud_fhe_job_records_bounded_noise_add_output_state":
-        "8421882d1ac7a200fd42a1ecfe5c0190edc5fb9fdaea52920d3ac9557ac93ec7",
-    "run_soracloud_fhe_job_records_bounded_noise_non_add_output_state":
-        "11dc9ff82134f1cbe474875233832ba442aeda8d27c463e439ccbbae117f85ed",
-    "run_soracloud_fhe_job_records_ciphertext_output_state":
-        "e0b668657c200edadfeb76ff852ae8fee25c3435350535763da4ea9ef4ffa7a8",
+        "726620ea2007d19390bc47837c4abb34b8d5687d349197686930880f6c59e2fb",
+    "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_bounded_add_output":
+        "36abc51e069f77f1449ad364c0b31769094a1781eb949180b4a38f59ca8db086",
+    "run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add_outputs":
+        "539d42d5f94a8972b4236592f114cab239a644993ad933df35b86d7faac888e0",
+    "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_exact_output":
+        "c605b7efa5e0384978c9b57df2cb244f92cf47ac7060436bce140eed15f9feb1",
     "run_soracloud_fhe_job_rejects_all_zero_persisted_fhe_input":
         "2379db41aa8f74b2edbe22afe1b650afdd196293dd81b1bb3dc217c2d5e393ce",
     "run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input":
@@ -64,8 +66,44 @@ PROTECTED_FUNCTION_SHA256 = {
     "run_soracloud_fhe_job_rejects_persisted_fhe_input_without_bound_mode":
         "9bd7419a97a6fa8fbfcdda8b1fc0c83edf7fdaa2e73b6f2d16c68c22db3ce0ea",
     "start_soracloud_training_job_records_authoritative_job_state":
-        "7be29fab2df3e0d5a524b6f1721a5d44e9cfbb431303165f4447643b45d65c8f",
+        "0aae121c5e82149eb0140654d23035e7e8571e18e091d718d0c922b7909a5ed2",
 }
+
+TEST_NAME_REPLACEMENTS = (
+    (
+        "soracloud_fhe_public_key_proof_accepts_verified_active_record",
+        "soracloud_fhe_public_key_proof_rejects_registered_binding_only_proof",
+    ),
+    (
+        "soracloud_fhe_bootstrap_key_proof_accepts_verified_active_verifier",
+        "soracloud_fhe_bootstrap_key_proof_rejects_registered_binding_only_proof",
+    ),
+    (
+        "run_soracloud_fhe_job_records_ciphertext_output_state",
+        "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_exact_output",
+    ),
+    (
+        "run_soracloud_fhe_job_records_bounded_noise_add_output_state",
+        "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_bounded_add_output",
+    ),
+    (
+        "run_soracloud_fhe_job_records_bounded_noise_non_add_output_state",
+        "run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add_outputs",
+    ),
+    (
+        "mutate_soracloud_state_accepts_registered_fhe_input_admission_proof",
+        "mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof",
+    ),
+    (
+        "mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof",
+        "mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof",
+    ),
+)
+ADDED_FAIL_CLOSED_TEST_AFTER = "registered_bfv_key_switch_decomposition_chain_uses_target_limb_prefix"
+ADDED_FAIL_CLOSED_TEST = (
+    ("#[test]",),
+    "soracloud_bounded_noise_add_matches_plaintext_slots_and_output_bound",
+)
 
 REQUIRED_HELPER_TOKENS = (
     "isi::DeploySoracloudService",
@@ -217,11 +255,33 @@ def _test_inventory(source: str) -> tuple[tuple[tuple[str, ...], str], ...]:
     return tuple(inventory)
 
 
-def validate_source(source: str, donor: str) -> None:
-    if len(source.splitlines()) > MAXIMUM_SOURCE_LINES:
+def _expanded_test_source(source: str, initial_fixture: str) -> str:
+    if source.count(INITIAL_FIXTURE_INCLUDE) != 1:
+        raise GuardError("Soracloud initial fixture include changed")
+    return source.replace(INITIAL_FIXTURE_INCLUDE, initial_fixture, 1)
+
+
+def _expected_test_inventory(
+    donor: str,
+) -> tuple[tuple[tuple[str, ...], str], ...]:
+    replacements = dict(TEST_NAME_REPLACEMENTS)
+    expected: list[tuple[tuple[str, ...], str]] = []
+    for attributes, name in _test_inventory(donor):
+        expected.append((attributes, replacements.get(name, name)))
+        if name == ADDED_FAIL_CLOSED_TEST_AFTER:
+            expected.append(ADDED_FAIL_CLOSED_TEST)
+    return tuple(expected)
+
+
+def validate_source(source: str, donor: str, initial_fixture: str) -> None:
+    expanded_source = _expanded_test_source(source, initial_fixture)
+    if len(expanded_source.splitlines()) > MAXIMUM_SOURCE_LINES:
         raise GuardError("Soracloud fixture consolidation lost its 500-line ratchet")
-    if _test_inventory(source) != _test_inventory(donor):
-        raise GuardError("Soracloud ordered test names or attributes changed")
+    if _test_inventory(expanded_source) != _expected_test_inventory(donor):
+        raise GuardError(
+            "Soracloud ordered test inventory changed outside the exact "
+            "seven retired to eight fail-closed replacements"
+        )
     if source.count(HELPER_START) != 1 or source.count(HELPER_END) != 1:
         raise GuardError("Soracloud typed helper corridor markers changed")
     start = source.index(HELPER_START)
@@ -242,11 +302,16 @@ def validate_source(source: str, donor: str) -> None:
 
 class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
     def test_source_contract(self) -> None:
-        validate_source(SOURCE.read_text(), _preimage())
+        validate_source(
+            SOURCE.read_text(),
+            _preimage(),
+            INITIAL_FIXTURE_SOURCE.read_text(),
+        )
 
     def test_mutations_fail_closed(self) -> None:
         source = SOURCE.read_text()
         donor = _preimage()
+        initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
         mutations = (
             source.replace(
                 'b"gov-fhe-missing-bound"', 'b"gov-fhe-mutated-bound"', 1
@@ -267,6 +332,11 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
                 "run_soracloud_fhe_job_accepts_all_zero_persisted_fhe_input",
                 1,
             ),
+            source.replace(
+                "soracloud_fhe_public_key_proof_rejects_registered_binding_only_proof",
+                "soracloud_fhe_public_key_proof_accepts_registered_binding_only_proof",
+                1,
+            ),
             source.replace("#[test]", "#[ignore]", 1),
             source.replace(
                 HELPER_END, "    fn callback_escape(_f: impl Fn()) {}\n" + HELPER_END, 1
@@ -281,7 +351,16 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(digest=_sha256(mutation)[:12]):
                 with self.assertRaises(GuardError):
-                    validate_source(mutation, donor)
+                    validate_source(mutation, donor, initial_fixture)
+
+        mutated_initial_fixture = initial_fixture.replace(
+            "soracloud_provenance_signature_admission_rejects_malformed_ed25519_signature_r",
+            "soracloud_provenance_signature_admission_accepts_malformed_ed25519_signature_r",
+            1,
+        )
+        with self.subTest(digest=_sha256(mutated_initial_fixture)[:12]):
+            with self.assertRaises(GuardError):
+                validate_source(source, donor, mutated_initial_fixture)
 
 
 if __name__ == "__main__":

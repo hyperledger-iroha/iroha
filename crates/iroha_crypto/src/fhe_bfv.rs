@@ -6974,7 +6974,7 @@ macro_rules! define_bfv_canonical_material_codec_v1 {
         #[doc = concat!(
             "Hash validated canonical ",
             $material_label,
-            ".\n\n# Errors\nReturns BfvError when validation or canonical Norito encoding fails."
+            ".\n\n# Errors\nReturns `BfvError` when validation or canonical Norito encoding fails."
         )]
         pub fn $digest(material: &$material) -> Result<Hash, BfvError> {
             ($validate)(material)?;
@@ -6984,7 +6984,7 @@ macro_rules! define_bfv_canonical_material_codec_v1 {
         #[doc = concat!(
             "Decode validated canonical ",
             $bytes_label,
-            ".\n\n# Errors\nReturns BfvError when byte admission or material validation fails."
+            ".\n\n# Errors\nReturns `BfvError` when byte admission or material validation fails."
         )]
         pub fn $decode(bytes: &[u8]) -> Result<$material, BfvError> {
             decode_bfv_canonical_material_bytes_v1(
@@ -6998,7 +6998,7 @@ macro_rules! define_bfv_canonical_material_codec_v1 {
         #[doc = concat!(
             "Hash validated canonical ",
             $bytes_label,
-            ".\n\n# Errors\nReturns BfvError when byte admission or digesting fails."
+            ".\n\n# Errors\nReturns `BfvError` when byte admission or digesting fails."
         )]
         pub fn $digest_from_bytes(bytes: &[u8]) -> Result<Hash, BfvError> {
             let (_, digest) = $and_digest_from_bytes(bytes)?;
@@ -7008,7 +7008,7 @@ macro_rules! define_bfv_canonical_material_codec_v1 {
         #[doc = concat!(
             "Decode and hash validated canonical ",
             $bytes_label,
-            ".\n\n# Errors\nReturns BfvError when byte admission or digesting fails."
+            ".\n\n# Errors\nReturns `BfvError` when byte admission or digesting fails."
         )]
         pub fn $and_digest_from_bytes(bytes: &[u8]) -> Result<($material, Hash), BfvError> {
             let material = $decode(bytes)?;
@@ -7034,7 +7034,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Hash ",
             $bytes_label,
-            " for a caller-owned public key.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " for a caller-owned public key.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $digest_for_public_key(
             params: &BfvParameters,
@@ -7048,7 +7048,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode and hash ",
             $bytes_label,
-            " for a caller-owned public key.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " for a caller-owned public key.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $and_digest_for_public_key(
             params: &BfvParameters,
@@ -7071,7 +7071,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode ",
             $bytes_label,
-            " for a caller-owned public key.\n\n# Errors\nReturns BfvError when admission or validation fails."
+            " for a caller-owned public key.\n\n# Errors\nReturns `BfvError` when admission or validation fails."
         )]
         pub fn $validate_for_public_key(
             params: &BfvParameters,
@@ -7085,7 +7085,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key and ",
             $bytes_label,
-            " bytes with the proof-input digest.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " bytes with the proof-input digest.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $validate_bytes_and_digest(
             params: &BfvParameters,
@@ -7103,7 +7103,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key and ",
             $bytes_label,
-            " bytes with all admitted digests.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " bytes with all admitted digests.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $validate_bytes_and_digests(
             params: &BfvParameters,
@@ -7129,7 +7129,7 @@ macro_rules! define_bfv_public_key_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key and ",
             $bytes_label,
-            " bytes together.\n\n# Errors\nReturns BfvError when admission or validation fails."
+            " bytes together.\n\n# Errors\nReturns `BfvError` when admission or validation fails."
         )]
         pub fn $validate_bytes(
             params: &BfvParameters,
@@ -7165,7 +7165,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Hash ",
             $bytes_label,
-            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $digest_for_ciphertext(
             params: &BfvParameters,
@@ -7187,7 +7187,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode and hash ",
             $bytes_label,
-            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $and_digest_for_ciphertext(
             params: &BfvParameters,
@@ -7222,7 +7222,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode ",
             $bytes_label,
-            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns BfvError when admission or validation fails."
+            " for caller-owned ciphertext inputs.\n\n# Errors\nReturns `BfvError` when admission or validation fails."
         )]
         pub fn $validate_for_ciphertext(
             params: &BfvParameters,
@@ -7244,7 +7244,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key, ciphertext, and ",
             $bytes_label,
-            " bytes with the proof-input digest.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " bytes with the proof-input digest.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $validate_bytes_and_digest(
             params: &BfvParameters,
@@ -7267,7 +7267,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key, ciphertext, and ",
             $bytes_label,
-            " bytes with all admitted digests.\n\n# Errors\nReturns BfvError when admission, validation, or digesting fails."
+            " bytes with all admitted digests.\n\n# Errors\nReturns `BfvError` when admission, validation, or digesting fails."
         )]
         pub fn $validate_bytes_and_digests(
             params: &BfvParameters,
@@ -7319,7 +7319,7 @@ macro_rules! define_bfv_ciphertext_proof_input_byte_admission_v1 {
         #[doc = concat!(
             "Decode public-key, ciphertext, and ",
             $bytes_label,
-            " bytes together.\n\n# Errors\nReturns BfvError when admission or validation fails."
+            " bytes together.\n\n# Errors\nReturns `BfvError` when admission or validation fails."
         )]
         pub fn $validate_bytes(
             params: &BfvParameters,
@@ -13301,10 +13301,6 @@ pub fn validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_
 /// Returns [`BfvError`] when the role is not a proof-key role, the registered parameter profile
 /// cannot be derived, public-input/evaluator/profile digests are missing, placeholders, or aliases,
 /// native key bytes are inert or oversized, or canonical encoding fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "first-release proof-key envelope admission keeps all commitment checks in one deterministic path"
-)]
 pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -26076,10 +26072,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1
 /// Returns [`BfvError`] when either transcript digest is a zero/placeholder sentinel, the statement
 /// hash equals the trace-material digest, or the canonical public opening range cannot accommodate
 /// the first-release verifier query count.
-#[expect(
-    clippy::too_many_lines,
-    reason = "transcript-bound opening derivation keeps validation, rejection sampling, and final ordering together"
-)]
 pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
     statement_hash: Hash,
     trace_material_digest: Hash,
@@ -32491,8 +32483,8 @@ pub fn bfv_bootstrap_key_refresh_bounded_noise_output_bound(
 /// The current first-release refresh masks are BFV encryptions of zero. After decryption, each
 /// coefficient is bounded by the public-key residual times the small encryption polynomial plus two
 /// fresh small error products: `pk_error * u + e1 + e2 * s`. With ternary `u`/`s` and error
-/// multiples bounded by `BFV_ERROR_MULTIPLE_BOUND`, each negacyclic product contributes at most `n
-/// * E` plaintext-modulus multiples and the direct error contributes `E`, for `(2n + 1) * E`.
+/// multiples bounded by `BFV_ERROR_MULTIPLE_BOUND`, each negacyclic product contributes at most
+/// `n * E` plaintext-modulus multiples and the direct error contributes `E`, for `(2n + 1) * E`.
 ///
 /// This is an exact diagnostic bound for the deterministic refresh-key format; it is not the future
 /// bounded-RLWE noise budget.

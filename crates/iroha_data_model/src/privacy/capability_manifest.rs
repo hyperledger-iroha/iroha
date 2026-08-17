@@ -327,7 +327,7 @@ pub struct PrivacyExact12CapabilityRowV1 {
     pub limitation: Option<PrivacyCapabilityLimitationV1>,
 }
 impl PrivacyExact12CapabilityRowV1 {
-    fn from_committed_snapshot_row(row: PrivacyCapabilityRowV1) -> Self {
+    fn from_committed_snapshot_row(row: &PrivacyCapabilityRowV1) -> Self {
         let readiness = match row.compiled_profile {
             PrivacyCompiledProfileResultV1::Available(_)
                 if row.protocol_id == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 =>
@@ -422,7 +422,7 @@ impl PrivacyExact12CapabilityRowV1 {
                 },
             );
         }
-        let projected = Self::from_committed_snapshot_row(PrivacyCapabilityRowV1 {
+        let projected = Self::from_committed_snapshot_row(&PrivacyCapabilityRowV1 {
             protocol_id: self.protocol_id,
             compiled_profile: self.compiled_profile,
             activation: self.activation,
@@ -552,7 +552,6 @@ impl PrivacyCapabilitySnapshotV1 {
             protocols: self
                 .protocols
                 .iter()
-                .copied()
                 .map(PrivacyExact12CapabilityRowV1::from_committed_snapshot_row)
                 .collect(),
             manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new([0; 32]),

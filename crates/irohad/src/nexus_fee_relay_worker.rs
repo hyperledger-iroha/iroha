@@ -299,14 +299,13 @@ impl NexusFeeRelayWorker {
             validate_relay_work_bounds(&key, &envelope)?;
             if durable.relays.len() >= self.config.max_pending_relays.get()
                 && !durable.relays.contains_key(&key)
+                && !reclaim_oldest_rejected_relay(&mut durable)
             {
-                if !reclaim_oldest_rejected_relay(&mut durable) {
-                    iroha_logger::warn!(
-                        max_pending_relays = self.config.max_pending_relays.get(),
-                        "Nexus fee relay worker bounded durable relay set is full of active work; deferring finalized relay enqueue"
-                    );
-                    continue;
-                }
+                iroha_logger::warn!(
+                    max_pending_relays = self.config.max_pending_relays.get(),
+                    "Nexus fee relay worker bounded durable relay set is full of active work; deferring finalized relay enqueue"
+                );
+                continue;
             }
             if self.verified_relay_exists(&envelope)? {
                 continue;
@@ -1754,9 +1753,9 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
             tx_count: 1,
-            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
             total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),

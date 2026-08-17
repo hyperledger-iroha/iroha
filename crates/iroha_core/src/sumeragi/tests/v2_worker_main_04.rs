@@ -1,3 +1,4 @@
+#[test]
 fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
     let (mut service, _) = fixture();
     service.clean_teardown = false;

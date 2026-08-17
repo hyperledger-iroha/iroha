@@ -2607,24 +2607,24 @@ struct SoracloudFheOpenVerifyEnvelopeContract {
     max_native_envelope_bytes: usize,
 }
 
-const SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT:
-    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
-    manifest: "soracloud fhe input admission proof",
-    max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
-    bounds: soracloud_fhe_input_admission_open_verify_bounds,
-    circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
-    public_inputs: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
-    max_native_envelope_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
-};
-const SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT:
-    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
-    manifest: "soracloud fhe public-key proof",
-    max_open_verify_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
-    bounds: soracloud_fhe_public_key_proof_open_verify_bounds,
-    circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
-    public_inputs: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-    max_native_envelope_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-};
+const SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT: SoracloudFheOpenVerifyEnvelopeContract =
+    SoracloudFheOpenVerifyEnvelopeContract {
+        manifest: "soracloud fhe input admission proof",
+        max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+        bounds: soracloud_fhe_input_admission_open_verify_bounds,
+        circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        public_inputs: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+    };
+const SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT: SoracloudFheOpenVerifyEnvelopeContract =
+    SoracloudFheOpenVerifyEnvelopeContract {
+        manifest: "soracloud fhe public-key proof",
+        max_open_verify_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+        bounds: soracloud_fhe_public_key_proof_open_verify_bounds,
+        circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        public_inputs: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+    };
 const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_OPEN_VERIFY_CONTRACT:
     SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
     manifest: "soracloud fhe bootstrap key proof",

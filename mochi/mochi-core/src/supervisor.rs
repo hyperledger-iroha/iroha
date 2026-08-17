@@ -1668,6 +1668,7 @@ impl SupervisorBuilder {
     /// Consuming the prior handle prevents callers from using two active
     /// supervisors for one network root. See [`SupervisorReplacementFailure`]
     /// for the guarded pre-commit rollback behavior.
+    #[expect(clippy::result_large_err, reason = "failure returns the prior owner")]
     pub fn build_replacing(
         self,
         previous: Supervisor,
@@ -4209,17 +4210,16 @@ impl PeerSpec {
             SupervisorError::Config("managed peer config has no parent directory".to_owned())
         })?;
         let owner_uid = fs::metadata(parent)?.uid();
-        if let Ok(existing) = fs::symlink_metadata(&self.config_path) {
-            if !existing.file_type().is_file()
+        if let Ok(existing) = fs::symlink_metadata(&self.config_path)
+            && (!existing.file_type().is_file()
                 || existing.file_type().is_symlink()
                 || existing.uid() != owner_uid
-                || existing.nlink() != 1
-            {
-                return Err(SupervisorError::Config(format!(
-                    "managed peer config `{}` must be an owner-owned regular single-link file",
-                    self.config_path.display()
-                )));
-            }
+                || existing.nlink() != 1)
+        {
+            return Err(SupervisorError::Config(format!(
+                "managed peer config `{}` must be an owner-owned regular single-link file",
+                self.config_path.display()
+            )));
         }
         let mut options = OpenOptions::new();
         options.write(true).create(true).mode(0o600);

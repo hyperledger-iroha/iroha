@@ -25,6 +25,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "ordinary": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "pending": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
         "runner": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "launch": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "scheduler_cases": "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_certified_serve_cases.rs",
         "ledger_cases": "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
         "startup_cases": "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
@@ -65,6 +66,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "ordinary",
         "pending",
         "runner",
+        "launch",
     )
     production_tokens = rust_code_tokens(
         "\n".join(sources[role] for role in production_roles)
@@ -279,7 +281,13 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         (
             "HashOf::new(request) != authenticated.request_hash()",
             "&recipient != &authenticated.request().requester",
+            "routes.semantic_target() != &recipient",
+            "!ownership.validate_exact()",
             "!ownership.matches_message(inbound.message())",
+            "!ownership.matches_semantic_origin(Some(&recipient))",
+            "!ownership.matches_reply_routes(Some(routes))",
+            "inbound.take_ingress_ownership()",
+            "inbound.into_message_sender_and_reply_routes()",
             "authority: Some(authority)",
         ),
     )
@@ -318,7 +326,26 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "settle_certified_serve_worker_completed",
             "verify_certified_serve_terminal_replay",
             "services.post_to_peer_on_reply_routes",
+            "result.task.recipient.clone()",
+            "result.task.reply_routes.clone()",
+            "result.task.ingress_ownership.clone()",
             "self.queue.acknowledge_lifecycle_certified_serve",
+        ),
+    )
+    sequence(
+        "worker",
+        "ProductionV2Services",
+        "post_to_peer_on_reply_routes",
+        "Serve exact-output route publication",
+        (
+            "reply_routes.semantic_target() != &peer",
+            "!ingress_ownership.validate_exact()",
+            "!ingress_ownership.matches_reply_routes(Some(&reply_routes))",
+            "begin_fail_stop_operation()",
+            "if reply_routes.is_empty()",
+            "post_block_message_on_reply_routes_while_guarded",
+            "ExactFanoutOwnership::SourceRetained",
+            "operation.complete()",
         ),
     )
     sequence(
@@ -406,6 +433,45 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "ingress_restart_error(&output_guard)",
         ),
     )
+    sequence(
+        "launch",
+        "ProductionLeaderWireIngressBindingV1",
+        "bind",
+        "leader-wire-only lifecycle ingress binding",
+        (
+            "ingress.bind_leader_wire_lifecycle_gate(",
+            "ingress.close()",
+            "gate: Some(gate)",
+        ),
+    )
+    sequence(
+        "launch",
+        "ProductionLeaderWireIngressBindingV1",
+        "retire",
+        "leader-wire-only lifecycle ingress retirement",
+        (
+            "self.gate.take()",
+            "self.ingress.close()",
+            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
+        ),
+    )
+    sequence(
+        "launch",
+        "ProductionLifecycleOwnerV1",
+        "launch",
+        "leader-wire-only lifecycle launch transfer",
+        (
+            "leader_wire_launch.open_gate(",
+            "leader_wire_restore.scheduler_ordinal_high_watermark()",
+            "ProductionLeaderWireIngressBindingV1::bind(",
+            "ProductionV2Services::start_with_apply_service(",
+            "leader_wire_ingress_binding,",
+        ),
+        expected_attributes=(
+            "#[allow(clippy::result_large_err)]",
+            "#[inline(never)]",
+        ),
+    )
 
     seal_specs = (
         ("registry", "ConcreteLifecycleWorkRegistry", "attest_ready_certified_serve_request"),
@@ -417,6 +483,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         ("worker", "LifecycleIoCapacityReservation<'_>", "preflight_lifecycle_certified_serve"),
         ("worker", "LifecycleIoCapacityReservation<'_>", "commit_lifecycle_certified_serve"),
         ("worker", "PreparedLifecycleCertifiedServeCompletionV1", "settle_deliver_and_acknowledge"),
+        ("worker", "ProductionV2Services", "post_to_peer_on_reply_routes"),
         ("worker", "ProductionV2Services", "drain_lifecycle_certified_serve_completion"),
         ("body_store", "V2BodyStore", "read_durable_body_for_certified_serve"),
         ("projection", "super::ProductionLifecycleOwnerV1", "settle_certified_serve_worker_completed"),
@@ -424,6 +491,9 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         ("ordinary", None, "run_lifecycle_active_height"),
         ("pending", None, "run_pending_active_height"),
         ("height", None, "drain_lifecycle_v2_ingress"),
+        ("launch", "ProductionLeaderWireIngressBindingV1", "bind"),
+        ("launch", "ProductionLeaderWireIngressBindingV1", "retire"),
+        ("launch", "ProductionLifecycleOwnerV1", "launch"),
     )
     observed_seal_keys = {
         f"{role}:{owner + '::' if owner else ''}{name}"
@@ -439,17 +509,21 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
     for role, owner, name in seal_specs:
         key = f"{role}:{owner + '::' if owner else ''}{name}"
         expected = _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256.get(key)
+        sealed_attributes = {
+            "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": (
+                "#[cfg(any(not(test), feature = \"bls\"))]",
+            ),
+            "launch:ProductionLifecycleOwnerV1::launch": (
+                "#[allow(clippy::result_large_err)]",
+                "#[inline(never)]",
+            ),
+        }.get(key, ())
         sealed = item(
             role,
             owner,
             name,
             f"lifecycle Certified-Serve sealed item {key}",
-            expected_attributes=(
-                ("#[cfg(any(not(test), feature = \"bls\"))]",)
-                if key
-                == "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed"
-                else ()
-            ),
+            expected_attributes=sealed_attributes,
         )
         if expected is not None:
             _require_rust_item_token_sha256(

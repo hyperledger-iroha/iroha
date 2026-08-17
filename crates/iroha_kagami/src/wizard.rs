@@ -156,6 +156,10 @@ impl ProfileDefaults {
     }
 }
 impl<T: Write> RunArgs<T> for Args {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the guided command keeps generation, validation, persistence, and the final operator handoff in one linear workflow"
+    )]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;

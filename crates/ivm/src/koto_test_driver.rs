@@ -1062,7 +1062,18 @@ fn compile_suite_with_modules_for_chain(
             "exact module-graph test compilation accepts one directly declared root".to_owned(),
         );
     }
-    let source_name = suite.target_path.display().to_string();
+    let source_name = if suite.target_path.is_absolute() {
+        let project_root = suite.target_path.parent().ok_or_else(|| {
+            format!(
+                "Kotodama test target `{}` has no project parent directory",
+                suite.target_path.display()
+            )
+        })?;
+        crate::kotodama::driver::logical_source_name(&suite.target_path, project_root)
+            .map_err(|error| error.to_string())?
+    } else {
+        suite.target_path.display().to_string()
+    };
     let outputs = ModuleBuildGraph::default()
         .build_test_project(
             SourceLinkRequest {
@@ -1595,7 +1606,7 @@ impl KotoTestHost {
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &inner.caller_subject(),

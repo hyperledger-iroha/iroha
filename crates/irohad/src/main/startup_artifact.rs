@@ -1,19 +1,21 @@
 //! Bounded readers and decoders for local startup trust-root artifacts.
+use super::{ConfigError, ReportResult, StartError};
+use error_stack::{Report, ResultExt as _};
+use iroha_genesis::{GenesisBlock, RawGenesisTransaction, read_signed_genesis};
 use std::{
     fs,
     io::{self, Read as _},
     path::Path,
 };
-use error_stack::{Report, ResultExt as _};
-use iroha_genesis::{GenesisBlock, RawGenesisTransaction, read_signed_genesis};
-use super::{ConfigError, ReportResult, StartError};
 /// Integrity-bound TOML is one flattened configuration source.
-pub(super) const INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1: usize =
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the source limit is the fixed one-mebibyte iroha_config constant"
+)]
+pub const INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1: usize =
     iroha_config::base::toml::MAX_TOML_SOURCE_BYTES as usize;
 /// Read and decode the optional source manifest under fixed startup budgets.
-pub(super) fn read_genesis_manifest(
-    path: &Path,
-) -> ReportResult<RawGenesisTransaction, StartError> {
+pub fn read_genesis_manifest(path: &Path) -> ReportResult<RawGenesisTransaction, StartError> {
     let bytes = iroha_genesis::read_genesis_manifest_bytes(path)
         .change_context(StartError::InitKura)
         .attach_with(|| format!("failed to read genesis manifest JSON at {}", path.display()))?;
@@ -25,7 +27,7 @@ pub(super) fn read_genesis_manifest(
     })
 }
 /// Read and decode one signed genesis artifact under fixed startup budgets.
-pub(super) fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
+pub fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     const PANIC_HELP: &str = concat!(
         "Genesis decode panicked. A common cause is an invalid `Name` (identifiers ",
         "must not contain whitespace or the characters `@`, `#`, `$`). ",
@@ -52,7 +54,7 @@ pub(super) fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, C
     }
 }
 /// Read a stable direct regular file, retaining at most `max_bytes`.
-pub(super) fn read_bounded_startup_artifact(
+pub fn read_bounded_startup_artifact(
     path: &Path,
     max_bytes: usize,
     label: &str,
@@ -78,7 +80,7 @@ pub(super) fn read_bounded_startup_artifact(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
     #[cfg(windows)]
     {

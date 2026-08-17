@@ -103,7 +103,8 @@ pub mod mldsa65 {
         const RELEASE_KAT_CONTEXT: &[u8] = b"iroha-crypto:mldsa-native-release-kat:v1";
         const RELEASE_KAT_MESSAGE: &[u8] = b"native Rust ML-DSA and PQClean interoperability";
         const ML_DSA_SECRET_ETA_OFFSET: usize = 128;
-        const RELEASE_KAT_DIGESTS: [(MlDsaSuite, [u8; 32], [u8; 32], [u8; 32]); 3] = [
+        type ReleaseKatDigest = (MlDsaSuite, [u8; 32], [u8; 32], [u8; 32]);
+        const RELEASE_KAT_DIGESTS: [ReleaseKatDigest; 3] = [
             (
                 MlDsaSuite::MlDsa44,
                 hex_literal::hex!(
@@ -288,10 +289,10 @@ pub mod mldsa65 {
                 }
             }
         }
-        fn assert_malformed_eta_rejected(error: soranet_pq::MlDsaError, suite: MlDsaSuite) {
+        fn assert_malformed_eta_rejected(error: &soranet_pq::MlDsaError, suite: MlDsaSuite) {
             assert!(
                 matches!(
-                    &error,
+                    error,
                     soranet_pq::MlDsaError::SecretKeyMismatch {
                         suite: actual,
                         kind,
@@ -391,10 +392,10 @@ pub mod mldsa65 {
                 assert_eq!(malformed.len(), suite.secret_key_len());
                 let error = soranet_pq::validate_mldsa_secret_key(suite, &malformed)
                     .expect_err("unused eta encodings must fail strict secret-key validation");
-                assert_malformed_eta_rejected(error, suite);
+                assert_malformed_eta_rejected(&error, suite);
                 let error = soranet_pq::mldsa_public_key_from_secret_key(suite, &malformed)
                     .expect_err("unused eta encodings must not reconstruct a public key");
-                assert_malformed_eta_rejected(error, suite);
+                assert_malformed_eta_rejected(&error, suite);
                 let mut rng = release_kat_signing_rng();
                 let error = soranet_pq::sign_mldsa(
                     suite,
@@ -404,7 +405,7 @@ pub mod mldsa65 {
                     &mut rng,
                 )
                 .expect_err("unused eta encodings must fail before signing");
-                assert_malformed_eta_rejected(error, suite);
+                assert_malformed_eta_rejected(&error, suite);
             }
         }
         #[test]

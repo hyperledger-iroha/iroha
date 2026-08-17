@@ -5438,8 +5438,9 @@
         "kind": "fn",
         "symbol": "run_lifecycle_active_height",
         "required_tokens": [
-          "try_begin_certified_serve_producer_episode()",
-          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+          ".service_kura_replica_advert_refresh_turn(Instant::now())",
+          "claim_producer_turn_for_local_proposal(&mut active_runner)",
+          "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)"
         ]
       },
       {
@@ -5447,8 +5448,9 @@
         "kind": "fn",
         "symbol": "run_pending_active_height",
         "required_tokens": [
-          "try_begin_certified_serve_producer_episode()",
-          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+          "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
+          ".service_kura_replica_advert_refresh_turn(Instant::now())",
+          "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)"
         ]
       },
       {
@@ -7120,7 +7122,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
           "kind": "fn",
           "symbol": "canonical_executed_block_recovery_batches",
           "required_tokens": [

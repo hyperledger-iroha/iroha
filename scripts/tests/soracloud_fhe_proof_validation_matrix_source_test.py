@@ -19,7 +19,7 @@ PROVENANCE_SUFFIX_SHA256 = (
     "9cf253efe5ab26f15331eff89cfff59ad2fb8e3d4d2a5ea4b89fca5b83c5fc28"
 )
 FHE_PREFIX_NORMALIZED_SHA256 = (
-    "8d7a45d9bc92f33e706dccdc40e39b48854f02e6b2707f9bcebd9baf58b26060"
+    "cf5fafc76195a6ee628fae10f64b73cb33205c016848ce3239cbdbbd47961464"
 )
 SUFFIX_MARKER = b"#[test]\nfn rollout_provenance_payload_encodes_canonical_tuple() {\n"
 
@@ -98,7 +98,7 @@ SEALED_ATOMS = (
     b"forged_commitment: 0x27",
     b'wrong_circuit_id: "soracloud_fhe_public_key_v2"',
     b'wrong_circuit_id: "soracloud_fhe_bootstrap_key_proof_v2"',
-    b'wrong_circuit_id: "soracloud_fhe_full_bootstrap_execution_v2"',
+    b'wrong_circuit_id: "iroha_bfv_full_bootstrap_v2"',
     b'b"soracloud:fhe-public-key:public-inputs:v2"',
     b'b"soracloud:fhe-bootstrap-key:public-inputs:v2"',
     b'b"soracloud:fhe-full-bootstrap-execution:public-inputs:v2"',
@@ -160,7 +160,7 @@ EXPECTED_PROFILE_ATOMS = {
         b"canonical_commitment: 0x63",
         b"forged_commitment: 0x27",
         b"circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1",
-        b'wrong_circuit_id: "soracloud_fhe_full_bootstrap_execution_v2"',
+        b'wrong_circuit_id: "iroha_bfv_full_bootstrap_v2"',
         b"SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1",
         b'b"soracloud:fhe-full-bootstrap-execution:public-inputs:v2"',
         b'verifier_alias: "soracloud_fhe_full_bootstrap_execution_alias_v1"',

@@ -8330,7 +8330,7 @@ impl PendingAutoscaleTamper {
 }
 fn autoscale_commit_revalidation_fixture(
     max_lanes: u32,
-    target_tps: u32,
+    target_block_ms: u64,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, Arc<Kura>, State) {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
@@ -8342,7 +8342,7 @@ fn autoscale_commit_revalidation_fixture(
             vec![LaneConfig::default()],
             1,
             max_lanes,
-            target_tps,
+            target_block_ms,
         ))
         .expect("apply autoscale commit-revalidation Nexus config");
     *state.tiered_backend.lock() =
@@ -8551,6 +8551,20 @@ fn assert_autoscale_commit_rejects_committed_drift(case: CommittedAutoscaleDrift
     assert!(!elastic_blocks_dir.exists());
     assert!(!elastic_snapshot_dir.exists());
 }
+fn assert_autoscale_da_effects_staged(state_block: &StateBlock<'_>) {
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_some(),
+        "autoscale transition should be staged before commit"
+    );
+    assert!(
+        state_block.pending_da_commitments.is_some(),
+        "DA commitments should be staged before commit"
+    );
+    assert!(
+        state_block.pending_da_pin_intents.is_some(),
+        "DA pin intents should be staged before commit"
+    );
+}
 #[test]
 fn autoscale_commit_revalidates_disabled_autoscale_before_storage_publish() {
     assert_autoscale_commit_rejects_committed_drift(CommittedAutoscaleDrift::Disabled);
@@ -8651,9 +8665,7 @@ fn assert_autoscale_scale_out_preflight_failure_is_atomic(
     state_block.add_committed_fragments(20);
     let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed_second, Vec::new());
-    assert!(state_block.pending_autoscale_lifecycle.is_some());
-    assert!(state_block.pending_da_commitments.is_some());
-    assert!(state_block.pending_da_pin_intents.is_some());
+    assert_autoscale_da_effects_staged(&state_block);
     let_row! { error = state_block .commit() .expect_err("autoscale storage preflight failure must abort state commit") };
     assert!(matches!(
         error,
@@ -8758,9 +8770,7 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetiremen
     let mut state_block = state.block(retirement.header());
     let_row! { committed_retirement = ValidBlock::new_unverified_for_tests(retirement) .commit_unchecked() .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
-    assert!(state_block.pending_autoscale_lifecycle.is_some());
-    assert!(state_block.pending_da_commitments.is_some());
-    assert!(state_block.pending_da_pin_intents.is_some());
+    assert_autoscale_da_effects_staged(&state_block);
     assert_lane_scoped_cleanup_fixture_pruned_from_state_block(
         &state_block,
         retired_lane_id,
@@ -17965,17 +17975,35 @@ state_test! { sync set_nexus_prunes_account_scope_directory_for_removed_dataspac
         "entries should be removed when every dataspace becomes stale",
     );
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
+#[derive(Clone, Copy)]
+enum LaneDataspaceChangeRoute {
+    SetNexus,
+    Lifecycle,
+}
+fn assert_lane_state_pruned_on_dataspace_change(route: LaneDataspaceChangeRoute) {
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let query_handle = LiveQueryStore::start_test();
     let retained = DataSpaceId::UNIVERSAL;
-    let migrated = DataSpaceId::new(9);
+    let migrated = match route {
+        LaneDataspaceChangeRoute::SetNexus => DataSpaceId::new(9),
+        LaneDataspaceChangeRoute::Lifecycle => DataSpaceId::new(11),
+    };
     let reset_lane = LaneId::new(1);
     let_row! { initial_nexus = iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, alias: "lane1-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), dataspace_catalog: DataSpaceCatalog::new(vec![ DataSpaceMetadata { id: retained, alias: "universal".to_string(), description: None, fault_tolerance: 1, }, DataSpaceMetadata { id: migrated, alias: "migrated".to_string(), description: None, fault_tolerance: 1, }, ]) .expect("dataspace catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    let_row! { mut state = State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle) };
+    let mut state = match route {
+        LaneDataspaceChangeRoute::SetNexus => State::new_with_nexus_for_testing(
+            World::default(),
+            initial_nexus,
+            LiveQueryStore::start_test(),
+        ),
+        LaneDataspaceChangeRoute::Lifecycle => {
+            let mut state = blank_test_state();
+            state
+                .set_nexus(initial_nexus)
+                .expect("set initial nexus config");
+            state
+        }
+    };
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
     {
@@ -18008,7 +18036,11 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
     {
         let mut intents = state.da_pin_intents.write();
         let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), reset_lane, 1, 1, StorageTicketId::new([0x44; 32]), ManifestDigest::new([0x55; 32]), ) };
-        intent.alias = Some("lane1-reassign".to_string());
+        let alias = match route {
+            LaneDataspaceChangeRoute::SetNexus => "lane1-reassign",
+            LaneDataspaceChangeRoute::Lifecycle => "lane1-lifecycle-reassign",
+        };
+        intent.alias = Some(alias.to_string());
         intents.insert(
             intent,
             DaCommitmentLocation {
@@ -18029,12 +18061,28 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
         );
         wb.commit();
     }
-    let reset_status_bonded = Quantity::from(909_u32);
+    let reset_status_bonded = Quantity::from(match route {
+        LaneDataspaceChangeRoute::SetNexus => 909_u32,
+        LaneDataspaceChangeRoute::Lifecycle => 911_u32,
+    });
     record_public_lane_staking_status_for_test(reset_lane, &reset_status_bonded);
-    let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: migrated, alias: "lane1-migrated".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), dataspace_catalog: DataSpaceCatalog::new(vec![ DataSpaceMetadata { id: retained, alias: "universal".to_string(), description: None, fault_tolerance: 1, }, DataSpaceMetadata { id: migrated, alias: "migrated".to_string(), description: None, fault_tolerance: 1, }, ]) .expect("dataspace catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(updated_nexus)
-        .expect("set updated nexus config");
+    match route {
+        LaneDataspaceChangeRoute::SetNexus => {
+            let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: migrated, alias: "lane1-migrated".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), dataspace_catalog: DataSpaceCatalog::new(vec![ DataSpaceMetadata { id: retained, alias: "universal".to_string(), description: None, fault_tolerance: 1, }, DataSpaceMetadata { id: migrated, alias: "migrated".to_string(), description: None, fault_tolerance: 1, }, ]) .expect("dataspace catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
+            state
+                .set_nexus(updated_nexus)
+                .expect("set updated nexus config");
+        }
+        LaneDataspaceChangeRoute::Lifecycle => {
+            let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: reset_lane, dataspace_id: migrated, alias: "lane1-migrated".to_string(), ..LaneConfig::default() }], retire: vec![reset_lane], } };
+            state
+                .apply_lane_lifecycle(&plan)
+                .expect("apply lane lifecycle reassign");
+            let nexus_snapshot = state.nexus_snapshot();
+            let_row! { lane_entry = nexus_snapshot .lane_config .entry(reset_lane) .expect("lane must remain after reassign") };
+            assert_eq!(lane_entry.dataspace_id, migrated);
+        }
+    }
     assert!(
         state.lane_relay_snapshot().is_empty(),
         "lane relays should be pruned when lane dataspace changes"
@@ -18059,7 +18107,10 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
         state
             .da_pin_intents
             .read()
-            .get_by_alias("lane1-reassign")
+            .get_by_alias(match route {
+                LaneDataspaceChangeRoute::SetNexus => "lane1-reassign",
+                LaneDataspaceChangeRoute::Lifecycle => "lane1-lifecycle-reassign",
+            })
             .is_none(),
         "lane pin intents should be pruned when lane dataspace changes"
     );
@@ -18074,127 +18125,24 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
     );
     assert_public_lane_staking_status_absent(
         reset_lane,
-        "set_nexus lane dataspace change must clear reset-lane operator staking status",
+        match route {
+            LaneDataspaceChangeRoute::SetNexus => {
+                "set_nexus lane dataspace change must clear reset-lane operator staking status"
+            }
+            LaneDataspaceChangeRoute::Lifecycle => {
+                "lifecycle lane dataspace change must clear reset-lane operator staking status"
+            }
+        },
     );
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
 #[test]
-#[allow(clippy::too_many_lines)]
+fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
+    assert_lane_state_pruned_on_dataspace_change(LaneDataspaceChangeRoute::SetNexus);
+}
+#[test]
 fn apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes() {
-    let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let mut state = blank_test_state();
-    let reset_lane = LaneId::new(1);
-    let retained = DataSpaceId::UNIVERSAL;
-    let migrated = DataSpaceId::new(11);
-    let_row! { initial_nexus = iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, alias: "lane1-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), dataspace_catalog: DataSpaceCatalog::new(vec![ DataSpaceMetadata { id: retained, alias: "universal".to_string(), description: None, fault_tolerance: 1, }, DataSpaceMetadata { id: migrated, alias: "migrated".to_string(), description: None, fault_tolerance: 1, }, ]) .expect("dataspace catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(initial_nexus)
-        .expect("set initial nexus config");
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
-    {
-        let mut relays = state.lane_relays.write();
-        let_row! { _ = relays .insert(sample_lane_relay_envelope( 1, reset_lane, &signers, vec![0b0000_0001], )) .expect("lane relay stored") };
-    }
-    {
-        let mut commitments = state.da_commitments.write();
-        let_row! { record = DaCommitmentRecord::new( reset_lane, 1, 0, BlobDigest::new([0xAA; 32]), ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
-        commitments.insert(
-            &record,
-            DaCommitmentLocation {
-                block_height: 3,
-                index_in_bundle: 0,
-            },
-        );
-        state.da_confidential_compute.write().insert(
-            &record,
-            DaCommitmentLocation {
-                block_height: 3,
-                index_in_bundle: 1,
-            },
-            &ConfidentialComputePolicy::new(
-                ConfidentialComputeMechanism::Encryption,
-                7,
-                Vec::new(),
-            ),
-        );
-    }
-    {
-        let mut intents = state.da_pin_intents.write();
-        let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), reset_lane, 1, 1, StorageTicketId::new([0x44; 32]), ManifestDigest::new([0x55; 32]), ) };
-        intent.alias = Some("lane1-lifecycle-reassign".to_string());
-        intents.insert(
-            intent,
-            DaCommitmentLocation {
-                block_height: 3,
-                index_in_bundle: 2,
-            },
-        );
-    }
-    {
-        let mut wb = state.world.block();
-        wb.lane_relay_emergency_validators.insert(
-            reset_lane,
-            LaneRelayEmergencyValidatorSet {
-                peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
-                expires_at_height: 10,
-                metadata: Metadata::default(),
-            },
-        );
-        wb.commit();
-    }
-    let reset_status_bonded = Quantity::from(911_u32);
-    record_public_lane_staking_status_for_test(reset_lane, &reset_status_bonded);
-    let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: reset_lane, dataspace_id: migrated, alias: "lane1-migrated".to_string(), ..LaneConfig::default() }], retire: vec![reset_lane], } };
-    state
-        .apply_lane_lifecycle(&plan)
-        .expect("apply lane lifecycle reassign");
-    let nexus_snapshot = state.nexus_snapshot();
-    let_row! { lane_entry = nexus_snapshot .lane_config .entry(reset_lane) .expect("lane must remain after reassign") };
-    assert_eq!(lane_entry.dataspace_id, migrated);
-    assert!(
-        state.lane_relay_snapshot().is_empty(),
-        "lane relays should be pruned when lane dataspace changes"
-    );
-    assert!(
-        state
-            .da_commitments
-            .read()
-            .get_by_lane_epoch_sequence(reset_lane.as_u32(), 1, 0)
-            .is_none(),
-        "lane commitments should be pruned when lane dataspace changes"
-    );
-    assert!(
-        state
-            .da_confidential_compute
-            .read()
-            .get_by_lane_epoch_sequence(reset_lane.as_u32(), 1, 0)
-            .is_none(),
-        "lane confidential receipts should be pruned when lane dataspace changes"
-    );
-    assert!(
-        state
-            .da_pin_intents
-            .read()
-            .get_by_alias("lane1-lifecycle-reassign")
-            .is_none(),
-        "lane pin intents should be pruned when lane dataspace changes"
-    );
-    assert!(
-        state
-            .world
-            .lane_relay_emergency_validators
-            .view()
-            .get(&reset_lane)
-            .is_none(),
-        "lane emergency validator overrides should be pruned when lane dataspace changes"
-    );
-    assert_public_lane_staking_status_absent(
-        reset_lane,
-        "lifecycle lane dataspace change must clear reset-lane operator staking status",
-    );
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    assert_lane_state_pruned_on_dataspace_change(LaneDataspaceChangeRoute::Lifecycle);
 }
 state_test! { sync set_tiered_backend_aborts_on_storage_error
     let mut state = blank_test_state();

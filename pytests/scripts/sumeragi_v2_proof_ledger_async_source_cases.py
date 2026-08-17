@@ -559,13 +559,15 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,\n"
             "       PersistDecisionRecoveryKind, PersistDecisionBody,\n"
             "       PersistDecisionValidationHeld, PersistDecisionRequest,\n"
-            "       AsyncCandidateAtConsumerWithOrigin,\n"
+            "       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,\n"
+            "       AsyncCandidateSuccessorProposalRound,\n"
             "       AsyncCandidateWithIdentityAndOrigin,\n"
             "       CandidateConsumerCurrent, PersistDecisionRequests\n",
             "BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,\n"
             "       PersistDecisionRecoveryKind, PersistDecisionBody,\n"
             "       PersistDecisionValidationHeld, PersistDecisionRequest,\n"
-            "       AsyncCandidateAtConsumerWithOrigin,\n"
+            "       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,\n"
+            "       AsyncCandidateSuccessorProposalRound,\n"
             "       CandidateConsumerCurrent, PersistDecisionRequests\n",
             "derive the singleton frontier and current-consumer identity",
         ),
@@ -2432,6 +2434,14 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "Serve completion settlement/delivery/acknowledgement must retain ordered marker",
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "post_to_peer_on_reply_routes",
+            "worker:ProductionV2Services::post_to_peer_on_reply_routes",
+            "ExactFanoutOwnership::SourceRetained",
+            "ExactFanoutOwnership::WorkerTransferred",
+            "Serve exact-output route publication must retain ordered marker",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
             "prepare_and_dispatch_current_certified_serve",
             "turn:prepare_and_dispatch_current_certified_serve",
@@ -2446,6 +2456,30 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "persist_completed_with_worker_readback",
             "persist_completed_without_worker_readback",
             "worker Serve terminal publication must retain ordered marker",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "bind",
+            "launch:ProductionLeaderWireIngressBindingV1::bind",
+            "ingress.bind_leader_wire_lifecycle_gate(",
+            "ingress.bind_unreviewed_leader_wire_lifecycle_gate(",
+            "leader-wire-only lifecycle ingress binding must retain ordered marker",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "retire",
+            "launch:ProductionLeaderWireIngressBindingV1::retire",
+            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
+            "self.ingress.unbind_unreviewed_leader_wire_lifecycle_gate(&gate)",
+            "leader-wire-only lifecycle ingress retirement must retain ordered marker",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "launch",
+            "launch:ProductionLifecycleOwnerV1::launch",
+            "ProductionLeaderWireIngressBindingV1::bind(",
+            "ProductionCertifiedServeIngressBindingV1::bind(",
+            "leader-wire-only lifecycle launch transfer must retain ordered marker",
         ),
     ),
 )
@@ -2579,35 +2613,35 @@ def test_leader_wire_physical_ingress_production_contract_is_current(
             "complete current physical source prefix",
         ),
         (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "                if durable_ordinals != active_ordinals {\n",
-            "                if false {\n",
+            "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs",
+            "        if durable_ingress_ordinals != active_ordinals {\n",
+            "        if false {\n",
             "complete durable and in-memory logical Ingress owner sets",
         ),
         (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "            active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);\n",
-            "            active_leader_wire_carriers\n"
-            "                .sort_by_key(|(owner, _)| owner.token.scheduler_ordinal);\n",
+            "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs",
+            "    active_carriers.sort_by_key(|(_, ordinal)| *ordinal);\n",
+            "    active_carriers\n"
+            "        .sort_by_key(|(owner, _)| owner.token.scheduler_ordinal);\n",
             "ordering by physical ordinal",
         ),
         (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "                    .remove(&owner.token)\n",
-            "                    .get(&owner.token)\n"
-            "                    .copied()\n",
+            "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs",
+            "            .remove(&owner.token)\n",
+            "            .get(&owner.token)\n"
+            "            .copied()\n",
             "consume its one exact physical carrier",
         ),
         (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "            if !leader_wire_carrier_ordinals.is_empty() {\n",
-            "            if false {\n",
+            "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs",
+            "    if !carrier_ordinals.is_empty() {\n",
+            "    if false {\n",
             "correspondence must be total before ordering",
         ),
         (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "match active_leader_wire_carriers.into_iter().next() {\n",
-            "match active_leader_wire_carriers.into_iter().last() {\n",
+            "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs",
+            "active_carriers.first()",
+            "active_carriers.last()",
             "minimum physical carrier",
         ),
         (

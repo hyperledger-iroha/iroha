@@ -47,10 +47,10 @@ pub use finality::{
 // substitute an in-memory backend, treat the local two-slot store as protection from privileged
 // offline rollback, treat a public query response or publisher-supplied bytes as finality evidence,
 // or revive the retired public Torii upload path.
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 /// Live daemon-owned dependencies made available only after trusted startup replay.
 ///
 /// The context carries handles rather than snapshots so a long-running publication backend can
@@ -111,7 +111,7 @@ impl MusubiPublicationPrivateServiceContextV1 {
     pub fn queue(&self) -> Arc<Queue> {
         Arc::clone(&self.queue)
     }
-    /// Clone the embedded SoraFS node handle.
+    /// Clone the embedded `SoraFS` node handle.
     #[must_use]
     pub fn sorafs_node(&self) -> sorafs_node::NodeHandle {
         self.sorafs_node.clone()
@@ -171,7 +171,7 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// exact uppercase method plus path/header/body values to
     /// `iroha::musubi_runtime::MusubiPublicationPrivateServiceV1`.
     /// The runner owns that core together with its injected durable journal, HSM/signer, and
-    /// SoraFS backends; `irohad` never receives those secrets or dependency objects.
+    /// `SoraFS` backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;
 }
 /// Complete injected private-service deployment assembled outside stock `irohad` configuration.
@@ -231,16 +231,20 @@ pub fn start_injected_musubi_publication_private_service_v1(
     deployment: Option<MusubiPublicationPrivateDeploymentV1>,
     shutdown: ShutdownSignal,
 ) -> (MusubiPublicationPrivateServiceAvailabilityV1, Option<Child>) {
-    match deployment {
-        Some(deployment) => (
-            MusubiPublicationPrivateServiceAvailabilityV1::Supervised,
-            Some(deployment.start(shutdown)),
-        ),
-        None => (
-            MusubiPublicationPrivateServiceAvailabilityV1::Unavailable,
-            None,
-        ),
-    }
+    deployment.map_or_else(
+        || {
+            (
+                MusubiPublicationPrivateServiceAvailabilityV1::Unavailable,
+                None,
+            )
+        },
+        |deployment| {
+            (
+                MusubiPublicationPrivateServiceAvailabilityV1::Supervised,
+                Some(deployment.start(shutdown)),
+            )
+        },
+    )
 }
 /// Build and start an optional late-bound deployment.
 ///
@@ -271,10 +275,6 @@ pub fn build_and_start_injected_musubi_publication_private_service_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
     use super::*;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_core::{
@@ -284,6 +284,10 @@ mod tests {
     };
     use iroha_futures::supervisor::Supervisor;
     use sorafs_node::config::StorageConfig;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     struct EarlyExitRunner;
     impl MusubiPublicationPrivateServiceRunnerV1 for EarlyExitRunner {
         fn serve(

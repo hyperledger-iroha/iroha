@@ -1,4 +1,4 @@
-//! Peer-authenticated Unix transport, SCM_RIGHTS framing, fixed client, and CLI.
+//! Peer-authenticated Unix transport, `SCM_RIGHTS` framing, fixed client, and CLI.
 
 use super::super::{SoftwareSignerWrappingKeyV1, load_software_signer_wrapping_key_from_fd_v1};
 use super::{
@@ -37,13 +37,17 @@ use std::{
     mem::MaybeUninit,
     os::{
         fd::{AsFd as _, BorrowedFd, OwnedFd},
-        unix::fs::{
-            DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
-            PermissionsExt as _,
+        unix::{
+            fs::{
+                DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
+                PermissionsExt as _,
+            },
+            net::UnixStream,
+            process::CommandExt as _,
         },
-        unix::net::UnixStream,
     },
     path::{Component, Path, PathBuf},
+    process::Command as ProcessCommand,
     sync::Arc,
     time::Duration,
 };
@@ -66,6 +70,11 @@ pub struct TairaAuthorityEndpointPolicyV1 {
 
 impl TairaAuthorityEndpointPolicyV1 {
     /// Validate endpoint paths and the complete public binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TairaAuthorityErrorV1::Binding`] when the binding or either
+    /// endpoint path is invalid.
     pub fn try_new(
         request_socket: impl Into<PathBuf>,
         administrator_socket: impl Into<PathBuf>,
@@ -104,11 +113,21 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Authenticate service availability before caller-controlled input is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the endpoint cannot be reached or its authenticated
+    /// response does not match the installed binding.
     pub fn qualify(&self) -> Result<(), TairaAuthorityErrorV1> {
         self.qualify_status().map(drop)
     }
 
     /// Authenticate the request-side service and return its signed status object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the endpoint cannot be reached or its authenticated
+    /// status response is invalid.
     pub fn status(&self) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
         self.qualify_status()
     }
@@ -148,6 +167,11 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Send one canonical authorization package and ordered artifact descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request exchange fails or the authority rejects
+    /// the package.
     pub fn authorize(
         &self,
         request_json: Vec<u8>,
@@ -170,6 +194,11 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Perform non-mutating historical receipt verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request exchange fails or the authority rejects
+    /// the receipt.
     pub fn verify_receipt(
         &self,
         request_json: Vec<u8>,
@@ -244,6 +273,11 @@ pub struct TairaAuthorityServerV1 {
 
 impl TairaAuthorityServerV1 {
     /// Bind a service to its reviewed public identity and endpoint policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service binding cannot be recovered or does not
+    /// match the endpoint policy and effective service identity.
     pub fn try_new(
         service: Arc<TairaAuthorityServiceV1>,
         policy: TairaAuthorityEndpointPolicyV1,
@@ -262,6 +296,11 @@ impl TairaAuthorityServerV1 {
     }
 
     /// Serve authenticated one-request sessions until SIGINT or SIGTERM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when endpoint binding, runtime setup, session handling,
+    /// or endpoint cleanup fails.
     pub fn serve(self) -> Result<(), TairaAuthorityErrorV1> {
         let (request_listener, request_guard) = bind_endpoint(
             &self.policy.request_socket,
@@ -279,7 +318,7 @@ impl TairaAuthorityServerV1 {
             request_guard,
             administrator_guard,
             self.service,
-            self.policy,
+            &self.policy,
         )
     }
 }
@@ -290,7 +329,7 @@ fn serve_listeners(
     request_guard: BoundEndpointV1,
     administrator_guard: BoundEndpointV1,
     service: Arc<TairaAuthorityServiceV1>,
-    policy: TairaAuthorityEndpointPolicyV1,
+    policy: &TairaAuthorityEndpointPolicyV1,
 ) -> Result<(), TairaAuthorityErrorV1> {
     request_listener
         .set_nonblocking(true)
@@ -943,58 +982,75 @@ fn load_fixed_request_client(
     role: TairaAuthorityRoleV1,
 ) -> Result<TairaAuthorityClientV1, TairaAuthorityErrorV1> {
     let client = load_fixed_client(role)?;
-    authenticate_request_client_uid(client.policy.binding.signer.client_uid)?;
+    let client_uid = client.policy.binding.signer.client_uid;
+    if request_client_identity_plan(rustix::process::geteuid().as_raw(), client_uid)?
+        != RequestClientIdentityPlanV1::AlreadyBound
+    {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
     Ok(client)
 }
 
-fn authenticate_request_client_uid(client_uid: u32) -> Result<(), TairaAuthorityErrorV1> {
-    authenticate_request_client_uid_with(
-        rustix::process::geteuid().as_raw(),
-        client_uid,
-        permanently_drop_request_client_uid,
-        || rustix::process::geteuid().as_raw(),
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestClientIdentityPlanV1 {
+    AlreadyBound,
+    ReexecAs(u32),
 }
 
-fn authenticate_request_client_uid_with<DropUid, EffectiveUid>(
+fn request_client_identity_plan(
     current_uid: u32,
     client_uid: u32,
-    drop_uid: DropUid,
-    effective_uid: EffectiveUid,
-) -> Result<(), TairaAuthorityErrorV1>
-where
-    DropUid: FnOnce(u32) -> Result<(), TairaAuthorityErrorV1>,
-    EffectiveUid: FnOnce() -> u32,
-{
+) -> Result<RequestClientIdentityPlanV1, TairaAuthorityErrorV1> {
     if client_uid == 0 || client_uid == u32::MAX {
         return Err(TairaAuthorityErrorV1::Binding);
     }
-    if current_uid == 0 {
-        drop_uid(client_uid)?;
-    } else if current_uid != client_uid {
-        return Err(TairaAuthorityErrorV1::Binding);
+    match current_uid {
+        uid if uid == client_uid => Ok(RequestClientIdentityPlanV1::AlreadyBound),
+        0 => Ok(RequestClientIdentityPlanV1::ReexecAs(client_uid)),
+        _ => Err(TairaAuthorityErrorV1::Binding),
     }
-    if effective_uid() != client_uid {
-        return Err(TairaAuthorityErrorV1::Binding);
-    }
-    Ok(())
 }
 
-fn permanently_drop_request_client_uid(client_uid: u32) -> Result<(), TairaAuthorityErrorV1> {
-    use std::os::raw::{c_int, c_uint};
-
-    unsafe extern "C" {
-        fn setuid(uid: c_uint) -> c_int;
+fn request_client_role(command: &Command) -> Option<TairaAuthorityRoleV1> {
+    match command {
+        Command::Authorize(args) | Command::VerifyReceipt(args) => Some(args.role),
+        Command::Status(args) => Some(args.role),
+        Command::PrepareRole(_)
+        | Command::Provision(_)
+        | Command::InstallBinding(_)
+        | Command::Serve(_)
+        | Command::AssignRun(_)
+        | Command::Recover(_)
+        | Command::Rotate(_)
+        | Command::InstallRotation(_)
+        | Command::Revoke(_) => None,
     }
+}
 
-    // SAFETY: `setuid` accepts every `uid_t`; the authenticated binding has
-    // already excluded root and the platform sentinel.  A root `setuid`
-    // updates the real, effective, and saved IDs, so this child cannot regain
-    // root before connecting to the role socket.
-    if unsafe { setuid(client_uid) } != 0 {
-        return Err(TairaAuthorityErrorV1::State);
+fn reexec_root_request_client(command: &Command) -> Result<(), TairaAuthorityErrorV1> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Ok(());
     }
-    Ok(())
+    let Some(role) = request_client_role(command) else {
+        return Ok(());
+    };
+    let client = load_fixed_client(role)?;
+    let RequestClientIdentityPlanV1::ReexecAs(client_uid) =
+        request_client_identity_plan(0, client.policy.binding.signer.client_uid)?
+    else {
+        return Err(TairaAuthorityErrorV1::Binding);
+    };
+    let executable = std::env::current_exe().map_err(|_| TairaAuthorityErrorV1::State)?;
+    let _exec_error = ProcessCommand::new(executable)
+        .args(std::env::args_os().skip(1))
+        .uid(client_uid)
+        .env_clear()
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir("/")
+        .exec();
+    Err(TairaAuthorityErrorV1::State)
 }
 
 #[derive(Clone, Copy)]
@@ -1013,7 +1069,7 @@ fn read_public_binding(
     }
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| TairaAuthorityErrorV1::State)?;
     let before = file.metadata().map_err(|_| TairaAuthorityErrorV1::State)?;
@@ -1203,8 +1259,10 @@ struct RevokeArgs {
 }
 
 pub(super) fn run_cli() -> Result<(), &'static str> {
-    match Cli::parse().command {
-        Command::PrepareRole(args) => cli_prepare_role(args),
+    let command = Cli::parse().command;
+    reexec_root_request_client(&command).map_err(cli_error)?;
+    match command {
+        Command::PrepareRole(args) => cli_prepare_role(&args),
         Command::Provision(args) => cli_provision(args),
         Command::InstallBinding(args) => cli_install_binding(args.role),
         Command::Serve(args) => cli_serve(args),
@@ -1221,8 +1279,8 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
                 .map_err(cli_error)?;
             write_stdout(&output)
         }
-        Command::Authorize(args) => cli_artifact_operation(args, false),
-        Command::VerifyReceipt(args) => cli_artifact_operation(args, true),
+        Command::Authorize(args) => cli_artifact_operation(&args, false),
+        Command::VerifyReceipt(args) => cli_artifact_operation(&args, true),
         Command::Recover(args) => cli_recover(args),
         Command::Status(args) => {
             let client = load_fixed_request_client(args.role).map_err(cli_error)?;
@@ -1297,7 +1355,7 @@ fn cli_install_rotation(role: TairaAuthorityRoleV1) -> Result<(), &'static str> 
     write_stdout(&handoff)
 }
 
-fn cli_prepare_role(args: PrepareRoleArgs) -> Result<(), &'static str> {
+fn cli_prepare_role(args: &PrepareRoleArgs) -> Result<(), &'static str> {
     if rustix::process::geteuid().as_raw() != 0
         || args.service_uid == u32::MAX
         || (args.role == TairaAuthorityRoleV1::Qualification) != (args.service_uid == 0)
@@ -1436,8 +1494,12 @@ fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
                 observation,
             )
         }
-        (TairaAuthorityRoleV1::PrivacyGovernance, _, _)
-        | (TairaAuthorityRoleV1::PublicSoakReplayAdmission, _, _)
+        (
+            TairaAuthorityRoleV1::PrivacyGovernance
+            | TairaAuthorityRoleV1::PublicSoakReplayAdmission,
+            _,
+            _,
+        )
         | (_, Some(_), _)
         | (_, _, Some(_)) => {
             return Err("authority command failed");
@@ -1564,7 +1626,7 @@ fn cli_recover(args: RecoverArgs) -> Result<(), &'static str> {
     write_stdout(&service.status_json().map_err(cli_error)?)
 }
 
-fn cli_artifact_operation(args: ArtifactArgs, verify: bool) -> Result<(), &'static str> {
+fn cli_artifact_operation(args: &ArtifactArgs, verify: bool) -> Result<(), &'static str> {
     let client = load_fixed_request_client(args.role).map_err(cli_error)?;
     client.qualify().map_err(cli_error)?;
     let input = read_stdin_bounded().map_err(cli_error)?;
@@ -1602,10 +1664,23 @@ fn duplicate_inherited_descriptor(value: i32) -> Result<OwnedFd, TairaAuthorityE
     if value <= 2 {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
-    // SAFETY: the positive inherited descriptor is borrowed only for this
-    // `fcntl` call.  The caller retains ownership of the original descriptor.
-    let descriptor = unsafe { BorrowedFd::borrow_raw(value) };
-    rustix::io::fcntl_dupfd_cloexec(descriptor, 3)
+    #[cfg(target_os = "linux")]
+    {
+        let process = rustix::process::pidfd_open(
+            rustix::process::getpid(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+        return rustix::process::pidfd_getfd(
+            process,
+            value,
+            rustix::process::PidfdGetfdFlags::empty(),
+        )
+        .map_err(|_| TairaAuthorityErrorV1::Rejected);
+    }
+    #[cfg(not(target_os = "linux"))]
+    File::open(format!("/dev/fd/{value}"))
+        .map(OwnedFd::from)
         .map_err(|_| TairaAuthorityErrorV1::Rejected)
 }
 
@@ -1645,7 +1720,7 @@ fn write_pending_binding_new(
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| "authority output failed")?;
     file.write_all(&bytes)
@@ -1684,7 +1759,7 @@ fn write_binding_new(
         .write(true)
         .create_new(true)
         .mode(0o644)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| "authority output failed")?;
     file.write_all(&bytes)
@@ -1748,7 +1823,7 @@ fn install_fixed_successor_binding(
             .write(true)
             .create_new(true)
             .mode(0o644)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
             .open(&pending)
             .map_err(|_| "authority binding installation failed")?;
         file.write_all(&encoded)
@@ -1778,7 +1853,6 @@ const fn cli_error(_: TairaAuthorityErrorV1) -> &'static str {
 #[cfg(test)]
 mod request_client_identity_tests {
     use std::{
-        cell::Cell,
         fs,
         io::{Read as _, Seek as _, SeekFrom, Write as _},
         os::{
@@ -1788,80 +1862,41 @@ mod request_client_identity_tests {
     };
 
     use super::{
-        TairaAuthorityErrorV1, authenticate_request_client_uid_with,
-        duplicate_inherited_descriptor,
+        RequestClientIdentityPlanV1, TairaAuthorityErrorV1, duplicate_inherited_descriptor,
+        request_client_identity_plan,
     };
 
     #[test]
     fn bound_client_uid_connects_without_a_credential_transition() {
         let client_uid = 4_101;
-        authenticate_request_client_uid_with(
-            client_uid,
-            client_uid,
-            |_| panic!("an already-bound request client must not change credentials"),
-            || client_uid,
-        )
-        .expect("bound client UID must be accepted");
+        assert_eq!(
+            request_client_identity_plan(client_uid, client_uid),
+            Ok(RequestClientIdentityPlanV1::AlreadyBound)
+        );
     }
 
     #[test]
-    fn root_request_children_can_drop_to_distinct_role_uids() {
-        let observed = Cell::new(0);
+    fn root_request_children_reexec_as_distinct_role_uids() {
         for client_uid in [4_101, 4_102] {
-            observed.set(0);
-            authenticate_request_client_uid_with(
-                0,
-                client_uid,
-                |target| {
-                    observed.set(target);
-                    Ok(())
-                },
-                || observed.get(),
-            )
-            .expect("each root child must adopt its role-bound client UID");
-            assert_eq!(observed.get(), client_uid);
+            assert_eq!(
+                request_client_identity_plan(0, client_uid),
+                Ok(RequestClientIdentityPlanV1::ReexecAs(client_uid))
+            );
         }
     }
 
     #[test]
     fn unrelated_uid_and_invalid_bound_uids_fail_before_transition() {
         for (current_uid, client_uid) in [(4_103, 4_101), (0, 0), (0, u32::MAX)] {
-            let attempted = Cell::new(false);
             assert_eq!(
-                authenticate_request_client_uid_with(
-                    current_uid,
-                    client_uid,
-                    |_| {
-                        attempted.set(true);
-                        Ok(())
-                    },
-                    || client_uid,
-                ),
+                request_client_identity_plan(current_uid, client_uid),
                 Err(TairaAuthorityErrorV1::Binding)
             );
-            assert!(!attempted.get());
         }
     }
 
     #[test]
-    fn failed_or_incomplete_root_drop_is_rejected() {
-        assert_eq!(
-            authenticate_request_client_uid_with(
-                0,
-                4_101,
-                |_| Err(TairaAuthorityErrorV1::State),
-                || 4_101,
-            ),
-            Err(TairaAuthorityErrorV1::State)
-        );
-        assert_eq!(
-            authenticate_request_client_uid_with(0, 4_101, |_| Ok(()), || 0),
-            Err(TairaAuthorityErrorV1::Binding)
-        );
-    }
-
-    #[test]
-    fn read_only_inherited_descriptor_survives_root_child_drop_planning() {
+    fn read_only_inherited_descriptor_survives_root_child_reexec_planning() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("artifact");
         let mut original = fs::File::create(&path).expect("create inherited artifact");
@@ -1878,17 +1913,10 @@ mod request_client_identity_tests {
             assert_eq!(metadata.uid(), 0);
         }
 
-        let effective = Cell::new(0);
-        authenticate_request_client_uid_with(
-            0,
-            4_101,
-            |target| {
-                effective.set(target);
-                Ok(())
-            },
-            || effective.get(),
-        )
-        .expect("root request child must adopt the bound client UID");
+        assert_eq!(
+            request_client_identity_plan(0, 4_101),
+            Ok(RequestClientIdentityPlanV1::ReexecAs(4_101))
+        );
 
         fs::remove_file(&path).expect("remove artifact path before descriptor duplication");
         let duplicate = duplicate_inherited_descriptor(original.as_raw_fd())

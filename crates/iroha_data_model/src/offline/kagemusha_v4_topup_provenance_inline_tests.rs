@@ -35,6 +35,10 @@ mod kagemusha_v4_topup_provenance_tests {
             seed, 0xF0,
         ])))
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture constructor must keep the top-up anchor, height context, quorum certificate, and proof mutually consistent"
+    )]
     fn evidence(
         network_id: NetworkId,
         asset: &AssetDefinitionId,

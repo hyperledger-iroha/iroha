@@ -7,6 +7,8 @@
     clippy::result_large_err,
     clippy::struct_excessive_bools
 )]
+#[cfg(test)]
+#[allow(unused_macro_rules)]
 macro_rules! routing_test {
     (sync $name:ident $($body:tt)*) => {
         #[test]
@@ -38362,33 +38364,28 @@ fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
 mod address_metrics_tests {
     use super::*;
     use crate::filter::{FieldPath, FilterExpr};
-    use iroha_data_model::{
-        account::{AccountAddress, AccountId, address::AddressDomainKind},
-        domain::DomainId,
-    };
+    use iroha_data_model::account::{AccountAddress, AccountId, address::AddressDomainKind};
     use norito::json::Value;
     const TEST_CONTEXT: &str = "/tests/account-metrics";
     const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
-    fn local8_literal() -> &'static str {
-        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
-    }
+    const LOCAL8_LITERAL: &str = "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora";
     routing_test! { current_thread parse_account_literal_counts_local8_attempts
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
+        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
             .expect_err("local8 literal should fail")
             .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
             .with_label_values(&[TEST_CONTEXT, reason]);
         let before_invalid = invalid_counter.get();
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
+        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
     routing_test! { current_thread parse_account_literal_records_local8_domain_labels
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let domain_label = local8_domain_label(local8_literal()).expect("domain parses");
+        let domain_label = local8_domain_label(LOCAL8_LITERAL).expect("domain parses");
         let local8_counter = metrics
             .torii_address_domain_total
             .with_label_values(&[TEST_CONTEXT, "local8"]);
@@ -38397,14 +38394,14 @@ mod address_metrics_tests {
             .with_label_values(&[TEST_CONTEXT, domain_label.as_str()]);
         let before_local8 = local8_counter.get();
         let before_domain = domain_counter.get();
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
+        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(local8_counter.get(), before_local8 + 1);
         assert_eq!(domain_counter.get(), before_domain + 1);
     }
     routing_test! { current_thread filter_validation_records_address_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
+        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
             .expect_err("local8 literal should fail")
             .reason();
         let invalid_counter = metrics
@@ -38413,7 +38410,7 @@ mod address_metrics_tests {
         let before_invalid = invalid_counter.get();
         let expr = FilterExpr::Eq(
             FieldPath("authority".to_string()),
-            Value::String(local8_literal().into()),
+            Value::String(LOCAL8_LITERAL.into()),
         );
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
@@ -38469,20 +38466,18 @@ mod address_metrics_tests {
             .get();
         assert_eq!(after, before + 1);
     }
-    fn i105_literal(domain_label: &str) -> String {
-        let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
+    fn i105_literal() -> String {
         let kp = checked_routing_fixture_keypair(
             0x97,
             iroha_crypto::Algorithm::Ed25519,
             "derive account literal metric fixture key",
         );
-        let account = AccountId::new(kp.public_key().clone());
-        account.to_string()
+        AccountId::new(kp.public_key().clone()).to_string()
     }
     routing_test! { current_thread parse_account_literal_records_default_domain_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
-        let literal = i105_literal("wonderland");
+        let literal = i105_literal();
         let label = AddressDomainKind::Default.as_str();
         let before = {
             let metrics = telemetry.metrics().await;
@@ -68318,26 +68313,6 @@ pub mod event {
             }
         }
     }
-}
-/// Get running Iroha version (block header version).
-#[iroha_futures::telemetry_future]
-pub async fn handle_version(state: Arc<CoreState>) -> Response {
-    use iroha_version::Version;
-    let latest_block = std::num::NonZeroUsize::new(state.committed_height())
-        .and_then(|height| state.block_by_height(height));
-    let mut resp = match latest_block {
-        Some(block) => Response::new(Body::from(block.version().to_string())),
-        None => {
-            let mut resp = Response::new(Body::from("genesis not applied"));
-            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            resp
-        }
-    };
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    resp
 }
 include!("routing/version_and_status_visibility.rs");
 #[cfg(feature = "telemetry")]

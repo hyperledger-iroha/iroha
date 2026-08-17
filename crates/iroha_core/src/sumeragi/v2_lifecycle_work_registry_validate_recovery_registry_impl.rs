@@ -1986,18 +1986,6 @@ impl ConcreteLifecycleWorkRegistry {
             RecoveredWalRegistrySlotV1::None,
         )
     }
-    /// Verify the complete post-repair startup registry: one exact recovered
-    /// WAL authority plus every live Ready-Fetch row and no other carrier.
-    pub(super) fn exactly_covers_recovered_ready_fetches_and_wal_authority(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> bool {
-        let Some(sign) = self.exact_recovered_wal_registry_slot() else {
-            return false;
-        };
-        !matches!(sign, RecoveredWalRegistrySlotV1::None)
-            && self.exactly_covers_recovered_ready_fetches_with_extra(coordinator, sign)
-    }
     fn exactly_covers_recovered_ready_fetches_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,

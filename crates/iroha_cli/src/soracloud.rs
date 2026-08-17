@@ -15938,6 +15938,35 @@ mod tests {
         fs::create_dir_all(&path).expect("create temp dir");
         path
     }
+    fn service_scaffold_args(
+        output_dir: PathBuf,
+        service_name: &str,
+        template: InitTemplate,
+    ) -> InitArgs {
+        InitArgs {
+            output_dir,
+            service_name: service_name.to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template,
+            overwrite: false,
+        }
+    }
+    fn app_scaffold_args(
+        output_dir: PathBuf,
+        app_name: &str,
+        template: AppInitTemplate,
+    ) -> AppInitArgs {
+        AppInitArgs {
+            output_dir,
+            app_name: app_name.to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template,
+            public_host: None,
+            static_site_dist_dir: None,
+            existing_repo: false,
+            overwrite: false,
+        }
+    }
     fn assert_request_has_no_inline_signing_fields(request: &impl JsonSerialize) {
         let Value::Object(body) =
             norito::json::to_value(request).expect("serialize Soracloud request")
@@ -16044,7 +16073,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert_eq!(output_name, name, "manifest function order");
             assert_eq!(output.len(), expected_len, "{name} byte length");
             assert_eq!(
-                hex::encode(Sha256::digest(output.as_bytes())),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(output.as_bytes())),
                 expected_digest,
                 "{name} digest"
             );
@@ -17285,15 +17314,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         static_markers: &[&str],
     ) {
         let dir = temp_dir(dir_name);
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -17374,15 +17397,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         test_body: &str,
     ) {
         let dir = temp_dir(dir_name);
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         let api = fs::read_to_string(&server_path).expect("read pii api");
         for marker in static_markers {
@@ -17778,15 +17795,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn status_args_can_resolve_service_filter_from_manifest_pair() {
         let dir = temp_dir("status_service_filter_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let status_payload =
             mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -17843,15 +17854,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn status_args_reject_conflicting_service_name_against_manifest_pair() {
         let dir = temp_dir("status_service_name_manifest_mismatch");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let server = MockHttpServer::start(BTreeMap::new());
         let error = StatusArgs {
             service_name: Some("wrong_name".to_owned()),
@@ -17886,15 +17891,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn config_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("config_status_service_filter_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let response = norito::json!({
             "service_name": "echo_console",
             "configs": [
@@ -17961,15 +17960,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn secret_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("secret_status_service_filter_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let response = norito::json!({
             "service_name": "echo_console",
             "secrets": [
@@ -18035,15 +18028,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn rollback_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("rollback_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let rollback_response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([
@@ -18119,15 +18106,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn rollout_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("rollout_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let status_payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -18231,15 +18212,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn hf_deploy_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_deploy_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let key_pair = soracloud_fixture_key_pair(0x16);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18325,15 +18300,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn hf_status_args_can_attach_service_plan_from_manifest_pair() {
         let dir = temp_dir("hf_status_service_plan_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let status_payload = norito::json!({
             "repo_id": "openai/gpt-oss",
             "storage_class": "Warm",
@@ -18395,15 +18364,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn hf_lease_leave_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_lease_leave_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let key_pair = soracloud_fixture_key_pair(0x17);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18477,15 +18440,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn hf_lease_renew_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_lease_renew_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let key_pair = soracloud_fixture_key_pair(0x1F);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18887,15 +18844,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
         let dir = temp_dir("model_upload_encryption_recipient_service_plan_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
             "recipient".to_owned(),
             json::to_value(&sample_uploaded_model_encryption_recipient())
@@ -20510,15 +20461,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn deploy_returns_manifest_backed_service_projection() {
         let dir = temp_dir("deploy_service_projection");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let deploy_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -20605,15 +20550,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
         let dir = temp_dir("upgrade_service_projection");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -20700,15 +20639,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn init_http_service_template_scaffolds_inrou_service() {
         let dir = temp_dir("http_service_template");
-        let output = InitArgs {
-            output_dir: dir.clone(),
-            service_name: "live_search".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        let output = service_scaffold_args(dir.clone(), "live_search", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         assert_eq!(output.template, "http-service");
         assert!(dir.join("http-service/app/server.mjs").exists());
         assert!(dir.join("http-service/build.sh").exists());
@@ -20933,15 +20866,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_http_service_scaffold_smoke_serves_health_and_echo() {
         let dir = temp_dir("http_service_smoke");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let server_path = dir.join("http-service/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read http-service server");
@@ -20960,15 +20887,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn local_plan_http_service_reports_workspace_scripts_and_hosted_runtime() {
         let dir = temp_dir("http_service_local_plan");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let output = LocalPlanArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -21027,18 +20948,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn local_plan_single_api_service_reports_deterministic_handler_routes() {
         let dir = temp_dir("single_api_service_local_plan");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let output = LocalPlanArgs {
             container: dir.join("services/api/container_manifest.json"),
             service: dir.join("services/api/service_manifest.json"),
@@ -21085,15 +20997,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn local_dev_http_service_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("http_service_local_dev_dry_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let output = LocalDevArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -21140,15 +21046,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("http_service_local_dev_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[0]).expect("write dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -21182,15 +21082,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("http_service_local_dev_interrupt");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[1]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -21224,15 +21118,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("http_service_build_and_sync_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[2])
             .expect("write build-and-sync script");
@@ -21272,15 +21160,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn deploy_workspace_http_service_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("http_service_deploy_workspace_dry_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -21331,15 +21213,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("http_service_deploy_workspace_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let configs_path = dir.join("materials").join("configs.json");
         let secrets_path = dir.join("materials").join("secrets.json");
         fs::create_dir_all(configs_path.parent().expect("materials parent"))
@@ -21406,15 +21282,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("http_service_upgrade_workspace_run");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
+        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
+            .run()
+            .expect("http-service init should succeed");
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[4]).expect("write upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark upgrade executable");
@@ -21458,15 +21328,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
         let dir = temp_dir("site_template");
-        let output = InitArgs {
-            output_dir: dir.clone(),
-            service_name: "docs_portal".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Site,
-            overwrite: false,
-        }
-        .run()
-        .expect("site init should succeed");
+        let output = service_scaffold_args(dir.clone(), "docs_portal", InitTemplate::Site)
+            .run()
+            .expect("site init should succeed");
         assert_eq!(output.template, "site");
         assert!(!dir.join("registry.json").exists());
         assert!(dir.join("site/package.json").exists());
@@ -21499,15 +21363,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn init_webapp_template_scaffolds_frontend_and_api() {
         let dir = temp_dir("webapp_template");
-        let output = InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        let output = service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         assert_eq!(output.template, "webapp");
         assert!(dir.join("webapp/frontend/package.json").exists());
         assert!(dir.join("webapp/api/server.mjs").exists());
@@ -21573,15 +21431,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn init_pii_app_template_scaffolds_private_policy_workflows() {
         let dir = temp_dir("pii_app_template");
-        let output = InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        let output = service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         assert_eq!(output.template, "pii-app");
         assert!(dir.join("pii-app/frontend/package.json").exists());
         assert!(dir.join("pii-app/api/server.mjs").exists());
@@ -21686,18 +21538,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_init_single_api_template_scaffolds_admissible_root_binding_service() {
         let dir = temp_dir("single_api_template");
-        let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        let output = app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         assert_eq!(output.template, "single-api");
         assert!(dir.join("web/package.json").exists());
         assert!(dir.join("web/src/App.vue").exists());
@@ -21905,18 +21748,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_single_api_dev_server_smoke_serves_healthz() {
         let dir = temp_dir("single_api_dev_smoke");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let server_path = dir.join("services/api/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read single-api dev server");
@@ -21943,18 +21777,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_init_split_app_template_scaffolds_live_and_vault_services() {
         let dir = temp_dir("split_app_template");
-        let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        let output = app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         assert_eq!(output.template, "split-app");
         assert!(dir.join("frontend/src/App.vue").exists());
         assert!(dir.join("services/live/app/server.mjs").exists());
@@ -22356,14 +22181,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_split_app_existing_repo_template_omits_starter_sources() {
         let dir = temp_dir("split_app_existing_repo_template");
         let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
             existing_repo: true,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
+            ..app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
         }
         .run()
         .expect("split-app existing-repo init should succeed");
@@ -22427,14 +22246,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_existing_repo_rejects_non_split_templates() {
         let dir = temp_dir("single_api_existing_repo_template");
         let err = AppInitArgs {
-            output_dir: dir,
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
             existing_repo: true,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
+            ..app_scaffold_args(dir, "travel_ops", AppInitTemplate::SingleApi)
         }
         .run()
         .expect_err("existing-repo should be rejected for single-api");
@@ -22447,14 +22260,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_split_app_template_accepts_public_host_and_dist_dir_overrides() {
         let dir = temp_dir("split_app_template_overrides");
         let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "hayahi".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
             public_host: Some("taira.sora.org".to_owned()),
             static_site_dist_dir: Some("../../apps/web/dist".to_owned()),
-            overwrite: false,
+            ..app_scaffold_args(dir.clone(), "hayahi", AppInitTemplate::SplitApp)
         }
         .run()
         .expect("split-app init with overrides should succeed");
@@ -22498,18 +22306,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_local_plan_split_app_reports_mixed_routes_and_cid_gateway() {
         let dir = temp_dir("split_app_local_plan");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
@@ -22641,18 +22440,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_local_plan_single_api_reports_child_service_workspace() {
         let dir = temp_dir("single_api_app_local_plan");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
@@ -22705,18 +22495,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_local_dev_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_local_dev_dry_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let output = AppLocalDevArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -22786,18 +22567,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("single_api_local_dev_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[5]).expect("write test dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -22835,18 +22607,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("single_api_local_dev_interrupt");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[6]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -22875,18 +22638,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_build_and_sync_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_build_and_sync_dry_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let output = AppBuildAndSyncArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -22954,18 +22708,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("single_api_build_and_sync_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[7])
             .expect("write test build-and-sync script");
@@ -23008,18 +22753,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_doctor_workspace_dry_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let output = AppDoctorWorkspaceArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -23063,18 +22799,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("single_api_release_workspace_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let release_script = dir.join("release.sh");
         fs::write(&release_script, STATIC_ASSETS_V1[8]).expect("write app release script");
         mark_template_file_executable(&release_script).expect("mark app release executable");
@@ -23135,18 +22862,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_deploy_workspace_dry_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let output = AppWorkspaceMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -23214,18 +22932,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("single_api_upgrade_workspace_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[9]).expect("write app upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark app upgrade executable");
@@ -23290,18 +22999,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_doctor_validates_split_app_release_contract() {
         let dir = temp_dir("split_app_doctor");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -23362,18 +23062,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
         let dir = temp_dir("split_app_doctor_rejects_hosted_prefix");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -23451,18 +23142,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_release_dry_run_reports_build_and_upsert_plan() {
         let dir = temp_dir("split_app_release_dry_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let key_pair = soracloud_fixture_key_pair(0x40);
         let authority = AccountId::new(key_pair.public_key().clone());
         let output = AppReleaseArgs {
@@ -23502,18 +23184,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("split_app_release_run");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
@@ -23604,18 +23277,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             return;
         }
         let dir = temp_dir("split_app_release_reuse_guest_images");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[11]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
@@ -23732,18 +23396,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_local_plan_rejects_app_service_name_mismatch() {
         let dir = temp_dir("split_app_local_plan_service_name_mismatch");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
@@ -23763,18 +23418,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_split_app_live_server_smoke_serves_hayahi_routes() {
         let dir = temp_dir("split_app_live_smoke");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let server_path = dir.join("services/live/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split live server");
@@ -23814,18 +23460,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_split_app_vault_dev_server_smoke_serves_auth_and_user_state() {
         let dir = temp_dir("split_app_vault_dev_smoke");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let server_path = dir.join("services/vault/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split vault dev server");
@@ -23846,18 +23483,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_split_app_frontend_build_guard_enforces_live_same_host_api() {
         let dir = temp_dir("split_app_frontend_guard");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let guard_path = dir.join("frontend/scripts/validate-production-env.mjs");
         if !node_available() {
             let guard = fs::read_to_string(&guard_path).expect("read build guard");
@@ -24063,15 +23691,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn init_hayahi_app_template_scaffolds_real_ivm_api_project() {
         let dir = temp_dir("hayahi_app_template");
-        let output = InitArgs {
-            output_dir: dir.clone(),
-            service_name: "hayahi_api".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HayahiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("hayahi-app init should succeed");
+        let output = service_scaffold_args(dir.clone(), "hayahi_api", InitTemplate::HayahiApp)
+            .run()
+            .expect("hayahi-app init should succeed");
         assert_eq!(output.template, "hayahi-app");
         assert!(dir.join("hayahi-app/package.json").exists());
         assert!(dir.join("hayahi-app/build.sh").exists());
@@ -24172,15 +23794,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_module_contains_replay_and_signature_guards() {
         let dir = temp_dir("webapp_auth_markers");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
@@ -24201,15 +23817,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_module_contains_replay_and_signature_guards() {
         let dir = temp_dir("pii_auth_markers");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let api =
             fs::read_to_string(dir.join("pii-app/api/server.mjs")).expect("read pii api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
@@ -24231,15 +23841,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_hayahi_app_contract_contains_real_route_entrypoints() {
         let dir = temp_dir("hayahi_auth_markers");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "hayahi_api".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HayahiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("hayahi-app init should succeed");
+        service_scaffold_args(dir.clone(), "hayahi_api", InitTemplate::HayahiApp)
+            .run()
+            .expect("hayahi-app init should succeed");
         let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
             .expect("read hayahi contract");
         assert!(contract.contains("route: \"/api/v1/health\""));
@@ -24396,18 +24000,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn sync_manifests_generated_split_app_scaffold_refreshes_service_refs() {
         let dir = temp_dir("sync_manifests_generated_split_app");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
         fs::write(
@@ -24475,18 +24070,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn sync_manifests_generated_single_api_scaffold_refreshes_service_refs() {
         let dir = temp_dir("sync_manifests_generated_single_api");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         fs::create_dir_all(dir.join("services/api/build")).expect("create api build dir");
         fs::write(
             dir.join("services/api/build/api-service.to"),
@@ -24524,18 +24110,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_status_filters_control_plane_status_to_split_app_services() {
         let dir = temp_dir("split_app_status");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24742,18 +24319,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_status_keeps_missing_manifest_services_visible() {
         let dir = temp_dir("split_app_status_missing_service");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24839,18 +24407,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_status_projects_single_api_frontend_root_binding_url() {
         let dir = temp_dir("single_api_status_root_binding");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24933,18 +24492,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_deploy_single_api_root_binding_injects_reserved_static_site_config() {
         let dir = temp_dir("single_api_root_binding_deploy");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         fs::create_dir_all(dir.join("web/dist")).expect("create web dist dir");
         fs::write(
             dir.join("web/dist/index.html"),
@@ -25126,18 +24676,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_deploy_rejects_app_service_name_mismatch_before_network_mutation() {
         let dir = temp_dir("app_deploy_service_name_mismatch");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
@@ -25163,18 +24704,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_deploy_uses_app_level_infra_endpoint_when_available() {
         let dir = temp_dir("app_deploy_app_infra_endpoint");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("single-api init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
+            .run()
+            .expect("single-api init should succeed");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.static_site = None;
@@ -25253,18 +24785,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_deploy_split_app_cid_only_skips_reserved_static_site_config() {
         let dir = temp_dir("split_app_cid_only_deploy");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -25464,18 +24987,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn app_upgrade_split_app_cid_only_keeps_route_projection() {
         let dir = temp_dir("split_app_cid_only_upgrade");
-        AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
-        }
-        .run()
-        .expect("split-app init should succeed");
+        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
+            .run()
+            .expect("split-app init should succeed");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -25608,15 +25122,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_on_weak_session_key_in_strict_mode() {
         let dir = temp_dir("webapp_auth_strict_key");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25636,15 +25144,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_on_invalid_auth_mode() {
         let dir = temp_dir("webapp_auth_invalid_mode");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!("node unavailable; validating static auth-mode guard markers in scaffold");
@@ -25685,15 +25187,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_when_external_state_is_required_without_adapter() {
         let dir = temp_dir("webapp_auth_missing_external_adapter");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25714,15 +25210,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
         let dir = temp_dir("webapp_auth_default_external_adapter_required");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25742,15 +25232,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_when_production_disables_external_state_requirement() {
         let dir = temp_dir("webapp_auth_production_disables_external_state");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25769,15 +25253,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_startup_fails_with_invalid_external_state_adapter_shape() {
         let dir = temp_dir("webapp_auth_invalid_external_adapter_shape");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25797,15 +25275,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
         let dir = temp_dir("webapp_auth_external_adapter");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25828,15 +25300,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_startup_fails_when_external_state_is_required_without_adapter() {
         let dir = temp_dir("pii_auth_missing_external_adapter");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25857,15 +25323,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
         let dir = temp_dir("pii_auth_default_external_adapter_required");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25885,15 +25345,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_startup_fails_when_production_disables_external_state_requirement() {
         let dir = temp_dir("pii_auth_production_disables_external_state");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25912,15 +25366,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_startup_fails_with_invalid_external_state_adapter_shape() {
         let dir = temp_dir("pii_auth_invalid_external_adapter_shape");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -25940,15 +25388,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
         let dir = temp_dir("pii_auth_external_adapter");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26139,15 +25581,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_private_route_requires_non_empty_capability_map() {
         let dir = temp_dir("webapp_auth_capability_map_required");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26167,15 +25603,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions() {
         let dir = temp_dir("webapp_auth_smoke");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26202,15 +25632,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_replay_lock_contention_is_fail_closed() {
         let dir = temp_dir("webapp_auth_replay_lock_contention");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26231,15 +25655,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_replay_lock_contention_is_fail_closed() {
         let dir = temp_dir("pii_auth_replay_lock_contention");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26260,15 +25678,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_webapp_auth_smoke_rejects_origin_mismatch() {
         let dir = temp_dir("webapp_auth_origin_mismatch");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "agent_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::Webapp,
-            overwrite: false,
-        }
-        .run()
-        .expect("webapp init should succeed");
+        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
+            .run()
+            .expect("webapp init should succeed");
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26289,15 +25701,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_smoke_rejects_origin_mismatch() {
         let dir = temp_dir("pii_auth_origin_mismatch");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -26318,15 +25724,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     #[test]
     fn generated_pii_app_auth_smoke_enforces_capability_authorization() {
         let dir = temp_dir("pii_auth_smoke");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
+            .run()
+            .expect("pii-app init should succeed");
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!("node unavailable; validating static pii-app capability markers in scaffold");

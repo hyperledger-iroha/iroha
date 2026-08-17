@@ -50,7 +50,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 push_weighted(
                     &mut residues,
                     sha_round,
-                    pack_bits(bits_group(current, group)).sub(current[SHA_STATE_OFFSET + state_index]),
+                    pack_bits(bits_group(current, group))
+                        .sub(current[SHA_STATE_OFFSET + state_index]),
                 );
             }
             let selected_w = selected_schedule(current, fixed, Some);
@@ -107,7 +108,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 selected_schedule(current, fixed, |round| (round >= 16).then(|| round - 7));
             let schedule_minus_16 =
                 selected_schedule(current, fixed, |round| (round >= 16).then(|| round - 16));
-            let schedule_carry = current[SHA_CARRY_OFFSET + 6].add(current[SHA_CARRY_OFFSET + 7].mul(F(2)));
+            let schedule_carry =
+                current[SHA_CARRY_OFFSET + 6].add(current[SHA_CARRY_OFFSET + 7].mul(F(2)));
             residues.push(
                 round_extended
                     .mul(
@@ -123,12 +125,14 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 push_weighted(
                     &mut residues,
                     round_zero,
-                    current[SHA_INITIAL_STATE_OFFSET + index].sub(current[SHA_STATE_OFFSET + index]),
+                    current[SHA_INITIAL_STATE_OFFSET + index]
+                        .sub(current[SHA_STATE_OFFSET + index]),
                 );
                 push_weighted(
                     &mut residues,
                     fixed[FIXED_FIRST_BLOCK_ROUND_ZERO],
-                    current[SHA_STATE_OFFSET + index].sub(F(u64::from(SHA256_INITIAL_STATE_V1[index]))),
+                    current[SHA_STATE_OFFSET + index]
+                        .sub(F(u64::from(SHA256_INITIAL_STATE_V1[index]))),
                 );
             }
             for index in 0..SHA_SCHEDULE_WORDS {
@@ -142,7 +146,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 push_weighted(
                     &mut residues,
                     round_nonlast,
-                    next[SHA_INITIAL_STATE_OFFSET + index].sub(current[SHA_INITIAL_STATE_OFFSET + index]),
+                    next[SHA_INITIAL_STATE_OFFSET + index]
+                        .sub(current[SHA_INITIAL_STATE_OFFSET + index]),
                 );
             }
             for carry in 0..6 {
@@ -249,7 +254,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                     let byte_in_word = cell % 4;
                     let first_bit = (3 - byte_in_word) * 8;
                     let byte = pack_bits(&bits_group(current, word)[first_bit..first_bit + 8]);
-                    selected_byte = selected_byte.add(fixed[FIXED_TERMINAL_CHUNK_OFFSET + chunk].mul(byte));
+                    selected_byte =
+                        selected_byte.add(fixed[FIXED_TERMINAL_CHUNK_OFFSET + chunk].mul(byte));
                 }
                 residues.push(
                     fixed[FIXED_SHA_END_TERMINAL]
@@ -320,15 +326,14 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 fixed[FIXED_SEQUENCE_TRANSITION],
                 next[SCRATCH_RUNNING_BEFORE].sub(running_after),
             );
-            let pair_selectors =
-                &current[SCRATCH_NONZERO_BYTE_SELECT_OFFSET..SCRATCH_NONZERO_BYTE_SELECT_OFFSET + 4];
-            let byte_selectors =
-                &current[SCRATCH_NONZERO_BYTE_SELECT_OFFSET..SCRATCH_NONZERO_BYTE_SELECT_OFFSET + 8];
+            let pair_selectors = &current
+                [SCRATCH_NONZERO_BYTE_SELECT_OFFSET..SCRATCH_NONZERO_BYTE_SELECT_OFFSET + 4];
+            let byte_selectors = &current
+                [SCRATCH_NONZERO_BYTE_SELECT_OFFSET..SCRATCH_NONZERO_BYTE_SELECT_OFFSET + 8];
             let bit_selectors =
                 &current[SCRATCH_NONZERO_BIT_SELECT_OFFSET..SCRATCH_NONZERO_BIT_SELECT_OFFSET + 8];
             let left_bits = &current[SCRATCH_BYTE_BITS_OFFSET..SCRATCH_BYTE_BITS_OFFSET + 8];
-            let right_bits =
-                &current[DISTINCT_RIGHT_BITS_OFFSET..DISTINCT_RIGHT_BITS_OFFSET + 8];
+            let right_bits = &current[DISTINCT_RIGHT_BITS_OFFSET..DISTINCT_RIGHT_BITS_OFFSET + 8];
             for selector in pair_selectors {
                 push_boolean(&mut residues, distinct, *selector);
             }
@@ -429,8 +434,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 fixed[FIXED_SUM_TRANSITION],
                 next[SCRATCH_RELATION_CARRY_BEFORE].sub(relation_carry_after),
             );
-            let relation_carry_bits =
-                &current[SCRATCH_RELATION_CARRY_BITS_OFFSET..SCRATCH_RELATION_CARRY_BITS_OFFSET + 2];
+            let relation_carry_bits = &current
+                [SCRATCH_RELATION_CARRY_BITS_OFFSET..SCRATCH_RELATION_CARRY_BITS_OFFSET + 2];
             for bit in &current[SCRATCH_BYTE_BITS_OFFSET..SCRATCH_BYTE_BITS_OFFSET + 8] {
                 push_boolean(&mut residues, sum_io, *bit);
             }
@@ -498,10 +503,12 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                     current[COPY_OFFSET + cell].sub(F(u64::from(expected))),
                 );
             }
-            let opcodes = &current[SCRATCH_VM_OPCODE_SELECT_OFFSET..SCRATCH_VM_OPCODE_SELECT_OFFSET + 9];
-            let destinations =
-                &current[SCRATCH_VM_DESTINATION_SELECT_OFFSET..SCRATCH_VM_DESTINATION_SELECT_OFFSET + 8];
-            let left_selectors = &current[SCRATCH_VM_LEFT_SELECT_OFFSET..SCRATCH_VM_LEFT_SELECT_OFFSET + 8];
+            let opcodes =
+                &current[SCRATCH_VM_OPCODE_SELECT_OFFSET..SCRATCH_VM_OPCODE_SELECT_OFFSET + 9];
+            let destinations = &current
+                [SCRATCH_VM_DESTINATION_SELECT_OFFSET..SCRATCH_VM_DESTINATION_SELECT_OFFSET + 8];
+            let left_selectors =
+                &current[SCRATCH_VM_LEFT_SELECT_OFFSET..SCRATCH_VM_LEFT_SELECT_OFFSET + 8];
             let right_selectors =
                 &current[SCRATCH_VM_RIGHT_SELECT_OFFSET..SCRATCH_VM_RIGHT_SELECT_OFFSET + 8];
             for selectors in [opcodes, destinations, left_selectors, right_selectors] {
@@ -547,7 +554,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
                 push_weighted(
                     &mut residues,
                     vm_program,
-                    current[COPY_OFFSET + 4 + byte].sub(current[SCRATCH_VM_IMMEDIATE_OFFSET + byte]),
+                    current[COPY_OFFSET + 4 + byte]
+                        .sub(current[SCRATCH_VM_IMMEDIATE_OFFSET + byte]),
                 );
             }
             let destination = encoded_selector(destinations);
@@ -637,7 +645,8 @@ macro_rules! define_note_profile_constraint_residues_v1 {
             );
             let result = current[SCRATCH_VM_RESULT];
             let difference = current[SCRATCH_VM_DIFFERENCE];
-            let result_bits = &current[SCRATCH_VM_RESULT_BITS_OFFSET..SCRATCH_VM_RESULT_BITS_OFFSET + 8];
+            let result_bits =
+                &current[SCRATCH_VM_RESULT_BITS_OFFSET..SCRATCH_VM_RESULT_BITS_OFFSET + 8];
             let difference_bits =
                 &current[VM_DIFFERENCE_BITS_OFFSET..VM_DIFFERENCE_BITS_OFFSET + 8];
             for bit in result_bits.iter().chain(difference_bits) {

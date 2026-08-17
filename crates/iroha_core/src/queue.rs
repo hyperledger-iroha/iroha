@@ -109,9 +109,11 @@ use iroha_data_model::nexus::{
     DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
     FeeSponsorBeneficiaryEpochBudgetWindow, FeeSponsorBlockBudgetWindow,
     FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow, FeeSponsorProgramEpochBudgetWindow,
-    FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LaneLifecyclePlan,
-    LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+    FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LanePrivacyProof,
+    UniversalAccountId,
 };
+#[cfg(test)]
+use iroha_data_model::nexus::{LaneLifecyclePlan, LaneStorageProfile, LaneVisibility};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},

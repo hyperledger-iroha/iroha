@@ -1,3 +1,7 @@
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixed V1 operation-to-payload matrix stays explicit for wire auditability"
+)]
 fn validate_operation_payload(
     request: &OperationRequestV1,
     session_chain_id: Option<&str>,
@@ -382,8 +386,7 @@ fn validate_operation_payload(
         {
             decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
         }
-        (slot, OPERATION_BILLING_QUERY_CAPABILITIES_V1)
-        | (slot, OPERATION_BILLING_FINALIZED_HEAD_V1)
+        (slot, OPERATION_BILLING_QUERY_CAPABILITIES_V1 | OPERATION_BILLING_FINALIZED_HEAD_V1)
             if slot == billing_finalized_query_slot =>
         {
             decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
@@ -487,10 +490,11 @@ fn validate_operation_payload(
             )?;
             validate_billing_record_id(lookup.record_id)?;
         }
-        (slot, OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1)
-        | (slot, OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1)
-            if slot == billing_acknowledgement_authority_slot =>
-        {
+        (
+            slot,
+            OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1,
+        ) if slot == billing_acknowledgement_authority_slot => {
             let acknowledgement = decode_canonical::<BillingAcknowledgementRequestWireV1>(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
@@ -629,10 +633,11 @@ fn validate_operation_payload(
                 return Err(BrokerError::Rejected);
             }
         }
-        (slot, OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1)
-        | (slot, OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1)
-            if slot == stream_token_gateway_admission_slot =>
-        {
+        (
+            slot,
+            OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
+            | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1,
+        ) if slot == stream_token_gateway_admission_slot => {
             let record = decode_canonical::<
                 iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
             >(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
@@ -763,10 +768,10 @@ fn validate_operation_payload(
             }
             pop_runtime_bindings_from_wire(&request.binding)?;
         }
-        (slot, OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1)
-        | (slot, OPERATION_POP_WALLET_RECIPIENT_OPEN_V1)
-            if slot == pop_registry_slot =>
-        {
+        (
+            slot,
+            OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1 | OPERATION_POP_WALLET_RECIPIENT_OPEN_V1,
+        ) if slot == pop_registry_slot => {
             let open = decode_canonical::<PopRecipientOpenRequestWireV1>(
                 &request.payload,
                 MAX_POP_RUNTIME_FRAME_BYTES_V1,
@@ -870,10 +875,11 @@ fn validate_operation_payload(
         (slot, OPERATION_POP_FINALIZED_TIME_V1) if slot == pop_registry_slot => {
             decode_canonical::<()>(&request.payload, MAX_POP_RUNTIME_FRAME_BYTES_V1)?;
         }
-        (slot, OPERATION_POR_REPLAY_ARCHIVE_READINESS_V1)
-        | (slot, OPERATION_POR_REPLAY_ARCHIVE_CURRENT_HEAD_V1)
-            if slot == por_replay_archive_slot =>
-        {
+        (
+            slot,
+            OPERATION_POR_REPLAY_ARCHIVE_READINESS_V1
+            | OPERATION_POR_REPLAY_ARCHIVE_CURRENT_HEAD_V1,
+        ) if slot == por_replay_archive_slot => {
             decode_canonical::<()>(
                 &request.payload,
                 MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1,

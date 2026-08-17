@@ -65,21 +65,23 @@ pub const MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1: u64 = 64 * 1024;
 /// The semantic release and exact verification lock share this provider-memory corridor; the
 /// artifact descriptor uses [`MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1`].
 pub const MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1: u64 = 2 * 1024 * 1024;
+const MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_USIZE_V1: usize = 64 * 1024;
+const MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_USIZE_V1: usize = 2 * 1024 * 1024;
 // Norito charges nested length-delimited bodies, container reservations, and any required
 // whole-input realignment copy cumulatively. The 48 MiB corridor is regression-tested against the
 // producer-reachable 2,056,570-byte dense-lock fixture with at least 5 MiB of reviewed headroom.
 const MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
-    24 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize;
+    24 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_USIZE_V1;
 const MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     32,
-    MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize,
+    MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_USIZE_V1,
     256,
     128 * 1024,
     32,
 );
 const MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     1_024,
-    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize,
+    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_USIZE_V1,
     100_000,
     MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
     64,
@@ -89,7 +91,7 @@ const MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1: norito::DecodeLimits = norito::D
 // allocation ceilings bound which complete graph shapes are admissible bundle metadata.
 const MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     1_024,
-    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize,
+    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_USIZE_V1,
     8_000_000,
     MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
     64,
@@ -2630,9 +2632,8 @@ impl MusubiSemanticReleaseManifestV1 {
             &self.abi,
             &self.dependencies,
             &self.exports,
-            self.interface_digest,
             &self.metadata,
-            self.verification_lock_digest,
+            (self.interface_digest, self.verification_lock_digest),
             verification_lock,
         )
     }
@@ -2733,9 +2734,8 @@ impl MusubiReleaseManifestV1 {
             &self.abi,
             &self.dependencies,
             &self.exports,
-            self.interface_digest,
             &self.metadata,
-            self.verification_lock_digest,
+            (self.interface_digest, self.verification_lock_digest),
             verification_lock,
         )
     }

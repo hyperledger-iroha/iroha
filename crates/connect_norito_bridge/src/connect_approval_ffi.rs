@@ -8,6 +8,7 @@ use iroha_data_model::{NetworkId, account::AccountId};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use libc::{c_char, c_int, c_uchar, c_ulong, malloc};
 use std::ptr;
+type ConnectIdentityParts = (NetworkId, [u8; 32], [u8; 32], [u8; 16]);
 pub(super) fn parse_connect_wallet_signature_algorithm_label(
     alg_str: &str,
 ) -> Result<Algorithm, c_int> {
@@ -49,7 +50,7 @@ pub(super) fn validate_exact_connect_identity(
     sid: &[u8],
     app_public_key: &[u8],
     nonce: &[u8],
-) -> Result<(NetworkId, [u8; 32], [u8; 32], [u8; 16]), c_int> {
+) -> Result<ConnectIdentityParts, c_int> {
     let network_id =
         network_id_from_raw_bytes(network_id_bytes).map_err(|_| ERR_CONNECT_IDENTITY)?;
     let sid: [u8; 32] = sid.try_into().map_err(|_| ERR_CONNECT_IDENTITY)?;

@@ -2469,6 +2469,8 @@ mod tests {
     }
     #[test]
     fn lane_config_json_rejects_duplicate_fields() {
+        use core::fmt::Write as _;
+
         let duplicate_values = [
             (
                 "id",
@@ -2484,7 +2486,8 @@ mod tests {
             let mut encoded =
                 norito::json::to_string(&LaneConfig::default()).expect("serialize lane metadata");
             assert_eq!(encoded.pop(), Some('}'));
-            encoded.push_str(&format!(",\"{field}\":{value}}}"));
+            write!(&mut encoded, ",\"{field}\":{value}}}")
+                .expect("writing duplicate field to a String cannot fail");
             let err = norito::json::from_str::<LaneConfig>(&encoded)
                 .expect_err("duplicate lane metadata fields must fail closed");
             assert!(

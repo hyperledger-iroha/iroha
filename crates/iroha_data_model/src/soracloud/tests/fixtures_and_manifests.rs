@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
 use iroha_crypto::{
     Algorithm, KeyPair,
     fhe_bfv::{
@@ -26,6 +25,7 @@ use iroha_crypto::{
         encode_packed_plaintext_slots, keygen_from_seed, ram_lfe_bfv_parameters_v1,
     },
 };
+use std::collections::{BTreeMap, BTreeSet};
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; 32];
     for (index, byte) in bytes.iter_mut().enumerate() {
@@ -72,7 +72,7 @@ fn sample_app_infra_manifest() -> SoraAppInfraManifestV1 {
         services: vec![sample_app_infra_service("app_api")],
     }
 }
-fn sample_signer() -> PublicKey {
+fn sample_signer() -> iroha_crypto::PublicKey {
     KeyPair::try_random()
         .expect("SoraCloud fixture signer key generation should succeed")
         .public_key()

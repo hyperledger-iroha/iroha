@@ -134,7 +134,7 @@ fn alternate_layout_and_framed_overhead_are_rejected() {
     reject_wire!(&wire, Route::SubmitOrder, NETWORK_SEED, Error::InvalidTransactionEncoding); drop(alternate);
 
     let (mut low, mut high) = (0, ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1);
-    while low < high { let mid = low + (high - low + 1) / 2; if ivm(mid, 0x26).encode_wire_v1().unwrap().len() <= ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1 { low = mid } else { high = mid - 1 } }
+    while low < high { let mid = low + (high - low).div_ceil(2); if ivm(mid, 0x26).encode_wire_v1().unwrap().len() <= ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1 { low = mid } else { high = mid - 1 } }
     let near_cap = ivm(low, 0x26);
     assert!(near_cap.encode_wire_v1().unwrap().len() <= ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1);
     assert!(norito::to_bytes(&near_cap).unwrap().len() > ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1);
@@ -144,8 +144,8 @@ fn alternate_layout_and_framed_overhead_are_rejected() {
 fn receipt_fixture() -> (SorafsOrderbookSubmissionIdentityV1, KeyPair, TransactionSubmissionReceipt) {
     let identity = inspect(&transaction(Route::SubmitOrder, 0x27), Route::SubmitOrder).unwrap().identity; let signer = keypair(0x61);
     let receipt = TransactionSubmissionReceipt::try_sign(TransactionSubmissionReceiptPayload {
-        tx_hash: identity.tx_hash.clone(), entrypoint_hash: identity.entrypoint_hash.clone(),
-        signed_transaction_hash: Some(identity.signed_transaction_hash.clone()), submitted_at_ms: 7,
+        tx_hash: identity.tx_hash, entrypoint_hash: identity.entrypoint_hash,
+        signed_transaction_hash: Some(identity.signed_transaction_hash), submitted_at_ms: 7,
         submitted_at_height: 8, signer: signer.public_key().clone(),
     }, &signer).unwrap();
     (identity, signer, receipt)
@@ -163,13 +163,13 @@ macro_rules! reject_receipt {
 fn receipt_is_exact_signed_pinned_bounded_and_binds_every_identity() {
     let (identity, signer, receipt) = receipt_fixture(); let wire = norito::to_bytes(&receipt).unwrap();
     assert_eq!(decode_and_verify_sorafs_orderbook_submission_receipt_v1(&wire, &identity, signer.public_key()).unwrap(), receipt);
-    assert_eq!(parse_sorafs_orderbook_submission_identity_v1(&identity.tx_hash.to_string(), &identity.entrypoint_hash.to_string(), &identity.signed_transaction_hash.to_string()), Some(identity.clone()));
+    assert_eq!(parse_sorafs_orderbook_submission_identity_v1(&identity.tx_hash.to_string(), &identity.entrypoint_hash.to_string(), &identity.signed_transaction_hash.to_string()), Some(identity));
     assert_eq!(parse_sorafs_orderbook_receipt_signer_v1(&signer.public_key().to_string()), Some(signer.public_key().clone()));
     reject_receipt!(&[], &identity, signer.public_key(), Error::EmptyReceipt);
     reject_receipt!(&vec![0; ORDERBOOK_SUBMISSION_RECEIPT_MAX_CANONICAL_BYTES_V1 + 1], &identity, signer.public_key(), Error::ReceiptTooLarge);
     reject_receipt!(&wire, &identity, keypair(0x62).public_key(), Error::ReceiptSignerMismatch);
     for index in 0_u8..3 {
-        let mut altered = identity.clone(); let other = Hash::prehashed([0x80 + index; Hash::LENGTH]);
+        let mut altered = identity; let other = Hash::prehashed([0x80 + index; Hash::LENGTH]);
         let error = match index { 0 => { altered.tx_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptTransactionHashMismatch }, 1 => { altered.entrypoint_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptEntrypointHashMismatch }, _ => { altered.signed_transaction_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptSignedTransactionHashMismatch } };
         reject_receipt!(&wire, &altered, signer.public_key(), error);
     }

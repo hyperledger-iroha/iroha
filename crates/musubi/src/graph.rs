@@ -800,7 +800,7 @@ mod tests {
         },
         prelude::{Algorithm, KeyPair},
     };
-    use std::{fs, path::Path};
+    use std::{fmt::Write as _, fs, path::Path};
     use tempfile::TempDir;
     fn network_id() -> iroha_data_model::NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
@@ -840,9 +840,11 @@ exports = []
 "#
         );
         if let Some((alias, path)) = dependency {
-            source.push_str(&format!(
-                "[dependencies]\n{alias} = {{ path = \"{path}\" }}\n"
-            ));
+            writeln!(
+                &mut source,
+                "[dependencies]\n{alias} = {{ path = \"{path}\" }}"
+            )
+            .expect("writing a manifest fixture to a String cannot fail");
         }
         source
     }
@@ -1137,7 +1139,11 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
         let mut root_manifest = APP.to_owned();
         root_manifest.push_str("[dependencies]\n");
         for index in 0..(MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 - 1) {
-            root_manifest.push_str(&format!("p{index:03} = {{ path = \"p{index:03}\" }}\n"));
+            writeln!(
+                &mut root_manifest,
+                "p{index:03} = {{ path = \"p{index:03}\" }}"
+            )
+            .expect("writing a manifest fixture to a String cannot fail");
             write(
                 &temp.path().join(format!("p{index:03}/Musubi.toml")),
                 &local_package_manifest(&format!("p{index:03}"), None),

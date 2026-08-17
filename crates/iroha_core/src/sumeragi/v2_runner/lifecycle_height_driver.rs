@@ -81,7 +81,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             // Ingress owner can add another Serve to the census.
                             return Ok(());
                         }
-                        if output_guard.restart_required() {
+                        if selected.restart_required() || output_guard.restart_required() {
                             return Err(V2RunnerError::RestartRequired);
                         }
                     }

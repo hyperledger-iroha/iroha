@@ -946,7 +946,6 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     assert_eq!(runtime.ingress.len(), 0);
 }
 #[test]
-#[test]
 fn typed_pacemaker_escape_selects_only_progress_root() {
     let start = Instant::now();
     let owner_tag = tag(0);

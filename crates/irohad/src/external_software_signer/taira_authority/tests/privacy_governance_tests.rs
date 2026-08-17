@@ -1,6 +1,10 @@
 // Privacy-governance authority tests included in the parent test module.
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "governance signing and history regression"
+)]
 fn privacy_governance_retained_key_authorizes_real_transaction_and_verifies_historically() {
     const GENESIS_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -9,7 +13,7 @@ fn privacy_governance_retained_key_authorizes_real_transaction_and_verifies_hist
     const GOVERNANCE_ISSUED_AT_MILLIS: u64 = 1_800_000_000_000;
     const GOVERNANCE_EXPIRES_AT_MILLIS: u64 = 1_800_000_060_000;
     const GOLDEN_REQUEST: &[u8] = include_bytes!(
-        "../../../../../scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
+        "../../../../../../scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
     );
 
     let parent = temporary_parent();
@@ -119,6 +123,10 @@ fn privacy_governance_retained_key_authorizes_real_transaction_and_verifies_hist
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "governance durable crash-boundary matrix"
+)]
 fn privacy_governance_recovers_the_durable_admission_across_crash_boundaries() {
     const GENESIS_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -127,7 +135,7 @@ fn privacy_governance_recovers_the_durable_admission_across_crash_boundaries() {
     const GOVERNANCE_ISSUED_AT_MILLIS: u64 = 1_800_000_000_000;
     const GOVERNANCE_EXPIRES_AT_MILLIS: u64 = 1_800_000_060_000;
     const GOLDEN_REQUEST: &[u8] = include_bytes!(
-        "../../../../../scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
+        "../../../../../../scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
     );
 
     for crash_after_signer_commit in [false, true] {

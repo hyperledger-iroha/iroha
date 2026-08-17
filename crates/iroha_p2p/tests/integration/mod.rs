@@ -22,6 +22,10 @@ use std::{
 ///
 /// Callers use struct update syntax for case-specific deviations, keeping the
 /// required network field set explicit in one place without collapsing cases.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the shared integration fixture deliberately lists every network field explicitly"
+)]
 fn test_network_config(
     address: IrohaSocketAddr,
     public_address: IrohaSocketAddr,
@@ -153,7 +157,7 @@ fn test_network_id(seed: &str) -> NetworkId {
 fn random_node_key_pair() -> KeyPair {
     KeyPair::random_with_algorithm(Algorithm::BlsNormal)
 }
-/// Assign an independently generated Ed25519 identity to the SoraNet transport role.
+/// Assign an independently generated Ed25519 identity to the `SoraNet` transport role.
 fn p2p_identity_keys(node: KeyPair) -> P2pIdentityKeys {
     let soranet_transport = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     P2pIdentityKeys::new(node, soranet_transport)

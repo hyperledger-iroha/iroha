@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             url: Some("https://example.org".into()),
             icon_hash: None,
         }),
-        constraints: constraints.clone(),
+        constraints,
         permissions: Some(req_perms.clone()),
     };
     // Build Approve control

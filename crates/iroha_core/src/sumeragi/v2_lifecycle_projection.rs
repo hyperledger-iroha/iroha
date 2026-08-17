@@ -251,6 +251,13 @@ enum CertifiedServeTerminalSettlementErrorKindV1 {
     },
     RestartRequired(CertifiedServeTerminalSettlementRestartV1),
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first-release worker settlement does not yet consume the retained terminal diagnostic accessors"
+    )
+)]
 impl CertifiedServeTerminalSettlementErrorV1 {
     /// Return the stable failure class.
     pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
@@ -907,7 +914,13 @@ impl super::ProductionLifecycleOwnerV1 {
     /// payload store and its exact retained body-store instance. No receipt,
     /// payload id, candidate, ordinal, digest, or replay parts enter this API.
     #[cfg(any(not(test), feature = "bls"))]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release owner-to-worker terminal completion handoff is not wired yet"
+        )
+    )]
     pub(in crate::sumeragi) fn settle_certified_serve_completed(
         &mut self,
         lease: super::TurnLease,
@@ -1114,7 +1127,6 @@ impl super::ProductionLifecycleOwnerV1 {
     /// The retained payload store derives the opaque request id from the
     /// authenticated request. No caller-supplied id or terminal receipt is
     /// accepted.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn settle_certified_serve_negative(
         &mut self,
         lease: super::TurnLease,
@@ -1533,6 +1545,60 @@ impl super::LifecycleCoordinator {
             }
         };
         let receipt = publication.receipt();
+        if !publication.is_pending() {
+            if !publication.exactly_matches_authenticated_request(authenticated) {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(
+                    CertifiedServePayloadStoreError::TerminalConflict,
+                ));
+            }
+            let outcome = match publication.state() {
+                DurableCertifiedServeAdmissionStateV1::Pending => unreachable!(
+                    "non-pending Certified-Serve publication cannot retain Pending state"
+                ),
+                DurableCertifiedServeAdmissionStateV1::Completed(response) => {
+                    TerminalOutcome::Completed(Some(digest_from_bytes(response.as_ref())))
+                }
+                DurableCertifiedServeAdmissionStateV1::Negative(
+                    CertifiedServePayloadNegativeOutcome::Cancelled,
+                ) => TerminalOutcome::Cancelled,
+                DurableCertifiedServeAdmissionStateV1::Negative(
+                    CertifiedServePayloadNegativeOutcome::Rejected(code),
+                ) => TerminalOutcome::Rejected(code),
+                DurableCertifiedServeAdmissionStateV1::Negative(
+                    CertifiedServePayloadNegativeOutcome::Failed(code),
+                ) => TerminalOutcome::Failed(code),
+            };
+            let terminal = self.records.iter().find_map(|(ordinal, record)| {
+                let metadata = self.durable_records.get(ordinal)?;
+                (record.work_class == LifecycleWorkClass::CertifiedServe
+                    && record.state == super::LifecycleState::Terminal(outcome)
+                    && metadata
+                        .payload
+                        .matches_terminal(record.work_class, Some(outcome))
+                    && metadata
+                        .replay_authority
+                        .exactly_matches_certified_serve_publication(authenticated, receipt))
+                .then_some(record.owner)
+            });
+            let Some(owner) = terminal else {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(
+                    CertifiedServePayloadStoreError::OrphanTerminalPayload,
+                ));
+            };
+            return Ok(match outcome {
+                TerminalOutcome::Completed(Some(_)) => {
+                    super::AdmissionDecision::ReplayTerminal { owner, outcome }
+                }
+                TerminalOutcome::Advanced | TerminalOutcome::Completed(None) => unreachable!(
+                    "Certified-Serve terminal publication cannot encode an unbound completion"
+                ),
+                TerminalOutcome::Cancelled
+                | TerminalOutcome::Rejected(_)
+                | TerminalOutcome::Failed(_) => super::AdmissionDecision::StutterTerminal { owner },
+            });
+        }
         let request = match certified_serve_admission_request(
             self.active_context(),
             verified,
@@ -1556,12 +1622,6 @@ impl super::LifecycleCoordinator {
             unreachable!("Certified-Serve projection always yields one candidate")
         };
         let candidate_key = candidate.key;
-        if !publication.is_pending() && !self.key_index.contains_key(&candidate.key) {
-            self.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(
-                CertifiedServePayloadStoreError::OrphanTerminalPayload,
-            ));
-        }
         let decision = self.admit(request);
         if matches!(decision, super::AdmissionDecision::WaitForCapacity(_)) {
             let attached = self

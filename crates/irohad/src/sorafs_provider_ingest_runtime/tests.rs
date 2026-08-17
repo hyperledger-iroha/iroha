@@ -1,3 +1,4 @@
+use super::*;
 use iroha_config_base::util::Bytes;
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -15,7 +16,6 @@ use sorafs_node::provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestMusubiArchiveFetchBindingV1,
     ProviderIngestSourceQualificationV1,
 };
-use super::*;
 mod quarantine_restart;
 #[test]
 fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
@@ -445,10 +445,10 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInvent
             self.policy_digest,
         ))
     }
-    fn check_readiness<'a>(
-        &'a self,
+    fn check_readiness(
+        &self,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>,
     > {
         Box::pin(async move {
@@ -463,11 +463,11 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInvent
     }
 }
 impl MusubiProviderAttestationInventorySinkV1 for TestMusubiAttestationInventoryV1 {
-    fn put<'a>(
-        &'a self,
+    fn put(
+        &self,
         _item: MusubiProviderAttestationInventoryItemV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>,
     > {
         Box::pin(async move {
@@ -1030,11 +1030,11 @@ async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-    let signed = governed
+    let signed_payload = governed
         .sign(exact_payload.clone())
         .await
         .expect("sign exact assignment revision");
-    assert_eq!(signed.payload(), &exact_payload);
+    assert_eq!(signed_payload.payload(), &exact_payload);
     assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
     let substituted_payload = test_completion_payload(&signer.key, provider_id, 8, 2);
     assert_eq!(

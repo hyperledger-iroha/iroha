@@ -14,20 +14,21 @@ Completed history lives in [`status.md`](./status.md).
   heights stable; empty blocks are not a liveness mechanism.
 - Exercise the combined Sumeragi liveness changes in the authenticated
   four-validator loss/hold/heal corridor, then complete full-workspace tests and
-  strict all-target Clippy before the release freeze. The focused `iroha_core`
-  compile and regression slices are green, but they are not a substitute for
-  the release-wide run.
+  strict all-target Clippy before the release freeze. The current Core library
+  test target compiles and the focused 24-test Soracloud slice is green, but the
+  fixture-bound Core lint cleanup and settled-tree Sumeragi source-contract
+  rerun remain open and none of these substitutes for the release-wide run.
 - Freeze the current revision-4 candidate only after the physical ChainEpoch
   proof shards, exact four-validator fault corridor, and remaining authoritative
   formal and workspace-wide validation are complete. Historical mutable-tree
   snapshots are not release receipts for the current source tree.
 - After that freeze, use the official workflows to regenerate and check the
-  JavaScript current-Rust-contract fixture and generated-artifact registry.
-  Preserve the green SDK release guard after its end-to-end closure repin and
-  the completed environment-inventory and JavaScript receipt-header repairs.
-- After the unrelated duplicate Kura type is reconciled, rerun the focused
-  Core/Torii ZK lifecycle, transcript, column-shape, reserved-STARK-alias, and
-  Goldilocks rejection tests, followed by the workspace ZK feature matrix.
+  environment inventory, JavaScript current-Rust-contract fixture, and
+  generated-artifact registry. Preserve the green SDK release guard after its
+  end-to-end closure repin and the completed JavaScript receipt-header repair.
+- Rerun the focused Core/Torii ZK lifecycle, transcript, column-shape,
+  reserved-STARK-alias, and Goldilocks rejection tests, followed by the
+  workspace ZK feature matrix.
   Ship the corrected IPA parameter derivation and Poseidon byte framing as one
   first-release fixture/proof hard cut; do not mix artifacts generated under
   the retired derivations with corrected nodes.
@@ -80,12 +81,12 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
-  4,500,000-line working target. The resolved index contains 4,820,899 Rust
-  lines across 7,964 checked files and 191 exact exceptions, with zero per-file
-  findings and 193,704 lines of ratchet headroom. The hard aggregate objective
-  is still unmet by 280,899 lines; do not redefine the baseline,
+  4,500,000-line working target. Derive the mutable tree's exact aggregate
+  count and remaining gap after source freeze; do not redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
-  security, consensus, SDK, or release-evidence behavior to close it.
+  security, consensus, SDK, or release-evidence behavior to close it. Keep
+  deterministic oversized-file exceptions as exact ratchets and the
+  source-budget gate finding-free.
 - Keep every reviewed production module and newly introduced companion source
   in the eventual signed commit, then rerun the strict SDK source-closure guard
   from that immutable candidate. Keep the staged merge-resolution and
@@ -155,7 +156,7 @@ profile-config admission, and public consensus wire roundtrips are complete.
 The five checked-in OpenAPI artifacts remain stale and require deterministic
 regeneration from a clean exact candidate; the dirty development checkout
 without the required release-authorized SSH signature is not release
-provenance. The outstanding revision-4 work is limited to:
+provenance. The outstanding revision-4 work includes:
 
 - Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
   closure. The TLA model now preserves `DualQuorum` as mathematical
@@ -1161,7 +1162,7 @@ passes with 88 legs, 860/860 production tests across 40 modules, 527/527 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The grouped SDK closure is 1,399 paths at
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`,
+`3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`,
 and diagnostics is 1,401 paths at
 `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
 These are mutable-tree source inventories, not a sealed receipt.
@@ -1201,12 +1202,10 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-The current source-file gate is green: 7,964 paths, 191 exact exceptions,
-4,820,899 Rust lines, and zero findings. Its configured baseline is 5,067,263
-lines, active ratchet 5,014,603, hard aggregate ceiling 4,540,000, and working
-target 4,500,000. The hard objective therefore remains open by 280,899 lines.
-The separate generic lifecycle-coordinator cutover receives no multilane credit
-toward that reduction, and immutable-candidate evidence remains open.
+Recompute the exact source count and remaining gap after the candidate is
+frozen, then close the distinct 4,540,000-line hard objective without claiming
+the generic lifecycle-coordinator cutover as a multilane reduction. The
+4,500,000-line working target and immutable-candidate evidence remain open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
@@ -1264,7 +1263,7 @@ hashes to
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
 its staged grouped and diagnostics suite-source manifests contain 1,399 and
 1,401 records respectively and hash to
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+`3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`
 and
 `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`;
 the synchronized 48-line wire TSV hashes to
@@ -1363,7 +1362,7 @@ The remaining work is evidence-driven and must stay in order:
   `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
   staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
   records with SHA-256 values
-  `8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+  `3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`
   and
   `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
@@ -25201,8 +25200,11 @@ signed ancestor-linked solid-block header proof,
   Key-owner diagnostics now also verify that generated public rotation and
   bootstrap refresh ciphertexts decrypt to zero under the matching secret key,
   including a bundle-level check over every rotation and bootstrap refresh
-  mask, and public bootstrap admission now requires a verifier-backed statement
-  proof envelope. Public deterministic transcript checks now recompute
+  mask, and public bootstrap admission requires a verifier-backed statement
+  proof envelope. Binding-only STARK AIR is rejected after metadata preflight;
+  admission remains closed until a dedicated zero-refresh witness AIR proves
+  the encrypted-zero and round-consistency relation. Public deterministic
+  transcript checks now recompute
   rotation and bootstrap encrypted-zero refresh material from the advertised
   seed, public key, key id, and round count, rejecting wrong-seed,
   key-id-drifted, or tampered refresh ciphertexts without requiring a secret
@@ -25246,17 +25248,18 @@ signed ancestor-linked solid-block header proof,
   pins proof public-key presence, ciphertext digest-list arity/sentinel checks,
   rejection of `fhe_public_key_digest` metadata on non-FHE state rows, and
   all-zero `fhe_public_key_digest` placeholders on FHE rows.
-  Core input-admission verification now recomputes those per-slot statement
-  digests from the decoded payload and proof public key, persists the admitted
-  public-key digest beside proven FHE bound metadata, and rejects persisted FHE
-  job inputs whose public-key digest does not match the governed job key or
-  whose BFV-shaped payload is an all-zero ciphertext sentinel before evaluator
-  execution.
+  Core input-admission preflight recomputes those per-slot statement digests
+  from the decoded payload and proof public key, but a binding-only AIR is
+  rejected at the missing dedicated ciphertext-witness boundary before any FHE
+  row, public-key digest, or claimed bound metadata is persisted. The existing
+  input loader still rejects corrupt persisted rows whose public-key digest
+  mismatches the governed job key or whose BFV payload is an all-zero sentinel.
   `RunSoracloudFheJob` now carries an
   optional bootstrap-key proof attachment, provenance signs it, and Core
   requires it for bootstrap execution while checking the policy-bound
-  statement hash against an active Soracloud STARK verifier record or
-  preverified proof cache entry. The verifier registry now rejects canonical
+  statement hash and active Soracloud STARK verifier record before failing
+  closed at the missing dedicated zero-refresh witness AIR boundary. The
+  verifier registry now rejects canonical
   Soracloud bootstrap verifier records whose registry id, namespace, circuit
   version, public-input schema hash, gas schedule, or active inline key
 	  material drift from the governed v1 profile, moving those rollout failures
@@ -25423,8 +25426,10 @@ signed ancestor-linked solid-block header proof,
 							  binding-AIR `OpenVerifyEnvelope` payloads only as rejection fixtures:
 							  the active full-bootstrap material and execution verifier gates reject
 							  them before backend dispatch because they do not prove the BFV
-							  bootstrap arithmetic. The bootstrap-key proof gate still has positive
-							  active-verifier coverage for the shared binding-AIR verifier path.
+							  bootstrap arithmetic. Input-admission, public-key, and bootstrap-key
+							  binding-AIR payloads are likewise rejection fixtures: their public
+							  binding does not prove the required BFV ciphertext, key-generation, or
+							  zero-refresh witness relations.
 							  Full-bootstrap material and execution proof verification now also
 							  requires the dedicated native STARK/AIR verifier before acceptance:
 							  non-`zk-stark` builds fail closed after envelope/verifier-record
@@ -26206,10 +26211,11 @@ signed ancestor-linked solid-block header proof,
   decrypted multi-slot output, and checks the propagated key-authorized
   centered-noise bound at the runtime boundary; the same bounded wrapper
   coverage now pins Multiply and packed `RotateLeft` propagated output bounds
-  while decrypting the registered target-limb outputs, and ledger-level
-  `RunSoracloudFheJob` coverage now persists bounded Multiply, packed
-  `RotateLeft`, and two-round Bootstrap output rows with the expected bound
-  mode, bound value, payload commitment, and decrypted plaintext. The crypto layer now owns
+  while decrypting the registered target-limb outputs. These deterministic
+  evaluator helpers retain arithmetic and bound-propagation coverage, while
+  ledger-level `RunSoracloudFheJob` coverage asserts binding-only proofs emit no
+  output row or audit event until the dedicated public-key and bootstrap-key
+  witness AIRs are available. The crypto layer now owns
   scalar and exact-RNS multi-round Bootstrap refresh helpers for exact and
   bounded-noise ciphertexts, rejects zero or over-capacity refresh counts before
   applying any round, and single-round scalar/RNS refresh helpers now preflight
@@ -26418,11 +26424,11 @@ signed ancestor-linked solid-block header proof,
   Soracloud BFV refresh-transcript admission now also derives its deterministic
   seed, bootstrap key-id, rotation-transcript, and bootstrap max-round caps from
   the public `iroha_crypto` constants.
-  Verifier-backed bounded-noise
-  FHE input-admission envelopes now persist bounded metadata after
-  bound-capacity, statement-hash, shared `OpenVerifyEnvelope` admission-shape
-  including size-first all-zero public-input rejection, active-verifier, and
-  backend proof checks; the data-model proof validator now
+  Bounded-noise FHE input-admission envelopes now receive bound-capacity,
+  statement-hash, shared `OpenVerifyEnvelope` admission-shape, active-verifier,
+  and native binding metadata preflight, then fail closed because no dedicated
+  ciphertext-witness AIR exists. They do not persist bounded metadata. The
+  data-model proof validator
   also rejects exact and bounded-noise input-admission bounds that exceed
   registered RAM-LFE BFV capacity before runtime admission, and persisted FHE
   state rows now reject exact or bounded bound metadata that exceeds the same
@@ -26507,20 +26513,21 @@ signed ancestor-linked solid-block header proof,
   refresh bound per output slot. Packed `RotateLeft` now also propagates
   conservative exact bounds through the current Galois key-switch bridge,
   plaintext-mask products, and schedule addition, with capacity rejection for
-  too-narrow profiles. Soracloud FHE state rows now carry optional exact
-  residual-multiple metadata, and `RunSoracloudFheJob` persists propagated
+  too-narrow profiles. Soracloud FHE state rows carry optional exact
+  residual-multiple metadata, and deterministic evaluator helpers propagate
   Add, balanced Multiply/relinearization, outer/packed `RotateLeft`, and
-  Bootstrap bounds for chained jobs while rejecting missing or over-capacity
-  input bounds before execution. The exact packed `RotateLeft` runtime
-  regression now decrypts the scheduled packed output and asserts the persisted
-  conservative residual bound. Client FHE state mutations without
+  Bootstrap bounds while rejecting missing or over-capacity inputs. Ledger
+  persistence remains fail-closed at the proof-witness boundary; the exact
+  packed `RotateLeft` evaluator regression decrypts the scheduled output and
+  asserts its conservative residual bound. Client FHE state mutations without
   proof-carrying input admission remain metadata-free and cannot feed FHE jobs.
-  Proof-carrying Upsert mutations now have a canonical Soracloud FHE
+  Proof-carrying Upsert mutations have a canonical Soracloud FHE
   input-admission statement, provenance binding, STARK/FRI verifier-key lookup,
   canonical V1 circuit binding, restored verifier metadata drift checks,
   ciphertext-shape validation, registered identifier slot-cap enforcement, and
-  residual-capacity check before core persists their residual metadata; FHE job
-  input loading applies the same slot cap to persisted rows before execution.
+  residual-capacity preflight. Binding-only proofs then fail closed before Core
+  persists residual metadata; FHE job input loading continues to apply the same
+  slot cap to any persisted row before execution.
   Persisted FHE rows with public bound metadata must now explicitly advertise
   exact-residual or bounded-noise semantics, and bound-only legacy/corrupt rows
   fail closed before execution.
@@ -26545,8 +26552,8 @@ signed ancestor-linked solid-block header proof,
   public-input shape for verifier-backed proof handoff. Core policy-bound
   admission now requires and signs public-key proof attachments in FHE job
   provenance, derives the expected public-key statement from the refresh
-  transcript, and verifies active Soracloud verifier records or preverified
-  proof cache entries before accepting policy-bound public-key material.
+  transcript, and validates active Soracloud verifier records before rejecting
+  binding-only AIR at the missing key-generation witness AIR boundary.
   Shared FHE execution-policy validation, production FHE governance-bundle
   admission, Core FHE job admission, and Torii signed FHE job preflight now
   require `public_key_proof_statement_digest`; Core and Torii derive the same

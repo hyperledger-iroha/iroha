@@ -1931,6 +1931,7 @@ fn fair_v2_ingress_consensus_round(
         | ConsensusMessageV2Payload::VrfReveal(_) => None,
     }
 }
+#[cfg(test)]
 fn fair_v2_ingress_is_certified_body_request(inbound: &InboundBlockMessage) -> bool {
     matches!(
         FairV2IngressMessageKind::classify(inbound.message()),

@@ -4376,7 +4376,7 @@ const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     count
 }
 const CATALOGED_ROUTE_COUNT: usize = cataloged_route_count(CATALOGED_ROUTE_FAMILIES);
-const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] {
+static CATALOGED_ROUTE_STORAGE: [RouteDescriptor; CATALOGED_ROUTE_COUNT] = {
     let mut routes = [aliases::SETUP_PLAN; CATALOGED_ROUTE_COUNT];
     let mut output_index = 0;
     let mut family_index = 0;
@@ -4391,9 +4391,7 @@ const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] 
         family_index += 1;
     }
     routes
-}
-const CATALOGED_ROUTE_STORAGE: [RouteDescriptor; CATALOGED_ROUTE_COUNT] =
-    flatten_cataloged_routes();
+};
 /// Canonical descriptors enforced by Torii's mounted-route registry.
 ///
 /// Router assembly fails when any enabled descriptor is missing or when a

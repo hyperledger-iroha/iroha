@@ -576,7 +576,6 @@ fn canonical_content_length_v1(bytes: &[u8], expected_bytes: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use sha2::{Digest as _, Sha256};
     use std::cell::Cell;
     const CLIENT_CONTRACT_FIXTURE_V1: &str =
@@ -741,6 +740,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the shared cross-SDK contract audit binds the complete request, success, and error wire fixture"
+    )]
     fn shared_client_contract_fixture_binds_exact_wire_bytes() {
         let fixture: norito::json::Value =
             norito::json::from_str(CLIENT_CONTRACT_FIXTURE_V1).expect("valid client fixture JSON");
@@ -978,19 +981,20 @@ mod tests {
                     )
             );
             let response = error_response_v1(status, code);
-            let expected_body = if let Some(body_hex) = fixture_response
+            let expected_body = fixture_response
                 .get("body_hex")
                 .and_then(norito::json::Value::as_str)
-            {
-                hex::decode(body_hex).expect("canonical error fixture hex")
-            } else {
-                fixture_response
-                    .get("body_utf8")
-                    .and_then(norito::json::Value::as_str)
-                    .expect("canonical JSON error fixture")
-                    .as_bytes()
-                    .to_vec()
-            };
+                .map_or_else(
+                    || {
+                        fixture_response
+                            .get("body_utf8")
+                            .and_then(norito::json::Value::as_str)
+                            .expect("canonical JSON error fixture")
+                            .as_bytes()
+                            .to_vec()
+                    },
+                    |body_hex| hex::decode(body_hex).expect("canonical error fixture hex"),
+                );
             assert_eq!(response.body, expected_body);
             assert_eq!(
                 validate_raw_response_v1(response, 320).expect_err("fixture is an HTTP error"),
@@ -1128,6 +1132,10 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the response-envelope audit keeps every status, header, length, and magic invariant together"
+    )]
     fn response_metadata_and_lengths_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
         let mut status = response_v1(expected);
@@ -1239,6 +1247,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the structured-error audit checks the complete closed status and canonical-body mapping"
+    )]
     fn structured_error_responses_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
         for (status, code) in [

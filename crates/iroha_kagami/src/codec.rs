@@ -260,7 +260,7 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
         let count = loop {
             match reader.read(&mut chunk[..read_len]) {
                 Ok(count) => break count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),
             }
         };
@@ -276,7 +276,7 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
     let extra = loop {
         match reader.read(&mut growth_probe) {
             Ok(count) => break count,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
     };

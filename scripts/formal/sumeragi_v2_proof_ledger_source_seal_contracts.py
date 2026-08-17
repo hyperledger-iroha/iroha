@@ -1198,7 +1198,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
+    "runtime_step": "cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
     "runtime_step_recovery": (
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
@@ -1372,7 +1372,7 @@ _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
     "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
 )
 _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
-    "de38450cc7767e992802f00326914057ad452ab0b7b558b74f53147be40ab619"
+    "c4bf44c2f0037ff4d1d4f803bef306501f47344da605f51f20a03e63bc3feeb3"
 )
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "c5aeb105b87871255d05ead870a60f056dd591e327e8cdeb44d75443885fc33a"
@@ -1504,11 +1504,8 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
         "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
     ),
-    "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it": (
-        "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
-    ),
     "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
-        "77dbbfac307f2bd98b86d1d9d111579c40b30fed6254da221544dacf1df8a7ba"
+        "95df3889b70c9358ed887e6bdf4c5ad6a08e361d10d8415e8587057e765d8d38"
     ),
     "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
@@ -1534,7 +1531,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
     ),
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
+        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -1552,9 +1549,9 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "ingress::try_recv_if_at_checked_classified": (
-        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
+        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
-    "lifecycle_runner::service_retained_certified_response": "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960",
+    "lifecycle_runner::service_retained_certified_response": "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f",
     "runner::drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
     ),
@@ -1611,11 +1608,7 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     ),
 }
 
-_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
-    "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
-        "6b66126a0ae12666093b2126bfadf1149738c9e19c3cd3ff9990fe0be46587bf"
-    ),
-}
+_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {}
 
 # Comment-normalized formal operators for the same finite producer episode.
 # These remain fail-closed placeholders until every listed semantic mutation
@@ -3323,18 +3316,22 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "registry:ConcreteLifecycleWorkRegistry::project_claimed_certified_serve_dispatch": "985dcb45690f99cde6bc2b07703e9c2cf915ceb1abb43b99710e8be71c4f5f26",
     "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
     "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
-    "turn:prepare_and_dispatch_current_certified_serve": "2e33cbcd9e51db7be8437e629f63ed86bb8d6dc60d0f275c0660525a916f639e",
+    "turn:prepare_and_dispatch_current_certified_serve": "3860ef97a19c524a74b7ae6aaaa0af2d8e0696571e8e5644986595f47f66d085",
     "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
     "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
     "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge": "2fb06e74b5c42ad6d54976116085bf255908f5e0549544e7216e8738576a975d",
+    "worker:ProductionV2Services::post_to_peer_on_reply_routes": "326e01fb46a4f99e7bd8c3b09f3216252b74ee7448003a2640dec578e4a8c08f",
     "worker:ProductionV2Services::drain_lifecycle_certified_serve_completion": "689949b5b5c84b99ae0c5ef0124b264111c358b9f1f2da88a2700e26ce5a4fbf",
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "c8127f3eefe3ee8be1c1816bc40462f95172ba0997ffe4e61f1884ba56e196b5",
-    "pending:run_pending_active_height": "6cc315db06ed0d2c305751eec553b1ba8aabcbe2c04da3c44f74737fa32c446a",
-    "height:drain_lifecycle_v2_ingress": "bdbd2183462acf06f5061b75685c8a7451fd2e33baf5ccae4f4ca72b2f9a5a5f",
+    "ordinary:run_lifecycle_active_height": "0691601d460ba01010d786a2d146d522edf6fc8b7804c1840d0229b17f24c5cc",
+    "pending:run_pending_active_height": "29f0362cb294a442e22ee77fa002ad75d89e7af6c244debfc5b26968b3300c95",
+    "height:drain_lifecycle_v2_ingress": "9a75ea7202bfcace792b217f5fca78ff31d041ef6f41039765823b4d6da0b0d2",
+    "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
+    "launch:ProductionLeaderWireIngressBindingV1::retire": "9d86d64a689217d27551b081f69a145e8b43a860dcd7ddf209ff3d53760f3485",
+    "launch:ProductionLifecycleOwnerV1::launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
 }
 
 # Completion provenance remains separately sealed because the direct runtime
@@ -3356,19 +3353,19 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "try_recv_if_at_checked_classified": (
-        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
+        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "34eebea6c6b1a3aefeb68010a2ea367970cc3f16a7d5adf592e184bcc799201e"
+        "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
+        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
     "bind_leader_wire_lifecycle_gate": (
-        "d6d8898d1a10684cc1f1aea7c91aa84dfb2f90862378d41d0f0908d57e2dfcc2"
+        "6e28cc9ea4d84a58f77736f20459030f6591ace7c3e33fae673ad2c5bc4f4c25"
     ),
 }
 
@@ -3728,9 +3725,9 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
     ),
 }
 
-# Exact production retirement of the two per-height fair-ingress gates. The
-# former runner binding wrappers are test-only compatibility scaffolding; the
-# production contract binds the canonical close and queue-owned unbind seams.
+# Exact production retirement of the leader-wire lifecycle gate. The retired
+# Certified-Serve gate and joint height-ingress wrappers are not production
+# seams; the lifecycle contract binds canonical close and exact leader unbind.
 _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     "runner::close_ingress_for_rollover": (
         "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
@@ -3738,16 +3735,8 @@ _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     "ingress::unbind_leader_wire_lifecycle_gate": (
         "4a5b25faedea52bea79ac5041b0f643b5baf7bbb0858d9e6953a5f9e9260869c"
     ),
-    "ingress::unbind_height_ingress_gates": (
-        "966e4feae1f1ca53553abce8847c1a14f8275eb81d4003bedf95e3591f362714"
-    ),
     "ingress::close": (
         "24741c2de73120ea5e1a9564203f5d5e0bd9d80a7f1a89d0bca2511e73dee1a7"
-    ),
-}
-_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
-    "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
-        "be7493c6461cb56ae73d8355a7b1da9bf5b6eaa89a95c039107052ba7af82220"
     ),
 }
 
@@ -3850,7 +3839,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "lifecycle_runner::service_retained_certified_response": (
-        "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960"
+        "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
@@ -4048,18 +4037,6 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     ),
     "worker::claimed_with_reply_routes_and_ingress_ownership": (
         "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
-    ),
-    "worker::serve_certified_request_on_routes": (
-        "6cfa46d3647ba72ae53fa12585926eb6803ed38dff9d656894ba7e7693dc06ac"
-    ),
-    "worker::queue_commit_serve": (
-        "73b2b40e5c2255d557c2e67ccdd58c3593381c5d713b4dd6315e48c350ff7dfb"
-    ),
-    "worker::io_handle_certified_serve_ingress_gate": (
-        "87acd6865d179d3911a66692e063ece997fbf7669a81493b19d9f443e1291735"
-    ),
-    "worker::services_certified_serve_ingress_gate": (
-        "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
         "ed0c01f2a93defb44b23ffa108c622bbdc4550588a859f44ac7313490f52c705"

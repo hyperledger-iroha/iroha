@@ -1924,6 +1924,10 @@ mod tests {
         },
     };
     const HANDLE: &str = "hsm://musubi/provider-attestation-clock/seal";
+    type CheckpointKey = ([u8; 32], [u8; 32]);
+    type CheckpointBlobs = BTreeMap<CheckpointKey, Vec<u8>>;
+    type CheckpointHeadRecords =
+        BTreeMap<CheckpointKey, MusubiProviderAttestationJournalCheckpointHeadRecordV1>;
     #[derive(Debug)]
     struct TestSeal {
         qualification: StdMutex<MusubiProviderAttestationClockSealQualificationV1>,
@@ -1934,16 +1938,14 @@ mod tests {
         pause_after_clock_cas: AtomicBool,
         clock_cas_reached: tokio::sync::Notify,
         resume_after_clock_cas: tokio::sync::Notify,
-        checkpoint_blobs: StdMutex<BTreeMap<([u8; 32], [u8; 32]), Vec<u8>>>,
+        checkpoint_blobs: StdMutex<CheckpointBlobs>,
         next_checkpoint_blob_put_error: StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,
         next_checkpoint_blob_load_error:
             StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,
         checkpoint_blob_put_readback_unavailable: AtomicBool,
         checkpoint_heads:
             StdMutex<BTreeMap<[u8; 32], MusubiProviderAttestationJournalCheckpointHeadRecordV1>>,
-        checkpoint_head_records: StdMutex<
-            BTreeMap<([u8; 32], [u8; 32]), MusubiProviderAttestationJournalCheckpointHeadRecordV1>,
-        >,
+        checkpoint_head_records: StdMutex<CheckpointHeadRecords>,
         next_checkpoint_head_cas_error: StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,
         next_checkpoint_head_load_error:
             StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,

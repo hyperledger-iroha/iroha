@@ -25,6 +25,8 @@ pub use transport::{
 };
 
 /// Run the standalone native authority command-line interface.
+/// # Errors
+/// Returns an error when CLI arguments, identity binding, or authority service startup fails.
 pub fn run_cli() -> Result<(), &'static str> {
     crate::external_software_signer::taira_authority::transport::run_cli()
 }

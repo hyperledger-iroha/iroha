@@ -18,7 +18,7 @@ use std::{io, path::Path};
 /// identity match the named path before and after the read. On qualified Unix targets, nonblocking
 /// open keeps a raced FIFO from hanging before its descriptor type is rejected. Other targets fail
 /// closed until a stable handle-identity implementation is available.
-pub(crate) fn read_bounded_single_link_regular_file_v1(
+pub fn read_bounded_single_link_regular_file_v1(
     path: &Path,
     max_bytes: u64,
 ) -> io::Result<Vec<u8>> {
@@ -91,7 +91,7 @@ where
 /// no-follow descriptor open, allowing focused tests to coordinate a
 /// final-component replacement without timing-dependent threads.
 #[cfg(all(test, unix))]
-pub(crate) fn read_bounded_single_link_regular_file_with_hook_v1<F>(
+pub fn read_bounded_single_link_regular_file_with_hook_v1<F>(
     path: &Path,
     max_bytes: u64,
     before_open: F,

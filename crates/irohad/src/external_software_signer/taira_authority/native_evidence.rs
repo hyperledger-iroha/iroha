@@ -186,6 +186,10 @@ struct BuildProvenanceV1 {
     workspace_source_manifest_sha256: String,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the fields mirror the canonical evidence isolation-policy schema"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PrivacyReleaseIsolationPolicyV1 {
@@ -352,6 +356,10 @@ struct PrivacyReleaseArtifactPairDigestV1 {
     json_sha256: [u8; 32],
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the fields mirror the canonical native-release receipt schema"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PrivacyReleaseReceiptV1 {
@@ -392,6 +400,10 @@ struct PrivacyReleaseZkX509ResourceEnvironmentV1 {
     affinity_cpu_count: u16,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the fields mirror the canonical zk-X509 process-limit schema"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PrivacyReleaseZkX509ResourceProcessLimitsV1 {
@@ -456,6 +468,10 @@ struct Exact12SummaryV1 {
 }
 
 /// Validate one native-evidence request before the service consumes replay state.
+#[allow(
+    clippy::too_many_lines,
+    reason = "this fail-closed API seam validates one ordered cross-artifact evidence chain"
+)]
 pub(super) fn validate_native_evidence_v1(
     subject: &Value,
     manifest: &[TairaAuthorityArtifactManifestEntryV1],
@@ -745,7 +761,7 @@ impl<R: Read> Read for AuthenticatedArchiveReaderV1<R> {
 fn hash_archive_member(reader: &mut dyn Read) -> io::Result<([u8; 32], u64)> {
     let mut digest = Sha256::new();
     let mut size = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
@@ -1584,7 +1600,7 @@ fn encode_base64(bytes: &[u8]) -> String {
 }
 
 fn decode_base64(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 4 != 0 {
+    if !value.len().is_multiple_of(4) {
         return None;
     }
     let bytes = value.as_bytes();
@@ -1639,15 +1655,15 @@ pub(super) mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf};
 
-    pub(crate) struct AuthorityServiceFixtureV1 {
-        pub(crate) _directory: tempfile::TempDir,
-        pub(crate) subject: Value,
-        pub(crate) manifest: Value,
-        pub(crate) paths: Vec<PathBuf>,
+    pub struct AuthorityServiceFixtureV1 {
+        pub _directory: tempfile::TempDir,
+        pub subject: Value,
+        pub manifest: Value,
+        pub paths: Vec<PathBuf>,
     }
 
     struct Fixture {
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
         subject: Value,
         manifest: Vec<TairaAuthorityArtifactManifestEntryV1>,
         artifacts: Vec<File>,
@@ -1719,7 +1735,7 @@ pub(super) mod tests {
         }
 
         fn install_archive(&mut self, name: &str, bytes: &[u8]) {
-            let path = self._directory.path().join("taira-test.tar.gz");
+            let path = self.directory.path().join("taira-test.tar.gz");
             fs::write(&path, bytes).expect("write archive fixture");
             if let Some(index) = self
                 .manifest
@@ -1995,6 +2011,10 @@ pub(super) mod tests {
         assert_eq!(archive.validate(), Err(TairaAuthorityErrorV1::Rejected));
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the cohesive fixture constructs the complete canonical evidence graph"
+    )]
     fn fixture() -> Fixture {
         let directory = tempfile::tempdir().expect("fixture directory");
         let source_sha256 = [0x44; 32];
@@ -2006,7 +2026,7 @@ pub(super) mod tests {
         let expectations = expectations_fixture();
         let stages = PrivacyReleaseStageArtifactsV1 {
             schema_version: 1,
-            stage_count: STAGE_COUNT_V1 as u16,
+            stage_count: u16::try_from(STAGE_COUNT_V1).expect("fixture stage count fits u16"),
             stages: expectations
                 .stages
                 .iter()
@@ -2064,7 +2084,7 @@ pub(super) mod tests {
             runner_binary_sha256: sha256(&runner),
             command_manifest: pair_digest(&command_norito, &command_json),
             stage_artifacts: pair_digest(&stages_norito, &stages_json),
-            fixed_stage_count: STAGE_COUNT_V1 as u16,
+            fixed_stage_count: u16::try_from(STAGE_COUNT_V1).expect("fixture stage count fits u16"),
             all_native_stages_passed: true,
             contains_witnesses: false,
             contains_canonical_proof_artifacts: true,
@@ -2100,7 +2120,7 @@ pub(super) mod tests {
             paths.push(path.clone());
             artifacts.push(File::open(&path).expect("open fixture artifact"));
             manifest.push(TairaAuthorityArtifactManifestEntryV1 {
-                ordinal: ordinal as u16,
+                ordinal: u16::try_from(ordinal).expect("fixture manifest ordinal fits u16"),
                 name: (*name).to_owned(),
                 size: payload.len() as u64,
                 sha256: sha256(&payload),
@@ -2199,7 +2219,7 @@ pub(super) mod tests {
             ),
         ]);
         Fixture {
-            _directory: directory,
+            directory,
             subject,
             manifest,
             artifacts,
@@ -2207,9 +2227,9 @@ pub(super) mod tests {
         }
     }
 
-    pub(crate) fn authority_service_fixture() -> AuthorityServiceFixtureV1 {
+    pub fn authority_service_fixture() -> AuthorityServiceFixtureV1 {
         let Fixture {
-            _directory,
+            directory,
             subject,
             manifest,
             artifacts: _,
@@ -2233,7 +2253,7 @@ pub(super) mod tests {
                 .collect(),
         );
         AuthorityServiceFixtureV1 {
-            _directory,
+            _directory: directory,
             subject,
             manifest,
             paths,
@@ -2261,7 +2281,8 @@ pub(super) mod tests {
                 stages.push(PrivacyReleaseExpectedStageV1 {
                     evidence: PrivacyReleaseStageEvidenceV1 {
                         schema_version: 1,
-                        stage_ordinal: ordinal as u16,
+                        stage_ordinal: u16::try_from(ordinal)
+                            .expect("fixture stage ordinal fits u16"),
                         protocol_id: protocol,
                         case_kind: case,
                         protocol_descriptor: format!("descriptor-{protocol_index}"),
@@ -2290,7 +2311,7 @@ pub(super) mod tests {
         }
         PrivacyReleaseExpectationsV1 {
             schema_version: 1,
-            stage_count: STAGE_COUNT_V1 as u16,
+            stage_count: u16::try_from(STAGE_COUNT_V1).expect("fixture stage count fits u16"),
             stages,
         }
     }
@@ -2505,7 +2526,8 @@ pub(super) mod tests {
             gzip.extend_from_slice(chunk);
         }
         gzip.extend_from_slice(&crc32(decoded).to_le_bytes());
-        gzip.extend_from_slice(&(decoded.len() as u32).to_le_bytes());
+        let decoded_len = u32::try_from(decoded.len()).expect("fixture gzip input fits u32");
+        gzip.extend_from_slice(&decoded_len.to_le_bytes());
         gzip
     }
 

@@ -430,18 +430,15 @@ let timeout_vote_episode_dependency =
     barrier_bypass
         == FairV2IngressBarrierBypass::TimeoutVoteEpisode
         && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
-        && (leader_wire_barrier.is_some_and(|owner| {
+        && leader_wire_barrier.is_some_and(|owner| {
             owner.token.identity.phase
                 == FairV2IngressLeaderWirePhase::CertifiedResponse
-        }) || (leader_wire_barrier.is_none()
-            && (selected_serve_barrier.is_some()
-                || certified_body_request_cutoff.is_some())));
+        });
 let dependency_bypass = !ingress_barrier_allows
-    && (serve_fence_escape_dependency
-        || timeout_vote_episode_dependency
+    && (timeout_vote_episode_dependency
         || (leader_wire_control_barrier
 """,
-        "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner or Serve barrier, and subordinate to a blocked ordinary barrier",
+        "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner, and subordinate to a blocked ordinary barrier",
         errors,
     )
     _require_rust_token_sequence(
@@ -1441,71 +1438,6 @@ record.status == super::FairV2IngressLeaderWireStatus::Ingress
                 errors,
             )
 
-    for name, expected_sha256 in (
-        _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256.items()
-    ):
-        item = _require_rust_item(worker_path, sources["worker"], name, errors)
-        _require_rust_item_context(
-            worker_path,
-            item,
-            worker_test_context,
-            f"timeout-vote Serve-barrier regression {name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            worker_path,
-            item,
-            expected_sha256,
-            f"timeout-vote Serve-barrier regression {name}",
-            errors,
-        )
-        for sequence, description in (
-            (
-                """
-ingress
-    .try_recv_if_checked_retiring_obsolete(|inbound| {
-""",
-                "ordinary selection must exercise the selected Serve barrier without bypass",
-            ),
-            (
-                """
-.try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-    |_| false,
-)
-""",
-                "the episode bypass must still reject when its downstream predicate rejects",
-            ),
-            (
-                """
-.try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-    |inbound| {
-""",
-                "the exact direct TimeoutVote must reach the authoritative predicate",
-            ),
-            (
-                """
-assert_eq!(
-    serve_gate
-        .selected_barrier()
-        .expect("inspect the retained Serve barrier")
-        .map(|barrier| barrier.carrier_ordinal()),
-    Some(1)
-);
-""",
-                "TimeoutVote predicate service must retain the selected Serve owner",
-            ),
-        ):
-            _require_rust_token_sequence(
-                worker_path,
-                item,
-                sequence,
-                description,
-                errors,
-            )
-
     expected_runtime_tests = {
         "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
         "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut",
@@ -1520,13 +1452,11 @@ assert_eq!(
             f"missing={sorted(expected_runtime_tests - observed_runtime_tests)}, "
             f"extra={sorted(observed_runtime_tests - expected_runtime_tests)}"
         )
-    expected_worker_tests = {
-        "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier"
-    }
+    expected_worker_tests: set[str] = set()
     observed_worker_tests = set(_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256)
     if observed_worker_tests != expected_worker_tests:
         errors.append(
-            "timeout-vote Serve-barrier regression seal inventory must be exact; "
+            "timeout-vote worker regression seal inventory must be exact; "
             f"missing={sorted(expected_worker_tests - observed_worker_tests)}, "
             f"extra={sorted(observed_worker_tests - expected_worker_tests)}"
         )

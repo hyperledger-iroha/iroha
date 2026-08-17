@@ -330,8 +330,7 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
     let error = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
-        .err()
-        .expect("second supervisor must not share a live runtime root");
+        .expect_err("second supervisor must not share a live runtime root");
     assert!(matches!(error, SupervisorError::SupervisorLocked { .. }));
     assert_eq!(
         current_generation_id(current.paths().root()).expect("read preserved selection"),

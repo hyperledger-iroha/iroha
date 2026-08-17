@@ -322,13 +322,9 @@ mod tests {
             }
             QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
             QueryItemKind::AssetEscrowRecord => QueryOutputBatchBox::AssetEscrowRecord(Vec::new()),
-            QueryItemKind::AssetEscrowsBySeller => {
-                QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
-            }
-            QueryItemKind::AssetEscrowsByBuyer => {
-                QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
-            }
-            QueryItemKind::AssetEscrowsByStatus => {
+            QueryItemKind::AssetEscrowsBySeller
+            | QueryItemKind::AssetEscrowsByBuyer
+            | QueryItemKind::AssetEscrowsByStatus => {
                 QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
             }
             QueryItemKind::FeeSponsorProgram => QueryOutputBatchBox::FeeSponsorProgram(Vec::new()),

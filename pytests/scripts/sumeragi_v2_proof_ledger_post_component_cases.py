@@ -779,14 +779,22 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_body_store.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_certified_serve_cases.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/user.rs"),
@@ -794,6 +802,8 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+    # The lifecycle registry's reviewed include closure has one nested layer.
     copy_reviewed_rust_include_components(tmp_path)
 
 
@@ -1525,4 +1535,3 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
             source_entries=entries,
             root_dir=tmp_path,
         )
-

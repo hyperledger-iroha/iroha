@@ -423,13 +423,13 @@ fn run() -> Result<(), String> {
                 .to_string(),
         );
     };
-    if let Some(expected) = expect_payload_digest {
-        if expected != plan_payload_digest {
-            return Err(
-                "`--expect-payload-digest` does not match the canonical plan whole-payload digest"
-                    .to_string(),
-            );
-        }
+    if let Some(expected) = expect_payload_digest
+        && expected != plan_payload_digest
+    {
+        return Err(
+            "`--expect-payload-digest` does not match the canonical plan whole-payload digest"
+                .to_string(),
+        );
     }
     expect_payload_digest = Some(plan_payload_digest);
     if expect_payload_len.is_none() {

@@ -1,8 +1,8 @@
 use FheProofFamily::{BootstrapKey, FullBootstrapExecution, InputAdmission, PublicKey};
 use FheValidationScenario::{
     AttachmentMetadataDrift, CanonicalEnvelope, CanonicalVerifierName, CommitmentAndEnvelopeHash,
-    InputAdmissionBackendMismatch, OpenVerifyEnvelopeDrift, OversizedPayloads, PublicInputShapeReplay,
-    PublishedBounds,
+    InputAdmissionBackendMismatch, OpenVerifyEnvelopeDrift, OversizedPayloads,
+    PublicInputShapeReplay, PublishedBounds,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,7 +145,8 @@ impl FheProofFamily {
                 verifier_alias: "soracloud_fhe_bootstrap_key_alias_v1",
                 max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
                 max_stark_wrapper_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
-                max_native_envelope_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+                max_native_envelope_bytes:
+                    SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
             },
             Self::FullBootstrapExecution => FheProofProfile {
                 fill_byte: 0xD5,
@@ -153,7 +154,7 @@ impl FheProofFamily {
                 canonical_commitment: 0x63,
                 forged_commitment: 0x27,
                 circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-                wrong_circuit_id: "soracloud_fhe_full_bootstrap_execution_v2",
+                wrong_circuit_id: "iroha_bfv_full_bootstrap_v2",
                 public_inputs_schema:
                     SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
                 wrong_public_inputs_schema:
@@ -198,9 +199,7 @@ impl FheProofFamily {
     fn schema_hash(self) -> [u8; 32] {
         match self {
             Self::PublicKey => soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1(),
-            Self::BootstrapKey => {
-                soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()
-            }
+            Self::BootstrapKey => soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
             Self::FullBootstrapExecution => {
                 soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
             }
@@ -401,7 +400,10 @@ fn run_published_bounds(family: FheProofFamily, id: &str) {
         profile.public_inputs_schema.len(),
         "{id}"
     );
-    assert_eq!(bounds.max_proof_bytes, profile.max_stark_wrapper_bytes, "{id}");
+    assert_eq!(
+        bounds.max_proof_bytes, profile.max_stark_wrapper_bytes,
+        "{id}"
+    );
     assert_eq!(bounds.max_aux_bytes, 0, "{id}");
     assert!(!bounds.allow_aux, "{id}");
     assert!(bounds.require_nonzero_vk_hash, "{id}");
@@ -606,6 +608,10 @@ fn run_commitment_and_envelope_hash(family: FheProofFamily, id: &str) {
     );
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the adversarial matrix keeps every ordered OpenVerify envelope mutation together"
+)]
 fn run_open_verify_envelope_drift(family: FheProofFamily, id: &str) {
     let profile = family.profile();
     let sample = family.sample();
@@ -681,10 +687,12 @@ fn run_open_verify_envelope_drift(family: FheProofFamily, id: &str) {
     let mut wrong_statement = sample.clone();
     let mut wrong_statement_envelope = envelope.clone();
     let mut statement_drift = open_proof.clone();
-    statement_drift.public_inputs =
-        vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
-    wrong_statement_envelope.proof_bytes =
-        encode_fhe_open_proof(&statement_drift, id, "encode statement-drifted STARK wrapper");
+    statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
+    wrong_statement_envelope.proof_bytes = encode_fhe_open_proof(
+        &statement_drift,
+        id,
+        "encode statement-drifted STARK wrapper",
+    );
     wrong_statement.replace_envelope(&wrong_statement_envelope);
     assert_fhe_rejected(
         &wrong_statement,

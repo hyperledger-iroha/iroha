@@ -607,6 +607,10 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
     assert_contains!(debug, "greater than zero");
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the profile fixture keeps secret-file substitution and every multilane default assertion in one end-to-end contract"
+)]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

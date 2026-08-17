@@ -50,7 +50,6 @@ const SEMANTIC_ARGV_JSON: &str = concat!(
     "\"kagemusha_recursive_spend_v4_bundle\",\"--jobs\",\"1\",",
     "\"--message-format=json-render-diagnostics\"]"
 );
-
 fn main() {
     if env::var_os(SEALED_FEATURE_ENV).is_some() {
         embed_exact_kagemusha_source_seal();
@@ -68,17 +67,20 @@ fn main() {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the authenticated projection is intentionally constructed and verified in one auditable flow"
+)]
 fn embed_exact_kagemusha_source_seal() {
     validate_exact_sealed_build_context();
     let source_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT", 40);
     let source_git_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_GIT_TREE", 40);
     let parent_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_PARENT_COMMIT", 40);
     let parent_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_PARENT_TREE", 40);
-    if parent_commit != AUTHORIZED_PARENT_COMMIT || parent_tree != AUTHORIZED_PARENT_TREE {
-        panic!(
-            "sealed Kagemusha source lineage does not descend from the authorized optimizations authority"
-        );
-    }
+    assert!(
+        parent_commit == AUTHORIZED_PARENT_COMMIT && parent_tree == AUTHORIZED_PARENT_TREE,
+        "sealed Kagemusha source lineage does not descend from the authorized optimizations authority"
+    );
     let commit_object_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT_OBJECT_SHA256", 64);
     let commit_object_size =
@@ -104,18 +106,22 @@ fn embed_exact_kagemusha_source_seal() {
         required_lower_hex_env_bounded("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_HEX", 2, 8192);
     let closure = decode_hex(&closure_hex, "reviewed source closure");
     validate_one_line_canonical_ascii(&closure, 4096, "reviewed source closure");
-    if sha256_hex(&closure) != closure_sha256 {
-        panic!("reviewed source closure bytes differ from their SHA-256");
-    }
+    assert_eq!(
+        sha256_hex(&closure),
+        closure_sha256,
+        "reviewed source closure bytes differ from their SHA-256"
+    );
     let source_date_epoch = required_decimal_env(
         "KAGEMUSHA_BUILD_SOURCE_DATE_EPOCH",
         AUTHORIZED_PARENT_EPOCH + 1,
         i64::MAX as u64,
     );
     let source_date_epoch_text = source_date_epoch.to_string();
-    if env::var("SOURCE_DATE_EPOCH").ok().as_deref() != Some(&source_date_epoch_text) {
-        panic!("SOURCE_DATE_EPOCH must exactly equal the authenticated source epoch");
-    }
+    assert_eq!(
+        env::var("SOURCE_DATE_EPOCH").ok().as_deref(),
+        Some(source_date_epoch_text.as_str()),
+        "SOURCE_DATE_EPOCH must exactly equal the authenticated source epoch"
+    );
     let execution_policy_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_EXECUTION_POLICY_SHA256", 64);
     let unit_graph_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SHA256", 64);
@@ -212,17 +218,20 @@ fn embed_exact_kagemusha_source_seal() {
         16_384,
         "authenticated source-seal projection",
     );
-    if supplied_projection != projection.as_bytes() {
-        panic!("authenticated source-seal projection is noncanonical or differs from its inputs");
-    }
+    assert_eq!(
+        supplied_projection,
+        projection.as_bytes(),
+        "authenticated source-seal projection is noncanonical or differs from its inputs"
+    );
     let supplied_projection_sha256 = required_lower_hex_env(
         "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256",
         64,
     );
     let actual_projection_sha256 = sha256_hex(&supplied_projection);
-    if supplied_projection_sha256 != actual_projection_sha256 {
-        panic!("authenticated source-seal projection SHA-256 differs");
-    }
+    assert_eq!(
+        supplied_projection_sha256, actual_projection_sha256,
+        "authenticated source-seal projection SHA-256 differs"
+    );
     println!("cargo:rustc-env=GIT_COMMIT_HASH={source_commit}");
     println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_COMMIT={source_commit}");
     println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_TREE_SHA256={source_tree_sha256}");
@@ -245,21 +254,22 @@ fn require_actual_tool_digest(environment_name: &str, expected_sha256: &str, lab
     let path = env::var_os(environment_name)
         .unwrap_or_else(|| panic!("{environment_name} is required for a sealed build"));
     let path = Path::new(&path);
-    if !path.is_absolute() {
-        panic!("sealed {label} path must be absolute");
-    }
+    assert!(path.is_absolute(), "sealed {label} path must be absolute");
     let canonical = fs::canonicalize(path)
         .unwrap_or_else(|error| panic!("sealed {label} path is unavailable: {error}"));
     let metadata = fs::metadata(&canonical)
         .unwrap_or_else(|error| panic!("sealed {label} metadata is unavailable: {error}"));
-    if !metadata.is_file() || metadata.len() == 0 {
-        panic!("sealed {label} path is not a nonempty regular file");
-    }
+    assert!(
+        metadata.is_file() && metadata.len() > 0,
+        "sealed {label} path is not a nonempty regular file"
+    );
     let bytes = fs::read(&canonical)
         .unwrap_or_else(|error| panic!("sealed {label} bytes are unavailable: {error}"));
-    if sha256_hex(&bytes) != expected_sha256 {
-        panic!("sealed {label} bytes differ from the reviewed SHA-256");
-    }
+    assert_eq!(
+        sha256_hex(&bytes),
+        expected_sha256,
+        "sealed {label} bytes differ from the reviewed SHA-256"
+    );
 }
 
 fn validate_exact_sealed_build_context() {
@@ -272,16 +282,16 @@ fn validate_exact_sealed_build_context() {
         ("DEBUG", "false"),
         ("NUM_JOBS", "1"),
     ] {
-        if env::var(name).ok().as_deref() != Some(expected) {
-            panic!("{name} differs from the exact sealed candidate build context");
-        }
+        assert_eq!(
+            env::var(name).ok().as_deref(),
+            Some(expected),
+            "{name} differs from the exact sealed candidate build context"
+        );
     }
     let mut observed = Vec::new();
     for (name, value) in env::vars_os() {
         if let Some(name) = cargo_feature_env_name(&name) {
-            if value != OsStr::new("1") {
-                panic!("{name} must have the exact value 1");
-            }
+            assert_eq!(value, OsStr::new("1"), "{name} must have the exact value 1");
             observed.push(name.to_owned());
         }
     }
@@ -351,7 +361,7 @@ fn required_lower_hex_env_bounded(name: &str, minimum: usize, maximum: usize) ->
         .unwrap_or_else(|_| panic!("{name} is required for a sealed Kagemusha candidate build"));
     if value.len() < minimum
         || value.len() > maximum
-        || value.len() % 2 != 0
+        || !value.len().is_multiple_of(2)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -373,9 +383,10 @@ fn required_decimal_env(name: &str, minimum: u64, maximum: u64) -> u64 {
     let parsed = value
         .parse::<u64>()
         .unwrap_or_else(|_| panic!("{name} exceeds unsigned 64-bit decimal"));
-    if !(minimum..=maximum).contains(&parsed) || parsed.to_string() != value {
-        panic!("{name} is outside its authenticated bound");
-    }
+    assert!(
+        (minimum..=maximum).contains(&parsed) && parsed.to_string() == value,
+        "{name} is outside its authenticated bound"
+    );
     parsed
 }
 
@@ -390,7 +401,8 @@ fn decode_hex(value: &str, label: &str) -> Vec<u8> {
             let low = (pair[1] as char)
                 .to_digit(16)
                 .unwrap_or_else(|| panic!("{label} hex is invalid"));
-            ((high << 4) | low) as u8
+            u8::try_from((high << 4) | low)
+                .unwrap_or_else(|_| unreachable!("a hexadecimal byte always fits in u8"))
         })
         .collect()
 }
@@ -410,15 +422,28 @@ fn validate_one_line_canonical_ascii(value: &[u8], maximum: usize, label: &str) 
 }
 
 fn sha256_hex(value: &[u8]) -> String {
+    #[rustfmt::skip]
+    const ROUND_CONSTANTS: [u32; 64] = [
+        0x428a_2f98, 0x7137_4491, 0xb5c0_fbcf, 0xe9b5_dba5, 0x3956_c25b, 0x59f1_11f1, 0x923f_82a4,
+        0xab1c_5ed5, 0xd807_aa98, 0x1283_5b01, 0x2431_85be, 0x550c_7dc3, 0x72be_5d74, 0x80de_b1fe,
+        0x9bdc_06a7, 0xc19b_f174, 0xe49b_69c1, 0xefbe_4786, 0x0fc1_9dc6, 0x240c_a1cc, 0x2de9_2c6f,
+        0x4a74_84aa, 0x5cb0_a9dc, 0x76f9_88da, 0x983e_5152, 0xa831_c66d, 0xb003_27c8, 0xbf59_7fc7,
+        0xc6e0_0bf3, 0xd5a7_9147, 0x06ca_6351, 0x1429_2967, 0x27b7_0a85, 0x2e1b_2138, 0x4d2c_6dfc,
+        0x5338_0d13, 0x650a_7354, 0x766a_0abb, 0x81c2_c92e, 0x9272_2c85, 0xa2bf_e8a1, 0xa81a_664b,
+        0xc24b_8b70, 0xc76c_51a3, 0xd192_e819, 0xd699_0624, 0xf40e_3585, 0x106a_a070, 0x19a4_c116,
+        0x1e37_6c08, 0x2748_774c, 0x34b0_bcb5, 0x391c_0cb3, 0x4ed8_aa4a, 0x5b9c_ca4f, 0x682e_6ff3,
+        0x748f_82ee, 0x78a5_636f, 0x84c8_7814, 0x8cc7_0208, 0x90be_fffa, 0xa450_6ceb, 0xbef9_a3f7,
+        0xc671_78f2,
+    ];
     let mut state = [
-        0x6a09e667_u32,
-        0xbb67ae85,
-        0x3c6ef372,
-        0xa54ff53a,
-        0x510e527f,
-        0x9b05688c,
-        0x1f83d9ab,
-        0x5be0cd19,
+        0x6a09_e667_u32,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
     ];
     let bit_len = (value.len() as u64)
         .checked_mul(8)
@@ -429,18 +454,6 @@ fn sha256_hex(value: &[u8]) -> String {
         padded.push(0);
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
     for block in padded.chunks_exact(64) {
         let mut words = [0_u32; 64];
         for (index, word) in words[..16].iter_mut().enumerate() {
@@ -458,28 +471,41 @@ fn sha256_hex(value: &[u8]) -> String {
                 .wrapping_add(words[index - 7])
                 .wrapping_add(s1);
         }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        let [
+            mut state_a,
+            mut state_b,
+            mut state_c,
+            mut state_d,
+            mut state_e,
+            mut state_f,
+            mut state_g,
+            mut state_h,
+        ] = state;
         for index in 0..64 {
-            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let choose = (e & f) ^ ((!e) & g);
-            let temp1 = h
+            let sum1 =
+                state_e.rotate_right(6) ^ state_e.rotate_right(11) ^ state_e.rotate_right(25);
+            let choose = (state_e & state_f) ^ ((!state_e) & state_g);
+            let temp1 = state_h
                 .wrapping_add(sum1)
                 .wrapping_add(choose)
-                .wrapping_add(K[index])
+                .wrapping_add(ROUND_CONSTANTS[index])
                 .wrapping_add(words[index]);
-            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let sum0 =
+                state_a.rotate_right(2) ^ state_a.rotate_right(13) ^ state_a.rotate_right(22);
+            let majority = (state_a & state_b) ^ (state_a & state_c) ^ (state_b & state_c);
             let temp2 = sum0.wrapping_add(majority);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
+            state_h = state_g;
+            state_g = state_f;
+            state_f = state_e;
+            state_e = state_d.wrapping_add(temp1);
+            state_d = state_c;
+            state_c = state_b;
+            state_b = state_a;
+            state_a = temp1.wrapping_add(temp2);
         }
-        for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+        for (slot, value) in state.iter_mut().zip([
+            state_a, state_b, state_c, state_d, state_e, state_f, state_g, state_h,
+        ]) {
             *slot = slot.wrapping_add(value);
         }
     }

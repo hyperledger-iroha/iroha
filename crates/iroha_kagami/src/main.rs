@@ -83,18 +83,19 @@ impl std::error::Error for ExplicitExitError {}
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            if let Some(explicit) = error.downcast_ref::<ExplicitExitError>() {
+        Err(error) => error.downcast_ref::<ExplicitExitError>().map_or_else(
+            || {
+                eprintln!("{error:?}");
+                ExitCode::FAILURE
+            },
+            |explicit| {
                 // Explicit security outcomes are machine records. Do not wrap
                 // them in color-eyre's Debug report, which would make the
                 // documented status line unstable for operators and tooling.
                 eprintln!("{explicit}");
                 ExitCode::from(explicit.code())
-            } else {
-                eprintln!("{error:?}");
-                ExitCode::FAILURE
-            }
-        }
+            },
+        ),
     }
 }
 fn run() -> Outcome {

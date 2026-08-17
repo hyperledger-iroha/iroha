@@ -1506,8 +1506,8 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
             {
                 "rows": 194,
                 "forward_rows": 64,
-                "source_lines": 13_307,
-                "net_reduction": 951,
+                "source_lines": 13_282,
+                "net_reduction": 976,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_SOURCE_LINES, 951)

@@ -1,3 +1,4 @@
+use super::public_musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
 use iroha_data_model::{
     isi::musubi::PublishMusubiReleaseV1,
     musubi::{
@@ -19,7 +20,6 @@ use iroha_data_model::{
         validate_musubi_account_id_v1,
     },
 };
-use super::public_musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
 #[test]
 fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
     assert_eq!(
@@ -83,7 +83,7 @@ fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() {
 #[allow(clippy::too_many_lines)]
 fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
     const RETIRED_QUERY_CAP_BYTES: usize = 8 * 1024 * 1024;
-    fn padded_name(prefix: String) -> Name {
+    fn padded_name(prefix: &str) -> Name {
         assert!(prefix.len() <= MAX_NAME_BYTES);
         format!("{prefix}{}", "\\".repeat(MAX_NAME_BYTES - prefix.len()))
             .parse()
@@ -158,7 +158,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
     let mut root_dependencies = Vec::with_capacity(MUSUBI_MAX_DEPENDENCIES_V1);
     let mut nodes = Vec::with_capacity(MUSUBI_MAX_DEPENDENCIES_V1);
     for index in 0..MUSUBI_MAX_DEPENDENCIES_V1 {
-        let alias = padded_name(format!("dep-{index:03}-"));
+        let alias = padded_name(&format!("dep-{index:03}-"));
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(
                 u64::MAX
@@ -192,7 +192,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         });
     }
     let exports = (0..MUSUBI_MAX_EXPORTS_V1)
-        .map(|index| padded_name(format!("export-{index:04}-")))
+        .map(|index| padded_name(&format!("export-{index:04}-")))
         .collect::<Vec<_>>();
     let keywords = (0..MUSUBI_MAX_KEYWORDS_V1)
         .map(|index| {

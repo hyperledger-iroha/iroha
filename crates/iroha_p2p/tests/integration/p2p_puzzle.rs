@@ -119,7 +119,7 @@ async fn matching_required_puzzle_parameters_connect() {
         let (network, child) = NetworkHandle::<EmptyMsg>::start(
             super::p2p_identity_keys(key_pair.clone()),
             config(address.clone(), handshake.clone()),
-            chain.clone(),
+            chain,
             None,
             None,
             shutdown.clone(),
@@ -177,7 +177,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     let started1 = NetworkHandle::<EmptyMsg>::start(
         super::p2p_identity_keys(kp1.clone()),
         config(addr1.clone(), handshake_entry),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -190,7 +190,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     let started2 = NetworkHandle::<EmptyMsg>::start(
         super::p2p_identity_keys(kp2.clone()),
         config(addr2.clone(), handshake_exit),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),

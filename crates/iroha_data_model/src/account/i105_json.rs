@@ -12,7 +12,7 @@ const I105_BASE: u64 = 105;
 const I105_LIMB_DIGITS: usize = 8;
 const I105_LIMB_BASE: u64 = 14_774_554_437_890_625; // 105^8
 const I105_CHECKSUM_LEN: usize = 6;
-/// Write one canonical AccountId JSON string without constructing an
+/// Write one canonical `AccountId` JSON string without constructing an
 /// `AccountAddress` or staging the rendered string.
 ///
 /// The sole attacker-sized scratch object is an exact-layout boxed slice of base-105^8 limbs. For
@@ -52,8 +52,10 @@ fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, Bo
     // SAFETY: `layout` is non-zero and was constructed for exactly `length`
     // `MaybeUninit<u64>` values. `Box::from_raw` receives that same slice
     // layout and therefore deallocates it with the matching request size.
-    let allocation = NonNull::new(unsafe { std::alloc::alloc(layout) }.cast::<MaybeUninit<u64>>())
+    let allocation = NonNull::new(unsafe { std::alloc::alloc(layout) })
         .ok_or(BoundedJsonError::AllocationFailed)?;
+    // `Layout::array::<MaybeUninit<u64>>` guarantees the alignment required by this typed view.
+    let allocation = allocation.cast::<MaybeUninit<u64>>();
     let slice = core::ptr::slice_from_raw_parts_mut(allocation.as_ptr(), length);
     Ok(unsafe { Box::from_raw(slice) })
 }

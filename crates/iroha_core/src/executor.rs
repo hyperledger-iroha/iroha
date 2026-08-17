@@ -10987,6 +10987,25 @@ mod tests {
             seed,
         )))
     }
+    fn state_for_testing(world: World) -> State {
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        )
+    }
+    fn state_after_genesis(world: World) -> State {
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        state
+    }
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
             .assets
@@ -11647,11 +11666,7 @@ mod tests {
                 Json::from(norito::json!({ "unexpected": true })),
             )]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let proposal_id = [0xA6; 32];
@@ -11722,11 +11737,7 @@ mod tests {
             ],
             [],
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let custom_id: CustomParameterId = "attacker_parameter".parse().expect("parameter id");
@@ -11900,11 +11911,7 @@ mod tests {
                 restitute_permission.clone(),
             ]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         Register::trigger(Trigger::new(
@@ -12445,11 +12452,7 @@ mod tests {
             authority.clone(),
             invalid_permissions.iter().cloned().collect(),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "governance_selector_sink".parse().expect("role id");
@@ -12523,11 +12526,7 @@ mod tests {
         world
             .account_permissions
             .insert(issuer.clone(), BTreeSet::from([issuer_permission.clone()]));
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
@@ -12628,11 +12627,7 @@ mod tests {
             asset_owner.clone(),
             BTreeSet::from([account_alias_permission]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(
             nonzero!(2_u64),
             None,
@@ -12829,11 +12824,7 @@ mod tests {
             administrator.clone(),
             BTreeSet::from([ordinary_permission.clone(), offline_permission.clone()]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
@@ -12936,11 +12927,7 @@ mod tests {
             holder.clone(),
             BTreeSet::from([exact.clone(), can_manage_roles]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
@@ -13149,11 +13136,7 @@ mod tests {
             ],
             [],
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.tx_call_hash = Some(Hash::prehashed([0xD8; Hash::LENGTH]));
@@ -13404,11 +13387,7 @@ mod tests {
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let tx = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -13720,11 +13699,7 @@ mod tests {
             authority.clone(),
             BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         (
             state,
             authority_keypair,
@@ -13879,11 +13854,7 @@ mod tests {
                 ),
             );
         }
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             beneficiary.clone(),
@@ -15128,11 +15099,7 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &fee_asset);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -15209,11 +15176,7 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &fee_asset);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -15674,11 +15637,7 @@ mod tests {
                 lease_id,
             ),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -16559,15 +16518,7 @@ mod tests {
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let registration = Register::asset_definition(AssetDefinition::numeric(
             projected_id,
             "coin".to_owned(),
@@ -16618,15 +16569,7 @@ mod tests {
             )
             .build(&owner)],
         );
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut stx = block.transaction();
         let executor = super::Executor::Initial;
@@ -16793,14 +16736,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -16873,14 +16809,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_quantity(
@@ -16982,11 +16911,7 @@ mod tests {
                 .expect("active alias-domain ownership check"),
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
         let mut transaction = block.transaction();
         let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
@@ -17032,14 +16957,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17136,11 +17054,7 @@ mod tests {
                     .account_permissions
                     .insert(authority.clone(), BTreeSet::from([permission]));
             }
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
+            let state = state_for_testing(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let mut transaction = block.transaction();
             transaction.tx_call_hash = Some(Hash::new(case.as_bytes()));
@@ -17204,11 +17118,7 @@ mod tests {
         world
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"contract-transfer-test"));
@@ -17328,14 +17238,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17413,14 +17316,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17470,14 +17366,7 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let beneficiary_account = Account::new(beneficiary.clone()).build(&beneficiary);
         let world = World::with([domain], [alice_account, beneficiary_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
@@ -17542,15 +17431,7 @@ mod tests {
                 ],
                 [],
             );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
-            state
-                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-                .commit()
-                .expect("commit bootstrap block");
+            let state = state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -17646,15 +17527,7 @@ mod tests {
                 )
                 .build(&owner)],
             );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
-            state
-                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-                .commit()
-                .expect("commit bootstrap block");
+            let state = state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let instruction = match instruction_kind {
                 "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
@@ -17786,14 +17659,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17855,14 +17721,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_definition(
@@ -17913,14 +17772,7 @@ mod tests {
             [],
             [nft],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17969,14 +17821,7 @@ mod tests {
             [],
             [nft],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction =

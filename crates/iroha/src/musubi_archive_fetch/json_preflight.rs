@@ -198,7 +198,7 @@ mod tests {
             atom_bytes: 4,
         };
         assert_eq!(
-            preflight_json_dom(br#"[[[[0]]]]"#, limits),
+            preflight_json_dom(br"[[[[0]]]]", limits),
             Err(JsonDomPreflightErrorV1::TooDeep)
         );
         assert_eq!(
@@ -210,11 +210,11 @@ mod tests {
             Err(JsonDomPreflightErrorV1::StringBytes)
         );
         assert_eq!(
-            preflight_json_dom(br#"[0]]"#, limits),
+            preflight_json_dom(br"[0]]", limits),
             Err(JsonDomPreflightErrorV1::Malformed)
         );
         assert_eq!(
-            preflight_json_dom(br#"[12345]"#, limits),
+            preflight_json_dom(br"[12345]", limits),
             Err(JsonDomPreflightErrorV1::AtomBytes)
         );
     }
