@@ -1266,7 +1266,10 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "38b971d5318ae8e7ee21cf3692f1d40df2c3e7a7099e2acf2071b2dead7c2edf"
+        "ebcf85d154b1f3d02559a29cfd6d354e9ab60207e0a82ec0caebe6de34bfdeb5"
+    ),
+    "SumeragiV2AsyncRankAndInitProofs.tla": (
+        "6b483eb2d39e27aab74fd0ef12054472523d2f868a6252e3b053bb3bb9962d17"
     ),
 }
 PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
@@ -1361,7 +1364,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "38b971d5318ae8e7ee21cf3692f1d40df2c3e7a7099e2acf2071b2dead7c2edf"
+        "ebcf85d154b1f3d02559a29cfd6d354e9ab60207e0a82ec0caebe6de34bfdeb5"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "31fa16d2e9df281f6eab223a84e5ace13e836d9417df00cad379996078c61019"

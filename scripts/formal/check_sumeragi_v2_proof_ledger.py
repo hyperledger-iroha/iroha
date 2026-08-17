@@ -39076,6 +39076,21 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 f"{observed_sha256}"
             )
 
+    for path, symbol, theorem, expected in (
+        (formal_dir / "SumeragiV2AsyncNetwork.tla", "AsyncProductionTimingInstantiation", False, "AsyncMaximumRoundTimeout = 10 * AsyncRoundTimeout"),
+        (formal_dir / "SumeragiV2AsyncRankAndInitProofs.tla", "ProductionAdequateViewTimeoutExists", True, r"/\ ModelConfiguration /\ AsyncConfiguration /\ AsyncProductionTimingInstantiation /\ ViewDomain = Nat => \E roundView \in Views: /\ roundView <= AsyncMaximumView /\ AsyncViewTimeout(roundView) > AsyncWorstCaseServiceBudget"),
+    ):
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: production timing instantiation source must be a regular file")
+            continue
+        extracted = (_top_level_theorem_body if theorem else _top_level_operator_body)(path.read_text(encoding="utf-8"), symbol)
+        body = "" if extracted is None else extracted[0]
+        if theorem:
+            body = re.split(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1)[0]
+        observed = " ".join(body.split())
+        if observed != expected:
+            errors.append(f"{path}: {symbol} must retain the exact reviewed production timing statement {expected!r}; found {observed!r}")
+
     for name, expected_sha256 in (
         SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256.items()
     ):
@@ -58848,7 +58863,7 @@ CertifiedMergeSidecarMessage::CloseAck(_)
     dispatch_effect = _require_rust_item(
         runner_path,
         runner_source,
-        "dispatch_lane_work_effect",
+        "dispatch_lane_work_effect_from_snapshot",
         errors,
     )
     _require_rust_item_context(
@@ -61407,6 +61422,7 @@ if self.pending_server_closures.is_empty() {
                 "park_unwritable_reply_target",
             ),
         ),
+        ("QueuePlanBatchSources", ("resolve", "contains_exact", "validate")),
         (
             "DurableExactOutputServiceOwner",
             ("is_sealed", "seal"),
@@ -61431,7 +61447,8 @@ if self.pending_server_closures.is_empty() {
                 "drain_certified_merge_sidecar_chunk_admissions",
                 "close_certified_merge_sidecar_prefix", "cancel_historical_lane_recovery_requests",
                 "cancel_certified_merge_sidecar_requests", "cancel_acknowledged_certified_merge_sidecar_closes",
-                "can_retain_lane_work_effect",
+                "can_retain_lane_work_effect", "can_retain_lane_work_effect_from_snapshot", "post_queue_plan_admission_certificate",
+                "queue_plan_admission_batch_sources", "queue_plan_effect_parts",
                 "handoff_applied_height_output_to_durable_reconstruction",
                 "seal_applied_height_output_handoff",
                 "validate_applied_height_output_handoff_authority",
@@ -61576,7 +61593,7 @@ if self.pending_server_closures.is_empty() {
         "dispatch_lane_work_effects_with_progress", "drain_finalized_lane_work_output",
         "retain_active_owned_reply_routes",
         "retain_active_owned_reply_routes_with_snapshot_hook",
-        "dispatch_lane_work_effect",
+        "dispatch_lane_work_effect", "dispatch_lane_work_effect_from_snapshot",
     ):
         item = _require_rust_item(runner_path, runner_source, item_name, errors)
         runner_ack_items[item_name] = item
@@ -61629,6 +61646,8 @@ if self.pending_server_closures.is_empty() {
             errors,
             expected_attributes=() if key == "ordinary_finalize" else ("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
         )
+    _require_rust_token_sequence(pending_runner_path, lifecycle_runner_items["pending_loop"], "pending_queue_plan_admission_dirty: Arc<AtomicBool>,", "pending-Kura startup must retain the shared QueuePlan dirty notification owner", errors)
+    _require_rust_token_sequence(pending_runner_path, lifecycle_runner_items["pending_loop"], "lane_relay_rx, pending_queue_plan_admission_dirty, wake_rx,", "pending-Kura finalization must forward the unchanged QueuePlan dirty owner in the ordinary-loop argument position", errors)
     for key, expected_sha256 in _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256.items():
         item = lifecycle_runner_items.get(key)
         path = lifecycle_runner_path if key.startswith("ordinary") else pending_runner_path
@@ -61687,6 +61706,16 @@ if self.pending_server_closures.is_empty() {
                 f"{description} {qualified_name}",
                 errors,
             )
+
+    for seals, required, description in (
+        (_PRODUCTION_EXACT_OUTPUT_ITEM_SHA256, {"applied_height_reconstruction_covers"}, "QueuePlan applied-height owner"),
+        (_PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256, {"ProductionV2Services::can_retain_lane_work_effect_from_snapshot"}, "QueuePlan reservation owner"),
+        (_PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256, {"queue_plan_admission_reconstruction_covers"}, "QueuePlan durable reconstruction owner"),
+        (_PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256, {"scope", "validate_fanout"}, "QueuePlan typed claim owner"),
+        (_PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256, {"lane_work_effect_reply_routes_have_valid_shape", "lane_work_effect_reply_routes_are_valid", "merge_lane_work_effect_reply_routes_after_route_merge", "lane_work_effect_key"}, "QueuePlan lane identity owner"),
+    ):
+        if missing := sorted(required - set(seals)):
+            errors.append(f"{worker_path}: {description} token-seal inventory is missing {missing!r}")
 
     _require_rust_source_token_sequence(
         merge_path,
@@ -65812,7 +65841,7 @@ let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect"),
+        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect_from_snapshot"),
         """
 let Some(fanout) = PendingExactFanout::classified_with_route_history(
     messages,
@@ -65831,9 +65860,19 @@ fanout.rollover_claim = rollover_claim;
         "lane preflight must retain the complete bounded reply and fair-ingress histories through typed fanout validation",
         errors,
     )
+    _require_rust_token_sequence(worker_path, worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect"), """let mut sources = if matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }) { Some(self.queue_plan_admission_batch_sources()?) } else { None }; self.can_retain_lane_work_effect_from_snapshot(effect, sources.as_mut())""", "the public lane preflight must freeze one QueuePlan Kura inventory before delegating to the complete reservation owner", errors)
+    for item, expected, description in (
+        (worker_ack_items.get("QueuePlanBatchSources::resolve"), """if !self.inventory.contains(&hash) { return Ok(None); } if !self.bodies.contains_key(&hash) { let Some(bytes) = kura.pending_queue_plan_admission_certificate(hash).map_err(|error| error.to_string())? else { return Ok(None); }; self.bodies.insert(hash, bytes); } Ok(self.bodies.get(&hash).map(Vec::as_slice))""", "QueuePlan source resolution must reject inventory misses and cache only exact Kura reads"),
+        (worker_ack_items.get("QueuePlanBatchSources::contains_exact"), "self.resolve(kura, Hash::new(bytes)).map(|source| source == Some(bytes))", "QueuePlan source authentication must compare exact bytes returned through the frozen inventory"),
+        (worker_ack_items.get("QueuePlanBatchSources::validate"), """let hash = Hash :: new ( bytes ) ; if ! self . validated . contains ( & hash ) { crate :: torii_proxy :: decode_and_validate_queue_plan_admission_certificate_v2 ( network_id , bytes , ) . map_err ( | error | format ! ( ) ) ? ; # [ cfg ( test ) ] _kura . pending_queue_plan_admission_batch_validations . fetch_add ( 1 , AtomicOrdering :: Relaxed ) ; self . validated . insert ( hash ) ; } Ok ( hash )""", "QueuePlan source validation must decode exact bytes before caching their hash"),
+        (worker_ack_items.get("ProductionV2Services::queue_plan_admission_batch_sources"), """self.kura.pending_queue_plan_admission_hash_inventory().map(|inventory| QueuePlanBatchSources { inventory, bodies: HashMap::new(), validated: HashSet::new(), }).map_err(|error| error.to_string())""", "QueuePlan batching must freeze one exact Kura hash inventory with empty read and validation caches"),
+        (worker_ack_items.get("ProductionV2Services::queue_plan_effect_parts"), """let expected_leader = self . context . roster . get ( usize :: try_from ( self . context . leader ( view ) ) . unwrap_or ( usize :: MAX ) ) . map ( | entry | & entry . validator ) . ok_or_else ( || . to_owned ( ) ) ? ; if peer != expected_leader { return Err ( . to_owned ( ) , ) ; } let certificate_hash = kura_sources . validate ( & self . kura , & self . context . network_id , certificate ) ? ; if ! kura_sources . contains_exact ( & self . kura , certificate ) ? { return Err ( . to_owned ( ) ) ; } Ok ( ( vec ! [ NetworkMessage :: QueuePlanAdmissionCertificate ( Arc :: clone ( certificate , ) ) ] , vec ! [ peer . clone ( ) ] , vec ! [ ExactTargetRoute :: Topology ] , None , None , ExactOutputRolloverClaim :: QueuePlanAdmission { scope : self . exact_output_scope ( ) , target : peer . clone ( ) , view , certificate_hash , } , ) )""", "QueuePlan dispatch must bind the frozen leader, validated exact Kura bytes, topology route, and typed rollover claim"),
+        (worker_ack_items.get("ProductionV2Services::post_queue_plan_admission_certificate"), """let output_guard = Arc :: clone ( & self . output_guard ) ; let Some ( operation ) = output_guard . begin_fail_stop_operation ( ) else { return ; } ; let Ok ( ( messages , peers , _ , _ , _ , rollover_claim ) ) = self . queue_plan_effect_parts ( & peer , view , & certificate , kura_sources ) else { iroha_logger :: error ! ( % peer , view , ) ; return ; } ; match self . enqueue_exact_fanout_while_guarded ( messages , peers , rollover_claim , operation . permit ( ) , ) { Ok ( ExactFanoutOwnership :: Owned ) => operation . complete ( ) , Ok ( ExactFanoutOwnership :: SourceRetained ) => iroha_logger :: error ! ( ) , Err ( error ) => iroha_logger :: error ! ( % error , ) , }""", "QueuePlan publication must complete its fail-stop owner only after exact-fanout ownership transfers"),
+    ):
+        _require_rust_token_sequence(worker_path, item, expected, description, errors)
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect"),
+        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect_from_snapshot"),
         """
 if fanout
     .targets
@@ -66563,7 +66602,7 @@ self.push_merge_sidecar_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect"),
+        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect_from_snapshot"),
         "vec![NetworkMessage::CertifiedMergeSidecar(Arc::clone(message))]",
         "worker preflight must preserve the exact lane-effect payload pointer",
         errors,
@@ -67240,6 +67279,7 @@ if let V2LaneWorkEffect::PostDurableLaneCertificate {
         "runner pruning must update durable lane routes and fair-ingress ownership atomically without losing sibling sources",
         errors,
     )
+    _require_rust_token_sequence(runner_path, runner_ack_items.get("retain_active_owned_reply_routes_with_snapshot_hook"), """V2LaneWorkEffect :: PostLaneBlock { .. } | V2LaneWorkEffect :: PostDurableLaneCertificate { .. } | V2LaneWorkEffect :: PostNativeAmx { .. } | V2LaneWorkEffect :: PostLaneDrainVote { .. } | V2LaneWorkEffect :: BroadcastMerge ( _ ) | V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } | V2LaneWorkEffect :: PostCertifiedMergeSidecar { .. } => return true ,""", "topology-owned QueuePlan handoff must never enter reply-route pruning", errors)
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("retain_active_owned_reply_routes_with_snapshot_hook"),
@@ -67279,16 +67319,7 @@ retained != 0
         "runner pruning must retain every live source attempt and its tombstones",
         errors,
     )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
-        """
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
-let scan_limit = lane_work.effect_count();
-""",
-        "runner lane dispatch must apply writer receipts before selecting owned work",
-        errors,
-    )
+    _require_rust_token_sequence(runner_path, runner_ack_items.get("dispatch_lane_work_effects_with_progress"), """apply_certified_merge_sidecar_chunk_admissions ( lane_work , services , limit ) ? ; let mut queue_plan_sources = None ; let scan_limit = lane_work . effect_count ( ) ; let mut dispatched = 0 usize ; for _ in 0 .. scan_limit { if dispatched >= limit . max ( 1 ) { break ; } let Some ( mut next_effect ) = lane_work . next_effect ( ) else { break ; } ; if ! retain_active_owned_reply_routes ( & mut next_effect ) { let _ = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; continue ; } if queue_plan_sources . is_none ( ) && matches ! ( & next_effect , V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } ) { queue_plan_sources = Some ( services . queue_plan_admission_batch_sources ( ) . map_err ( V2RunnerError :: Service ) ? , ) ; } if ! services . can_retain_lane_work_effect_from_snapshot ( & next_effect , queue_plan_sources . as_mut ( ) ) . map_err ( V2RunnerError :: Service ) ? { let effect = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; drop ( effect ) ; if next_effect . retries_from_native_catalog_after_source_retention ( ) { continue ; } if ! lane_work . requeue_effect ( next_effect ) { return Err ( V2RunnerError :: Service ( . to_owned ( ) , ) ) ; } continue ; } let effect = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; drop ( effect ) ;""", "runner lane dispatch must apply receipts, preserve the bounded scan and fail-stop peek/drain, then reuse one immutable QueuePlan Kura inventory for every preflight", errors)
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
@@ -67298,7 +67329,7 @@ let scan_limit = lane_work.effect_count();
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("dispatch_lane_work_effect"),
+        runner_ack_items.get("dispatch_lane_work_effect_from_snapshot"),
         """
 let route_shape_is_valid = match message.as_ref() {
     CertifiedMergeSidecarMessage::Request(_)
@@ -67312,9 +67343,10 @@ if !route_shape_is_valid {
         "runner sidecar dispatch must reject missing or extraneous route ownership",
         errors,
     )
+    _require_rust_token_sequence(runner_path, runner_ack_items.get("dispatch_lane_work_effect"), """let mut sources = if matches ! ( & effect , V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } ) { Some ( services . queue_plan_admission_batch_sources ( ) . map_err ( V2RunnerError :: Service ) ? , ) } else { None } ; dispatch_lane_work_effect_from_snapshot ( services , effect , sources . as_mut ( ) )""", "standalone lane dispatch must freeze one QueuePlan Kura inventory before delegating to the complete dispatch owner", errors)
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("dispatch_lane_work_effect"),
+        runner_ack_items.get("dispatch_lane_work_effect_from_snapshot"),
         """
 services.post_certified_merge_sidecar_with_reply_routes(
     peer.clone(),
@@ -68726,7 +68758,7 @@ Ok((
     )
     _require_rust_token_sequence(
         worker_path,
-        reservation_items.get("ProductionV2Services::can_retain_lane_work_effect"),
+        reservation_items.get("ProductionV2Services::can_retain_lane_work_effect_from_snapshot"),
         """
 V2LaneWorkEffect::PostDurableLaneCertificate {
     peer,
@@ -68776,6 +68808,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+    _require_rust_token_sequence(worker_path, durable_history_items.get("queue_plan_admission_reconstruction_covers"), """let ExactOutputRolloverClaim :: QueuePlanAdmission { target , view , certificate_hash , .. } = rollover_claim else { return Err ( . to_owned ( ) ) ; } ; let [ NetworkMessage :: QueuePlanAdmissionCertificate ( certificate ) ] = messages else { return Err ( . to_owned ( ) ) ; } ; let expected_leader = artifact . height_context . roster . get ( usize :: try_from ( artifact . height_context . leader ( * view ) ) . unwrap_or ( usize :: MAX ) ) . map ( | entry | & entry . validator ) ; if expected_leader != Some ( target ) { return Err ( . to_owned ( ) ) ; } let durable_history = durable_history . ok_or_else ( || { . to_owned ( ) } ) ? ; let source_is_exact = durable_history . pending_queue_plan_admission_certificate ( * certificate_hash ) . map_err ( | error | error . to_string ( ) ) ? . is_some_and ( | bytes | bytes == certificate . as_slice ( ) ) ; source_is_exact . then_some ( ( ) ) . ok_or_else ( || . to_owned ( ) )""", "QueuePlan rollover reconstruction must bind the frozen leader and reread exact certificate bytes from Kura", errors)
     exact_output_claim_items: dict[str, RustItem | None] = {}
     for item_name, expected_sha256 in _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256.items():
         item = _require_rust_item(worker_path, worker_source, item_name, errors)
@@ -68808,6 +68841,13 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+
+    for item, expected, description in (
+        (exact_output_claim_items.get("scope"), "| Self::QueuePlanAdmission { scope, .. }", "QueuePlan output must carry the exact applied-height creation scope"),
+        (exact_output_claim_items.get("validate_fanout"), """Self :: QueuePlanAdmission { target , certificate_hash , .. } => { let [ NetworkMessage :: QueuePlanAdmissionCertificate ( certificate ) ] = messages else { return Err ( . to_owned ( ) , ) ; } ; if peers != std :: slice :: from_ref ( target ) || certificate . is_empty ( ) || certificate . len ( ) > iroha_data_model :: merge :: MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES || Hash :: new ( certificate . as_slice ( ) ) != * certificate_hash { return Err ( . to_owned ( ) , ) ; } Ok ( ( ) ) }""", "QueuePlan output must bind one bounded certificate to its exact leader target and durable hash"),
+        (exact_output_items.get("applied_height_reconstruction_covers"), """if matches ! ( rollover_claim , ExactOutputRolloverClaim :: QueuePlanAdmission { .. } ) { return queue_plan_admission_reconstruction_covers ( messages , rollover_claim , artifact , durable_history , ) ; }""", "QueuePlan output must revalidate its independent Kura source before generic durable-history dispatch"),
+    ):
+        _require_rust_token_sequence(worker_path, item, expected, description, errors)
 
     lane_items: dict[str, RustItem | None] = {}
     if not lane_path.is_file() or lane_path.is_symlink():
@@ -68848,6 +68888,17 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+    for item, expected, description in (
+        (lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"), "queue_plan_admission_handoff_retry_required: false, queue_plan_admission_handoff_cursor: 0,", "lane construction must initialize QueuePlan handoff retry and fair cursor state exactly once"),
+        (lane_ack_items.get("V2LaneWorkAdapter::accept_relay_message"), """self.decision_pending() && !matches!(&message, LaneRelayMessage::CertifiedMergeSidecar { .. } | LaneRelayMessage::QueuePlanAdmissionCertificate { .. })""", "Decision-pending relay admission must preserve only certified sidecar and QueuePlan durable handoffs"),
+        (lane_ack_items.get("V2LaneWorkAdapter::accept_relay_message"), """LaneRelayMessage :: QueuePlanAdmissionCertificate { sender , certificate , } => self . accept_queue_plan_admission_certificate ( sender , certificate , active_view ) ,""", "QueuePlan relay admission must delegate its exact sender, bytes, and active view"),
+        (lane_ack_items.get("V2LaneWorkAdapter::retire_inactive_merge_sidecar_requests"), "| V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => None,", "sidecar retirement must leave topology-owned QueuePlan handoffs untouched"),
+        (lane_items.get("merge_lane_work_effect_reply_routes_after_route_merge"), """V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } , V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } , ) => true ,""", "duplicate QueuePlan effects must merge without inventing reply-route ownership"),
+        (lane_items.get("lane_work_effect_key"), """V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { peer , view , certificate , } => { encoded . push ( 6 ) ; encoded . extend ( peer . encode ( ) ) ; encoded . extend ( view . encode ( ) ) ; encoded . extend ( certificate . as_ref ( ) . encode ( ) ) ; }""", "QueuePlan effect identity must bind its unique tag, target, view, and exact certificate bytes"),
+    ):
+        _require_rust_token_sequence(lane_path, item, expected, description, errors)
+    for item_name in ("lane_work_effect_reply_routes_have_valid_shape", "lane_work_effect_reply_routes_are_valid"):
+        _require_rust_token_sequence(lane_path, lane_items.get(item_name), "| V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,", f"{item_name} must classify QueuePlan handoff as topology-owned", errors)
     for path, item, expected, description in (
         (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
         (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt"),
@@ -70221,7 +70272,7 @@ assert_eq!(
         "drain_v2_ingress", "authorize_decided_lane_recovery_drain", "rollover_finalized_height_outputs",
         "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
         "drain_finalized_lane_work_output",
-        "dispatch_lane_work_effect",
+        "dispatch_lane_work_effect", "dispatch_lane_work_effect_from_snapshot",
     }
     observed_exact_output_runner_items = set(
         _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256
@@ -70767,67 +70818,9 @@ if reply_routes.semantic_target() != &sender {
         errors,
         count=2,
     )
-    _require_exact_rust_tokens(
-        runner_path,
-        runner_ack_items.get("require_peeked_lane_work_effect"),
-        """
-fn require_peeked_lane_work_effect(
-    drained: Option<V2LaneWorkEffect>,
-) -> Result<V2LaneWorkEffect, V2RunnerError> {
-    drained.ok_or(V2RunnerError::RestartRequired)
-}
-""",
-        "runner lane dispatch must fail stop if its guarded peek loses the exact queued owner before drain",
-        errors,
-    )
     _require_rust_token_sequence(
         runner_path,
-        runner_items.get("dispatch_lane_work_effects_with_progress"),
-        """
-let scan_limit = lane_work.effect_count();
-let mut dispatched = 0usize;
-for _ in 0..scan_limit {
-    if dispatched >= limit.max(1) {
-        break;
-    }
-    let Some(mut next_effect) = lane_work.next_effect() else {
-        break;
-    };
-    if !retain_active_owned_reply_routes(&mut next_effect) {
-        let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-        continue;
-    }
-    if !services
-        .can_retain_lane_work_effect(&next_effect)
-        .map_err(V2RunnerError::Service)?
-    {
-        let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-        drop(effect);
-        if next_effect.retries_from_native_catalog_after_source_retention() {
-            continue;
-        }
-        if !lane_work.requeue_effect(next_effect) {
-            return Err(V2RunnerError::Service(
-                "lane-work scheduler could not restore a reserved effect".to_owned(),
-            ));
-        }
-        continue;
-    }
-""",
-        "lane scheduler must release catalog-retained delivery slots and scan past other unserviceable heads without losing ownership",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("dispatch_lane_work_effects_with_progress"),
-        "let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;\n"
-        "drop(effect);\n" + _PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS,
-        "lane scheduler must dispatch only after exact reservation preflight, release catalog-retained delivery slots, and requeue other source-retained handoffs before applying receipts",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("dispatch_lane_work_effect"),
+        runner_items.get("dispatch_lane_work_effect_from_snapshot"),
         """
 V2LaneWorkEffect::PostDurableLaneCertificate {
     peer,

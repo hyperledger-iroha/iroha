@@ -11765,9 +11765,7 @@ def test_serve_scheduler_ordinal_source_seal_covers_exact_matrix(
     assert sum(name.endswith("_fixed.cfg") for name in artifacts) == 6
     assert sum(name.endswith("_bug.cfg") for name in artifacts) == 6
     assert len(module.SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256) == 14
-    assert set(module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256) == {
-        "SumeragiV2AsyncNetwork.tla"
-    }
+    assert set(module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256) == {"SumeragiV2AsyncNetwork.tla", "SumeragiV2AsyncRankAndInitProofs.tla"}
     assert (
         "_serve_scheduler_ordinal_mutation_source_fidelity_errors"
         in module.validate_ledger.__code__.co_names
@@ -11794,7 +11792,7 @@ def test_serve_scheduler_ordinal_source_seal_covers_exact_matrix(
         "serve_scheduler_claim_ranked_reentry_fixed.cfg",
         "serve_scheduler_claim_raw_descent_bug.cfg",
         "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh",
-        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncNetwork.tla", "SumeragiV2AsyncRankAndInitProofs.tla",
     ),
 )
 def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
@@ -11832,6 +11830,8 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
 @pytest.mark.parametrize(
     ("artifact_name", "old", "new", "expected_error"),
     (
+        ("SumeragiV2AsyncNetwork.tla", "AsyncMaximumRoundTimeout = 10 * AsyncRoundTimeout", "AsyncMaximumRoundTimeout = 9 * AsyncRoundTimeout", "AsyncProductionTimingInstantiation must retain the exact reviewed production timing statement"),
+        ("SumeragiV2AsyncRankAndInitProofs.tla", "/\\ AsyncProductionTimingInstantiation\n  /\\ ViewDomain = Nat", "/\\ TRUE\n  /\\ ViewDomain = Nat", "ProductionAdequateViewTimeoutExists must retain the exact reviewed production timing statement"),
         (
             "SumeragiV2AsyncNetwork.tla",
             "  THEN AsyncNextCandidateLifecycleOrdinal(node)\n"
