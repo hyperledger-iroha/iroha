@@ -1347,9 +1347,9 @@ def _current_async_partition_sources(module) -> dict[str, str]:
 def test_async_partition_exact_body_seal_rejects_one_provider_mutation() -> None:
     module = load_checker()
     sources = _current_async_partition_sources(module)
-    errors, _ = module._async_liveness_shard_contract(sources)
+    errors, providers = module._async_liveness_shard_contract(sources)
     assert errors == []
-    provider = module.ASYNC_LIVENESS_SHARDS[0][0]
+    provider = providers["ModelResponsiveValidators"]
     source = sources[provider]
     assert source.count("ModelResponsiveValidators") >= 1
     sources[provider] = source.replace(

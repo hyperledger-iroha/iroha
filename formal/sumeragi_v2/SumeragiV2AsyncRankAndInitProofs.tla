@@ -3286,8 +3286,4 @@ BY AsyncInitEstablishesIngressTopologyType,
    AsyncInitEstablishesIngressContentType
    DEF AsyncIngressTypeInvariant
 
-THEOREM ModelResponsiveValidators ==
-  ModelConfiguration => Responsive \subseteq ValidatorIds
-BY SMT DEF ModelConfiguration, QuorumConfiguration
-
 =============================================================================

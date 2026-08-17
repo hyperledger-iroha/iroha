@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "74f8d96e38783361fc458df379be0a7e740fbadeee8404eb55859acbafd88754"
+    "51b47a637adee8933d5980cd9c2335d4dbe56e5c7ff6753d7f6b7b77d47fbb54"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -632,7 +632,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     'CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling',
 )
 ASYNC_LIVENESS_SHARDS = (
-    ("SumeragiV2AsyncRankAndInitProofs", "ModelResponsiveValidators"),
+    ("SumeragiV2AsyncRankAndInitProofs", "AsyncInitEstablishesIngressType"),
     (
         "SumeragiV2AsyncRankAndInitContinuationProofs",
         "AsyncInitEstablishesSchedulerType",
@@ -1269,7 +1269,7 @@ SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
         "ebcf85d154b1f3d02559a29cfd6d354e9ab60207e0a82ec0caebe6de34bfdeb5"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
-        "6b483eb2d39e27aab74fd0ef12054472523d2f868a6252e3b053bb3bb9962d17"
+        "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
     ),
 }
 PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (

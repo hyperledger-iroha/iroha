@@ -187,7 +187,7 @@
     "scripts/check_sorafs_production_readiness.py": 7031,
     "scripts/deploy_taira_v21_reset.py": 5330,
     "scripts/formal/check_sumeragi_v2_multilane_models.py": 5291,
-    "scripts/formal/check_sumeragi_v2_proof_ledger.py": 75226,
+    "scripts/formal/check_sumeragi_v2_proof_ledger.py": 75219,
     "scripts/formal/sumeragi_v2_proof_ledger_production_trace_contracts.py": 5079,
     "scripts/iso_operator_evidence_verify.py": 6426,
     "scripts/iso_production_readiness.py": 10725,
