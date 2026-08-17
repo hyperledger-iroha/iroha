@@ -37,7 +37,14 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         .expect("lane application receipt");
     assert_eq!(receipt.format_label(), "lane.application_receipt");
     assert_eq!(receipt.proposal, proposal);
-    assert_eq!(receipt.artifact.ownership, ownership);
+    assert_eq!(
+        receipt
+            .source
+            .global_artifact()
+            .expect("canonical receipt source")
+            .ownership,
+        ownership
+    );
     assert_eq!(receipt.application_block_height, block_height);
     assert_eq!(receipt.application_block_hash, block_hash);
     assert_eq!(
@@ -840,7 +847,6 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
             "lane block application receipt",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed application receipt entry"
     );
@@ -852,9 +858,9 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
 #[test]
-fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence() {
+fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evidence() {
     #[derive(Encode)]
-    struct LegacyLaneBlockApplicationReceiptArtifact {
+    struct PreReleaseLaneBlockApplicationReceiptArtifact {
         format: LaneBlockApplicationReceiptArtifactFormat,
         proposal: LaneBlockProposalV1,
         artifact: LaneBlockArtifact,
@@ -895,10 +901,14 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
     let current = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("current lane application receipt");
-    let legacy = LegacyLaneBlockApplicationReceiptArtifact {
+    let pre_release = PreReleaseLaneBlockApplicationReceiptArtifact {
         format: current.format,
         proposal: current.proposal,
-        artifact: current.artifact,
+        artifact: current
+            .source
+            .global_artifact()
+            .expect("canonical receipt source")
+            .clone(),
         application_block_height: current.application_block_height,
         application_block_hash: current.application_block_hash,
         entrypoint_indices: current.entrypoint_indices,
@@ -906,7 +916,7 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         result_hashes: current.result_hashes,
         results: current.results,
     };
-    let payload = norito::to_bytes(&legacy).expect("encode legacy application receipt");
+    let payload = norito::to_bytes(&pre_release).expect("encode pre-release application receipt");
     let (data_path, index_path) =
         Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -918,9 +928,8 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
             "lane block application receipt",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
-        "legacy application receipt should replace the indexed test entry"
+        "pre-release application receipt should replace the indexed test entry"
     );
     assert_eq!(
         kura.read_lane_block_application_receipt_from_paths_locked(
@@ -935,10 +944,14 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
     );
 }
 #[test]
-fn autonomous_execution_input_requires_complete_exact_source_binding() {
+fn autonomous_execution_input_uses_one_exact_typed_source_binding() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+    assert!(
+        payload.origin_proposal.payload_block_hint.is_none(),
+        "fixture must exercise hint-free autonomous execution"
+    );
     let input = Kura::autonomous_lane_block_execution_input_candidate(&payload, network_id, epoch)
         .expect("autonomous input fixture");
     assert_eq!(
@@ -946,29 +959,20 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
         Ok(()),
         "a complete reservation-bound autonomous input must be accepted"
     );
-    for (label, candidate) in [
-        ("chain", {
-            let mut candidate = input.clone();
-            candidate.autonomous_network_id = None;
-            candidate
-        }),
-        ("epoch", {
-            let mut candidate = input.clone();
-            candidate.autonomous_epoch = None;
-            candidate
-        }),
-        ("payload", {
-            let mut candidate = input.clone();
-            candidate.autonomous_payload_hash = None;
-            candidate
-        }),
-    ] {
-        assert_eq!(
-            Kura::validate_lane_block_execution_input_artifact(&candidate),
-            Err("execution input autonomous source binding is incomplete"),
-            "missing {label} binding must fail closed"
-        );
-    }
+    assert_eq!(
+        input.source.autonomous_binding(),
+        Some((network_id, epoch, payload.payload_hash))
+    );
+    assert!(input.source.global_artifact().is_none());
+    let encoded = input
+        .encode_framed()
+        .expect("encode autonomous execution input");
+    assert_eq!(
+        norito::decode_canonical::<LaneBlockExecutionInputArtifact>(&encoded)
+            .expect("decode autonomous execution input"),
+        input,
+        "the typed autonomous source must roundtrip canonically"
+    );
     let mut unbound = input.clone();
     unbound.reservation_keys.clear();
     unbound.routing_plans.clear();
@@ -994,9 +998,16 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
     let mut input =
         Kura::autonomous_lane_block_execution_input_candidate(&payload, network_id, epoch)
             .expect("autonomous input fixture");
-    input.autonomous_network_id = None;
-    input.autonomous_epoch = None;
-    input.autonomous_payload_hash = None;
+    let unrelated = dummy_block_with_lane_payload_ownership(LaneId::new(1), DataSpaceId::new(2), 1);
+    let unrelated_ownership = unrelated
+        .execution_context()
+        .expect("unrelated execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    input.source = LaneBlockExecutionSourceV1::global_block(LaneBlockArtifact::new(
+        unrelated.hash(),
+        unrelated_ownership,
+    ));
     for (label, candidate) in [
         ("reservation", {
             let mut candidate = input.clone();
@@ -1023,13 +1034,6 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
             "{label} metadata must fail closed without an autonomous source binding"
         );
     }
-    input.reservation_keys.clear();
-    input.routing_plans.clear();
-    input.native_amx_receipts.clear();
-    assert_eq!(
-        Kura::validate_lane_block_execution_input_artifact(&input),
-        Ok(())
-    );
 }
 #[test]
 fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
@@ -1184,7 +1188,6 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
             "lane block execution input",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed execution input entry"
     );
@@ -1206,14 +1209,20 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
     );
 }
 #[test]
-fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding() {
+fn lane_block_execution_input_reader_rejects_pre_release_correlated_source_layout() {
     #[derive(Encode)]
-    struct LegacyLaneBlockExecutionInputArtifact {
+    struct PreReleaseLaneBlockExecutionInputArtifact {
         format: LaneBlockExecutionInputArtifactFormat,
         proposal: LaneBlockProposalV1,
         artifact: LaneBlockArtifact,
+        autonomous_network_id: Option<iroha_data_model::NetworkId>,
+        autonomous_epoch: Option<u64>,
+        autonomous_payload_hash: Option<Hash>,
         entrypoint_hashes: Vec<Hash>,
         entrypoints: Vec<TransactionEntrypoint>,
+        reservation_keys: Vec<LaneQueueReservationKeyV2>,
+        routing_plans: Vec<RoutingPlan>,
+        native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     }
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1241,14 +1250,24 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
     let current = LaneBlockExecutionInputArtifact::new(recovered);
-    let legacy = LegacyLaneBlockExecutionInputArtifact {
+    let pre_release = PreReleaseLaneBlockExecutionInputArtifact {
         format: current.format,
-        proposal: current.proposal,
-        artifact: current.artifact,
-        entrypoint_hashes: current.entrypoint_hashes,
-        entrypoints: current.entrypoints,
+        proposal: current.proposal.clone(),
+        artifact: current
+            .source
+            .global_artifact()
+            .expect("canonical input source")
+            .clone(),
+        autonomous_network_id: None,
+        autonomous_epoch: None,
+        autonomous_payload_hash: None,
+        entrypoint_hashes: current.entrypoint_hashes.clone(),
+        entrypoints: current.entrypoints.clone(),
+        reservation_keys: current.reservation_keys.clone(),
+        routing_plans: current.routing_plans.clone(),
+        native_amx_receipts: current.native_amx_receipts.clone(),
     };
-    let payload = norito::to_bytes(&legacy).expect("encode legacy lane execution input");
+    let payload = norito::to_bytes(&pre_release).expect("encode pre-release lane execution input");
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -1260,9 +1279,8 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
             "lane block execution input",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
-        "legacy execution input should populate the indexed test entry"
+        "pre-release execution input should populate the indexed test entry"
     );
     assert_eq!(
         kura.read_lane_block_execution_input_from_paths_locked(
@@ -1273,7 +1291,7 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
             false,
         ),
         None,
-        "a pre-autonomous input omitting bindings, reservations, routing, and receipts must fail closed"
+        "the pre-release artifact plus correlated optional bindings layout must fail closed"
     );
 }
 #[test]
@@ -1328,7 +1346,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "stale lane artifact should overwrite the indexed artifact entry"
     );
@@ -1343,7 +1360,7 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
     );
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height),
-        Some(recovered.artifact),
+        recovered.source.global_artifact().cloned(),
         "healing must restore the canonical lane artifact"
     );
 }
@@ -1846,7 +1863,6 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
             "lane block execution preflight",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed preflight entry"
     );

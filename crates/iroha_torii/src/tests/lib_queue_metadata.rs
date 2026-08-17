@@ -46,23 +46,25 @@ mod tests_queue_metadata {
     }
     #[test]
     fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {
-        let transaction_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"outcome-unknown"));
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"outcome-unknown",
+        ));
         let error = queue::Error::PlanJournalDurabilityIndeterminate {
-            transaction_hash,
+            entrypoint_hash,
+            signed_transaction_hash: None,
             reason: "cleanup sync failed".to_owned(),
         };
         assert_eq!(
             super::Error::queue_error_summary(&error),
             (
                 "queue_plan_journal_outcome_unknown",
-                "transaction admission outcome is unknown; reconcile by exact transaction hash before retrying",
+                "transaction admission outcome is unknown; reconcile by exact entrypoint hash before retrying",
             )
         );
         let (code, detail) = queue_rejection_metadata(&error);
         assert_eq!(code, "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN");
-        assert!(detail.contains(&transaction_hash.to_string()));
-        assert!(detail.contains("reconcile that exact signed hash before retrying"));
+        assert!(detail.contains(&entrypoint_hash.to_string()));
+        assert!(detail.contains("reconcile that exact entrypoint before retrying"));
         assert_eq!(
             super::Error::status_code_for_queue_error(&error),
             StatusCode::SERVICE_UNAVAILABLE

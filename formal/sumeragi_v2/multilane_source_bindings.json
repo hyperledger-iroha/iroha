@@ -2466,14 +2466,25 @@
       },
       {
         "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "kind": "enum",
+        "symbol": "LaneBlockExecutionSourceV1",
+        "required_tokens": [
+          "GlobalBlock {",
+          "artifact: LaneBlockArtifact",
+          "AutonomousLane {",
+          "network_id: iroha_data_model::NetworkId",
+          "epoch: u64",
+          "payload_hash: Hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
         "kind": "struct",
         "symbol": "LaneBlockExecutionInputArtifact",
         "required_tokens": [
           "pub format: LaneBlockExecutionInputArtifactFormat",
           "pub proposal: LaneBlockProposalV1",
-          "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
-          "pub autonomous_epoch: Option<u64>",
-          "pub autonomous_payload_hash: Option<Hash>",
+          "pub source: LaneBlockExecutionSourceV1",
           "pub entrypoint_hashes: Vec<Hash>",
           "pub entrypoints: Vec<TransactionEntrypoint>",
           "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
@@ -2499,9 +2510,10 @@
         "kind": "method",
         "symbol": "Kura::recover_lane_block_execution_input_source",
         "required_tokens": [
+          "LaneBlockExecutionSourceV1::AutonomousLane",
+          "LaneBlockExecutionSourceV1::GlobalBlock",
           "recover_autonomous_lane_block_payload_with_sidecar_repair",
-          "recover_lane_block_payload_with_sidecar_repair",
-          "LaneBlockPayloadAvailability::DescriptorMismatch"
+          "recover_lane_block_payload_with_sidecar_repair"
         ]
       },
       {
@@ -2589,7 +2601,8 @@
           "regular_sidecar_metadata(index_path, parent)",
           "SidecarIndexLayout::read_from(",
           "layout.aligned_len != index_metadata.file.len()",
-          "layout.is_based() && lane_block_height < layout.base_height",
+          "if let Some(layout) = layout",
+          "lane_block_height < layout.base_height",
           "MAX_INDEXED_SIDECAR_GAP_ENTRIES",
           "BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES",
           "maximum_index_growth_for_unresolved_sidecar_write(",
@@ -2598,10 +2611,49 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "kind": "method",
+        "symbol": "SidecarIndexLayout::based",
+        "required_tokens": [
+          "if base_height == 0 || base_height == u64::MAX",
+          ".checked_sub(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)",
+          "entries_offset: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64",
+          "aligned_len: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + aligned_entries_len"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "kind": "method",
+        "symbol": "SidecarIndexLayout::read_from",
+        "required_tokens": [
+          "if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64",
+          "sidecar V1 base-height header is truncated",
+          "if first.offset != u64::MAX || first.len != u64::MAX",
+          "sidecar V1 base-height marker is missing",
+          "metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK",
+          "Self::based(metadata.offset, index_len)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+        "kind": "method",
+        "symbol": "BoundProgressAppendIntentV1::validate_against_old_layout",
+        "required_tokens": [
+          "None if self.old_index_len == 0 && !self.pair_was_present",
+          "INDEXED_SIDECAR_BASE_HEADER_SIZE + PIPELINE_INDEX_ENTRY_SIZE",
+          "let expected_header = SidecarIndexLayout::base_header(self.height);",
+          "prefix != expected_header.as_slice()"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/kura/indexed_sidecar_io.rs",
         "kind": "fn",
         "symbol": "append_indexed_sidecar_with_pinned_height",
         "required_tokens": [
+          "if height == 0 || height == u64::MAX",
+          "let pair_was_absent = data_was_absent;",
+          "let header = SidecarIndexLayout::base_header(height);",
+          "SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)",
           "data.write_all(payload)",
           "sync_indexed_sidecar_initial_data(",
           "index.write_all(",
@@ -3989,7 +4041,7 @@
           "let index_metadata = self.regular_sidecar_metadata(index_path, parent)?;",
           "let layout = match (data_metadata, index_metadata)",
           "let append_intent_max = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?;",
-          "let transient_bytes = if layout.is_based()",
+          "let transient_bytes = if let Some(layout) = layout",
           "Self::maximum_index_growth_for_unresolved_sidecar_write(",
           "self.validate_configured_autonomous_mutation_disk_peak_locked(",
           "Ok(LaneBlockExecutionInputPublicationPlan {"
@@ -4444,6 +4496,27 @@
       }
     ],
     "forbidden_source_checks": [
+      {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "kind": "method",
+        "symbol": "SidecarIndexLayout::read_from",
+        "forbidden_tokens": [
+          "index_len < PIPELINE_INDEX_ENTRY_SIZE_U64",
+          "marker_field_present",
+          "malformed sidecar base-height marker"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "kind": "struct",
+        "symbol": "LaneBlockExecutionInputArtifact",
+        "forbidden_tokens": [
+          "pub artifact: LaneBlockArtifact",
+          "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
+          "pub autonomous_epoch: Option<u64>",
+          "pub autonomous_payload_hash: Option<Hash>"
+        ]
+      },
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "kind": "struct",
@@ -6043,7 +6116,7 @@
             "source_id: body.source_id",
             "tx_entrypoint_hash: body.tx_entrypoint_hash",
             "plan_digest: body.plan_digest",
-            "round: body.round",
+            "round_height: body.round.height",
             "epoch: body.epoch",
             "network_id: body.network_id",
             "authority_context_height: body.authority_context_height",
@@ -11142,11 +11215,20 @@
           "required_tokens": [
             "limit == 0",
             "ensure_prune_recovery_not_required",
+            "pending_queue_plan_admission_inventory_paths_unlocked",
+            "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
+            "read_pending_queue_plan_admission_path"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/queue_plan_admission_batch.rs",
+          "kind": "fn",
+          "symbol": "pending_queue_plan_admission_inventory_paths_unlocked",
+          "required_tokens": [
             "pending_merge_entry_paths_unlocked",
             "pending_queue_plan_admission_paths_unlocked",
             "combined_bytes_within_limit(merge_bytes, admission_bytes)",
-            "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
-            "read_pending_queue_plan_admission_path"
+            "invalid_pending_queue_plan_admission_error"
           ]
         },
         {
@@ -12019,6 +12101,15 @@
           "kind": "fn",
           "symbol": "refresh_merge_candidates",
           "required_tokens": [
+            "reconcile_pending_queue_plan_admissions(active_view)",
+            "drive_lane_drain(active_view)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/queue_plan_admission_handoff.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_queue_plan_admissions",
+          "required_tokens": [
             "pending_queue_plan_admission_certificates_bounded",
             "classify_pending_queue_plan_admission",
             "PendingQueuePlanAdmissionDisposition::Exact",
@@ -12026,7 +12117,8 @@
             "PendingQueuePlanAdmissionDisposition::Stale",
             "reject_exact_queue_plan_admission_claim",
             "remove_pending_queue_plan_admission_certificate",
-            "PendingQueuePlanAdmissionDisposition::EligibleAbsent"
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+            "PendingQueuePlanAdmissionDisposition::Future"
           ]
         }
       ]

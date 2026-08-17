@@ -76,6 +76,27 @@ pub(crate) fn entrypoint_hash_from_framed_bytes(
     let entrypoint: TransactionEntrypoint = norito::decode_canonical(framed)?;
     Ok(entrypoint.hash())
 }
+/// Return the exact signed-transaction identity carried by an entrypoint, when one exists.
+#[must_use]
+pub(crate) fn exact_signed_transaction_hash(
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<SignedTransaction>> {
+    match entrypoint {
+        TransactionEntrypoint::External(signed) => Some(signed.hash()),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+    }
+}
+/// Project a hash known to identify an external signed transaction into its entrypoint identity.
+///
+/// `TransactionEntrypoint::External` deliberately preserves the signed transaction's digest.
+/// Use only after proving an external signed identity; internal APIs use the entrypoint type.
+#[must_use]
+pub fn external_entrypoint_hash_from_signed_hash(
+    hash: HashOf<SignedTransaction>,
+) -> HashOf<TransactionEntrypoint> {
+    HashOf::from_untyped_unchecked(Hash::from(hash))
+}
 /// Stateful admission facts that must be committed only if transaction execution succeeds.
 #[derive(Debug, Clone)]
 pub(crate) struct StatefulAdmission {
@@ -180,55 +201,29 @@ pub(crate) fn prune_expired_sealed_commitments(state_block: &mut StateBlock<'_>)
     }
     expired_keys.len()
 }
-static FRAUD_ASSESSMENT_BAND_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("fraud_assessment_band")
-        .expect("static band metadata name")
-});
-static FRAUD_ASSESSMENT_SCORE_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("fraud_assessment_score_bps")
-        .expect("static score metadata name")
-});
-static FRAUD_ASSESSMENT_TENANT_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("fraud_assessment_tenant")
-        .expect("static tenant metadata name")
-});
-static FRAUD_ASSESSMENT_LATENCY_NAME: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("fraud_assessment_latency_ms")
-            .expect("static latency metadata name")
-    });
-static FRAUD_ASSESSMENT_ENVELOPE_NAME: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("fraud_assessment_envelope")
-            .expect("static attestation envelope metadata name")
-    });
-static FRAUD_ASSESSMENT_DIGEST_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("fraud_assessment_digest")
-        .expect("static attestation digest metadata name")
-});
-static CONTRACT_MANIFEST_METADATA_NAME: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY)
-            .expect("static contract manifest metadata key")
-    });
-static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("gov_contract_address")
-            .expect("static governance metadata key")
-    });
-static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_manifest_approvers")
-        .expect("static governance metadata key")
-});
-static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("contract_address")
-            .expect("static contract address metadata key")
-    });
-static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
-        .expect("static heartbeat metadata key")
-});
+macro_rules! metadata_names {
+    ($($name:ident => $value:expr),+ $(,)?) => {
+        $(
+            static $name: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
+                iroha_data_model::name::Name::from_str($value)
+                    .expect("valid static metadata name")
+            });
+        )+
+    };
+}
+metadata_names! {
+    FRAUD_ASSESSMENT_BAND_NAME => "fraud_assessment_band",
+    FRAUD_ASSESSMENT_SCORE_NAME => "fraud_assessment_score_bps",
+    FRAUD_ASSESSMENT_TENANT_NAME => "fraud_assessment_tenant",
+    FRAUD_ASSESSMENT_LATENCY_NAME => "fraud_assessment_latency_ms",
+    FRAUD_ASSESSMENT_ENVELOPE_NAME => "fraud_assessment_envelope",
+    FRAUD_ASSESSMENT_DIGEST_NAME => "fraud_assessment_digest",
+    CONTRACT_MANIFEST_METADATA_NAME => MANIFEST_METADATA_KEY,
+    GOV_CONTRACT_ADDRESS_METADATA_KEY => "gov_contract_address",
+    GOV_APPROVERS_METADATA_KEY => "gov_manifest_approvers",
+    CONTRACT_ADDRESS_METADATA_KEY => "contract_address",
+    HEARTBEAT_METADATA_NAME => "sumeragi_heartbeat",
+}
 pub(crate) const ED25519_SIGNATURE_LENGTH: usize = 64;
 const MULTISIG_DIRECT_SIGN_REJECTION: &str =
     "multisig accounts must use the multisig propose/approve flow; direct signatures are rejected";
@@ -342,7 +337,7 @@ impl<'tx> CheckedTransaction<'tx> {
         tx: AcceptedTransaction<'tx>,
         state: &impl StateReadOnlyWithTransactions,
     ) -> Result<Self, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)> {
-        if state.has_transaction(tx.hash()) {
+        if state.has_entrypoint(tx.hash_as_entrypoint()) {
             return Err((tx, TransactionAlreadyCommitted));
         }
         Ok(Self(tx))
@@ -368,7 +363,7 @@ impl<'tx> CheckedTransaction<'tx> {
     /// Check whether the transaction is now recorded in the blockchain.
     #[must_use]
     pub fn is_in_blockchain(&self, state: &impl StateReadOnlyWithTransactions) -> bool {
-        state.has_transaction(self.hash())
+        state.has_entrypoint(self.hash_as_entrypoint())
     }
 }
 impl<'tx> core::ops::Deref for CheckedTransaction<'tx> {
@@ -2946,7 +2941,12 @@ impl StateBlock<'_> {
             return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
         }
         if let TransactionEntrypoint::SealedReveal(reveal) = tx.entrypoint() {
-            return Self::validate_sealed_transaction_reveal(reveal, state_transaction, ivm_cache);
+            return Self::validate_sealed_transaction_reveal(
+                reveal,
+                state_transaction,
+                ivm_cache,
+                routing_decision,
+            );
         }
         if matches!(tx.entrypoint(), TransactionEntrypoint::Time(_)) {
             return Err(TransactionRejectionReason::Validation(
@@ -3095,6 +3095,7 @@ impl StateBlock<'_> {
         reveal: &SealedTransactionReveal,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
+        routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
@@ -3154,7 +3155,14 @@ impl StateBlock<'_> {
         }
         state_transaction.world.smart_contract_state.remove(key);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
-        Self::validate_transaction_internal(accepted, state_transaction, ivm_cache, None)
+        // The outer entrypoint's route was authenticated before the reveal was opened. Preserve it
+        // for the inner signed transaction so policy drift cannot replace the committed lane.
+        Self::validate_transaction_internal(
+            accepted,
+            state_transaction,
+            ivm_cache,
+            routing_decision,
+        )
     }
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     fn validate_ivm(
@@ -6938,7 +6946,7 @@ pub mod tests {
         let mut state_block = state.block(header);
         state_block
             .transactions
-            .insert_block_with_single_tx(accepted.as_ref().hash(), nonzero!(1_usize));
+            .insert_block_with_single_tx(accepted.as_ref().hash_as_entrypoint(), nonzero!(1_usize));
         state_block.commit().expect("block commit");
         let view = state.view();
         let result = accepted.into_checked(&view);
@@ -6961,6 +6969,11 @@ pub mod tests {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(
+            external_entrypoint_hash_from_signed_hash(signed.hash()),
+            signed.hash_as_entrypoint(),
+            "an explicitly external signed identity must project to its canonical entrypoint identity"
+        );
         assert_eq!(accepted.encoded_len(), expected_len);
         let signed_bytes = accepted
             .signed_bytes()
@@ -11844,15 +11857,14 @@ pub mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         crate::kura::LaneBlockExecutionInputArtifact::new(crate::kura::RecoveredLaneBlockPayload {
             proposal,
-            artifact: crate::kura::LaneBlockArtifact::new(
-                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"lane execution proposal block",
-                )),
-                ownership,
+            source: crate::kura::LaneBlockExecutionSourceV1::global_block(
+                crate::kura::LaneBlockArtifact::new(
+                    iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"lane execution proposal block",
+                    )),
+                    ownership,
+                ),
             ),
-            autonomous_network_id: None,
-            autonomous_epoch: None,
-            autonomous_payload_hash: None,
             entrypoints,
             reservation_keys: Vec::new(),
             routing_plans: Vec::new(),
@@ -12004,6 +12016,119 @@ pub mod tests {
         for (_, _, result) in results {
             result.expect("descriptor-routed lane transaction should pass");
         }
+    }
+    #[test]
+    fn sealed_reveal_preserves_authenticated_routing_context() {
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
+        let chain: ChainId = "sealed-reveal-authenticated-route".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let signed = (0_u64..256)
+            .find_map(|attempt| {
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    Name::from_str("sealed_route_attempt").expect("static metadata key"),
+                    Json::new(attempt),
+                );
+                let signed = TransactionBuilder::new(
+                    *state.network_id_ref(),
+                    authority.clone(),
+                    fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+                )
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(&signed));
+                let plan = {
+                    let view = state.view();
+                    evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        0,
+                        1,
+                    )
+                    .expect("fresh sealed-reveal route resolves")
+                };
+                (plan.coordinator_route().lane_id == TestLaneId::new(1)).then_some(signed)
+            })
+            .expect("fixture finds a transaction freshly routed to the open elastic lane");
+        let salt = [0xA5; 32];
+        let reveal_deadline_height = 2;
+        let commitment = compute_sealed_transaction_commitment(
+            state.network_id_ref(),
+            &signed,
+            salt,
+            reveal_deadline_height,
+        );
+        let record = PendingSealedTransactionCommitment {
+            payload: SealedTransactionCommitmentPayload {
+                network_id: *state.network_id_ref(),
+                authority: authority.clone(),
+                commitment,
+                reveal_after_height: 1,
+                reveal_deadline_height,
+                nonce: None,
+            },
+            commit_height: 0,
+            commit_index: 0,
+        };
+        {
+            let mut world = state.world.block();
+            world.smart_contract_state.insert(
+                sealed_commitment_state_key(&commitment),
+                norito::to_bytes(&record).expect("encode pending sealed commitment"),
+            );
+            world.commit();
+        }
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            salt,
+        ));
+        let explicit_route =
+            crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let external_result = block
+            .validate_transaction_with_entrypoint_index_and_routing_context(
+                AcceptedTransaction::new_unchecked(Cow::Owned(signed)),
+                &mut ivm_cache,
+                0,
+                explicit_route,
+            )
+            .1;
+        let reveal_result = block
+            .validate_transaction_with_entrypoint_index_and_routing_context(
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal)),
+                &mut ivm_cache,
+                1,
+                explicit_route,
+            )
+            .1;
+        assert!(matches!(
+            &external_result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(_)
+            ))
+        ));
+        assert_eq!(
+            reveal_result, external_result,
+            "sealed reveal must preserve the authenticated route instead of re-deriving the open elastic route"
+        );
+        assert!(
+            block
+                .world
+                .smart_contract_state
+                .get(&sealed_commitment_state_key(&commitment))
+                .is_some(),
+            "a rejected reveal must roll back pending-commitment removal"
+        );
     }
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {

@@ -1528,8 +1528,7 @@ fn committed_transaction_by_hash(
         .trim()
         .parse()
         .map_err(|_| conversion_error("payment_tx_hash must be a transaction hash"))?;
-    let target_as_signed = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(target));
-    let Some(height) = app.state.committed_transaction_height(&target_as_signed) else {
+    let Some(height) = app.state.committed_entrypoint_height(&target) else {
         #[cfg(test)]
         if app.state.committed_height() == 0 {
             return Err(not_permitted_error(

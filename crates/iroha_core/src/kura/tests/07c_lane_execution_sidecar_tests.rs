@@ -104,7 +104,7 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         .expect("lane execution input");
     assert_eq!(input.format_label(), "lane.execution_input");
     assert_eq!(input.proposal, proposal);
-    assert_eq!(input.artifact, recovered.artifact);
+    assert_eq!(input.source, recovered.source);
     assert_eq!(
         input.entrypoint_hashes,
         proposal.descriptor.accepted_transaction_hashes

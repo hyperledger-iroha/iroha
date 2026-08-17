@@ -34,7 +34,7 @@ present	iroha.sumeragi.commit_certificates
 present	iroha.sumeragi.validator_sets.list
 present	iroha.sumeragi.validator_sets.get
 present	iroha.sumeragi.pacemaker
-present	iroha.sumeragi.phases
+absent	iroha.sumeragi.phases
 present	iroha.sumeragi.params
 present	iroha.sumeragi.status
 present	iroha.sumeragi.leader
@@ -43,7 +43,7 @@ present	iroha.sumeragi.checkpoints
 present	iroha.sumeragi.consensus_keys
 present	iroha.sumeragi.bls_keys
 present	iroha.sumeragi.key_lifecycle
-present	iroha.sumeragi.telemetry
+absent	iroha.sumeragi.telemetry
 present	iroha.sumeragi.commit_qc.get
 present	iroha.sumeragi.evidence.count
 present	iroha.sumeragi.evidence.list

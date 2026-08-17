@@ -973,33 +973,6 @@ fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     assert!(receiver.try_recv().is_some());
 }
 #[test]
-fn retired_global_v1_messages_never_enter_live_queues() {
-    let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
-    handle.ingress_ready.store(true, Ordering::Release);
-    assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
-    assert!(receiver.try_recv().is_none());
-}
-#[test]
-fn first_release_vrf_frames_are_decode_only_and_never_enter_live_queues() {
-    let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
-    handle.ingress_ready.store(true, Ordering::Release);
-    let commit = BlockMessage::VrfCommit(super::consensus::VrfCommit {
-        epoch: 4,
-        commitment: [0xA5; 32],
-        signer: 0,
-        bls_sig: vec![0x5A],
-    });
-    let reveal = BlockMessage::VrfReveal(super::consensus::VrfReveal {
-        epoch: 4,
-        reveal: [0xA6; 32],
-        signer: 0,
-        bls_sig: vec![0x5B],
-    });
-    assert!(!handle.incoming_block_message(commit));
-    assert!(!handle.incoming_block_message(reveal));
-    assert!(receiver.try_recv().is_none());
-}
-#[test]
 fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(true, Ordering::Release);
@@ -1193,13 +1166,13 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
 }
 #[test]
 fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
-    use std::num::NonZeroU64;
     use crate::merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseV1,
         CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
         CertifiedMergeSidecarStreamEpochV1,
     };
+    use std::num::NonZeroU64;
     let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
         .expect("one-validator ingress geometry is representable");
     assert_eq!(ingress_capacity, 7);

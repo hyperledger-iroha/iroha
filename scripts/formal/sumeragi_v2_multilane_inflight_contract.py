@@ -242,6 +242,27 @@ INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
 )
 INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
     (
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "method",
+        "SidecarIndexLayout::read_from",
+        (
+            "index_len < PIPELINE_INDEX_ENTRY_SIZE_U64",
+            "marker_field_present",
+            "malformed sidecar base-height marker",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "struct",
+        "LaneBlockExecutionInputArtifact",
+        (
+            "pub artifact: LaneBlockArtifact",
+            "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
+            "pub autonomous_epoch: Option<u64>",
+            "pub autonomous_payload_hash: Option<Hash>",
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "struct",
         "LaneReservationSnapshotReplaySeal",
@@ -2119,14 +2140,25 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     ),
     (
         "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "enum",
+        "LaneBlockExecutionSourceV1",
+        (
+            "GlobalBlock {",
+            "artifact: LaneBlockArtifact",
+            "AutonomousLane {",
+            "network_id: iroha_data_model::NetworkId",
+            "epoch: u64",
+            "payload_hash: Hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
         "struct",
         "LaneBlockExecutionInputArtifact",
         (
             "pub format: LaneBlockExecutionInputArtifactFormat",
             "pub proposal: LaneBlockProposalV1",
-            "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
-            "pub autonomous_epoch: Option<u64>",
-            "pub autonomous_payload_hash: Option<Hash>",
+            "pub source: LaneBlockExecutionSourceV1",
             "pub entrypoint_hashes: Vec<Hash>",
             "pub entrypoints: Vec<TransactionEntrypoint>",
             "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
@@ -2152,9 +2184,10 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "method",
         "Kura::recover_lane_block_execution_input_source",
         (
+            "LaneBlockExecutionSourceV1::AutonomousLane",
+            "LaneBlockExecutionSourceV1::GlobalBlock",
             "recover_autonomous_lane_block_payload_with_sidecar_repair",
             "recover_lane_block_payload_with_sidecar_repair",
-            "LaneBlockPayloadAvailability::DescriptorMismatch",
         ),
     ),
     (
@@ -2242,7 +2275,8 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "regular_sidecar_metadata(index_path, parent)",
             "SidecarIndexLayout::read_from(",
             "layout.aligned_len != index_metadata.file.len()",
-            "layout.is_based() && lane_block_height < layout.base_height",
+            "if let Some(layout) = layout",
+            "lane_block_height < layout.base_height",
             "MAX_INDEXED_SIDECAR_GAP_ENTRIES",
             "BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES",
             "maximum_index_growth_for_unresolved_sidecar_write(",
@@ -2251,10 +2285,49 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "method",
+        "SidecarIndexLayout::based",
+        (
+            "if base_height == 0 || base_height == u64::MAX",
+            ".checked_sub(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)",
+            "entries_offset: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64",
+            "aligned_len: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + aligned_entries_len",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "method",
+        "SidecarIndexLayout::read_from",
+        (
+            "if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64",
+            "sidecar V1 base-height header is truncated",
+            "if first.offset != u64::MAX || first.len != u64::MAX",
+            "sidecar V1 base-height marker is missing",
+            "metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK",
+            "Self::based(metadata.offset, index_len)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+        "method",
+        "BoundProgressAppendIntentV1::validate_against_old_layout",
+        (
+            "None if self.old_index_len == 0 && !self.pair_was_present",
+            "INDEXED_SIDECAR_BASE_HEADER_SIZE + PIPELINE_INDEX_ENTRY_SIZE",
+            "let expected_header = SidecarIndexLayout::base_header(self.height);",
+            "prefix != expected_header.as_slice()",
+        ),
+    ),
+    (
         "crates/iroha_core/src/kura/indexed_sidecar_io.rs",
         "fn",
         "append_indexed_sidecar_with_pinned_height",
         (
+            "if height == 0 || height == u64::MAX",
+            "let pair_was_absent = data_was_absent;",
+            "let header = SidecarIndexLayout::base_header(height);",
+            "SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)",
             "data.write_all(payload)",
             "sync_indexed_sidecar_initial_data(",
             "index.write_all(",
@@ -3642,7 +3715,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "let index_metadata = self.regular_sidecar_metadata(index_path, parent)?;",
             "let layout = match (data_metadata, index_metadata)",
             "let append_intent_max = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?;",
-            "let transient_bytes = if layout.is_based()",
+            "let transient_bytes = if let Some(layout) = layout",
             "Self::maximum_index_growth_for_unresolved_sidecar_write(",
             "self.validate_configured_autonomous_mutation_disk_peak_locked(",
             "Ok(LaneBlockExecutionInputPublicationPlan {",

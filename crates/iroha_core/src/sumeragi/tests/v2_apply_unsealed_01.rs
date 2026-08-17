@@ -263,8 +263,8 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         .append_merge_entry(&entry)
         .expect("persist committed merge history fixture");
     let carrier = body_with_exact_merge_execution_header(&entry);
-    fixture.state.record_direct_committed_transactions(
-        [reservation.signed_transaction_hash],
+    fixture.state.record_direct_committed_entrypoints(
+        [reservation.entrypoint_hash],
         NonZeroUsize::new(1).expect("committed height"),
     );
     let staged_merge_queue_reservation_hashes =
@@ -272,16 +272,16 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
             .expect("project exact staged reservation membership");
     assert_eq!(
         staged_merge_queue_reservation_hashes,
-        BTreeSet::from([reservation.signed_transaction_hash]),
+        BTreeSet::from([reservation.entrypoint_hash]),
         "the generic committed-hash cleanup exclusion must bind the exact staged merge member"
     );
     assert!(
-        queue.has_durable_plan_claim_for_test(reservation.signed_transaction_hash),
+        queue.has_durable_plan_claim_for_test(reservation.entrypoint_hash),
         "the reserved transaction must retain its durable QueuePlan claim before cleanup"
     );
     assert_eq!(
         queue.remove_committed_hashes(
-            std::iter::once(reservation.signed_transaction_hash).filter(|transaction_hash| {
+            std::iter::once(reservation.entrypoint_hash).filter(|transaction_hash| {
                 !staged_merge_queue_reservation_hashes.contains(transaction_hash)
             },),
             None,
@@ -290,7 +290,7 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         "generic committed-hash cleanup must defer autonomous reservation ownership"
     );
     assert!(
-        queue.has_durable_plan_claim_for_test(reservation.signed_transaction_hash),
+        queue.has_durable_plan_claim_for_test(reservation.entrypoint_hash),
         "generic cleanup must not tombstone the autonomous QueuePlan claim"
     );
     assert_eq!(
@@ -310,7 +310,7 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         1
     );
     assert!(
-        !queue.has_durable_plan_claim_for_test(reservation.signed_transaction_hash),
+        !queue.has_durable_plan_claim_for_test(reservation.entrypoint_hash),
         "certified finalization must consume the QueuePlan claim after reservation Commit"
     );
     assert!(queue.live_lane_reservations().is_empty());
@@ -380,8 +380,8 @@ v2_apply_test!(
             .collect::<Vec<_>>();
         let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
         let (_parent, entry) = merge_entry_with_reservations(&fixture.context, members);
-        fixture.state.record_direct_committed_transactions(
-            [keys[0].signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [keys[0].entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
         let reference = CertifiedMergeLedgerReference::new(&entry);
@@ -400,8 +400,8 @@ v2_apply_test!(
         .expect_err("a missing later State member must reject before Queue mutation");
         assert!(matches!(
             error,
-            V2ReservationLifecycleError::UncommittedMergeTransaction { transaction_hash }
-                if transaction_hash == keys[1].signed_transaction_hash
+            V2ReservationLifecycleError::UncommittedMergeEntrypoint { entrypoint_hash }
+                if entrypoint_hash == keys[1].entrypoint_hash
         ));
         assert_eq!(
             queue.live_lane_reservations().len(),
@@ -409,8 +409,8 @@ v2_apply_test!(
             "all group owners must remain live after failed full-State preflight"
         );
         assert!(queue.lane_reservation_commit_barriers().is_empty());
-        fixture.state.record_direct_committed_transactions(
-            [keys[1].signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [keys[1].entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
         let applications = authenticated_autonomous_carrier_application_projections(
@@ -516,14 +516,14 @@ v2_apply_test!(
             .expect("two-group result root");
         batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-        fixture.state.record_direct_committed_transactions(
+        fixture.state.record_direct_committed_entrypoints(
             [
-                first.signed_transaction_hash,
-                second.signed_transaction_hash,
+                first.entrypoint_hash,
+                second.entrypoint_hash,
             ],
             NonZeroUsize::new(1).expect("committed height"),
         );
-        assert!(queue.remove_routing_plan_for_test(second.signed_transaction_hash));
+        assert!(queue.remove_routing_plan_for_test(second.entrypoint_hash));
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let applications = authenticated_autonomous_carrier_application_projections(
             &reference,
@@ -542,7 +542,7 @@ v2_apply_test!(
         assert!(matches!(
             error,
             V2ReservationLifecycleError::Queue(LaneQueueReservationError::Conflict { hash })
-                if hash == second.signed_transaction_hash
+                if hash == second.entrypoint_hash
         ));
         let live = queue.live_lane_reservations();
         assert_eq!(live.len(), 2);
@@ -550,7 +550,7 @@ v2_apply_test!(
         assert!(live.contains(&second));
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(
-            queue.has_durable_plan_claim_for_test(first.signed_transaction_hash),
+            queue.has_durable_plan_claim_for_test(first.entrypoint_hash),
             "later-group rejection must not tombstone the first QueuePlan"
         );
     }
@@ -602,8 +602,8 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
         "framed and bare Norito must remain distinct"
     );
     *encoded = bare;
-    fixture.state.record_direct_committed_transactions(
-        [reservation.signed_transaction_hash],
+    fixture.state.record_direct_committed_entrypoints(
+        [reservation.entrypoint_hash],
         NonZeroUsize::new(1).expect("committed height"),
     );
     let reference = CertifiedMergeLedgerReference::new(&entry);
@@ -1132,8 +1132,8 @@ v2_apply_test!(
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist committed merge carrier and exact sidecar");
         fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
-        fixture.state.record_direct_committed_transactions(
-            [reservation.signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [reservation.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier transaction height"),
         );
         assert_eq!(fixture.state.committed_block_hash_at_height(2), None);
@@ -1169,8 +1169,8 @@ v2_apply_test!(
             "missing canonical State history must not consume Queue ownership"
         );
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-        fixture.state.record_direct_committed_transactions(
-            [reservation.signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [reservation.entrypoint_hash],
             NonZeroUsize::new(1).expect("deliberately mismatched State membership height"),
         );
         drop(first_queue);
@@ -1240,8 +1240,8 @@ v2_apply_test!(
             mismatched_snapshot
         );
         assert!(replayed_queue.lane_reservation_startup_reconciliation_pending());
-        fixture.state.record_direct_committed_transactions(
-            [reservation.signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [reservation.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
         assert_eq!(
@@ -1403,10 +1403,10 @@ v2_apply_test!(
             .expect("persist exact valid-prefix merge binding");
         fixture.persist_exact_v2_finality_chain(&[&parent, &first_carrier]);
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &first_carrier);
-        fixture.state.record_direct_committed_transactions(
+        fixture.state.record_direct_committed_entrypoints(
             [
-                first.signed_transaction_hash,
-                second.signed_transaction_hash,
+                first.entrypoint_hash,
+                second.entrypoint_hash,
             ],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
@@ -1423,8 +1423,8 @@ v2_apply_test!(
         .expect_err("missing later merge binding must fail before consuming the valid prefix");
         assert!(matches!(
             error,
-            V2ReservationLifecycleError::MissingCommittedBinding { transaction_hash }
-                if transaction_hash == second.signed_transaction_hash
+            V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
+                if entrypoint_hash == second.entrypoint_hash
         ));
         assert_eq!(
             queue
@@ -1518,8 +1518,8 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         .expect("persist full committed suffix merge group");
     fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_transactions(
-        keys.iter().map(|key| key.signed_transaction_hash),
+    fixture.state.record_direct_committed_entrypoints(
+        keys.iter().map(|key| key.entrypoint_hash),
         NonZeroUsize::new(2).expect("exact committed suffix carrier State height"),
     );
     let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
@@ -1636,11 +1636,11 @@ v2_apply_test!(
             .expect("persist exact first committed group");
         fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-        fixture.state.record_direct_committed_transactions(
+        fixture.state.record_direct_committed_entrypoints(
             first_keys
                 .iter()
-                .map(|key| key.signed_transaction_hash)
-                .chain([later_key.signed_transaction_hash]),
+                .map(|key| key.entrypoint_hash)
+                .chain([later_key.entrypoint_hash]),
             NonZeroUsize::new(2).expect("exact mixed carrier State height"),
         );
         let before = queue
@@ -1657,8 +1657,8 @@ v2_apply_test!(
         .expect_err("malformed later group must stop before consuming mixed first group");
         assert!(matches!(
             error,
-            V2ReservationLifecycleError::MissingCommittedBinding { transaction_hash }
-                if transaction_hash == later_key.signed_transaction_hash
+            V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
+                if entrypoint_hash == later_key.entrypoint_hash
         ));
         assert_eq!(
             queue
@@ -1734,8 +1734,8 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
         .expect("persist replayed commit barrier merge group");
     fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_transactions(
-        keys.iter().map(|key| key.signed_transaction_hash),
+    fixture.state.record_direct_committed_entrypoints(
+        keys.iter().map(|key| key.entrypoint_hash),
         NonZeroUsize::new(2).expect("exact replayed commit barrier carrier State height"),
     );
     drop(queue);
@@ -1808,8 +1808,8 @@ v2_apply_test!(
             .expect("install partial-state reservation journal");
         let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
         let keys = payload.reservation_keys.clone();
-        fixture.state.record_direct_committed_transactions(
-            [keys[0].signed_transaction_hash],
+        fixture.state.record_direct_committed_entrypoints(
+            [keys[0].entrypoint_hash],
             NonZeroUsize::new(1).expect("partial committed height"),
         );
         let before = queue
@@ -1901,7 +1901,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
             format!("strict FIFO digest-order discriminator {index}"),
         )])
         .sign(fixture.genesis_key.private_key());
-        expected_fifo.push(transaction.hash());
+        expected_fifo.push(transaction.hash_as_entrypoint());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let routing_plan = queue
             .route_plan_with_state(&accepted, fixture.state.as_ref())
@@ -1979,7 +1979,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
     assert_eq!(
         selected
             .iter()
-            .map(|transaction| transaction.as_ref().hash())
+            .map(|transaction| transaction.as_ref().hash_as_entrypoint())
             .collect::<Vec<_>>(),
         expected_fifo,
         "strict absence must restore the exact pre-reservation FIFO sequence"
@@ -2827,14 +2827,14 @@ v2_apply_test!(pending_merge_split_group_is_rejected, {
     let second_entry = pending_merge_entry(&fixture.context, 1, b"pending split second");
     let first_hash = HashOf::new(&first_entry);
     let second_hash = HashOf::new(&second_entry);
-    let mut by_transaction = BTreeMap::new();
+    let mut by_entrypoint = BTreeMap::new();
     for (index, key) in group.ordered_keys.iter().copied().enumerate() {
         let entry_hash = if index + 1 == group.ordered_keys.len() {
             second_hash
         } else {
             first_hash
         };
-        by_transaction.insert(key.signed_transaction_hash, (entry_hash, key));
+        by_entrypoint.insert(key.entrypoint_hash, (entry_hash, key));
     }
     let by_entry = BTreeMap::from([
         (
@@ -2847,7 +2847,7 @@ v2_apply_test!(pending_merge_split_group_is_rejected, {
         ),
     ]);
     assert!(matches!(
-        exact_pending_merge_for_group(&group, &by_transaction, &by_entry),
+        exact_pending_merge_for_group(&group, &by_entrypoint, &by_entry),
         Err(V2ReservationLifecycleError::PendingMergeBindingMismatch {
             lane_id: LaneId::SINGLE,
             proposal_height: 1,

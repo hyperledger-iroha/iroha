@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! scheduling outcomes or final state. This toggles the knob and compares events
 //! and balances for a mixed set of transactions.
+use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -10,7 +11,6 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc}; // trait for .get()
-mod snapshots;
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

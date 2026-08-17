@@ -227,7 +227,9 @@ pub fn finalize_committed_block(
         .kura()
         .store_block(Arc::new(signed_block))
         .expect("store committed test block before publishing its state height");
-    let _ = state_block.apply_without_execution(&committed_block, Vec::new());
+    state_block
+        .block_hashes
+        .push_for_tests(committed_block.as_ref().hash());
     state_block.commit().unwrap();
 }
 /// Build a minimal self-describing contract artifact containing a single HALT.
@@ -1590,7 +1592,7 @@ mod tests {
             "queued transaction fixture".to_owned(),
         )])
         .sign(keypair.private_key());
-        let first_tx_hash = tx.hash();
+        let first_entrypoint_hash = tx.hash_as_entrypoint();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1608,7 +1610,7 @@ mod tests {
         );
         assert_eq!(
             view.kura()
-                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .get_block_heights_by_entrypoint_hash(first_entrypoint_hash)
                 .expect("transaction index is complete"),
             [core::num::NonZeroUsize::new(1).expect("nonzero")]
                 .into_iter()
@@ -1625,7 +1627,7 @@ mod tests {
             "second queued transaction fixture".to_owned(),
         )])
         .sign(keypair.private_key());
-        let second_tx_hash = second_tx.hash();
+        let second_entrypoint_hash = second_tx.hash_as_entrypoint();
         queue
             .push(
                 AcceptedTransaction::new_unchecked(Cow::Owned(second_tx)),
@@ -1650,7 +1652,7 @@ mod tests {
         );
         assert_eq!(
             view.kura()
-                .get_block_heights_by_transaction_hash(second_tx_hash)
+                .get_block_heights_by_entrypoint_hash(second_entrypoint_hash)
                 .expect("transaction index is complete"),
             [core::num::NonZeroUsize::new(2).expect("nonzero")]
                 .into_iter()
@@ -1658,7 +1660,7 @@ mod tests {
         );
         assert_eq!(
             view.kura()
-                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .get_block_heights_by_entrypoint_hash(first_entrypoint_hash)
                 .expect("transaction index remains complete"),
             [core::num::NonZeroUsize::new(1).expect("nonzero")]
                 .into_iter()

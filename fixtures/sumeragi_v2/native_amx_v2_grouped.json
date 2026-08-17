@@ -36,7 +36,8 @@
         "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
         "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
         "post_state_root": "hash:B367329C1BC04D88F963BE38AF8268A82E0FC4E0325D4AEA6D92E7284E8F9853#B8F4",
-        "topup_anchor_count": 0
+        "topup_anchor_count": 0,
+        "topup_anchor_root": null
       },
       "manifest_artifacts": [
         {
@@ -688,6 +689,7 @@
                       "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                       "validator_set_hash_version": 1
                     },
+                    "payload_block_hint": null,
                     "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                   },
                   "participant_settlement": {
@@ -1845,6 +1847,7 @@
                       "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                       "validator_set_hash_version": 1
                     },
+                    "payload_block_hint": null,
                     "proposal_hash": "hash:2F1EBE9129BC250B36E9A5DCFCE4ACCF9DBC7070ED962D9810E462ED075791F7#9FD4"
                   },
                   "participant_settlement": {
@@ -3017,6 +3020,7 @@
                       "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                       "validator_set_hash_version": 1
                     },
+                    "payload_block_hint": null,
                     "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                   },
                   "participant_settlement": {
@@ -4174,6 +4178,7 @@
                       "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                       "validator_set_hash_version": 1
                     },
+                    "payload_block_hint": null,
                     "proposal_hash": "hash:2F1EBE9129BC250B36E9A5DCFCE4ACCF9DBC7070ED962D9810E462ED075791F7#9FD4"
                   },
                   "participant_settlement": {
@@ -5414,6 +5419,7 @@
                   "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                   "validator_set_hash_version": 1
                 },
+                "payload_block_hint": null,
                 "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
               },
               "participant_settlement": {
@@ -6571,6 +6577,7 @@
                   "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                   "validator_set_hash_version": 1
                 },
+                "payload_block_hint": null,
                 "proposal_hash": "hash:2F1EBE9129BC250B36E9A5DCFCE4ACCF9DBC7070ED962D9810E462ED075791F7#9FD4"
               },
               "participant_settlement": {
@@ -7743,6 +7750,7 @@
                   "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                   "validator_set_hash_version": 1
                 },
+                "payload_block_hint": null,
                 "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
               },
               "participant_settlement": {
@@ -8900,6 +8908,7 @@
                   "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                   "validator_set_hash_version": 1
                 },
+                "payload_block_hint": null,
                 "proposal_hash": "hash:2F1EBE9129BC250B36E9A5DCFCE4ACCF9DBC7070ED962D9810E462ED075791F7#9FD4"
               },
               "participant_settlement": {
@@ -11266,6 +11275,7 @@
                 "validator_set_hash": "hash:449670ABEA0B9DD3A3A4FDA87B9A5F4793AD531346AF1666498E3EFFCD2187BF#BF66",
                 "validator_set_hash_version": 1
               },
+              "payload_block_hint": null,
               "proposal_hash": "hash:74710A5BF9DC0D677AAF20C33CDE0CEEE7C83B8A51AF49179856AF39E3EADC1D#FC82"
             },
             "participant_settlement": {
@@ -12427,6 +12437,7 @@
                 "validator_set_hash": "hash:449670ABEA0B9DD3A3A4FDA87B9A5F4793AD531346AF1666498E3EFFCD2187BF#BF66",
                 "validator_set_hash_version": 1
               },
+              "payload_block_hint": null,
               "proposal_hash": "hash:74710A5BF9DC0D677AAF20C33CDE0CEEE7C83B8A51AF49179856AF39E3EADC1D#FC82"
             },
             "participant_settlement": {
@@ -13035,7 +13046,8 @@
               "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
               "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
               "post_state_root": "hash:B367329C1BC04D88F963BE38AF8268A82E0FC4E0325D4AEA6D92E7284E8F9853#B8F4",
-              "topup_anchor_count": 0
+              "topup_anchor_count": 0,
+              "topup_anchor_root": null
             },
             "manifest_artifacts": [
               {
@@ -13691,6 +13703,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                         },
                         "participant_settlement": {
@@ -14848,6 +14861,7 @@
                             "validator_set_hash": "hash:449670ABEA0B9DD3A3A4FDA87B9A5F4793AD531346AF1666498E3EFFCD2187BF#BF66",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:74710A5BF9DC0D677AAF20C33CDE0CEEE7C83B8A51AF49179856AF39E3EADC1D#FC82"
                         },
                         "participant_settlement": {
@@ -16020,6 +16034,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                         },
                         "participant_settlement": {
@@ -17177,6 +17192,7 @@
                             "validator_set_hash": "hash:449670ABEA0B9DD3A3A4FDA87B9A5F4793AD531346AF1666498E3EFFCD2187BF#BF66",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:74710A5BF9DC0D677AAF20C33CDE0CEEE7C83B8A51AF49179856AF39E3EADC1D#FC82"
                         },
                         "participant_settlement": {
@@ -18409,6 +18425,7 @@
                 "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                 "validator_set_hash_version": 1
               },
+              "payload_block_hint": null,
               "proposal_hash": "hash:D0673DA3E63B65FFB28400640099BA8F493E687548E4FA0B2C26CCDDEDDC0E07#F4F8"
             },
             "participant_settlement": {
@@ -19570,6 +19587,7 @@
                 "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                 "validator_set_hash_version": 1
               },
+              "payload_block_hint": null,
               "proposal_hash": "hash:D0673DA3E63B65FFB28400640099BA8F493E687548E4FA0B2C26CCDDEDDC0E07#F4F8"
             },
             "participant_settlement": {
@@ -20178,7 +20196,8 @@
               "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
               "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
               "post_state_root": "hash:B367329C1BC04D88F963BE38AF8268A82E0FC4E0325D4AEA6D92E7284E8F9853#B8F4",
-              "topup_anchor_count": 0
+              "topup_anchor_count": 0,
+              "topup_anchor_root": null
             },
             "manifest_artifacts": [
               {
@@ -20834,6 +20853,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                         },
                         "participant_settlement": {
@@ -21991,6 +22011,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:D0673DA3E63B65FFB28400640099BA8F493E687548E4FA0B2C26CCDDEDDC0E07#F4F8"
                         },
                         "participant_settlement": {
@@ -23163,6 +23184,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
                         },
                         "participant_settlement": {
@@ -24320,6 +24342,7 @@
                             "validator_set_hash": "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
                             "validator_set_hash_version": 1
                           },
+                          "payload_block_hint": null,
                           "proposal_hash": "hash:D0673DA3E63B65FFB28400640099BA8F493E687548E4FA0B2C26CCDDEDDC0E07#F4F8"
                         },
                         "participant_settlement": {

@@ -65,7 +65,6 @@ use iroha_data_model::{
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
-    peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
@@ -121,33 +120,6 @@ static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new(
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
     OnceLock::new();
 static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
-static LAST_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
-static MAX_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_PROPOSE_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_DA_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_PREVOTE_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
-static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
-static BLOCK_CREATED_HINT_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
-static BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
-static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
-static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
-static RBC_BACKLOG: OnceLock<Mutex<RbcBacklogSnapshot>> = OnceLock::new();
-static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const COMMIT_CERT_HISTORY_CAP: usize = 512;
 /// Guard serializing destructive canonical-chain transitions.
@@ -2213,7 +2185,6 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
-    set_committed_lane_blocks(Vec::new());
     bump_v2_watchdog_revision();
 }
 #[cfg(test)]
@@ -4319,200 +4290,6 @@ impl RbcMismatchKind {
         }
     }
 }
-#[derive(Default)]
-struct AvailabilityStats {
-    total_votes: u64,
-    per_peer: BTreeMap<PeerId, CollectorEntry>,
-}
-#[derive(Clone)]
-struct CollectorEntry {
-    idx: u64,
-    votes: u64,
-}
-/// Snapshot entry describing availability votes ingested by a collector.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AvailabilityCollectorSnapshot {
-    /// Collector topology index.
-    pub collector_idx: u64,
-    /// Collector peer identifier.
-    pub peer: PeerId,
-    /// Number of availability votes ingested by this collector.
-    pub votes_ingested: u64,
-}
-/// Aggregated availability vote ingestion snapshot for the telemetry route.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AvailabilitySnapshot {
-    /// Total availability votes ingested by this node.
-    pub total: u64,
-    /// Per-collector vote counts keyed by topology index and peer id.
-    pub collectors: Vec<AvailabilityCollectorSnapshot>,
-}
-/// Aggregated RBC backlog metrics snapshot for the telemetry route.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RbcBacklogSnapshot {
-    /// Total missing chunks across active sessions.
-    pub total_missing_chunks: u64,
-    /// Maximum missing chunks within any single session.
-    pub max_missing_chunks: u64,
-    /// Number of sessions whose local chunk delivery is still incomplete.
-    pub pending_sessions: u64,
-}
-/// Pending pre-INIT RBC stash entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PendingRbcEntrySnapshot {
-    /// Block hash associated with the pending session.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Block height for the pending session.
-    pub height: u64,
-    /// View index for the pending session.
-    pub view: u64,
-    /// Number of chunk frames currently buffered.
-    pub chunks: u64,
-    /// Total chunk payload bytes currently buffered.
-    pub bytes: u64,
-    /// READY frames currently buffered.
-    pub ready: u64,
-    /// DELIVER frames currently buffered.
-    pub deliver: u64,
-    /// Chunk frames dropped for this session due to caps.
-    pub dropped_chunks: u64,
-    /// Chunk payload bytes dropped for this session due to caps.
-    pub dropped_bytes: u64,
-    /// READY frames dropped for this session due to caps.
-    pub dropped_ready: u64,
-    /// DELIVER frames dropped for this session due to caps.
-    pub dropped_deliver: u64,
-    /// Age in milliseconds since the first pending message was recorded.
-    pub age_ms: u64,
-}
-impl Default for PendingRbcEntrySnapshot {
-    fn default() -> Self {
-        Self {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
-            height: 0,
-            view: 0,
-            chunks: 0,
-            bytes: 0,
-            ready: 0,
-            deliver: 0,
-            dropped_chunks: 0,
-            dropped_bytes: 0,
-            dropped_ready: 0,
-            dropped_deliver: 0,
-            age_ms: 0,
-        }
-    }
-}
-/// Aggregated pending RBC stash metrics.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PendingRbcSnapshot {
-    /// Current pending sessions awaiting INIT.
-    pub sessions: u64,
-    /// Maximum pending sessions retained.
-    pub session_cap: u64,
-    /// Aggregate pending chunk frames across sessions.
-    pub chunks: u64,
-    /// Aggregate pending chunk payload bytes across sessions.
-    pub bytes: u64,
-    /// Configured per-session chunk cap.
-    pub max_chunks_per_session: u64,
-    /// Configured per-session byte cap.
-    pub max_bytes_per_session: u64,
-    /// Configured TTL in milliseconds before pending entries expire.
-    pub ttl_ms: u64,
-    /// Total pending frames dropped across all reasons.
-    pub drops_total: u64,
-    /// Total pending frames dropped due to cap enforcement.
-    pub drops_cap_total: u64,
-    /// Aggregate payload or signature bytes dropped due to caps.
-    pub drops_cap_bytes_total: u64,
-    /// Total pending frames dropped due to TTL expiry.
-    pub drops_ttl_total: u64,
-    /// Aggregate payload or signature bytes dropped due to TTL expiry.
-    pub drops_ttl_bytes_total: u64,
-    /// Total pending bytes dropped across all reasons.
-    pub drops_bytes_total: u64,
-    /// Total pending sessions evicted.
-    pub evicted_total: u64,
-    /// Total READY frames stashed before processing.
-    pub stash_ready_total: u64,
-    /// READY frames stashed because INIT has not arrived.
-    pub stash_ready_init_missing_total: u64,
-    /// READY frames stashed because the commit roster is missing.
-    pub stash_ready_roster_missing_total: u64,
-    /// READY frames stashed because the commit roster hash mismatched.
-    pub stash_ready_roster_hash_mismatch_total: u64,
-    /// READY frames stashed while the commit roster is unverified.
-    pub stash_ready_roster_unverified_total: u64,
-    /// Total DELIVER frames stashed before processing.
-    pub stash_deliver_total: u64,
-    /// DELIVER frames stashed because INIT has not arrived.
-    pub stash_deliver_init_missing_total: u64,
-    /// DELIVER frames stashed because the commit roster is missing.
-    pub stash_deliver_roster_missing_total: u64,
-    /// DELIVER frames stashed because the commit roster hash mismatched.
-    pub stash_deliver_roster_hash_mismatch_total: u64,
-    /// DELIVER frames stashed while the commit roster is unverified.
-    pub stash_deliver_roster_unverified_total: u64,
-    /// Chunk frames stashed before INIT arrives.
-    pub stash_chunk_total: u64,
-    /// Pending sessions with per-session drop counters.
-    pub entries: Vec<PendingRbcEntrySnapshot>,
-}
-/// Process-local phase-latency and retained compatibility-counter snapshot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PhaseLatenciesSnapshot {
-    /// Last observed latency for the propose phase in milliseconds.
-    pub propose_ms: u64,
-    /// Last observed latency for data-availability collection in milliseconds.
-    pub collect_da_ms: u64,
-    /// Last observed latency for prevote collection in milliseconds.
-    pub collect_prevote_ms: u64,
-    /// Last observed latency for precommit collection in milliseconds.
-    pub collect_precommit_ms: u64,
-    /// Last observed latency for redundant collector fan-out in milliseconds.
-    pub collect_aggregator_ms: u64,
-    /// Last observed latency for the commit phase in milliseconds.
-    pub commit_ms: u64,
-    /// Maximum propose latency observed since process start.
-    pub propose_max_ms: u64,
-    /// Maximum data-availability collection latency observed since process start.
-    pub collect_da_max_ms: u64,
-    /// Maximum prevote collection latency observed since process start.
-    pub collect_prevote_max_ms: u64,
-    /// Maximum precommit collection latency observed since process start.
-    pub collect_precommit_max_ms: u64,
-    /// Maximum redundant collector fan-out latency observed since process start.
-    pub collect_aggregator_max_ms: u64,
-    /// Maximum commit latency observed since process start.
-    pub commit_max_ms: u64,
-    /// EMA propose latency in milliseconds.
-    pub propose_ema_ms: u64,
-    /// EMA data-availability collection latency in milliseconds.
-    pub collect_da_ema_ms: u64,
-    /// EMA prevote collection latency in milliseconds.
-    pub collect_prevote_ema_ms: u64,
-    /// EMA precommit collection latency in milliseconds.
-    pub collect_precommit_ema_ms: u64,
-    /// EMA redundant collector fan-out latency in milliseconds.
-    pub collect_aggregator_ema_ms: u64,
-    /// EMA commit latency in milliseconds.
-    pub commit_ema_ms: u64,
-    /// Sum of current propose, DA, prevote, precommit, and commit latencies.
-    pub pipeline_total_ms: u64,
-    /// Saturating sum of the maxima for the pipeline phases.
-    pub pipeline_total_max_ms: u64,
-    /// EMA latency for the aggregate pipeline in milliseconds.
-    pub pipeline_total_ema_ms: u64,
-    /// Gossip fallback invocations after collectors were exhausted.
-    pub gossip_fallback_total: u64,
-    /// Block-created messages dropped by the locked-QC gate.
-    pub block_created_dropped_by_lock_total: u64,
-    /// Block-created messages rejected due to hint mismatch.
-    pub block_created_hint_mismatch_total: u64,
-    /// Block-created messages rejected due to proposal mismatch.
-    pub block_created_proposal_mismatch_total: u64,
-}
 fn lock_operator_status_slot<T>(
     slot: &'static Mutex<T>,
     label: &'static str,
@@ -4536,10 +4313,6 @@ static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock
 static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
 static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = OnceLock::new();
 static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
-static LANE_PAYLOAD_OWNERSHIPS: OnceLock<Mutex<Vec<SumeragiLanePayloadOwnership>>> =
-    OnceLock::new();
-static COMMITTED_LANE_BLOCKS: OnceLock<Mutex<Vec<CommittedLaneBlockSnapshot>>> = OnceLock::new();
-static LANE_BLOCK_SESSIONS: OnceLock<Mutex<Vec<SumeragiLaneBlockSessionStatus>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 static NEXUS_STAKING_STATUS: OnceLock<Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>>> =
@@ -4557,18 +4330,6 @@ static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
 pub(crate) const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
 pub(crate) const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
-fn availability_slot() -> &'static Mutex<AvailabilityStats> {
-    AVAILABILITY_STATS.get_or_init(|| Mutex::new(AvailabilityStats::default()))
-}
-fn qc_latency_slot() -> &'static Mutex<BTreeMap<&'static str, u64>> {
-    QC_LATENCY_MS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-fn rbc_backlog_slot() -> &'static Mutex<RbcBacklogSnapshot> {
-    RBC_BACKLOG.get_or_init(|| Mutex::new(RbcBacklogSnapshot::default()))
-}
-fn pending_rbc_slot() -> &'static Mutex<PendingRbcSnapshot> {
-    PENDING_RBC_STATE.get_or_init(|| Mutex::new(PendingRbcSnapshot::default()))
-}
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NexusFeePayer {
@@ -5704,340 +5465,6 @@ pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
     WORKER_QUEUE_DROPS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
 }
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
-/// Set the last observed propose-phase latency in milliseconds.
-pub fn set_phase_propose_ms(ms: u64) {
-    store_phase_ms(&LAST_PROPOSE_MS, &MAX_PROPOSE_MS, ms);
-}
-/// Set the last observed data-availability collection latency in milliseconds.
-pub fn set_phase_collect_da_ms(ms: u64) {
-    store_phase_ms(&LAST_COLLECT_DA_MS, &MAX_COLLECT_DA_MS, ms);
-}
-/// Set the last observed prevote collection latency in milliseconds.
-pub fn set_phase_collect_prevote_ms(ms: u64) {
-    store_phase_ms(&LAST_COLLECT_PREVOTE_MS, &MAX_COLLECT_PREVOTE_MS, ms);
-}
-/// Set the last observed precommit collection latency in milliseconds.
-pub fn set_phase_collect_precommit_ms(ms: u64) {
-    store_phase_ms(&LAST_COLLECT_PRECOMMIT_MS, &MAX_COLLECT_PRECOMMIT_MS, ms);
-}
-/// Set the last observed redundant collector fan-out latency in milliseconds.
-pub fn set_phase_collect_aggregator_ms(ms: u64) {
-    store_phase_ms(&LAST_COLLECT_AGG_MS, &MAX_COLLECT_AGG_MS, ms);
-}
-/// Set the last observed commit-phase latency in milliseconds.
-pub fn set_phase_commit_ms(ms: u64) {
-    store_phase_ms(&LAST_COMMIT_MS, &MAX_COMMIT_MS, ms);
-}
-fn store_phase_ms(latest: &AtomicU64, maximum: &AtomicU64, ms: u64) {
-    latest.store(ms, Ordering::Relaxed);
-    maximum.fetch_max(ms, Ordering::Relaxed);
-}
-/// Set the EMA propose-phase latency in milliseconds.
-pub fn set_phase_propose_ema_ms(ms: u64) {
-    LAST_PROPOSE_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA data-availability collection latency in milliseconds.
-pub fn set_phase_collect_da_ema_ms(ms: u64) {
-    LAST_COLLECT_DA_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA prevote collection latency in milliseconds.
-pub fn set_phase_collect_prevote_ema_ms(ms: u64) {
-    LAST_COLLECT_PREVOTE_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA precommit collection latency in milliseconds.
-pub fn set_phase_collect_precommit_ema_ms(ms: u64) {
-    LAST_COLLECT_PRECOMMIT_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA redundant collector fan-out latency in milliseconds.
-pub fn set_phase_collect_aggregator_ema_ms(ms: u64) {
-    LAST_COLLECT_AGG_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA commit-phase latency in milliseconds.
-pub fn set_phase_commit_ema_ms(ms: u64) {
-    LAST_COMMIT_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set the EMA aggregate pipeline latency in milliseconds.
-pub fn set_phase_pipeline_total_ema_ms(ms: u64) {
-    LAST_PIPELINE_TOTAL_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Increment the collector-exhaustion gossip fallback counter.
-pub fn inc_gossip_fallback() {
-    GOSSIP_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-/// Increment the counter for block-created messages rejected by the lock gate.
-pub fn inc_block_created_dropped_by_lock() {
-    BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-/// Increment the counter for block-created hint mismatches.
-pub fn inc_block_created_hint_mismatch() {
-    BLOCK_CREATED_HINT_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-/// Increment the counter for block-created proposal mismatches.
-pub fn inc_block_created_proposal_mismatch() {
-    BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-fn phase_pipeline_total(values: [u64; 5]) -> u64 {
-    values.into_iter().fold(0_u64, u64::saturating_add)
-}
-/// Snapshot process-local per-phase latency diagnostics.
-#[must_use]
-pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
-    let propose_ms = LAST_PROPOSE_MS.load(Ordering::Relaxed);
-    let collect_da_ms = LAST_COLLECT_DA_MS.load(Ordering::Relaxed);
-    let collect_prevote_ms = LAST_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
-    let collect_precommit_ms = LAST_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
-    let collect_aggregator_ms = LAST_COLLECT_AGG_MS.load(Ordering::Relaxed);
-    let commit_ms = LAST_COMMIT_MS.load(Ordering::Relaxed);
-    let propose_max_ms = MAX_PROPOSE_MS.load(Ordering::Relaxed);
-    let collect_da_max_ms = MAX_COLLECT_DA_MS.load(Ordering::Relaxed);
-    let collect_prevote_max_ms = MAX_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
-    let collect_precommit_max_ms = MAX_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
-    let collect_aggregator_max_ms = MAX_COLLECT_AGG_MS.load(Ordering::Relaxed);
-    let commit_max_ms = MAX_COMMIT_MS.load(Ordering::Relaxed);
-    PhaseLatenciesSnapshot {
-        propose_ms,
-        collect_da_ms,
-        collect_prevote_ms,
-        collect_precommit_ms,
-        collect_aggregator_ms,
-        commit_ms,
-        propose_max_ms,
-        collect_da_max_ms,
-        collect_prevote_max_ms,
-        collect_precommit_max_ms,
-        collect_aggregator_max_ms,
-        commit_max_ms,
-        propose_ema_ms: LAST_PROPOSE_EMA_MS.load(Ordering::Relaxed),
-        collect_da_ema_ms: LAST_COLLECT_DA_EMA_MS.load(Ordering::Relaxed),
-        collect_prevote_ema_ms: LAST_COLLECT_PREVOTE_EMA_MS.load(Ordering::Relaxed),
-        collect_precommit_ema_ms: LAST_COLLECT_PRECOMMIT_EMA_MS.load(Ordering::Relaxed),
-        collect_aggregator_ema_ms: LAST_COLLECT_AGG_EMA_MS.load(Ordering::Relaxed),
-        commit_ema_ms: LAST_COMMIT_EMA_MS.load(Ordering::Relaxed),
-        pipeline_total_ms: phase_pipeline_total([
-            propose_ms,
-            collect_da_ms,
-            collect_prevote_ms,
-            collect_precommit_ms,
-            commit_ms,
-        ]),
-        pipeline_total_max_ms: phase_pipeline_total([
-            propose_max_ms,
-            collect_da_max_ms,
-            collect_prevote_max_ms,
-            collect_precommit_max_ms,
-            commit_max_ms,
-        ]),
-        pipeline_total_ema_ms: LAST_PIPELINE_TOTAL_EMA_MS.load(Ordering::Relaxed),
-        gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
-        block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
-            .load(Ordering::Relaxed),
-        block_created_hint_mismatch_total: BLOCK_CREATED_HINT_MISMATCH_TOTAL
-            .load(Ordering::Relaxed),
-        block_created_proposal_mismatch_total: BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL
-            .load(Ordering::Relaxed),
-    }
-}
-/// Record an availability vote ingested by the local collector.
-pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
-    let mut stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
-    stats.total_votes = stats.total_votes.saturating_add(1);
-    let entry = stats
-        .per_peer
-        .entry(peer.clone())
-        .or_insert_with(|| CollectorEntry {
-            idx: collector_idx,
-            votes: 0,
-        });
-    entry.idx = collector_idx;
-    entry.votes = entry.votes.saturating_add(1);
-}
-/// Snapshot process-local availability vote ingestion counters.
-#[must_use]
-pub fn availability_snapshot() -> AvailabilitySnapshot {
-    let stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
-    let mut collectors: Vec<_> = stats
-        .per_peer
-        .iter()
-        .map(|(peer, entry)| AvailabilityCollectorSnapshot {
-            collector_idx: entry.idx,
-            peer: peer.clone(),
-            votes_ingested: entry.votes,
-        })
-        .collect();
-    collectors.sort_by_key(|entry| entry.collector_idx);
-    AvailabilitySnapshot {
-        total: stats.total_votes,
-        collectors,
-    }
-}
-/// Record the last observed QC assembly latency for a stable kind label.
-pub fn record_qc_latency(kind: &'static str, ms: u64) {
-    lock_operator_status_slot(qc_latency_slot(), "QC latency stats").insert(kind, ms);
-}
-/// Snapshot QC assembly latencies sorted by kind label.
-#[must_use]
-pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
-    lock_operator_status_slot(qc_latency_slot(), "QC latency stats")
-        .iter()
-        .map(|(kind, ms)| ((*kind).to_owned(), *ms))
-        .collect()
-}
-/// Replace the aggregated RBC backlog telemetry snapshot.
-pub fn set_rbc_backlog_snapshot(
-    total_missing_chunks: u64,
-    max_missing_chunks: u64,
-    pending_sessions: u64,
-) {
-    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot") = RbcBacklogSnapshot {
-        total_missing_chunks,
-        max_missing_chunks,
-        pending_sessions,
-    };
-}
-/// Snapshot the aggregated RBC backlog telemetry.
-#[must_use]
-pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
-    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot")
-}
-/// Replace the pending-RBC compatibility snapshot.
-pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
-    #[cfg(test)]
-    let _guard = rbc_status_test_guard();
-    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") = snapshot;
-}
-/// Snapshot pending-RBC compatibility diagnostics.
-#[must_use]
-pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
-    #[cfg(test)]
-    let _guard = rbc_status_test_guard();
-    lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot").clone()
-}
-#[cfg(test)]
-mod telemetry_compatibility_tests {
-    use super::{PendingRbcEntrySnapshot, PendingRbcSnapshot, RbcBacklogSnapshot};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::BlockHeader, peer::PeerId};
-    #[test]
-    fn phase_snapshot_tracks_current_max_ema_and_compatibility_counters() {
-        let _guard = super::rbc_status_test_guard();
-        super::reset_rbc_backlog_stats_for_tests();
-        super::set_phase_propose_ms(10);
-        super::set_phase_propose_ms(4);
-        super::set_phase_collect_da_ms(2);
-        super::set_phase_collect_prevote_ms(3);
-        super::set_phase_collect_precommit_ms(4);
-        super::set_phase_collect_aggregator_ms(50);
-        super::set_phase_commit_ms(6);
-        super::set_phase_propose_ema_ms(11);
-        super::set_phase_collect_da_ema_ms(12);
-        super::set_phase_collect_prevote_ema_ms(13);
-        super::set_phase_collect_precommit_ema_ms(14);
-        super::set_phase_collect_aggregator_ema_ms(15);
-        super::set_phase_commit_ema_ms(16);
-        super::set_phase_pipeline_total_ema_ms(17);
-        super::inc_gossip_fallback();
-        super::inc_block_created_dropped_by_lock();
-        super::inc_block_created_hint_mismatch();
-        super::inc_block_created_proposal_mismatch();
-        let snapshot = super::phase_latencies_snapshot();
-        assert_eq!(snapshot.propose_ms, 4);
-        assert_eq!(snapshot.propose_max_ms, 10);
-        assert_eq!(snapshot.collect_da_ms, 2);
-        assert_eq!(snapshot.collect_prevote_ms, 3);
-        assert_eq!(snapshot.collect_precommit_ms, 4);
-        assert_eq!(snapshot.collect_aggregator_ms, 50);
-        assert_eq!(snapshot.commit_ms, 6);
-        assert_eq!(snapshot.pipeline_total_ms, 19);
-        assert_eq!(snapshot.pipeline_total_max_ms, 25);
-        assert_eq!(snapshot.propose_ema_ms, 11);
-        assert_eq!(snapshot.collect_da_ema_ms, 12);
-        assert_eq!(snapshot.collect_prevote_ema_ms, 13);
-        assert_eq!(snapshot.collect_precommit_ema_ms, 14);
-        assert_eq!(snapshot.collect_aggregator_ema_ms, 15);
-        assert_eq!(snapshot.commit_ema_ms, 16);
-        assert_eq!(snapshot.pipeline_total_ema_ms, 17);
-        assert_eq!(snapshot.gossip_fallback_total, 1);
-        assert_eq!(snapshot.block_created_dropped_by_lock_total, 1);
-        assert_eq!(snapshot.block_created_hint_mismatch_total, 1);
-        assert_eq!(snapshot.block_created_proposal_mismatch_total, 1);
-        super::reset_rbc_backlog_stats_for_tests();
-        assert_eq!(super::phase_latencies_snapshot(), Default::default());
-    }
-    #[test]
-    fn phase_pipeline_totals_saturate() {
-        let _guard = super::rbc_status_test_guard();
-        super::reset_rbc_backlog_stats_for_tests();
-        super::set_phase_propose_ms(u64::MAX);
-        super::set_phase_collect_da_ms(1);
-        let snapshot = super::phase_latencies_snapshot();
-        assert_eq!(snapshot.pipeline_total_ms, u64::MAX);
-        assert_eq!(snapshot.pipeline_total_max_ms, u64::MAX);
-        super::reset_rbc_backlog_stats_for_tests();
-    }
-    #[test]
-    fn collector_qc_and_rbc_snapshots_roundtrip_and_reset() {
-        let _guard = super::rbc_status_test_guard();
-        super::reset_rbc_backlog_stats_for_tests();
-        let key_pair = KeyPair::try_from_seed(
-            b"telemetry-compatibility-collector".to_vec(),
-            Algorithm::BlsNormal,
-        )
-        .expect("derive collector fixture");
-        let peer = PeerId::new(key_pair.public_key().clone());
-        super::record_availability_vote(4, &peer);
-        super::record_availability_vote(5, &peer);
-        let availability = super::availability_snapshot();
-        assert_eq!(availability.total, 2);
-        assert_eq!(availability.collectors.len(), 1);
-        assert_eq!(availability.collectors[0].collector_idx, 5);
-        assert_eq!(availability.collectors[0].peer, peer);
-        assert_eq!(availability.collectors[0].votes_ingested, 2);
-        super::record_qc_latency("precommit", 30);
-        super::record_qc_latency("availability", 10);
-        super::record_qc_latency("availability", 20);
-        assert_eq!(
-            super::qc_latency_snapshot(),
-            vec![
-                ("availability".to_owned(), 20),
-                ("precommit".to_owned(), 30)
-            ]
-        );
-        super::set_rbc_backlog_snapshot(9, 4, 2);
-        assert_eq!(
-            super::rbc_backlog_snapshot(),
-            RbcBacklogSnapshot {
-                total_missing_chunks: 9,
-                max_missing_chunks: 4,
-                pending_sessions: 2,
-            }
-        );
-        let pending = PendingRbcSnapshot {
-            sessions: 1,
-            session_cap: 8,
-            chunks: 3,
-            bytes: 512,
-            drops_total: 2,
-            entries: vec![PendingRbcEntrySnapshot {
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"pending-rbc",
-                )),
-                height: 7,
-                view: 2,
-                chunks: 3,
-                bytes: 512,
-                ..PendingRbcEntrySnapshot::default()
-            }],
-            ..PendingRbcSnapshot::default()
-        };
-        super::set_pending_rbc_snapshot(pending.clone());
-        assert_eq!(super::pending_rbc_snapshot(), pending);
-        super::reset_rbc_backlog_stats_for_tests();
-        assert_eq!(super::availability_snapshot(), Default::default());
-        assert!(super::qc_latency_snapshot().is_empty());
-        assert_eq!(super::rbc_backlog_snapshot(), Default::default());
-        assert_eq!(super::pending_rbc_snapshot(), Default::default());
-    }
-}
 /// Count a duplicate transaction skipped by gossip.
 pub fn inc_gossip_duplicate_known_skipped() {
     GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -6089,15 +5516,6 @@ fn lane_settlement_commitments_slot() -> &'static Mutex<Vec<LaneBlockCommitment>
 }
 fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
     LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn lane_payload_ownerships_slot() -> &'static Mutex<Vec<SumeragiLanePayloadOwnership>> {
-    LANE_PAYLOAD_OWNERSHIPS.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn committed_lane_blocks_slot() -> &'static Mutex<Vec<CommittedLaneBlockSnapshot>> {
-    COMMITTED_LANE_BLOCKS.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn lane_block_sessions_slot() -> &'static Mutex<Vec<SumeragiLaneBlockSessionStatus>> {
-    LANE_BLOCK_SESSIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
 type LaneRelayKey = (
     iroha_data_model::nexus::LaneId,
@@ -6218,134 +5636,6 @@ pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
         lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
     upsert_lane_relay_envelope(&mut guard, envelope);
 }
-/// Update the legacy process-local lane ownership snapshot.
-///
-/// Updates are merged by `(lane_id, dataspace_id)` so a proposal for one lane
-/// does not erase the latest ownership evidence for another active lane. Empty
-/// updates are no-ops; use [`clear_lane_payload_ownerships`] for deliberate
-/// test/shutdown cleanup. The public diagnostics endpoint reconstructs
-/// authoritative rows from State and Kura instead of this cache.
-pub fn set_lane_payload_ownerships(mut entries: Vec<SumeragiLanePayloadOwnership>) {
-    entries.retain(|entry| match entry.validate_replay_material() {
-        Ok(()) => true,
-        Err(err) => {
-            iroha_logger::warn!(
-                lane_id = %entry.lane_id,
-                dataspace_id = %entry.dataspace_id,
-                lane_block_height = entry.lane_block_height,
-                lane_block_view = entry.lane_block_view,
-                error = %err,
-                "dropping lane payload ownership status with invalid replay material"
-            );
-            false
-        }
-    });
-    let mut guard = lock_operator_status_slot(
-        lane_payload_ownerships_slot(),
-        "lane payload ownership snapshot",
-    );
-    if entries.is_empty() {
-        return;
-    }
-    for entry in entries {
-        upsert_lane_payload_ownership(&mut guard, entry);
-    }
-    if guard.len() > LANE_PAYLOAD_OWNERSHIPS_CAP {
-        guard.sort_by_key(lane_payload_ownership_retention_key);
-        let drain = guard.len() - LANE_PAYLOAD_OWNERSHIPS_CAP;
-        guard.drain(0..drain);
-    }
-}
-/// Clear all cached lane-local DA/RBC ownership identities.
-pub fn clear_lane_payload_ownerships() {
-    let mut guard = lock_operator_status_slot(
-        lane_payload_ownerships_slot(),
-        "lane payload ownership snapshot",
-    );
-    guard.clear();
-}
-fn upsert_lane_payload_ownership(
-    entries: &mut Vec<SumeragiLanePayloadOwnership>,
-    entry: SumeragiLanePayloadOwnership,
-) {
-    if let Some(existing) = entries.iter_mut().find(|existing| {
-        existing.lane_id == entry.lane_id && existing.dataspace_id == entry.dataspace_id
-    }) {
-        if lane_payload_ownership_retention_key(&entry)
-            >= lane_payload_ownership_retention_key(existing)
-        {
-            *existing = entry;
-        }
-        return;
-    }
-    entries.push(entry);
-}
-fn lane_payload_ownership_retention_key(
-    entry: &SumeragiLanePayloadOwnership,
-) -> (u64, u64, u64, u64, u32, u64) {
-    (
-        entry.lane_block_height,
-        entry.lane_block_view,
-        entry.proposal_height,
-        entry.proposal_view,
-        entry.lane_id.as_u32(),
-        entry.dataspace_id.as_u64(),
-    )
-}
-fn validate_committed_lane_block_snapshot(
-    entry: &CommittedLaneBlockSnapshot,
-) -> Result<(), String> {
-    let descriptor = &entry.proposal.descriptor;
-    if entry.lane_id != descriptor.lane_id
-        || entry.dataspace_id != descriptor.dataspace_id
-        || entry.lane_block_height != descriptor.lane_block_height
-        || entry.lane_block_view != descriptor.lane_block_view
-        || entry.descriptor_hash != descriptor.descriptor_hash
-        || entry.proposal_hash != entry.proposal.proposal_hash
-    {
-        return Err("summary fields do not match embedded lane-block proposal".to_owned());
-    }
-    let session = crate::lane_consensus::CommittedLaneBlockSession {
-        proposal: entry.proposal.clone(),
-        prepare_qc: entry.prepare_qc.clone(),
-        commit_qc: entry.commit_qc.clone(),
-    };
-    crate::lane_consensus::validate_committed_lane_block_session(&session)
-        .map_err(|err| err.to_string())
-}
-/// Replace the legacy process-local committed lane-block snapshot.
-///
-/// The public diagnostics endpoint reconstructs authoritative rows from State
-/// and Kura instead of this cache.
-pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
-    #[cfg(test)]
-    let _guard = rbc_status_test_guard();
-    entries.retain(
-        |entry| match validate_committed_lane_block_snapshot(entry) {
-            Ok(()) => true,
-            Err(err) => {
-                iroha_logger::warn!(
-                    lane_id = %entry.lane_id,
-                    dataspace_id = %entry.dataspace_id,
-                    lane_block_height = entry.lane_block_height,
-                    lane_block_view = entry.lane_block_view,
-                    error = %err,
-                    "dropping committed lane block status with invalid certified identity"
-                );
-                false
-            }
-        },
-    );
-    if entries.len() > COMMITTED_LANE_BLOCKS_CAP {
-        let drain = entries.len() - COMMITTED_LANE_BLOCKS_CAP;
-        entries.drain(0..drain);
-    }
-    let mut guard = lock_operator_status_slot(
-        committed_lane_blocks_slot(),
-        "committed lane block snapshot",
-    );
-    *guard = entries;
-}
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
@@ -6370,25 +5660,13 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
         .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
-    lock_operator_status_slot(
-        lane_payload_ownerships_slot(),
-        "lane payload ownership snapshot",
-    )
-    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
-    lock_operator_status_slot(
-        committed_lane_blocks_slot(),
-        "committed lane block snapshot",
-    )
-    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
-    lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot")
-        .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
 #[cfg(test)]
 pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
     format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
         lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
         lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
@@ -6401,15 +5679,6 @@ pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
             "lane settlement commitments snapshot"
         ),
         lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
-        lock_operator_status_slot(
-            lane_payload_ownerships_slot(),
-            "lane payload ownership snapshot"
-        ),
-        lock_operator_status_slot(
-            committed_lane_blocks_slot(),
-            "committed lane block snapshot"
-        ),
-        lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot"),
         lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
         lock_operator_status_slot(nexus_staking_slot(), "nexus staking status"),
         lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
@@ -6435,31 +5704,6 @@ fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
 /// Return the cached lane relay envelopes used by Nexus diagnostics.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
-}
-/// Return the legacy process-local lane-local DA ownership snapshot.
-pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
-    lock_operator_status_slot(
-        lane_payload_ownerships_slot(),
-        "lane payload ownership snapshot",
-    )
-    .clone()
-}
-/// Return the legacy process-local standalone committed lane-block snapshot.
-pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
-    lock_operator_status_slot(
-        committed_lane_blocks_slot(),
-        "committed lane block snapshot",
-    )
-    .clone()
-}
-/// Replace the legacy process-local standalone lane-block session snapshot.
-pub fn set_lane_block_sessions(entries: Vec<SumeragiLaneBlockSessionStatus>) {
-    *lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot") =
-        entries;
-}
-/// Return the legacy process-local standalone lane-block session snapshot.
-pub fn lane_block_sessions_snapshot() -> Vec<SumeragiLaneBlockSessionStatus> {
-    lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot").clone()
 }
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))
@@ -6568,18 +5812,6 @@ pub struct StatusSnapshot {
     pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
     /// Certified lane relay envelopes.
     pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
-    /// Legacy process-local lane payload ownership commitments.
-    ///
-    /// Torii ignores this field and publishes State+Kura-derived rows instead.
-    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Legacy process-local standalone committed lane-block state.
-    ///
-    /// Torii ignores this field and publishes State+Kura-derived rows instead.
-    pub committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
-    /// Legacy process-local lane-local consensus sessions.
-    ///
-    /// Torii ignores this field and publishes State+Kura-derived rows instead.
-    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
     /// Count of governance-sealed lanes.
     pub lane_governance_sealed_total: u32,
     /// Aliases of governance-sealed lanes.
@@ -6612,9 +5844,6 @@ pub fn snapshot() -> StatusSnapshot {
         dataspace_commitments: dataspace_commitments_snapshot(),
         lane_settlement_commitments: lane_settlement_commitments_snapshot(),
         lane_relay_envelopes: lane_relay_envelopes_snapshot(),
-        lane_payload_ownerships: lane_payload_ownerships_snapshot(),
-        committed_lane_blocks: committed_lane_blocks_snapshot(),
-        lane_block_sessions: lane_block_sessions_snapshot(),
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance,

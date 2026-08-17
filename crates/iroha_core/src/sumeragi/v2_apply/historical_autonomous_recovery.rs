@@ -245,7 +245,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         descriptor.validator_set.clone()
     } else {
         let nexus = state.nexus_snapshot();
-        if !nexus.enabled || !super::lane_planner::proposal_lookahead_enabled(&nexus, height) {
+        if super::lane_planner::uses_global_lane_committee(&nexus) {
             input
                 .historical_context
                 .roster
@@ -327,7 +327,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         )
         .map_err(|error| invalid_historical_autonomous_recovery(input, error.to_string()))?;
     let mut reservation_digests = BTreeSet::new();
-    let mut transaction_hashes = BTreeSet::new();
+    let mut entrypoint_hashes = BTreeSet::new();
     for (key, entrypoint_hash) in input
         .reservation_group
         .ordered_keys
@@ -340,9 +340,11 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             || key.reservation_owner_hash != reservation_owner_hash
             || key.proposal_identity_hash != proposal_identity_hash
             || !reservation_digests.insert(key.digest())
-            || !transaction_hashes.insert(key.signed_transaction_hash)
+            || !entrypoint_hashes.insert(key.entrypoint_hash)
             || (require_canonical_carrier_body
-                && state.has_committed_transaction(key.signed_transaction_hash))
+                && state.has_committed_entrypoint(
+                    key.entrypoint_hash,
+                ))
         {
             return Err(invalid_historical_autonomous_recovery(
                 input,

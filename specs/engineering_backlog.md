@@ -9255,7 +9255,7 @@ redistributable schemas, and official trust/revocation bundles.
     duplicate-free target dataspace sets. DefaultHost also binds handles to the
     manifest root carried by inline, recorded, or late proof envelopes before
     failing closed without a verifier. The focused `fastpq_prover` AXT binding slice,
-    `iroha_data_model` `proof_matches_manifest` slice, `ivm_abi`
+    `iroha_data_model` `proof_envelope_shape_matches_manifest` slice, `ivm_abi`
     `preflight_fastpq_v1_proof_envelope` test, `ivm` `axt_host_flow` target, and
     `ivm` `host_unknown_syscall`/`core_host_policy` targets are green as of
     2026-05-02. FastPQ AXT deterministic account fixtures now derive

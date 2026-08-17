@@ -1888,6 +1888,23 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun feePaymentJsonRequiresExplicitNullableGasLimit() {
+        val missingGas = JsonParser.parse(
+            """{"payer":"authority","value":{"charge_limits":[]}}""",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            FeePaymentJson.parse(missingGas, "fee payment")
+        }
+
+        val explicitNull = JsonParser.parse(
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}""",
+        )
+        val parsed = FeePaymentJson.parse(explicitNull, "fee payment")
+        assertIs<FeePaymentIntent.Authority>(parsed)
+        assertNull(parsed.gasLimit)
+    }
+
+    @Test
     fun quoteFeesRejectsLegacyIdentityAndGenesisDomainsBeforeDispatch() {
         val executor = StubResponseExecutor(200, ByteArray(0))
         val transport = HttpClientTransport.withExecutor(
@@ -4542,7 +4559,7 @@ class HttpClientTransportTest {
                     .setStatusCode(202)
                     .setBody(byteArrayOf())
                 if (submitHeaderHash != null) {
-                    builder.addHeader("x-iroha-transaction-hash", submitHeaderHash)
+                    builder.addHeader("x-iroha-entrypoint-hash", submitHeaderHash)
                 }
                 return CompletableFuture.completedFuture(builder.build())
             }

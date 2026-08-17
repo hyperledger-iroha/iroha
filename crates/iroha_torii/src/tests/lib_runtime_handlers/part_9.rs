@@ -856,7 +856,10 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
             "failed_admissions section should be present",
         ),
         ("control_plane", "control_plane section should be present"),
-        ("runtime_manager", "runtime_manager section should be present"),
+        (
+            "runtime_manager",
+            "runtime_manager section should be present",
+        ),
     ] {
         assert!(
             payload
@@ -920,9 +923,7 @@ async fn soracloud_status_routing_for_test(
         .clone()
 }
 fn soracloud_routing_count(routing: &norito::json::Map, field: &str) -> Option<u64> {
-    routing
-        .get(field)
-        .and_then(norito::json::Value::as_u64)
+    routing.get(field).and_then(norito::json::Value::as_u64)
 }
 fn soracloud_routing_lane_ids(routing: &norito::json::Map, field: &str) -> Option<Vec<u64>> {
     routing
@@ -1431,15 +1432,6 @@ async fn telemetry_handlers_ok() {
     .await
     .expect("ok");
     assert!(!text.is_empty());
-    let resp = super::handler_sumeragi_phases(
-        State(app.clone()),
-        headers.clone(),
-        crate::loopback_connect_info(),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
     // QC and leader endpoints
     let resp = super::handler_sumeragi_qc(
         State(app.clone()),
@@ -1692,12 +1684,7 @@ impl RuntimeApiRouterFixture {
             kura.clone(),
             LiveQueryStore::start_test(),
         ));
-        Self::with_runtime(
-            chain_id,
-            kura,
-            state,
-            routing::MaybeTelemetry::disabled(),
-        )
+        Self::with_runtime(chain_id, kura, state, routing::MaybeTelemetry::disabled())
     }
 
     fn with_runtime(
@@ -1840,10 +1827,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn appeal_finance_publication_routes_are_read_only() {
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -1853,6 +1836,10 @@ async fn appeal_finance_publication_routes_are_read_only() {
         GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
         GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
         GovernanceDagSealedStateSlot, NodeHandle, NodeRuntimeDeps,
+    };
+    use std::{
+        fs,
+        path::{Path, PathBuf},
     };
     use tower::ServiceExt as _;
     #[derive(Debug)]
@@ -2175,11 +2162,7 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = fixture
-        .router
-        .oneshot(request)
-        .await
-        .expect("response");
+    let response = fixture.router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 #[cfg(feature = "app_api")]
@@ -2272,11 +2255,7 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-    let response = fixture
-        .router
-        .oneshot(request)
-        .await
-        .expect("response");
+    let response = fixture.router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let body = torii_body_bytes(response, "body").await;
     let text = String::from_utf8(body.to_vec()).expect("utf8");

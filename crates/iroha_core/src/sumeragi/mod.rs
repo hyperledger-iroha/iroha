@@ -710,26 +710,26 @@ pub struct InboundBlockMessage {
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
 impl InboundBlockMessage {
-    /// Normalize one direct or synthetic message.
+    /// Build one direct or synthetic message.
     ///
     /// Direct messages use the same identity as their semantic sender and
     /// authenticated transport source. Synthetic messages leave both unset.
     pub fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
         Self {
-            message: message.normalize(),
+            message,
             via: sender.clone(),
             sender,
             reply_routes: None,
             ingress_ownership: None,
         }
     }
-    /// Normalize one transport message while preserving a relayed protocol origin.
+    /// Build one transport message while preserving a relayed protocol origin.
     ///
     /// `sender` remains visible to consensus validation and response routing;
     /// `via` is the authenticated hop charged for every bounded ingress owner.
     pub fn from_transport(message: BlockMessage, sender: PeerId, via: PeerId) -> Self {
         Self {
-            message: message.normalize(),
+            message,
             sender: Some(sender),
             via: Some(via),
             reply_routes: None,
@@ -757,7 +757,7 @@ impl InboundBlockMessage {
         }
         let reply_routes = NetworkReplyRoutes::try_from_route(reply_route)?;
         Ok(Self {
-            message: message.normalize(),
+            message,
             sender: Some(sender),
             via: Some(via),
             reply_routes: Some(reply_routes),
@@ -1887,7 +1887,6 @@ impl FairV2IngressMessageKind {
                 Some(Self::LaneHistoricalRecoveryResponse)
             }
             BlockMessage::KuraReplicaAdvert(_) => Some(Self::KuraReplicaAdvert),
-            _ => None,
         }
     }
     const fn is_v2(self) -> bool {
@@ -7070,14 +7069,6 @@ impl SumeragiHandle {
     pub fn try_incoming_block_message_from(&self, sender: PeerId, message: BlockMessage) -> bool {
         self.try_incoming_block_message_from_owned(sender, message)
             .accepted_or_coalesced()
-    }
-    /// Reject retired v1 control-flow frames.
-    pub fn incoming_consensus_control_flow_message(&self, _message: ControlFlow) {
-        iroha_logger::debug!("rejecting decode-only Sumeragi v1 control-flow frame");
-    }
-    /// Reject retired v1 control-flow frames.
-    pub fn try_incoming_consensus_control_flow_message(&self, _message: ControlFlow) -> bool {
-        false
     }
     /// Try to transfer one exact lane-relay item to its serialized owner.
     pub fn try_incoming_lane_relay_owned(

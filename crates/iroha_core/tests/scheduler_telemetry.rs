@@ -18,14 +18,15 @@ use iroha_core::{
 use iroha_data_model::{
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
+        LaneConfig as ModelLaneConfig, LaneId, LaneSchedulerPolicy, LaneStorageProfile,
+        LaneVisibility,
     },
     prelude::*,
 };
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -212,7 +213,7 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
     use nonzero_ext::nonzero;
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
-    let mut lane_core = ModelLaneConfig {
+    let lane_core = ModelLaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::new(7),
         alias: "core".to_string(),
@@ -221,15 +222,12 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         governance: Some("parliament".to_string()),
         settlement: Some("xor".to_string()),
         storage: LaneStorageProfile::FullReplica,
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(4096).expect("positive capacity")),
+            Some(NonZeroU64::new(33).expect("positive starvation bound")),
+        )),
         ..ModelLaneConfig::default()
     };
-    lane_core
-        .metadata
-        .insert("scheduler.teu_capacity".to_string(), "4096".to_string());
-    lane_core.metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "33".to_string(),
-    );
     let lane_ops = ModelLaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(11),

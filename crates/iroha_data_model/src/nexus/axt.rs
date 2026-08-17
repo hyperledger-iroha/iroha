@@ -16,6 +16,12 @@ use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
+/// Maximum number of proof-bound remote-spend statements in one V1 FASTPQ binding.
+///
+/// This matches the consensus ceiling for authenticated AXT handles in one
+/// block, so one proof can legitimately cover every same-dataspace handle
+/// without permitting an unbounded outer proof envelope.
+pub const MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1: usize = 65_536;
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -41,35 +47,33 @@ impl AxtBinding {
 /// Canonical descriptor for an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtDescriptor {
     /// List of dataspace identifiers touched by the transaction.
     pub dsids: Vec<DataSpaceId>,
     /// Fine-grained access declarations for each dataspace.
-    #[norito(default)]
     pub touches: Vec<AxtTouchSpec>,
 }
 /// Declared access set for a dataspace touched by an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtTouchSpec {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
     /// Logical read-set expressed as application key prefixes.
-    #[norito(default)]
     pub read: Vec<String>,
     /// Logical write-set expressed as application key prefixes.
-    #[norito(default)]
     pub write: Vec<String>,
 }
 /// Runtime manifest supplied via `AXT_TOUCH`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct TouchManifest {
     /// Keys read within the dataspace during execution.
-    #[norito(default)]
     pub read: Vec<String>,
     /// Keys written within the dataspace during execution.
-    #[norito(default)]
     pub write: Vec<String>,
 }
 impl TouchManifest {
@@ -188,6 +192,7 @@ impl AxtDescriptorBuilder {
 /// Touch fragment emitted for a particular dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtTouchFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -197,17 +202,26 @@ pub struct AxtTouchFragment {
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct ProofBlob {
     /// Norito-encoded AXT proof envelope bytes.
     pub payload: Vec<u8>,
-    /// Optional expiry slot advertised by the prover.
-    #[norito(default)]
+    /// Outer mirror of the proof-bound expiry slot.
+    ///
+    /// `None` is an authenticated no-expiry sentinel, not an omitted
+    /// verification field. Consensus consumers must exact-compare this value
+    /// with the proof metadata.
+    #[norito(required)]
     pub expiry_slot: Option<u64>,
 }
-/// Check whether the proof envelope binds to the expected dataspace, manifest root,
-/// and V1 `FastPQ` verifier binding.
+/// Check whether the decoded proof envelope has the expected structural shape.
+///
+/// This helper performs canonical decoding and compares untrusted outer fields;
+/// it does **not** verify the `FastPQ` proof or cryptographically authenticate
+/// the dataspace, manifest root, expiry, DA commitment, or binding. Consensus
+/// and host admission must use the `fastpq_prover` verifier instead.
 #[must_use]
-pub fn proof_matches_manifest(
+pub fn proof_envelope_shape_matches_manifest(
     proof: &ProofBlob,
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -245,6 +259,11 @@ fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
             .target_dsids
             .windows(2)
             .all(|pair| pair[0] < pair[1])
+        && binding.remote_spend_intent_commitments.len() <= MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1
+        && binding
+            .remote_spend_intent_commitments
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
 }
 fn binding_string_is_present(value: &str) -> bool {
     !value.trim().is_empty()
@@ -264,19 +283,19 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtProofEnvelope {
     /// Dataspace the proof is intended for.
     pub dsid: DataSpaceId,
     /// Manifest root the proof commits to.
     pub manifest_root: [u8; 32],
     /// Optional DA commitment the proof is bound to.
-    #[norito(default)]
+    #[norito(required)]
     pub da_commitment: Option<[u8; 32]>,
     /// Backend-specific proof payload.
-    #[norito(default)]
     pub proof: Vec<u8>,
     /// Structured FASTPQ binding used to reconstruct the verified batch.
-    #[norito(default)]
+    #[norito(required)]
     pub fastpq_binding: Option<AxtFastpqBinding>,
     /// Optional non-zero scalar committed by the versioned FASTPQ proof statement.
     ///
@@ -284,15 +303,16 @@ pub struct AxtProofEnvelope {
     /// monetary quantity. Callers must convert a clear [`Quantity`] exactly at
     /// scale zero and reject values outside the `u128` statement domain. When
     /// present, the value must exactly match the proof-bound AXT batch metadata.
-    #[norito(default)]
+    #[norito(required)]
     pub committed_amount: Option<u128>,
     /// Optional commitment for hidden-amount intents.
-    #[norito(default)]
+    #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
 }
 /// Structured FASTPQ receipt/effect binding embedded in AXT proof envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtFastpqBinding {
     /// Canonical FASTPQ parameter set.
     pub parameter: String,
@@ -315,59 +335,66 @@ pub struct AxtFastpqBinding {
     /// Business effect type verified by the proof.
     pub verified_effect_type: String,
     /// Optional corridor label used by maintained flows.
-    #[norito(default)]
     pub corridor: String,
     /// Verifier identifier.
-    #[norito(default)]
     pub verifier_id: String,
     /// Verifier version.
-    #[norito(default)]
     pub verifier_version: String,
     /// Non-empty, strictly increasing target dataspace ids committed by the proof.
-    #[norito(default)]
     pub target_dsids: Vec<u64>,
     /// Business-effect bindings that maintained contracts compare on-ledger.
-    #[norito(default)]
+    #[norito(required)]
     pub effect_binding: Option<AxtEffectBinding>,
+    /// Canonical sorted commitments to remote-spend intents, when this proof
+    /// authorizes [`RemoteSpendIntent`] execution through asset handles.
+    ///
+    /// Generic proofs that are not consumed by `USE_ASSET_HANDLE` leave this
+    /// empty. Handle-bound proofs must include every exact descriptor, asset
+    /// dataspace, operation, accounts, and effective amount tuple that may use
+    /// the proof. Duplicates, non-canonical ordering, and sets larger than
+    /// [`MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1`] are rejected.
+    pub remote_spend_intent_commitments: Vec<[u8; 32]>,
 }
 /// Business-effect bindings committed by a FASTPQ proof envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtEffectBinding {
     /// Destination dataspace/domain label when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub destination_domain: Option<String>,
     /// Destination account id in canonical encoded form.
-    #[norito(default)]
+    #[norito(required)]
     pub destination_account_id: Option<String>,
     /// Vault account id in canonical encoded form.
-    #[norito(default)]
+    #[norito(required)]
     pub vault_account_id: Option<String>,
     /// Issuance account id in canonical encoded form.
-    #[norito(default)]
+    #[norito(required)]
     pub issuance_account_id: Option<String>,
     /// Source asset definition id in canonical literal form.
-    #[norito(default)]
+    #[norito(required)]
     pub source_asset_definition_id: Option<String>,
     /// Destination asset definition id in canonical literal form.
-    #[norito(default)]
+    #[norito(required)]
     pub destination_asset_definition_id: Option<String>,
     /// Source scalar in the versioned FASTPQ circuit statement, when present.
     ///
     /// This is not a ledger amount; business quantities must be converted
     /// exactly before constructing the proof witness.
-    #[norito(default)]
+    #[norito(required)]
     pub source_amount_i64: Option<i64>,
     /// Destination scalar in the versioned FASTPQ circuit statement, when present.
     ///
     /// This is not a ledger amount; business quantities must be converted
     /// exactly before constructing the proof witness.
-    #[norito(default)]
+    #[norito(required)]
     pub destination_amount_i64: Option<i64>,
 }
 /// Proof fragment associated with a dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtProofFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -377,6 +404,7 @@ pub struct AxtProofFragment {
 /// Dataspace composability group binding advertised by the capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct GroupBinding {
     /// Domain or composability group identifier.
     pub composability_group_id: Vec<u8>,
@@ -386,21 +414,23 @@ pub struct GroupBinding {
 /// Handle budget parameters.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
     pub remaining: Quantity,
     /// Optional per-use cap.
-    #[norito(default)]
+    #[norito(required)]
     pub per_use: Option<Quantity>,
 }
 /// Capability subject metadata.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct HandleSubject {
-    /// Account identifier of the spender (string form for now).
+    /// Canonical I105 account identifier of the spender.
     pub account: String,
     /// Optional originating dataspace for cross-dataspace handles.
-    #[norito(default)]
+    #[norito(required)]
     pub origin_dsid: Option<DataSpaceId>,
 }
 /// Domain separator for V1 issuer signatures over asset handles.
@@ -412,6 +442,7 @@ pub const AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:axt:asset-handl
 /// and currently executing IVM image before checking the signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtHandleIssuerContextV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -451,6 +482,7 @@ impl Default for AxtHandleIssuerContextV1 {
 /// Canonical V1 statement authenticated by an AXT capability issuer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AssetHandleIssuerPayloadV1 {
     /// Immutable admission context reconstructed by the validating host.
     pub context: AxtHandleIssuerContextV1,
@@ -475,6 +507,7 @@ pub struct AssetHandleIssuerPayloadV1 {
     /// Capability expiry slot.
     pub expiry_slot: u64,
     /// Requested clock-skew allowance, if any.
+    #[norito(required)]
     pub max_clock_skew_ms: Option<u32>,
 }
 /// Unsigned AXT capability claims prepared by an issuer.
@@ -483,6 +516,7 @@ pub struct AssetHandleIssuerPayloadV1 {
 /// admission-ready [`AssetHandle`] whose signature is mandatory on the wire.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AssetHandleDraft {
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
@@ -505,7 +539,7 @@ pub struct AssetHandleDraft {
     /// Expiry slot for freshness enforcement.
     pub expiry_slot: u64,
     /// Optional wall-clock skew allowance enforced by the host.
-    #[norito(default)]
+    #[norito(required)]
     pub max_clock_skew_ms: Option<u32>,
 }
 impl AssetHandleDraft {
@@ -566,6 +600,7 @@ impl AssetHandleDraft {
 /// Admission-ready AXT capability with a mandatory issuer signature.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AssetHandle {
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
@@ -588,7 +623,7 @@ pub struct AssetHandle {
     /// Expiry slot for freshness enforcement.
     pub expiry_slot: u64,
     /// Optional wall-clock skew allowance enforced by the host.
-    #[norito(default)]
+    #[norito(required)]
     pub max_clock_skew_ms: Option<u32>,
     /// Immutable network, issuer, code, and ABI context authenticated by the signature.
     pub issuer_context: AxtHandleIssuerContextV1,
@@ -707,48 +742,94 @@ pub fn next_axt_handle_sub_nonce(
 /// Simplified representation of spend operations.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SpendOp {
     /// Operation kind (e.g., "transfer").
     pub kind: String,
-    /// Origin account id (string form).
+    /// Origin account id in canonical I105 form.
     pub from: String,
-    /// Destination account id (string form).
+    /// Destination account id in canonical I105 form.
     pub to: String,
     /// Cleartext amount, or `None` when the proof carries a hidden amount.
-    #[norito(default)]
+    #[norito(required)]
     pub amount: Option<Quantity>,
 }
 /// Intent forwarded to a dataspace via `USE_ASSET_HANDLE`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct RemoteSpendIntent {
     /// Target asset dataspace identifier.
     pub asset_dsid: DataSpaceId,
     /// Operation payload.
     pub op: SpendOp,
 }
+#[derive(Encode)]
+struct RemoteSpendIntentCommitmentV1 {
+    descriptor_binding: AxtBinding,
+    asset_dsid: DataSpaceId,
+    kind: String,
+    from: String,
+    to: String,
+    effective_amount: Quantity,
+}
+/// Compute the canonical V1 commitment that binds a FASTPQ proof to one remote spend.
+///
+/// The commitment covers the descriptor binding, authenticated asset dataspace,
+/// exact operation kind and canonical account strings, plus the effective amount
+/// after cleartext/proof reconciliation. The domain separator and canonical
+/// framed Norito statement encoding make the commitment deterministic and
+/// distinct from other AXT and FASTPQ digests.
+#[must_use]
+pub fn compute_remote_spend_intent_commitment_v1(
+    descriptor_binding: AxtBinding,
+    asset_dsid: DataSpaceId,
+    kind: &str,
+    from: &str,
+    to: &str,
+    effective_amount: &Quantity,
+) -> [u8; 32] {
+    let statement = RemoteSpendIntentCommitmentV1 {
+        descriptor_binding,
+        asset_dsid,
+        kind: kind.to_owned(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+        effective_amount: effective_amount.clone(),
+    };
+    let mut payload = b"iroha:axt:remote-spend-intent:v1\0".to_vec();
+    payload.extend_from_slice(
+        &norito::encode_canonical(&statement)
+            .expect("fixed remote-spend commitment statement must encode canonically"),
+    );
+    Hash::new(payload).into()
+}
 /// Recorded handle usage for commit validation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtHandleFragment {
     /// Handle presented by the caller.
     pub handle: AssetHandle,
     /// Intent bound to the handle and dataspace.
     pub intent: RemoteSpendIntent,
     /// Optional proof attached to the handle.
-    #[norito(default)]
+    #[norito(required)]
     pub proof: Option<ProofBlob>,
     /// Cleartext amount associated with the intent, or `None` for a hidden amount.
-    #[norito(default)]
+    #[norito(required)]
     pub amount: Option<Quantity>,
     /// Optional commitment corresponding to the effective amount.
-    #[norito(default)]
+    #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
 }
 /// Canonical fingerprint for a handle usage recorded in the replay ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtHandleReplayKey {
+    /// Dataspace whose committed policy issued the handle.
+    pub asset_dsid: DataSpaceId,
     /// Descriptor binding that minted the handle.
     pub binding: AxtBinding,
     /// Handle era.
@@ -762,22 +843,25 @@ impl AxtHandleReplayKey {
     /// Create a replay key from explicit parts.
     #[must_use]
     pub fn from_parts(
+        asset_dsid: DataSpaceId,
         binding: [u8; 32],
         handle_era: u64,
         sub_nonce: u64,
         target_lane: LaneId,
     ) -> Self {
         Self {
+            asset_dsid,
             binding: AxtBinding::new(binding),
             handle_era,
             sub_nonce,
             target_lane,
         }
     }
-    /// Create a replay key from an [`AssetHandle`].
+    /// Create a replay key from an [`AssetHandle`] and its authenticated policy dataspace.
     #[must_use]
-    pub fn from_handle(handle: &AssetHandle) -> Self {
+    pub fn from_handle(asset_dsid: DataSpaceId, handle: &AssetHandle) -> Self {
         Self::from_parts(
+            asset_dsid,
             handle.axt_binding.into_array(),
             handle.handle_era,
             handle.sub_nonce,
@@ -788,8 +872,12 @@ impl AxtHandleReplayKey {
 /// Ledger entry capturing when a handle was consumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtReplayRecord {
-    /// Dataspace referenced by the handle.
+    /// Redundant observational dataspace recorded with the handle use.
+    ///
+    /// Replay and cleanup authority comes from [`AxtHandleReplayKey::asset_dsid`];
+    /// consumers must not use this copy to select the replay scope.
     pub dataspace: DataSpaceId,
     /// Slot when the handle was observed.
     pub used_slot: u64,
@@ -813,6 +901,7 @@ impl AxtReplayRecord {
 /// Aggregate record used to persist and replicate AXT envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtEnvelopeRecord {
     /// Binding derived from the descriptor.
     pub binding: AxtBinding,
@@ -821,13 +910,10 @@ pub struct AxtEnvelopeRecord {
     /// Canonical descriptor.
     pub descriptor: AxtDescriptor,
     /// Touch fragments per dataspace.
-    #[norito(default)]
     pub touches: Vec<AxtTouchFragment>,
     /// Proof fragments per dataspace.
-    #[norito(default)]
     pub proofs: Vec<AxtProofFragment>,
     /// Handle fragments recorded during execution.
-    #[norito(default)]
     pub handles: Vec<AxtHandleFragment>,
     /// Exact height of the block that persists this envelope.
     pub commit_height: u64,
@@ -835,6 +921,7 @@ pub struct AxtEnvelopeRecord {
 /// Per-dataspace policy snapshot sourced from the Space Directory/WSV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtPolicyEntry {
     /// Manifest root the handle must reference.
     pub manifest_root: [u8; 32],
@@ -850,6 +937,7 @@ pub struct AxtPolicyEntry {
 /// Binding between a dataspace id and its AXT policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtPolicyBinding {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -859,6 +947,7 @@ pub struct AxtPolicyBinding {
 /// Collection of AXT policy bindings for deterministic replication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtPolicySnapshot {
     /// Hash-derived snapshot version (truncated to u64 for gauges/telemetry).
     pub version: u64,
@@ -952,26 +1041,26 @@ impl AxtPolicySnapshot {
 /// Context captured when an AXT envelope fails policy checks.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AxtRejectContext {
     /// Classified reason for the rejection.
     pub reason: AxtRejectReason,
     /// Dataspace associated with the rejection (if known).
-    #[norito(default)]
+    #[norito(required)]
     pub dataspace: Option<DataSpaceId>,
     /// Lane associated with the rejection (if known).
-    #[norito(default)]
+    #[norito(required)]
     pub lane: Option<LaneId>,
     /// Snapshot version advertised by the policy map used for validation, when one was installed.
-    #[norito(default)]
+    #[norito(required)]
     pub snapshot_version: Option<u64>,
     /// Human-readable detail string for operators.
-    #[norito(default)]
     pub detail: String,
     /// Exact active handle era, when available.
-    #[norito(default)]
+    #[norito(required)]
     pub active_handle_era: Option<u64>,
     /// Exact next handle counter, when available.
-    #[norito(default)]
+    #[norito(required)]
     pub next_handle_counter: Option<u64>,
 }
 impl core::fmt::Display for AxtRejectContext {
@@ -1335,7 +1424,7 @@ mod tests {
         AssetHandleDraft {
             scope: vec!["transfer".into()],
             subject: HandleSubject {
-                account: "issuer-bound-account".into(),
+                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
                 origin_dsid: Some(DataSpaceId::new(7)),
             },
             budget: HandleBudget {
@@ -1370,6 +1459,103 @@ mod tests {
         assert!(
             decode_from_bytes::<AssetHandle>(&encoded).is_err(),
             "the admission wire type must require its issuer context and signature"
+        );
+    }
+    #[test]
+    fn handle_replay_key_scopes_identical_ticket_by_asset_dataspace() {
+        let handle = sample_asset_handle();
+        let key_a = AxtHandleReplayKey::from_handle(DataSpaceId::new(7), &handle);
+        let key_b = AxtHandleReplayKey::from_handle(DataSpaceId::new(8), &handle);
+        assert_ne!(key_a, key_b);
+        assert_eq!(key_a.binding, key_b.binding);
+        assert_eq!(key_a.handle_era, key_b.handle_era);
+        assert_eq!(key_a.sub_nonce, key_b.sub_nonce);
+        assert_eq!(key_a.target_lane, key_b.target_lane);
+
+        let encoded = to_bytes(&key_b).expect("encode dataspace-scoped replay key");
+        let decoded: AxtHandleReplayKey =
+            decode_from_bytes(&encoded).expect("decode dataspace-scoped replay key");
+        assert_eq!(decoded, key_b);
+        assert_eq!(decoded.asset_dsid, DataSpaceId::new(8));
+    }
+    #[test]
+    fn remote_spend_intent_commitment_binds_every_runtime_field() {
+        let descriptor_binding = AxtBinding::new([0xA5; 32]);
+        let dsid = DataSpaceId::new(7);
+        let amount = Quantity::from(5_u64);
+        let expected = compute_remote_spend_intent_commitment_v1(
+            descriptor_binding,
+            dsid,
+            "transfer",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            &amount,
+        );
+        assert_eq!(
+            expected,
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                dsid,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            )
+        );
+        let mutations = [
+            compute_remote_spend_intent_commitment_v1(
+                AxtBinding::new([0xA4; 32]),
+                dsid,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                DataSpaceId::new(8),
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                dsid,
+                "mint",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                dsid,
+                "transfer",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                dsid,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                descriptor_binding,
+                dsid,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &Quantity::from(6_u64),
+            ),
+        ];
+        assert!(
+            mutations
+                .into_iter()
+                .all(|commitment| commitment != expected)
         );
     }
     #[test]
@@ -1527,7 +1713,298 @@ mod tests {
             verifier_version: "v1".to_string(),
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         }
+    }
+    #[test]
+    fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
+        #[derive(Encode)]
+        struct PreReleaseDescriptor {
+            dsids: Vec<DataSpaceId>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseProofEnvelope {
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            da_commitment: Option<[u8; 32]>,
+            proof: Vec<u8>,
+            fastpq_binding: Option<AxtFastpqBinding>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseProofBlob {
+            payload: Vec<u8>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseHandleBudget {
+            remaining: Quantity,
+        }
+        #[derive(Encode)]
+        struct PreReleaseHandleSubject {
+            account: String,
+        }
+        #[derive(Encode)]
+        struct PreReleaseSpendOp {
+            kind: String,
+            from: String,
+            to: String,
+        }
+
+        let dsid = DataSpaceId::new(19);
+        let descriptor = to_bytes(&PreReleaseDescriptor { dsids: vec![dsid] })
+            .expect("encode pre-release AXT descriptor");
+        assert!(
+            decode_from_bytes::<AxtDescriptor>(&descriptor).is_err(),
+            "the V1 descriptor must require its exact touch collection"
+        );
+
+        let envelope = to_bytes(&PreReleaseProofEnvelope {
+            dsid,
+            manifest_root: [0xA5; 32],
+            da_commitment: None,
+            proof: vec![0xC3],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+        })
+        .expect("encode pre-release AXT proof envelope");
+        assert!(
+            decode_from_bytes::<AxtProofEnvelope>(&envelope).is_err(),
+            "the V1 proof envelope must require amount and commitment slots"
+        );
+
+        let shortened = to_bytes(&PreReleaseProofBlob {
+            payload: vec![0xC5],
+        })
+        .expect("encode pre-release proof blob");
+        assert!(decode_from_bytes::<ProofBlob>(&shortened).is_err());
+        let shortened = to_bytes(&PreReleaseHandleBudget {
+            remaining: Quantity::from(5_u64),
+        })
+        .expect("encode pre-release handle budget");
+        assert!(decode_from_bytes::<HandleBudget>(&shortened).is_err());
+        let shortened = to_bytes(&PreReleaseHandleSubject {
+            account: "sorau fixture".to_owned(),
+        })
+        .expect("encode pre-release handle subject");
+        assert!(decode_from_bytes::<HandleSubject>(&shortened).is_err());
+        let shortened = to_bytes(&PreReleaseSpendOp {
+            kind: "transfer".to_owned(),
+            from: "sorau source".to_owned(),
+            to: "sorau destination".to_owned(),
+        })
+        .expect("encode pre-release spend operation");
+        assert!(decode_from_bytes::<SpendOp>(&shortened).is_err());
+    }
+    #[test]
+    fn axt_v1_json_requires_nullable_slots_and_rejects_unknown_fields() {
+        let dsid = DataSpaceId::new(20);
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root: [0xA6; 32],
+            da_commitment: None,
+            proof: vec![0xC4],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        for field in [
+            "da_commitment",
+            "proof",
+            "fastpq_binding",
+            "committed_amount",
+            "amount_commitment",
+        ] {
+            let mut value =
+                norito::json::to_value(&envelope).expect("serialize AXT proof envelope");
+            assert!(
+                value
+                    .as_object_mut()
+                    .expect("AXT proof envelope JSON object")
+                    .remove(field)
+                    .is_some(),
+                "fixture must contain field {field}"
+            );
+            assert!(
+                norito::json::from_value::<AxtProofEnvelope>(value).is_err(),
+                "the V1 proof envelope must require {field}"
+            );
+        }
+        let mut unknown = norito::json::to_value(&envelope).expect("serialize AXT proof envelope");
+        unknown
+            .as_object_mut()
+            .expect("AXT proof envelope JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<AxtProofEnvelope>(unknown).is_err(),
+            "the V1 proof envelope must reject unknown fields"
+        );
+
+        let binding = envelope
+            .fastpq_binding
+            .as_ref()
+            .expect("fixture has FASTPQ binding");
+        let mut missing_effect = norito::json::to_value(binding).expect("serialize FASTPQ binding");
+        missing_effect
+            .as_object_mut()
+            .expect("FASTPQ binding JSON object")
+            .remove("effect_binding");
+        assert!(
+            norito::json::from_value::<AxtFastpqBinding>(missing_effect).is_err(),
+            "the V1 FASTPQ binding must require its nullable effect slot"
+        );
+
+        let proof = ProofBlob {
+            payload: vec![0xC5],
+            expiry_slot: None,
+        };
+        let mut missing_expiry = norito::json::to_value(&proof).expect("serialize proof blob");
+        missing_expiry
+            .as_object_mut()
+            .expect("proof blob JSON object")
+            .remove("expiry_slot");
+        assert!(
+            norito::json::from_value::<ProofBlob>(missing_expiry).is_err(),
+            "the V1 proof blob must require its nullable expiry slot"
+        );
+    }
+    #[test]
+    fn axt_v1_json_requires_handle_and_envelope_collections() {
+        let handle = sample_asset_handle();
+        let mut missing_skew = norito::json::to_value(&handle).expect("serialize asset handle");
+        missing_skew
+            .as_object_mut()
+            .expect("asset handle JSON object")
+            .remove("max_clock_skew_ms");
+        assert!(
+            norito::json::from_value::<AssetHandle>(missing_skew).is_err(),
+            "the V1 asset handle must require its nullable clock-skew slot"
+        );
+
+        let dsid = DataSpaceId::new(21);
+        let record = AxtEnvelopeRecord {
+            binding: AxtBinding::new([0xD1; 32]),
+            lane: LaneId::new(2),
+            descriptor: sample_descriptor(dsid),
+            touches: Vec::new(),
+            proofs: Vec::new(),
+            handles: Vec::new(),
+            commit_height: 1,
+        };
+        for field in ["touches", "proofs", "handles"] {
+            let mut value = norito::json::to_value(&record).expect("serialize AXT envelope");
+            value
+                .as_object_mut()
+                .expect("AXT envelope JSON object")
+                .remove(field);
+            assert!(
+                norito::json::from_value::<AxtEnvelopeRecord>(value).is_err(),
+                "the V1 AXT envelope must require {field}"
+            );
+        }
+    }
+    #[test]
+    fn axt_v1_json_requires_every_nested_nullable_slot() {
+        macro_rules! assert_required_json_fields {
+            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?]) => {{
+                let canonical = norito::json::to_value(&$value)
+                    .expect("serialize canonical AXT JSON value");
+                $(
+                    let mut missing = canonical.clone();
+                    assert!(
+                        missing
+                            .as_object_mut()
+                            .expect("canonical AXT JSON object")
+                            .remove($field)
+                            .is_some(),
+                        "fixture must contain field {}",
+                        $field,
+                    );
+                    assert!(
+                        norito::json::from_value::<$ty>(missing).is_err(),
+                        "V1 AXT JSON must require field {}",
+                        $field,
+                    );
+                )+
+            }};
+        }
+
+        let effect = AxtEffectBinding {
+            destination_domain: None,
+            destination_account_id: None,
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: None,
+            destination_asset_definition_id: None,
+            source_amount_i64: None,
+            destination_amount_i64: None,
+        };
+        assert_required_json_fields!(
+            effect,
+            AxtEffectBinding,
+            [
+                "destination_domain",
+                "destination_account_id",
+                "vault_account_id",
+                "issuance_account_id",
+                "source_asset_definition_id",
+                "destination_asset_definition_id",
+                "source_amount_i64",
+                "destination_amount_i64",
+            ]
+        );
+
+        let draft = sample_asset_handle_draft();
+        assert_required_json_fields!(draft.subject, HandleSubject, ["origin_dsid"]);
+        assert_required_json_fields!(draft.budget, HandleBudget, ["per_use"]);
+        assert_required_json_fields!(draft, AssetHandleDraft, ["max_clock_skew_ms"]);
+        let context = issuer_context(test_network_id(b"json-v1-network"), DataSpaceId::new(7));
+        assert_required_json_fields!(
+            draft.issuer_payload_v1(context),
+            AssetHandleIssuerPayloadV1,
+            ["max_clock_skew_ms"]
+        );
+
+        let op = SpendOp {
+            kind: "transfer".to_owned(),
+            from: draft.subject.account.clone(),
+            to: draft.subject.account.clone(),
+            amount: None,
+        };
+        assert_required_json_fields!(op, SpendOp, ["amount"]);
+        let fragment = AxtHandleFragment {
+            handle: sample_asset_handle(),
+            intent: RemoteSpendIntent {
+                asset_dsid: DataSpaceId::new(7),
+                op,
+            },
+            proof: None,
+            amount: None,
+            amount_commitment: None,
+        };
+        assert_required_json_fields!(
+            fragment,
+            AxtHandleFragment,
+            ["proof", "amount", "amount_commitment"]
+        );
+
+        let reject = AxtRejectContext {
+            reason: AxtRejectReason::PolicyDenied,
+            dataspace: None,
+            lane: None,
+            snapshot_version: None,
+            detail: "policy rejected".to_owned(),
+            active_handle_era: None,
+            next_handle_counter: None,
+        };
+        assert_required_json_fields!(
+            reject,
+            AxtRejectContext,
+            [
+                "dataspace",
+                "lane",
+                "snapshot_version",
+                "active_handle_era",
+                "next_handle_counter",
+            ]
+        );
     }
     fn descriptor_with_paths(read: &[&str], write: &[&str]) -> AxtDescriptor {
         let dsid = DataSpaceId::new(1);
@@ -1963,7 +2440,7 @@ mod tests {
         );
     }
     #[test]
-    fn proof_matches_manifest_accepts_envelope_and_rejects_raw_root() {
+    fn proof_envelope_shape_matches_manifest_accepts_envelope_and_rejects_raw_root() {
         let dsid = DataSpaceId::new(17);
         let manifest_root = [0xA5; 32];
         let envelope = AxtProofEnvelope {
@@ -1980,7 +2457,11 @@ mod tests {
             payload: encoded,
             expiry_slot: None,
         };
-        assert!(proof_matches_manifest(&proof, dsid, manifest_root));
+        assert!(proof_envelope_shape_matches_manifest(
+            &proof,
+            dsid,
+            manifest_root
+        ));
         let missing_binding = AxtProofEnvelope {
             dsid,
             manifest_root,
@@ -1994,7 +2475,7 @@ mod tests {
             payload: norito::to_bytes(&missing_binding).expect("encode envelope"),
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(
+        assert!(!proof_envelope_shape_matches_manifest(
             &missing_binding_proof,
             dsid,
             manifest_root
@@ -2003,7 +2484,11 @@ mod tests {
             payload: manifest_root.to_vec(),
             expiry_slot: Some(5),
         };
-        assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &raw_proof,
+            dsid,
+            manifest_root
+        ));
     }
     #[test]
     fn fastpq_binding_shape_requires_strictly_increasing_target_dsids() {
@@ -2019,7 +2504,31 @@ mod tests {
         );
     }
     #[test]
-    fn proof_matches_manifest_rejects_alternate_layout_and_restores_flags() {
+    fn fastpq_binding_shape_requires_canonical_remote_spend_commitment_set() {
+        let mut binding = sample_fastpq_binding(DataSpaceId::new(18));
+        binding.remote_spend_intent_commitments = vec![[0x11; 32], [0x22; 32]];
+        assert!(fastpq_binding_shape_is_concrete(&binding));
+        binding.remote_spend_intent_commitments = vec![[0x11; 32], [0x11; 32]];
+        assert!(!fastpq_binding_shape_is_concrete(&binding));
+        binding.remote_spend_intent_commitments = vec![[0x22; 32], [0x11; 32]];
+        assert!(!fastpq_binding_shape_is_concrete(&binding));
+
+        binding.remote_spend_intent_commitments = (0_u64
+            ..=u64::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1)
+                .expect("V1 commitment limit fits u64"))
+            .map(|index| {
+                let mut commitment = [0_u8; 32];
+                commitment[24..].copy_from_slice(&index.to_be_bytes());
+                commitment
+            })
+            .collect();
+        assert!(
+            !fastpq_binding_shape_is_concrete(&binding),
+            "an ordered but oversized commitment set must fail closed"
+        );
+    }
+    #[test]
+    fn proof_envelope_shape_matches_manifest_rejects_alternate_layout_and_restores_flags() {
         let dsid = DataSpaceId::new(21);
         let manifest_root = [0xD2; 32];
         let envelope = AxtProofEnvelope {
@@ -2058,7 +2567,7 @@ mod tests {
                 norito::core::effective_decode_flags(),
                 Some(alternate_flags)
             );
-            assert!(proof_matches_manifest(
+            assert!(proof_envelope_shape_matches_manifest(
                 &canonical_proof,
                 dsid,
                 manifest_root
@@ -2067,7 +2576,7 @@ mod tests {
                 norito::core::effective_decode_flags(),
                 Some(alternate_flags)
             );
-            assert!(!proof_matches_manifest(
+            assert!(!proof_envelope_shape_matches_manifest(
                 &alternate_proof,
                 dsid,
                 manifest_root
@@ -2080,7 +2589,7 @@ mod tests {
         assert_eq!(norito::core::effective_decode_flags(), prior_flags);
     }
     #[test]
-    fn proof_matches_manifest_rejects_synthetic_binding_shape() {
+    fn proof_envelope_shape_matches_manifest_rejects_synthetic_binding_shape() {
         let dsid = DataSpaceId::new(20);
         let manifest_root = [0xC1; 32];
         let mut binding = sample_fastpq_binding(dsid);
@@ -2098,7 +2607,11 @@ mod tests {
             payload: norito::to_bytes(&envelope).expect("encode envelope"),
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &proof,
+            dsid,
+            manifest_root
+        ));
         let mut binding = sample_fastpq_binding(dsid);
         binding.claim_type = "synthetic".to_string();
         let envelope = AxtProofEnvelope {
@@ -2114,7 +2627,11 @@ mod tests {
             payload: norito::to_bytes(&envelope).expect("encode envelope"),
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &proof,
+            dsid,
+            manifest_root
+        ));
         let mut binding = sample_fastpq_binding(dsid);
         binding.target_dsids.clear();
         let envelope = AxtProofEnvelope {
@@ -2130,10 +2647,14 @@ mod tests {
             payload: norito::to_bytes(&envelope).expect("encode envelope"),
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &proof,
+            dsid,
+            manifest_root
+        ));
     }
     #[test]
-    fn proof_matches_manifest_rejects_mismatch() {
+    fn proof_envelope_shape_matches_manifest_rejects_mismatch() {
         let dsid = DataSpaceId::new(18);
         let other = DataSpaceId::new(19);
         let manifest_root = [0xB4; 32];
@@ -2152,17 +2673,29 @@ mod tests {
             payload: encoded,
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &proof,
+            dsid,
+            manifest_root
+        ));
         let raw_proof = ProofBlob {
             payload: bad_root.to_vec(),
             expiry_slot: Some(7),
         };
-        assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &raw_proof,
+            dsid,
+            manifest_root
+        ));
         let zero_root = [0u8; 32];
         let zero_proof = ProofBlob {
             payload: zero_root.to_vec(),
             expiry_slot: None,
         };
-        assert!(!proof_matches_manifest(&zero_proof, dsid, zero_root));
+        assert!(!proof_envelope_shape_matches_manifest(
+            &zero_proof,
+            dsid,
+            zero_root
+        ));
     }
 }

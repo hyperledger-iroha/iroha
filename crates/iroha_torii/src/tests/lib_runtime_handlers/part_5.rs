@@ -302,6 +302,12 @@ async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
     assert_eq!(payload.schema_version, 1);
     assert_eq!(payload.queue.size, 0);
     assert_eq!(payload.sumeragi.block_cadence_ms, expected_block_cadence_ms);
+    assert!(
+        payload
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .is_empty()
+    );
     assert_eq!(
         payload.pipeline.ivm_max_cycles_upper_bound,
         app.state
@@ -363,7 +369,8 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xd8, "derive live pending pipeline-status fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd8, "derive live pending pipeline-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -383,7 +390,8 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     .into_response();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert!(
-        app.queue.contains_pending_hash(tx_hash.clone(), &app.state),
+        app.queue
+            .contains_pending_hash(transaction.hash_as_entrypoint(), &app.state),
         "fixture transaction should remain pending in the live queue"
     );
     app.pipeline_status_cache.record_entry(
@@ -1167,7 +1175,8 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
         torii_response_header(&missing_json_response, "x-iroha-reject-code"),
         Some("not_found"),
     );
-    let missing_json_body = torii_body_bytes(missing_json_response, "missing asset JSON body").await;
+    let missing_json_body =
+        torii_body_bytes(missing_json_response, "missing asset JSON body").await;
     let missing_envelope: ErrorEnvelope =
         norito::json::from_slice(&missing_json_body).expect("typed missing asset JSON");
     assert_eq!(missing_envelope.code, "not_found");
@@ -1497,8 +1506,7 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let tx_hashes: HashSet<_> = [sample.tx_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp =
-        pipeline_status_response(app.clone(), sample.tx_hash.to_string(), None, "ok").await;
+    let resp = pipeline_status_response(app.clone(), sample.tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
     assert_eq!(
@@ -1530,19 +1538,26 @@ fn store_and_index_transaction_details_block(
     block: SignedBlock,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> HashOf<SignedTransaction> {
+    let signed_hash = block
+        .external_transactions()
+        .next()
+        .expect("transaction-details fixture contains an external transaction")
+        .hash();
+    assert_eq!(
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash),
+        entrypoint_hash,
+    );
     let header = block.header();
     let height = NonZeroUsize::new(
         usize::try_from(header.height().get()).expect("transaction-details height fits usize"),
     )
     .expect("transaction-details height is nonzero");
-    let signed_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
     let block_hash = store_block(app, block);
     record_committed_block_hash_for_test(app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     state_block
         .transactions
-        .insert_block([signed_hash].into_iter().collect(), height);
+        .insert_block([entrypoint_hash].into_iter().collect(), height);
     state_block
         .commit()
         .expect("commit transaction-details membership index");
@@ -1608,8 +1623,7 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         "public status projection",
     )
     .await;
-    let public_json =
-        decode_torii_json(public, "public status body", "public status JSON").await;
+    let public_json = decode_torii_json(public, "public status body", "public status JSON").await;
     assert!(public_json.get("batch_transfer_outcomes").is_none());
     assert!(public_json.get("transaction").is_none());
     let public_text = norito::json::to_json(&public_json).expect("render public status JSON");
@@ -1761,14 +1775,14 @@ async fn pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_ha
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let reveal_status_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(reveal_entry_hash));
     let mut state_block = app.state.block(header);
-    let tx_hashes: HashSet<_> = [reveal_status_hash].into_iter().collect();
-    state_block.transactions.insert_block(tx_hashes, height_nz);
+    let entrypoint_hashes: HashSet<_> = [reveal_entry_hash].into_iter().collect();
+    state_block
+        .transactions
+        .insert_block(entrypoint_hashes, height_nz);
     state_block.commit().expect("commit");
     let resp =
-        pipeline_status_response(app.clone(), reveal_status_hash.to_string(), None, "ok").await;
+        pipeline_status_response(app.clone(), reveal_entry_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
     assert_eq!(
@@ -1958,7 +1972,8 @@ fn record_commit_cert(height: u64) -> Qc {
     let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
         [0x42; Hash::LENGTH],
     )));
-    let keypair = checked_torii_test_bls_keypair(0x30, "derive Torii recorded commit-cert fixture key");
+    let keypair =
+        checked_torii_test_bls_keypair(0x30, "derive Torii recorded commit-cert fixture key");
     let peer_id = PeerId::from(keypair.public_key().clone());
     let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32]));
     let parent_state_root = iroha_crypto::Hash::prehashed([0x22; 32]);

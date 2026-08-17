@@ -32,6 +32,7 @@ pub enum ExternalExecutionRouteRole {
 /// Lane/dataspace leg committed as part of an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct ExternalExecutionRouteLeg {
     /// Lane selected for this leg.
     pub lane_id: LaneId,
@@ -71,6 +72,7 @@ pub struct ExternalExecutionContext {
     /// Full coordinator/participant route plan used for execution.
     pub routing_plan_legs: Vec<ExternalExecutionRouteLeg>,
     /// Native AMX receipt collected for this routed entrypoint, when the plan spans dataspaces.
+    #[norito(required)]
     pub native_amx_receipt: Option<NativeAmxReceipt>,
 }
 impl ExternalExecutionContext {
@@ -136,6 +138,7 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 /// in consensus frames.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CertifiedMergeLedgerReference {
     /// Reference schema version. Version one is the only valid value.
     pub version: u8,
@@ -146,16 +149,22 @@ pub struct CertifiedMergeLedgerReference {
     /// Merge-ledger epoch sealed by the certificate.
     pub epoch_id: u64,
     /// Execution-batch hash when this entry applies autonomous lane work.
+    #[norito(required)]
     pub execution_batch_hash: Option<Hash>,
     /// Number of entrypoint/result leaves in the certified execution batch.
+    #[norito(required)]
     pub entrypoint_count: Option<u64>,
     /// Merkle root of the ordered certified entrypoint hashes.
+    #[norito(required)]
     pub entrypoint_merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
     /// Merkle root of the ordered certified execution-result hashes.
+    #[norito(required)]
     pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
     /// Committed WSV height from which the execution batch starts.
+    #[norito(required)]
     pub base_state_height: Option<u64>,
     /// Committed WSV identity from which the execution batch starts.
+    #[norito(required)]
     pub base_state_hash: Option<HashOf<BlockHeader>>,
     /// Self-contained merge certificate; its signer bitmap also identifies sidecar holders.
     pub merge_qc: MergeQuorumCertificate,
@@ -254,12 +263,13 @@ pub struct BlockExecutionContextBundle {
     pub external: Vec<ExternalExecutionContext>,
     /// Producer-authenticated autonomous payloads anchored by this global block.
     ///
-    /// This field is deliberately required in the current layout. Legacy
+    /// This field is deliberately required in the current layout. Pre-release
     /// execution-context bytes must not decode as an implicitly empty anchor.
     pub autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
     /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
+    #[norito(required)]
     pub merge_entry: Option<CertifiedMergeLedgerReference>,
 }
 impl BlockExecutionContextBundle {
@@ -545,10 +555,90 @@ mod tests {
         assert_eq!(decoded.autonomous_lane_payloads, vec![envelope]);
         assert!(!decoded.is_empty());
     }
+
+    #[test]
+    #[cfg(feature = "json")]
+    fn execution_context_json_requires_every_nullable_slot() {
+        let external = ExternalExecutionContext::new(
+            entrypoint_hash(b"explicit-native-amx-slot"),
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        );
+        let mut missing =
+            norito::json::to_value(&external).expect("serialize external execution context");
+        missing
+            .as_object_mut()
+            .expect("external execution context JSON object")
+            .remove("native_amx_receipt");
+        assert!(
+            norito::json::from_value::<ExternalExecutionContext>(missing).is_err(),
+            "the first-release external context must require its nullable Native AMX slot"
+        );
+
+        let mut unknown_leg = norito::json::to_value(&external.routing_plan_legs[0])
+            .expect("serialize external route leg");
+        unknown_leg
+            .as_object_mut()
+            .expect("external route leg JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<ExternalExecutionRouteLeg>(unknown_leg).is_err(),
+            "the first-release external route leg must reject unknown fields"
+        );
+
+        let reference = CertifiedMergeLedgerReference::new(&sample_merge_entry());
+        for field in [
+            "execution_batch_hash",
+            "entrypoint_count",
+            "entrypoint_merkle_root",
+            "result_merkle_root",
+            "base_state_height",
+            "base_state_hash",
+        ] {
+            let mut value =
+                norito::json::to_value(&reference).expect("serialize certified merge reference");
+            assert!(
+                value
+                    .as_object_mut()
+                    .expect("certified merge reference JSON object")
+                    .remove(field)
+                    .is_some(),
+                "fixture must contain nullable field {field}"
+            );
+            assert!(
+                norito::json::from_value::<CertifiedMergeLedgerReference>(value).is_err(),
+                "the first-release certified merge reference must require {field}"
+            );
+        }
+
+        let bundle = BlockExecutionContextBundle::new(Vec::new());
+        let mut missing =
+            norito::json::to_value(&bundle).expect("serialize block execution context bundle");
+        missing
+            .as_object_mut()
+            .expect("block execution context JSON object")
+            .remove("merge_entry");
+        assert!(
+            norito::json::from_value::<BlockExecutionContextBundle>(missing).is_err(),
+            "the first-release block context must require its nullable merge-entry slot"
+        );
+
+        let mut unknown =
+            norito::json::to_value(&reference).expect("serialize certified merge reference");
+        unknown
+            .as_object_mut()
+            .expect("certified merge reference JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<CertifiedMergeLedgerReference>(unknown).is_err(),
+            "the first-release certified merge reference must reject unknown fields"
+        );
+    }
+
     #[test]
     fn block_execution_context_layout_omissions_fail_closed() {
         #[derive(Encode)]
-        struct LegacyExternalExecutionContext {
+        struct PreReleaseExternalExecutionContext {
             entrypoint_hash: HashOf<TransactionEntrypoint>,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
@@ -570,7 +660,7 @@ mod tests {
             merge_entry: Option<CertifiedMergeLedgerReference>,
         }
         #[derive(Encode)]
-        struct LegacyBlockExecutionContextBundle {
+        struct PreReleaseIncompleteBlockExecutionContextBundle {
             version: u8,
             external: Vec<ExternalExecutionContext>,
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
@@ -582,16 +672,16 @@ mod tests {
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
         }
-        let legacy_external = LegacyExternalExecutionContext {
-            entrypoint_hash: entrypoint_hash(b"legacy-external"),
+        let pre_release_external = PreReleaseExternalExecutionContext {
+            entrypoint_hash: entrypoint_hash(b"pre-release-external"),
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
-            routing_plan_digest: Hash::new(b"legacy-external-plan"),
+            routing_plan_digest: Hash::new(b"pre-release-external-plan"),
             routing_plan_legs: Vec::new(),
         }
         .encode();
         assert!(
-            ExternalExecutionContext::decode(&mut legacy_external.as_slice()).is_err(),
+            ExternalExecutionContext::decode(&mut pre_release_external.as_slice()).is_err(),
             "an external context omitting its Native AMX receipt field must fail closed"
         );
         let unversioned = UnversionedBlockExecutionContextBundle {
@@ -616,14 +706,14 @@ mod tests {
             BlockExecutionContextBundle::decode(&mut pre_autonomous.as_slice()).is_err(),
             "the bundle layout omitting its autonomous payload field must fail closed"
         );
-        let legacy = LegacyBlockExecutionContextBundle {
+        let incomplete = PreReleaseIncompleteBlockExecutionContextBundle {
             version: BlockExecutionContextBundle::VERSION,
             external: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
         }
         .encode();
         assert!(
-            BlockExecutionContextBundle::decode(&mut legacy.as_slice()).is_err(),
+            BlockExecutionContextBundle::decode(&mut incomplete.as_slice()).is_err(),
             "the bundle layout omitting ownership and merge fields must fail closed"
         );
         let previous = PreviousBlockExecutionContextBundle {

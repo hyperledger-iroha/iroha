@@ -17,12 +17,10 @@ use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
     CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence,
-    EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height,
-    LaneBlockCertificateV1, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
-    LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1, NposGenesisParams, Proposal, Qc,
-    QcAggregate, QcRef, QcVote, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest,
-    RbcReady, RbcReadySignature, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
-    default_chain_order_hash,
+    ExecKv, ExecWitness, ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
+    LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
+    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View, VrfCommit,
+    VrfReveal, default_chain_order_hash,
 };
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
@@ -321,55 +319,6 @@ pub struct HandshakeGate {
     /// Deterministic genesis-embedded consensus-parameters fingerprint.
     pub parameters_fingerprint: [u8; 32],
 }
-/// Build canonical preimage for signing an RBC READY message.
-pub fn rbc_ready_preimage(network_id: &NetworkId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(network_id, "RbcReady", b"v1", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(ready.block_hash.as_ref().as_ref());
-    out.extend_from_slice(&ready.height.to_be_bytes());
-    out.extend_from_slice(&ready.view.to_be_bytes());
-    out.extend_from_slice(&ready.epoch.to_be_bytes());
-    out.extend_from_slice(ready.roster_hash.as_ref());
-    out.extend_from_slice(ready.chunk_root.as_ref());
-    out.extend_from_slice(&ready.sender.to_be_bytes());
-    out
-}
-/// Build canonical preimage for signing an RBC DELIVER message.
-pub fn rbc_deliver_preimage(
-    network_id: &NetworkId,
-    mode_tag: &str,
-    deliver: &RbcDeliver,
-) -> Vec<u8> {
-    let ready_bytes = deliver
-        .ready_signatures
-        .iter()
-        .map(|entry| {
-            std::mem::size_of::<u32>()
-                .saturating_add(std::mem::size_of::<u32>())
-                .saturating_add(entry.signature.len())
-        })
-        .sum::<usize>();
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32 + 4 + ready_bytes);
-    let domain = consensus_domain(network_id, "RbcDeliver", b"v1", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(deliver.block_hash.as_ref().as_ref());
-    out.extend_from_slice(&deliver.height.to_be_bytes());
-    out.extend_from_slice(&deliver.view.to_be_bytes());
-    out.extend_from_slice(&deliver.epoch.to_be_bytes());
-    out.extend_from_slice(deliver.roster_hash.as_ref());
-    out.extend_from_slice(deliver.chunk_root.as_ref());
-    out.extend_from_slice(&deliver.sender.to_be_bytes());
-    let ready_len = u32::try_from(deliver.ready_signatures.len()).unwrap_or(u32::MAX);
-    out.extend_from_slice(&ready_len.to_be_bytes());
-    for entry in &deliver.ready_signatures {
-        out.extend_from_slice(&entry.sender.to_be_bytes());
-        let sig_len = u32::try_from(entry.signature.len()).unwrap_or(u32::MAX);
-        out.extend_from_slice(&sig_len.to_be_bytes());
-        out.extend_from_slice(&entry.signature);
-    }
-    out
-}
 impl HandshakeGate {
     /// Build a local handshake gate from an exact network id and parameters fingerprint.
     pub fn local(network_id: NetworkId, parameters_fingerprint: [u8; 32], mode_tag: &str) -> Self {
@@ -598,8 +547,6 @@ mod tests {
     fn preimages_use_current_domain_tags() {
         let chain = test_network_id("iroha:test:preimage-tags");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
-        let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
-        let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
         let vote = Vote {
             block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
@@ -640,45 +587,6 @@ mod tests {
         assert_eq!(
             &vrf_reveal_preimage[..32],
             &consensus_domain(&chain, "VrfReveal", b"v1", PERMISSIONED_TAG)
-        );
-        let ready = RbcReady {
-            block_hash,
-            height: 11,
-            view: 2,
-            epoch: 0,
-            roster_hash,
-            chunk_root,
-            sender: 1,
-            signature: vec![0xAA],
-        };
-        let ready_preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
-        assert_eq!(
-            &ready_preimage[..32],
-            &consensus_domain(&chain, "RbcReady", b"v1", PERMISSIONED_TAG)
-        );
-        assert_ne!(
-            &ready_preimage[..32],
-            &consensus_domain(&chain, "RbcReady", b"v2", PERMISSIONED_TAG)
-        );
-        let deliver = RbcDeliver {
-            block_hash,
-            height: 11,
-            view: 2,
-            epoch: 0,
-            roster_hash,
-            chunk_root,
-            sender: 1,
-            signature: vec![0xBB],
-            ready_signatures: Vec::new(),
-        };
-        let deliver_preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
-        assert_eq!(
-            &deliver_preimage[..32],
-            &consensus_domain(&chain, "RbcDeliver", b"v1", PERMISSIONED_TAG)
-        );
-        assert_ne!(
-            &deliver_preimage[..32],
-            &consensus_domain(&chain, "RbcDeliver", b"v2", PERMISSIONED_TAG)
         );
     }
     #[test]
@@ -887,108 +795,6 @@ mod tests {
             v2_vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &v2_reveal),
             expected_v2_reveal,
             "versioned VRF reveal signatures must stay outside the reveal preimage",
-        );
-    }
-    #[test]
-    fn rbc_ready_preimage_matches_formal_layout_and_excludes_signature() {
-        let chain = test_network_id("iroha:test:rbc-ready-preimage-layout");
-        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x31; 32]));
-        let roster_hash = iroha_crypto::Hash::prehashed([0x32; 32]);
-        let chunk_root = iroha_crypto::Hash::prehashed([0x33; 32]);
-        let mut ready = RbcReady {
-            block_hash,
-            height: 0x0102_0304_0506_0708,
-            view: 0x1112_1314_1516_1718,
-            epoch: 0x2122_2324_2526_2728,
-            roster_hash,
-            chunk_root,
-            sender: 0x4142_4344,
-            signature: vec![0xAA, 0xBB, 0xCC],
-        };
-        let mut expected = Vec::new();
-        expected.extend_from_slice(&consensus_domain(
-            &chain,
-            "RbcReady",
-            b"v1",
-            PERMISSIONED_TAG,
-        ));
-        expected.extend_from_slice(ready.block_hash.as_ref().as_ref());
-        expected.extend_from_slice(&ready.height.to_be_bytes());
-        expected.extend_from_slice(&ready.view.to_be_bytes());
-        expected.extend_from_slice(&ready.epoch.to_be_bytes());
-        expected.extend_from_slice(ready.roster_hash.as_ref());
-        expected.extend_from_slice(ready.chunk_root.as_ref());
-        expected.extend_from_slice(&ready.sender.to_be_bytes());
-        assert_eq!(
-            rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
-            expected
-        );
-        ready.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
-        assert_eq!(
-            rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
-            expected
-        );
-    }
-    #[test]
-    fn rbc_deliver_preimage_matches_formal_layout_and_excludes_signature() {
-        let chain = test_network_id("iroha:test:rbc-deliver-preimage-layout");
-        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32]));
-        let roster_hash = iroha_crypto::Hash::prehashed([0x42; 32]);
-        let chunk_root = iroha_crypto::Hash::prehashed([0x43; 32]);
-        let mut deliver = RbcDeliver {
-            block_hash,
-            height: 0x0102_0304_0506_0708,
-            view: 0x1112_1314_1516_1718,
-            epoch: 0x2122_2324_2526_2728,
-            roster_hash,
-            chunk_root,
-            sender: 0x5152_5354,
-            signature: vec![0xAA, 0xBB, 0xCC],
-            ready_signatures: vec![
-                RbcReadySignature {
-                    sender: 0x6162_6364,
-                    signature: vec![0x10, 0x11, 0x12],
-                },
-                RbcReadySignature {
-                    sender: 0x7172_7374,
-                    signature: vec![0x20, 0x21],
-                },
-            ],
-        };
-        let mut expected = Vec::new();
-        expected.extend_from_slice(&consensus_domain(
-            &chain,
-            "RbcDeliver",
-            b"v1",
-            PERMISSIONED_TAG,
-        ));
-        expected.extend_from_slice(deliver.block_hash.as_ref().as_ref());
-        expected.extend_from_slice(&deliver.height.to_be_bytes());
-        expected.extend_from_slice(&deliver.view.to_be_bytes());
-        expected.extend_from_slice(&deliver.epoch.to_be_bytes());
-        expected.extend_from_slice(deliver.roster_hash.as_ref());
-        expected.extend_from_slice(deliver.chunk_root.as_ref());
-        expected.extend_from_slice(&deliver.sender.to_be_bytes());
-        expected.extend_from_slice(&2_u32.to_be_bytes());
-        expected.extend_from_slice(&0x6162_6364_u32.to_be_bytes());
-        expected.extend_from_slice(&3_u32.to_be_bytes());
-        expected.extend_from_slice(&[0x10, 0x11, 0x12]);
-        expected.extend_from_slice(&0x7172_7374_u32.to_be_bytes());
-        expected.extend_from_slice(&2_u32.to_be_bytes());
-        expected.extend_from_slice(&[0x20, 0x21]);
-        assert_eq!(
-            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
-            expected
-        );
-        deliver.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
-        assert_eq!(
-            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
-            expected
-        );
-        deliver.ready_signatures.swap(0, 1);
-        assert_ne!(
-            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
-            expected
         );
     }
     #[test]

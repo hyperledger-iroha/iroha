@@ -478,6 +478,11 @@ final class ToriiClientIntegrationTests: XCTestCase {
                 "manifest_hash": [digestArray],
                 "storage_ticket": [responseTicket],
                 "pdp_commitment": Data("commit".utf8).base64EncodedString(),
+                "stripe_layout": [
+                    "total_stripes": 1,
+                    "shards_per_stripe": 14,
+                    "row_parity_stripes": 0
+                ],
                 "queued_at_unix": 1_700_000_000,
                 "operator_signature": "DEADBEEF",
                 "rent_quote": [
@@ -519,9 +524,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         XCTAssertEqual(receipt.laneId, 9)
         XCTAssertEqual(receipt.epoch, 4)
         XCTAssertEqual(receipt.operatorSignatureHex, "DEADBEEF")
-        guard let rentQuote = receipt.rentQuote else {
-            return XCTFail("missing rent quote")
-        }
+        let rentQuote = receipt.rentQuote
         XCTAssertEqual(rentQuote.baseRentMicro, "900")
         XCTAssertEqual(rentQuote.protocolReserveMicro, "180")
         XCTAssertEqual(rentQuote.providerRewardMicro, "720")

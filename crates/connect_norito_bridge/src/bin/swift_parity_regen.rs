@@ -24,7 +24,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     io::{Read as _, Write as _},
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -99,6 +99,8 @@ struct FeePaymentSpec {
 #[norito(deny_unknown_fields)]
 struct FeePaymentValueSpec {
     charge_limits: Vec<Value>,
+    #[norito(required)]
+    gas_limit: Option<NonZeroU64>,
 }
 #[derive(Clone)]
 struct FixtureOutput {
@@ -171,7 +173,10 @@ impl FeePaymentSpec {
         if !self.value.charge_limits.is_empty() {
             return Err("Swift parity fee-payment charge_limits must be empty".to_owned());
         }
-        Ok(FeePaymentIntent::authority(Vec::new(), None))
+        Ok(FeePaymentIntent::authority(
+            Vec::new(),
+            self.value.gas_limit,
+        ))
     }
 }
 impl PayloadSpec {
@@ -1326,6 +1331,7 @@ mod tests {
                 payer: "authority".into(),
                 value: FeePaymentValueSpec {
                     charge_limits: Vec::new(),
+                    gas_limit: None,
                 },
             },
             metadata: BTreeMap::new(),
@@ -1505,6 +1511,21 @@ mod tests {
         let mut null = source_document();
         first_payload(&mut null).insert("metadata".into(), Value::Null);
         assert!(decode_document(null).is_err());
+    }
+    #[test]
+    fn source_schema_requires_nullable_fee_gas_limit() {
+        let mut missing = source_document();
+        first_payload(&mut missing)
+            .get_mut("fee_payment")
+            .expect("fee payment")
+            .as_object_mut()
+            .expect("fee-payment object")
+            .get_mut("value")
+            .expect("fee-payment value")
+            .as_object_mut()
+            .expect("fee-payment value object")
+            .remove("gas_limit");
+        assert!(decode_document(missing).is_err());
     }
     #[test]
     fn source_executable_and_instruction_schemas_are_closed() {

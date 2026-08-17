@@ -172,7 +172,7 @@ fn native_amx_receipts_for_apply_fixture(
         .iter()
         .map(|key| {
             let mut source_id = [0_u8; Hash::LENGTH];
-            source_id.copy_from_slice(key.signed_transaction_hash.as_ref());
+            source_id.copy_from_slice(key.entrypoint_hash.as_ref());
             source_id
         })
         .collect::<Vec<_>>();

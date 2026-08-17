@@ -22,6 +22,7 @@ RUST_GOVERNANCE_REQUEST_FIXTURE = (
     ROOT / "scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
 )
 HOSTILE_RUNTIME_UID = 501
+AUTHENTICATED_CLIENT_UID = 73
 UNMARKED_IROHA_HASH = "1" * 62 + "10"
 
 
@@ -188,7 +189,7 @@ def _receipt_value(
         "binding_schema": authority.BINDING_SCHEMA,
         "binding_sha256": _digest("installed binding"),
         "broker_binary_sha256": _digest("native broker binary"),
-        "kernel_peer_uid": authority.AUTHORIZED_CONTROLLER_PEER_UID,
+        "kernel_peer_uid": AUTHENTICATED_CLIENT_UID,
         "key_revision": 3,
         "operation_id": _digest("operation"),
         "policy_revision": 7,
@@ -214,6 +215,17 @@ def _receipt_value(
 
 def _receipt_bytes(value: dict[str, object]) -> bytes:
     return authority._canonical(value)
+
+
+def _validate_receipt(
+    request: authority.UntrustedGovernanceAuthorityRequestV1,
+    payload: bytes,
+    *,
+    client_uid: int = AUTHENTICATED_CLIENT_UID,
+) -> authority.UntrustedGovernanceAuthorityReceiptV1:
+    return authority._validate_untrusted_governance_authority_receipt_structure_v1(
+        request, payload, authenticated_client_uid=client_uid
+    )
 
 
 def test_untrusted_request_is_canonical_and_binds_shared_source_closed_contract() -> None:
@@ -473,9 +485,7 @@ def test_structural_receipt_is_accepted_only_after_native_historical_verificatio
 ) -> None:
     request = _request()
     payload = _receipt_bytes(_receipt_value(request))
-    structural = authority._validate_untrusted_governance_authority_receipt_structure_v1(
-        request, payload
-    )
+    structural = _validate_receipt(request, payload)
     assert structural.canonical_bytes == payload
     assert structural.request_id == request.request_id
     assert structural.signed_transaction_norito
@@ -484,10 +494,15 @@ def test_structural_receipt_is_accepted_only_after_native_historical_verificatio
     ).hexdigest()
 
     calls: list[str] = []
+
+    def preflight(role: str, *, require_signing: bool = True):
+        calls.append(f"preflight:{role}:{require_signing}")
+        return {"client_uid": AUTHENTICATED_CLIENT_UID}
+
     monkeypatch.setattr(
         authority.taira_authority_client,
         "preflight",
-        lambda role: calls.append(f"preflight:{role}"),
+        preflight,
     )
     monkeypatch.setattr(
         authority.taira_authority_client,
@@ -503,7 +518,7 @@ def test_structural_receipt_is_accepted_only_after_native_historical_verificatio
     )
     assert verified == structural
     assert calls == [
-        "preflight:privacy-governance",
+        "preflight:privacy-governance:False",
         "verify:privacy-governance",
     ]
 
@@ -527,7 +542,8 @@ def test_governance_request_authorizes_exact_validated_subject(
     monkeypatch.setattr(
         authority.taira_authority_client,
         "preflight",
-        lambda role: calls.append(f"preflight:{role}"),
+        lambda role: calls.append(f"preflight:{role}")
+        or {"client_uid": AUTHENTICATED_CLIENT_UID},
     )
     monkeypatch.setattr(
         authority.taira_authority_client,
@@ -547,6 +563,36 @@ def test_governance_request_authorizes_exact_validated_subject(
         "preflight:privacy-governance",
         "authorize:privacy-governance",
     ]
+
+
+def test_historical_receipt_must_match_authenticated_binding_client_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    receipt = _receipt_bytes(_receipt_value(request))
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "preflight",
+        lambda _role, **_kwargs: {"client_uid": AUTHENTICATED_CLIENT_UID + 1},
+    )
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "verify_receipt",
+        lambda *_args, **_kwargs: pytest.fail(
+            "mismatched peer UID reached native historical verification"
+        ),
+    )
+    with pytest.raises(
+        authority.PrivacyGovernanceAuthorityError,
+        match="authenticated binding client UID",
+    ):
+        authority.validate_authenticated_governance_receipt_v1(
+            request,
+            receipt,
+            authority_envelope_payload=authority.taira_authority_client.canonical_json_bytes(
+                {"schema": "test-governance-envelope"}
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -570,9 +616,7 @@ def test_receipt_base64_fields_reject_non_string_json_without_coercion(
         authority.PrivacyGovernanceAuthorityError,
         match="bounded nonempty ASCII",
     ):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 @pytest.mark.parametrize(
@@ -600,15 +644,17 @@ def test_receipt_decoded_byte_bounds_are_enforced_after_valid_base64(
         authority.PrivacyGovernanceAuthorityError,
         match="bounded canonical base64",
     ):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 @pytest.mark.parametrize(
     ("field", "forged", "message"),
     (
-        ("kernel_peer_uid", HOSTILE_RUNTIME_UID, "root controller peer UID"),
+        (
+            "kernel_peer_uid",
+            HOSTILE_RUNTIME_UID,
+            "authenticated binding client UID",
+        ),
         ("kernel_peer_uid", True, "nonnegative integer"),
         ("schema_version", True, "receipt schema version must be one positive integer"),
         ("schema_version", 1.0, "receipt schema version must be one positive integer"),
@@ -643,9 +689,7 @@ def test_runtime_uid_signer_role_reuse_and_legacy_contracts_are_rejected(
     value = _receipt_value(request)
     value[field] = forged
     with pytest.raises(authority.PrivacyGovernanceAuthorityError, match=message):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 @pytest.mark.parametrize(
@@ -672,9 +716,7 @@ def test_receipt_signer_and_committed_audit_heads_match_exact_request(
     value = _receipt_value(request)
     value[field] = forged
     with pytest.raises(authority.PrivacyGovernanceAuthorityError, match=message):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 def test_receipt_rejects_noncanonical_but_decodable_base64() -> None:
@@ -686,9 +728,7 @@ def test_receipt_rejects_noncanonical_but_decodable_base64() -> None:
         authority.PrivacyGovernanceAuthorityError,
         match="bounded canonical base64",
     ):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 def test_receipt_rejects_unmarked_native_transaction_hash() -> None:
@@ -699,9 +739,7 @@ def test_receipt_rejects_unmarked_native_transaction_hash() -> None:
         authority.PrivacyGovernanceAuthorityError,
         match="canonical Iroha marker bit",
     ):
-        authority._validate_untrusted_governance_authority_receipt_structure_v1(
-            request, _receipt_bytes(value)
-        )
+        _validate_receipt(request, _receipt_bytes(value))
 
 
 def test_self_consistent_forgery_cannot_reach_signer_validator_path_or_replay_io(
@@ -722,7 +760,7 @@ def test_self_consistent_forgery_cannot_reach_signer_validator_path_or_replay_io
     def forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("provisioning barrier allowed signer, path, or replay I/O")
 
-    def unavailable(_role: str) -> object:
+    def unavailable(_role: str, **_kwargs: object) -> object:
         raise authority.taira_authority_client.TairaAuthorityClientError(
             "fixed service unavailable"
         )
@@ -790,14 +828,21 @@ def test_both_public_entrypoints_preflight_before_authenticated_operations() -> 
         ):
             operations.pop(0)
         first = operations[0]
-        assert isinstance(first, ast.Expr)
+        assert isinstance(first, ast.Assign)
         assert isinstance(first.value, ast.Call)
         assert isinstance(first.value.func, ast.Name)
         assert (
             first.value.func.id
             == "_require_provisioned_privacy_governance_authority_v1"
         )
-        assert first.value.args == [] and first.value.keywords == []
+        assert first.value.args == []
+        if name == "request_authenticated_governance_transaction_v1":
+            assert first.value.keywords == []
+        else:
+            assert len(first.value.keywords) == 1
+            assert first.value.keywords[0].arg == "require_signing"
+            assert isinstance(first.value.keywords[0].value, ast.Constant)
+            assert first.value.keywords[0].value.value is False
         client_methods = {
             node.func.attr
             for node in ast.walk(functions[name])
@@ -815,7 +860,9 @@ def test_both_public_entrypoints_preflight_before_authenticated_operations() -> 
 
     assert "os.environ" not in source
     assert "getenv(" not in source
-    assert "client_uid" not in source
+    assert "AUTHORIZED_CONTROLLER_PEER_UID" not in source
+    assert 'client_uid = status.get("client_uid")' in source
+    assert "authenticated_client_uid=client_uid" in source
     assert authority.AUTHORITY_ENVELOPE_SCHEMA in source
     assert authority.REPLAY_NAMESPACE in source
     assert authority.LEGACY_VERANGE_AUTHORITY_ENVELOPE_SCHEMA != (

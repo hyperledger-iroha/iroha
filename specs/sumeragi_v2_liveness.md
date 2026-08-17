@@ -816,13 +816,11 @@ remote-only eviction. This witness is bounded Kura-local serving authority,
 not an inclusion proof exported to consensus: every requester independently
 matches the reference and certified entry to its own canonical carrier and
 rejects a substituted or non-holder response.
-Canonical version-2 retained records remain restart-readable. They expose no
-merge witness because none was stored. If their exact body remains available,
-the same persistence operation that precedes eviction replaces the legacy
-record atomically with version 3 and verifies the replacement before eviction
-may continue. A bodyless legacy record therefore fails historical merge
-service closed instead of manufacturing authority. The version-3 byte ceiling
-is the sum of the complete version-2 envelope, the independently bounded
+Version 3 is the only accepted retained-record layout. Pre-release version-2
+bytes fail closed at direct read and startup, even when the exact body remains
+available; operators must discard and rebuild that pre-release storage rather
+than promote unauthenticated missing fields. The current byte ceiling covers
+the complete base retained-record envelope, the independently bounded merge
 reference, and explicit Norito option/struct framing headroom.
 An unknown current-generation Close is acknowledged statelessly and consumes
 none of those tables.

@@ -1,13 +1,7 @@
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    sync::{
-        Arc, LazyLock, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use super::*;
+#[cfg(feature = "telemetry")]
+use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
+use crate::{routing::handle_v1_sumeragi_commit_qcs, utils::extractors::NoritoJson};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -85,11 +79,17 @@ use iroha_executor_data_model::permission::account::{
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode;
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    sync::{
+        Arc, LazyLock, Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tower::ServiceExt as _;
-use super::*;
-#[cfg(feature = "telemetry")]
-use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
-use crate::{routing::handle_v1_sumeragi_commit_qcs, utils::extractors::NoritoJson};
 fn query_conversion_message(err: &Error) -> Option<&str> {
     match err {
         Error::Query(ValidationFail::QueryFailed(
@@ -381,8 +381,12 @@ pub(crate) fn configure_private_ingress_routes_for_test(
     app: &mut SharedAppState,
 ) -> (LaneId, DataSpaceId) {
     let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_ed25519_keypair(0xb6, "derive private-ingress local validator fixture key");
-    let local_peer_keypair = checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(
+        0xb6,
+        "derive private-ingress local validator fixture key",
+    );
+    let local_peer_keypair =
+        checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
     let governance_dataspace = DataSpaceId::new(1);
@@ -473,10 +477,16 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     app: &mut SharedAppState,
 ) -> (RoutingDecision, RoutingDecision) {
     let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_ed25519_keypair(0xb8, "derive offline-foreign local validator fixture key");
-    let local_peer_keypair = checked_torii_test_bls_keypair(0xb9, "derive offline-foreign local peer fixture key");
-    let foreign_validator_keypair = checked_torii_test_ed25519_keypair(0xba, "derive offline-foreign validator fixture key");
-    let foreign_peer_keypair = checked_torii_test_bls_keypair(0xbb, "derive offline-foreign peer fixture key");
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(
+        0xb8,
+        "derive offline-foreign local validator fixture key",
+    );
+    let local_peer_keypair =
+        checked_torii_test_bls_keypair(0xb9, "derive offline-foreign local peer fixture key");
+    let foreign_validator_keypair =
+        checked_torii_test_ed25519_keypair(0xba, "derive offline-foreign validator fixture key");
+    let foreign_peer_keypair =
+        checked_torii_test_bls_keypair(0xbb, "derive offline-foreign peer fixture key");
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
     let foreign_validator = AccountId::new(foreign_validator_keypair.public_key().clone());
@@ -1315,7 +1325,10 @@ pub(crate) fn foreign_network_signed_app_fixture(
     key_seed: u8,
     network_marker: u8,
 ) -> (SharedAppState, HeaderMap) {
-    let key_pair = checked_torii_test_ed25519_keypair(key_seed, "derive foreign-network Torii auth fixture key");
+    let key_pair = checked_torii_test_ed25519_keypair(
+        key_seed,
+        "derive foreign-network Torii auth fixture key",
+    );
     let account = AccountId::new(key_pair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&account));
     let foreign_network =
@@ -1463,7 +1476,8 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
         .signature()
         .verify_hash(keypair.public_key(), header.hash())
         .expect("checked Torii block fixture signature verifies");
-    let wrong_key = checked_torii_test_bls_keypair(0xb2, "derive wrong Torii block signature fixture key");
+    let wrong_key =
+        checked_torii_test_bls_keypair(0xb2, "derive wrong Torii block signature fixture key");
     signature
         .signature()
         .verify_hash(wrong_key.public_key(), header.hash())
@@ -1508,7 +1522,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     {
         let mut topo_block = state_inner.commit_topology.block();
         topo_block.clear();
-        let peer_keypair = checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
+        let peer_keypair =
+            checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
         let peer_id = iroha_data_model::peer::PeerId::from(peer_keypair.public_key().clone());
         topo_block.push(peer_id);
         topo_block.commit();
@@ -1861,7 +1876,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         da_replay_store,
         da_receipt_log,
         da_receipt_signer,
-        torii_proxy_bridge_signer: checked_torii_test_ed25519_keypair(0xb5, "derive Torii proxy bridge fixture signer"),
+        torii_proxy_bridge_signer: checked_torii_test_ed25519_keypair(
+            0xb5,
+            "derive Torii proxy bridge fixture signer",
+        ),
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
@@ -2067,8 +2085,7 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
         torii_response_header(&response, "content-type"),
         Some("application/json")
     );
-    let _payload =
-        decode_torii_json(response, "response body", "json error payload").await;
+    let _payload = decode_torii_json(response, "response body", "json error payload").await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2089,8 +2106,7 @@ async fn explorer_instruction_detail_not_found_returns_json_response() {
         torii_response_header(&response, "content-type"),
         Some("application/json")
     );
-    let _payload =
-        decode_torii_json(response, "response body", "json error payload").await;
+    let _payload = decode_torii_json(response, "response body", "json error payload").await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -2294,10 +2310,7 @@ fn assert_route_unavailable_response(response: &Response) {
         Some("route_unavailable")
     );
 }
-async fn torii_body_bytes(
-    response: Response,
-    diagnostic: &'static str,
-) -> axum::body::Bytes {
+async fn torii_body_bytes(response: Response, diagnostic: &'static str) -> axum::body::Bytes {
     axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect(diagnostic)
@@ -2318,8 +2331,11 @@ struct CountingRouteRouter {
     route_calls: Arc<AtomicUsize>,
 }
 impl LaneRouter for CountingRouteRouter {
-    fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+    fn try_route(
+        &self,
+        _tx: &dyn TransactionRoutingView,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        Ok(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
     }
     fn try_route_without_state(
         &self,
@@ -2333,7 +2349,7 @@ impl LaneRouter for CountingRouteRouter {
         _state: &IrohaState,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         self.route_calls.fetch_add(1, Ordering::Relaxed);
-        Ok(self.route(tx))
+        self.try_route(tx)
     }
     fn try_route_plan_with_state(
         &self,
@@ -2385,10 +2401,12 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
     }
-    let keypair = checked_torii_test_ed25519_keypair(0xc1, "derive post-transaction rate-limit fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc1, "derive post-transaction rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "rate-limit-2", &keypair);
     let headers = HeaderMap::new();
     let submitted_hash = tx1.hash().to_string();
@@ -2396,8 +2414,8 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         .await
         .expect("accepted");
     assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
-    let hash_header = torii_response_header(&ok_response, "x-iroha-transaction-hash")
-        .expect("transaction hash header must be present");
+    let hash_header = torii_response_header(&ok_response, "x-iroha-entrypoint-hash")
+        .expect("entrypoint hash header must be present");
     assert_eq!(hash_header, submitted_hash);
     let lane_header = torii_response_header(&ok_response, "x-iroha-route-lane-id")
         .expect("route lane header must be present");
@@ -2423,11 +2441,18 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "queue-before-rate-1", &keypair);
-    let tx2 = signed_log_transaction_for_test(network_id, authority, "queue-before-rate-2", &keypair);
+    let tx1 = signed_log_transaction_for_test(
+        network_id,
+        authority.clone(),
+        "queue-before-rate-1",
+        &keypair,
+    );
+    let tx2 =
+        signed_log_transaction_for_test(network_id, authority, "queue-before-rate-2", &keypair);
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
     let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
@@ -2456,8 +2481,14 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));
     }
-    let first_keypair = checked_torii_test_ed25519_keypair(0xc2, "derive first post-transaction API-token fixture key");
-    let second_keypair = checked_torii_test_ed25519_keypair(0xc3, "derive second post-transaction API-token fixture key");
+    let first_keypair = checked_torii_test_ed25519_keypair(
+        0xc2,
+        "derive first post-transaction API-token fixture key",
+    );
+    let second_keypair = checked_torii_test_ed25519_keypair(
+        0xc3,
+        "derive second post-transaction API-token fixture key",
+    );
     let network_id = *app.state.network_id_ref();
     let tx1 = signed_log_transaction_for_test(
         network_id,
@@ -2487,7 +2518,8 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
 async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
     let mut app = mk_app_state_for_tests();
     let route_calls = install_counting_route_queue(&mut app);
-    let keypair = checked_torii_test_ed25519_keypair(0xc4, "derive post-transaction route-cache fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc4, "derive post-transaction route-cache fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -2512,7 +2544,8 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -2527,16 +2560,18 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let entrypoint_hash = torii_response_header(&response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
-    let tx_hash = torii_response_header(&response, "x-iroha-transaction-hash")
-        .expect("transaction hash header must be present");
-    assert_eq!(tx_hash, entrypoint_hash);
+    let signed_transaction_hash =
+        torii_response_header(&response, "x-iroha-signed-transaction-hash")
+            .expect("signed transaction hash header must be present");
+    assert_eq!(signed_transaction_hash, entrypoint_hash);
     assert_eq!(app.queue.active_len(), 1);
 }
 #[tokio::test]
 async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue() {
     let mut app = mk_app_state_for_tests();
     let route_calls = install_counting_route_queue(&mut app);
-    let keypair = checked_torii_test_ed25519_keypair(0xc6, "derive entrypoint route-cache fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc6, "derive entrypoint route-cache fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),

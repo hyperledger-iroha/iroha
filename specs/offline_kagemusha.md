@@ -452,6 +452,10 @@ inodes.
 After parsing, raw ParamsIPA and bootstrap payloads are released; the catalog
 retains the parsed verifier and only the serialized verifying keys needed to
 build governed activation records. Consensus never reads the filesystem.
+The validator execution-policy identity commits to the configured policy and
+the sorted identities of every authenticated catalog release. Peers with
+different release inventories therefore cannot advertise the same execution
+policy and then disagree when an activation or spend resolves local material.
 Wallets and provers install all eight artifacts, including both proving keys.
 Generated `dist/kagemusha/v4/*`, raw parameters, keys, device logs, and signing
 inputs remain untracked runtime material.
@@ -464,6 +468,15 @@ base genesis and publish its `genesis.expected_hash`; this hash is the sole
 `NetworkId`. Only then may operators build the finality roster and recursive
 release for that exact `NetworkId`, qualify it, and use
 `prepare-activation-v4` to prepare the governed height-two activation. The
+base-genesis check replays every mint, burn, and transfer of the backing asset
+in instruction order and requires a nonzero final balance. An unsupported
+instruction that could conceal a balance change fails closed; historical mint
+activity alone is not backing liquidity. The
+preparation command requires an explicit nonzero policy-evaluation Unix time,
+uses Core's complete consensus validator for trusted X.509 CA structure,
+critical extensions, certificate validity and production app policy, and binds
+that evaluation time into its report. Validators repeat the same validation at
+the activation block's actual timestamp. The
 exact-network escrow is materialized by Core from the live `NetworkId` and
 asset definition. A recursive release, release-derived escrow account, or
 device policy must never be embedded back into genesis: doing so would change
@@ -490,6 +503,22 @@ set. Withdrawal ends new issuance and offline-change
 creation, but retained material continues to verify and fully redeem previously
 issued branches indefinitely. Later governed device-policy rotation remains a
 separate operation and invalidates prior registrations, forcing re-registration.
+Active native registrations are capped at 512 globally and 64 per account. The
+active-world-state V4 record is capped at 4 KiB and stores a validated projection
+plus the exact original registration and projection hashes instead of duplicating
+the submitted report and evidence bytes from signed transaction history. Up to
+1,024 compact records (128 per account) may be retained so one complete cohort
+can cool while its replacement admits. Expired or superseded-policy records and
+their replay markers are pruned only after the 128-block challenge window is
+permanently past; the retained cap blocks further churn until then. These bounds
+keep active snapshots within their 512-leaf, depth-9 protocol ceiling and the
+registration-state value payloads within 4 MiB, alongside at most 1,024 state
+keys and 4,096 registration replay markers.
+
+This is a hard-cut V4 world-state format. Resetting an empty first-release Taira
+deployment is compatible with it, but a nonempty chain containing V3
+`kagemusha_online_registration_` keys must not upgrade without a separately
+reviewed deterministic migration.
 
 ## Production boundary
 
@@ -716,7 +745,17 @@ manifest-digest directories. The authenticated source-seal projection binds
 the exact reviewed closure to the allowed-signers and revocation-policy
 digests. An explicitly pinned empty revocation file means no revoked keys; the
 revocation input is never implicit. The corridor invokes the digest-pinned
-Kagami typed verifier for every release; it authenticates the policy, manifest,
+Kagami typed verifier for every release, but never executes Kagami directly.
+A distinct digest-pinned native controller must enforce
+`iroha.authenticated-tool-os-isolation.v1`: an attested runtime identity,
+closed inherited descriptors, no-new-privileges, no filesystem writes,
+network, or tool child creation, bounded output and wall time, and no residual
+job processes, with exact forwarding of the verifier status and byte streams.
+This OS boundary is mandatory because per-file limits, directory scans, and
+process-group signals cannot contain open-unlinked files, ambient-path writes,
+or `setsid` escapes. Its cumulative and maximum-live-root quotas must charge
+unlinked writes, not just the final visible directory size. The controlled
+verifier authenticates the policy, manifest,
 signed attestation, evidence, exact-eight artifacts, bootstrap witnesses, and
 promotion record rather than trusting filenames or JSON alone:
 
@@ -726,6 +765,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
@@ -750,6 +791,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
@@ -763,16 +806,21 @@ KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/run/iroha/kagemusha/ios-device-evidence \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID="$TRUSTED_KEY_ID" \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-evidence-ed25519.pub.pem \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/run/secrets/kagemusha-production-ios-policy-v1.json \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID="$FRESHNESS_AUTHORITY_KEY_ID" \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-freshness-authority-ed25519.pub.pem \
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external
-raw tree, trusted Ed25519 signature, physical-iOS invariants, and then compares
-the signed candidate-record digest with the immutable candidate reconstructed
-by Kagami from the finalized release. All three iOS environment variables are
-an all-or-none input; a simulator, XCTest summary, or raw tree for a different
-manifest digest fails closed.
+raw tree, trusted Ed25519 signature, physical-iOS invariants, the production
+policy, and the independently signed online freshness/consumption receipt at
+`<evidence-root>/<manifest-sha256>/online-freshness-consumption-receipt-v1.json`,
+then compares the signed candidate-record digest with the immutable candidate
+reconstructed by Kagami from the finalized release. All six iOS environment
+variables are an all-or-none input; a simulator, XCTest summary, missing or
+stale receipt, or raw tree for a different manifest digest fails closed.
 
 The policy path is always an explicit runtime input. No build-time environment
 variable or embedded policy selects a Kagemusha trust root.

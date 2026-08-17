@@ -699,7 +699,6 @@ def inspect_sorafs_orderbook_submission_v1(
 
 def verify_sorafs_orderbook_submission_receipt_v1(
     receipt_norito: bytes,
-    tx_hash: str,
     entrypoint_hash: str,
     signed_transaction_hash: str,
     expected_receipt_signer: str,
@@ -711,7 +710,6 @@ def verify_sorafs_orderbook_submission_receipt_v1(
         raise RuntimeError("native crypto module lacks strict orderbook receipt verification")
     result = verify_receipt(
         receipt_norito,
-        tx_hash,
         entrypoint_hash,
         signed_transaction_hash,
         expected_receipt_signer,

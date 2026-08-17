@@ -68,12 +68,17 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             format!("transaction queue did not durably admit the transaction: {reason}"),
         ),
         queue::Error::PlanJournalDurabilityIndeterminate {
-            transaction_hash,
+            entrypoint_hash,
+            signed_transaction_hash,
             reason,
         } => (
             "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
             format!(
-                "transaction admission outcome is unknown for {transaction_hash}; reconcile that exact signed hash before retrying: {reason}"
+                "transaction admission outcome is unknown for entrypoint {entrypoint_hash}{}; reconcile that exact entrypoint before retrying: {reason}",
+                signed_transaction_hash
+                    .as_ref()
+                    .map(|hash| format!(" (signed transaction {hash})"))
+                    .unwrap_or_default()
             ),
         ),
     }

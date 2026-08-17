@@ -991,30 +991,33 @@ fn observe_reserve_transaction_in_one_finalized_view(
 ) -> Option<ReserveFinalizedObservationV1> {
     let view = state.state.view();
     let snapshot = reserve_snapshot_in_view(&view, delivery, retained)?;
-    let transaction_outcome =
-        transaction_hash.map(
-            |transaction_hash| match view.transactions().get(transaction_hash) {
-                None => ReserveAuthoritativeTransactionOutcomeV1::Absent,
-                Some(block_height) if block_height.get() > view.block_hashes().len() => {
-                    ReserveAuthoritativeTransactionOutcomeV1::Unavailable
-                }
-                Some(block_height) => {
-                    let Some(expected_block_hash) = view
-                        .block_hashes()
-                        .get(block_height.get().saturating_sub(1))
-                        .copied()
-                    else {
-                        return ReserveAuthoritativeTransactionOutcomeV1::Unavailable;
-                    };
-                    inspect_indexed_reserve_transaction(
-                        view.kura(),
-                        transaction_hash,
-                        block_height,
-                        expected_block_hash,
-                    )
-                }
-            },
-        );
+    let transaction_outcome = transaction_hash.map(|transaction_hash| {
+        match view
+            .transactions()
+            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
+                transaction_hash.clone(),
+            )) {
+            None => ReserveAuthoritativeTransactionOutcomeV1::Absent,
+            Some(block_height) if block_height.get() > view.block_hashes().len() => {
+                ReserveAuthoritativeTransactionOutcomeV1::Unavailable
+            }
+            Some(block_height) => {
+                let Some(expected_block_hash) = view
+                    .block_hashes()
+                    .get(block_height.get().saturating_sub(1))
+                    .copied()
+                else {
+                    return ReserveAuthoritativeTransactionOutcomeV1::Unavailable;
+                };
+                inspect_indexed_reserve_transaction(
+                    view.kura(),
+                    transaction_hash,
+                    block_height,
+                    expected_block_hash,
+                )
+            }
+        }
+    });
     Some(ReserveFinalizedObservationV1 {
         snapshot,
         transaction_outcome,
@@ -1258,9 +1261,10 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
         };
         let exact_transaction_hash = exact_transaction.as_ref().map(SignedTransaction::hash);
         let local_evidence_before = exact_transaction_hash.as_ref().is_some_and(|hash| {
-            let queue_pending = state
-                .queue
-                .contains_pending_hash(hash.clone(), &state.state);
+            let queue_pending = state.queue.contains_pending_hash(
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                &state.state,
+            );
             let cache_kind = state
                 .pipeline_status_cache
                 .lookup(hash)
@@ -1284,9 +1288,10 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
             &observation.snapshot,
         );
         let local_evidence_after = exact_transaction_hash.as_ref().is_some_and(|hash| {
-            let queue_pending = state
-                .queue
-                .contains_pending_hash(hash.clone(), &state.state);
+            let queue_pending = state.queue.contains_pending_hash(
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                &state.state,
+            );
             let cache_kind = state
                 .pipeline_status_cache
                 .lookup(hash)
@@ -2358,7 +2363,10 @@ mod tests {
         assert_eq!(
             classify_local_reserve_transaction_submission(
                 &iroha_core::queue::Error::PlanJournalDurabilityIndeterminate {
-                    transaction_hash: transaction_hash(0x91),
+                    entrypoint_hash: iroha_core::tx::external_entrypoint_hash_from_signed_hash(
+                        transaction_hash(0x91),
+                    ),
+                    signed_transaction_hash: Some(transaction_hash(0x91)),
                     reason: "unknown".to_owned(),
                 }
             ),

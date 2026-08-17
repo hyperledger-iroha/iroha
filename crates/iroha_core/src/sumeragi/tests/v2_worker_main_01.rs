@@ -716,11 +716,17 @@ fn response_outputs_without_exact_routes_fail_stop() {
     assert!(!service.output_guard.restart_required());
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
+    let global_v2 = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
+            epoch: 1,
+            commitment: [0xA5; 32],
+            signer: 0,
+            bls_sig: vec![0x5A],
+        }),
+    ));
     assert!(
-        service
-            .post_lane_block(peer, BlockMessage::invalid_wire_sentinel())
-            .is_err(),
-        "the lane-only transport must reject decode-only global traffic"
+        service.post_lane_block(peer, global_v2).is_err(),
+        "the lane-only transport must reject global v2 traffic"
     );
     assert!(service.output_guard.restart_required());
     let (service, _) = fixture();

@@ -61,7 +61,7 @@ execution or release receipts.
 - The bound static inventory passes with exactly 88 corridor legs, 860/860
   production tests across 40 modules, 527/527 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
-  enumerates 1,399 grouped and 1,401 diagnostics paths at the exact hashes in
+  enumerates 1,398 grouped and 1,400 diagnostics paths at the exact hashes in
   the owning corpus and `G-SDK` rows below. These are source inventories, not
   execution receipts.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
@@ -264,6 +264,9 @@ The execution-input persistence boundary separately reconstructs the exact
 producer-authenticated payload and complete input, binds its canonical
 reservation group and authenticated writer witness, and consumes a checked
 `PersistExecutionInput` projection before the indexed Kura append.
+Its durable source is a single disjoint Norito V1 value: either the exact
+globally committed lane artifact or the autonomous network/epoch/payload hash.
+No partial optional binding and no synthetic global block anchor are admitted.
 The READY-QC persistence boundary separately binds the exact certificate,
 payload, chain/epoch, producer, committee bitmap, and shared reservation group
 into a move-only authority, consumes it, and checks `PersistReadyQc` before the
@@ -1634,7 +1637,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The current mutable-tree inventory
-is exactly 1,399 grouped and 1,401 diagnostics records. Their canonical hashes
+is exactly 1,398 grouped and 1,400 diagnostics records. Their canonical hashes
 are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
@@ -1726,14 +1729,14 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 4, Kotlin 6, and Java 5 tests. The current recursive mutable-tree closure
-contains exactly 1,399 grouped and 1,401 diagnostics records. Its grouped and
+contains exactly 1,398 grouped and 1,400 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
 and
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
+`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`.
 The checked-in grouped fixture has SHA-256
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -2028,13 +2031,13 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-mutable-tree closure contains exactly 1,399 grouped and 1,401 diagnostics
+mutable-tree closure contains exactly 1,398 grouped and 1,400 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
 and
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
+`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`.
 The current grouped JSON and wire TSV SHA-256 values are
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 Those are development fixture inventories, not SDK results. The changed

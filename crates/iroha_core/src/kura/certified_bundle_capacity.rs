@@ -549,11 +549,9 @@ impl Kura {
                 )
             })?;
         let mut pair = self.open_bound_progress_pair(data_path, index_path)?;
-        let (mut data, mut index, mut layout, old_data_len, old_index_len, pair_was_present) =
+        let (mut data, mut index, layout, old_data_len, old_index_len, pair_was_present) =
             match &mut pair {
-                BoundProgressPair::Absent(_) => {
-                    (None, None, SidecarIndexLayout::legacy(0), 0, 0, false)
-                }
+                BoundProgressPair::Absent(_) => (None, None, None, 0, 0, false),
                 BoundProgressPair::Present(bound) => {
                     let old_data_len = bound
                         .data
@@ -581,7 +579,7 @@ impl Kura {
                     (
                         Some(&mut bound.data),
                         Some(&mut bound.index),
-                        layout,
+                        Some(layout),
                         old_data_len,
                         old_index_len,
                         true,
@@ -590,7 +588,7 @@ impl Kura {
             };
         let payload_len = u64::try_from(payload.len())?;
         let (new_index_len, index_write_offset, old_index_bytes, new_index_bytes) =
-            if let Some(entry_pos) = layout.entry_position(height) {
+            if let Some(entry_pos) = layout.and_then(|layout| layout.entry_position(height)) {
                 let index_file = index.as_mut().ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         index_path.to_path_buf(),
@@ -651,7 +649,9 @@ impl Kura {
                     .to_vec(),
                 )
             } else {
-                if layout.is_based() && height < layout.base_height {
+                if let Some(layout) = layout
+                    && height < layout.base_height
+                {
                     return Err(Self::invalid_lane_artifact_error(
                         index_path.to_path_buf(),
                         format!(
@@ -660,19 +660,20 @@ impl Kura {
                     ));
                 }
                 let mut new_index_bytes = Vec::new();
-                let index_write_offset = if layout.aligned_len == 0 && height > 1 {
-                    new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
-                    layout =
-                        SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-                            .map_err(|message| {
-                                Self::invalid_lane_artifact_error(
-                                    index_path.to_path_buf(),
-                                    format!("{kind} initial based index is invalid: {message}"),
-                                )
-                            })?;
-                    0
-                } else {
-                    old_index_len
+                let (layout, index_write_offset) = match layout {
+                    Some(layout) => (layout, old_index_len),
+                    None => {
+                        new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
+                        let layout =
+                            SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
+                                .map_err(|message| {
+                                    Self::invalid_lane_artifact_error(
+                                        index_path.to_path_buf(),
+                                        format!("{kind} initial V1 index is invalid: {message}"),
+                                    )
+                                })?;
+                        (layout, 0)
+                    }
                 };
                 let expected_height = layout.next_height().ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
@@ -786,15 +787,20 @@ impl Kura {
             })?;
         intent
             .validate_against_old_layout(if old_index_len == 0 {
-                SidecarIndexLayout::legacy(0)
+                None
             } else {
-                SidecarIndexLayout::read_from(index.as_mut().expect("present index"), old_index_len)
+                Some(
+                    SidecarIndexLayout::read_from(
+                        index.as_mut().expect("present index"),
+                        old_index_len,
+                    )
                     .map_err(|message| {
                         Self::invalid_lane_artifact_error(
                             index_path.to_path_buf(),
                             format!("{kind} old layout changed: {message}"),
                         )
-                    })?
+                    })?,
+                )
             })
             .map_err(|message| {
                 Self::invalid_lane_artifact_error(
@@ -1201,47 +1207,41 @@ impl Kura {
                 )
             })?;
         old_window.copy_from_slice(&intent.old_index_bytes);
-        let layout = if index.len() < PIPELINE_INDEX_ENTRY_SIZE {
-            SidecarIndexLayout::legacy(u64::try_from(index.len())?)
-        } else {
-            let first = SidecarIndexEntry::from_bytes(
-                index[..PIPELINE_INDEX_ENTRY_SIZE]
-                    .try_into()
-                    .expect("fixed index entry width"),
-            );
-            if first.offset != u64::MAX && first.len != u64::MAX {
-                SidecarIndexLayout::legacy(u64::try_from(index.len())?)
-            } else {
-                if first.offset != u64::MAX
-                    || first.len != u64::MAX
-                    || index.len() < INDEXED_SIDECAR_BASE_HEADER_SIZE
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        index_path.to_path_buf(),
-                        format!("{kind} append preimage has a malformed based index header"),
-                    ));
-                }
-                let metadata = SidecarIndexEntry::from_bytes(
-                    index[PIPELINE_INDEX_ENTRY_SIZE..INDEXED_SIDECAR_BASE_HEADER_SIZE]
-                        .try_into()
-                        .expect("fixed based-index metadata width"),
-                );
-                if metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK {
-                    return Err(Self::invalid_lane_artifact_error(
-                        index_path.to_path_buf(),
-                        format!("{kind} append preimage has an invalid base-height checksum"),
-                    ));
-                }
-                SidecarIndexLayout::based(metadata.offset, u64::try_from(index.len())?).map_err(
-                    |message| {
-                        Self::invalid_lane_artifact_error(
-                            index_path.to_path_buf(),
-                            format!("{kind} append preimage index is invalid: {message}"),
-                        )
-                    },
-                )?
-            }
-        };
+        if index.len() < INDEXED_SIDECAR_BASE_HEADER_SIZE {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path.to_path_buf(),
+                format!("{kind} append preimage has a truncated V1 index header"),
+            ));
+        }
+        let first = SidecarIndexEntry::from_bytes(
+            index[..PIPELINE_INDEX_ENTRY_SIZE]
+                .try_into()
+                .expect("fixed index entry width"),
+        );
+        if first.offset != u64::MAX || first.len != u64::MAX {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path.to_path_buf(),
+                format!("{kind} append preimage is missing its V1 index marker"),
+            ));
+        }
+        let metadata = SidecarIndexEntry::from_bytes(
+            index[PIPELINE_INDEX_ENTRY_SIZE..INDEXED_SIDECAR_BASE_HEADER_SIZE]
+                .try_into()
+                .expect("fixed V1 index metadata width"),
+        );
+        if metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path.to_path_buf(),
+                format!("{kind} append preimage has an invalid base-height checksum"),
+            ));
+        }
+        let layout = SidecarIndexLayout::based(metadata.offset, u64::try_from(index.len())?)
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(
+                    index_path.to_path_buf(),
+                    format!("{kind} append preimage index is invalid: {message}"),
+                )
+            })?;
         if layout.aligned_len != intent.old_index_len
             || usize::try_from(layout.entry_count).unwrap_or(usize::MAX)
                 > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
@@ -1252,7 +1252,7 @@ impl Kura {
             ));
         }
         intent
-            .validate_against_old_layout(layout)
+            .validate_against_old_layout(Some(layout))
             .map_err(|message| {
                 Self::invalid_lane_artifact_error(
                     index_path.to_path_buf(),

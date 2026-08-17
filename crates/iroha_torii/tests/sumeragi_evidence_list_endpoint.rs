@@ -7,72 +7,93 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote,
-        default_chain_order_hash,
-    },
+    sumeragi::consensus::{Evidence, SumeragiV2EquivocationEvidence},
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    block::{BlockHeader, consensus::EvidenceRecord},
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    NetworkId,
+    block::{
+        BlockHeader,
+        consensus::EvidenceRecord,
+        consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            SumeragiV2Equivocation, ValidatorPower, Vote,
+        },
+    },
+    peer::PeerId,
 };
 use iroha_torii::{Error, EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 use std::sync::Arc;
-fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
-    let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-    let certificate = Qc {
-        phase: Phase::Prepare,
-        subject_block_hash: subject,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("derive evidence fixture key");
+    let roster = vec![ValidatorPower {
+        validator: PeerId::new(key_pair.public_key().clone()),
+        power: 1,
+    }];
+    let context = HeightContext {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        )),
+        protocol_version: PROTOCOL_VERSION,
+        height,
+        epoch: 0,
+        epoch_end_height: height,
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: None,
+        quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"evidence list nexus context"),
+        execution_policy_hash: Hash::new(b"evidence list execution policy"),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 4,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 512,
+        },
+        leader_seed: [seed; Hash::LENGTH],
+    };
+    let round = ConsensusRound {
+        context_id: context.id(),
         height,
         view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: "test-mode".to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: Vec::new(),
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: Vec::new(),
+    };
+    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"evidence list parent state"),
+        Hash::new(b"evidence list post state"),
+        Hash::new(b"evidence list ordinary writes"),
+        1,
+        Hash::new([seed]),
+    );
+    let vote = |subject_seed: u8| Vote {
+        round,
+        proposal_round: round,
+        phase: GlobalPhase::Prepare,
+        subject: BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [subject_seed; Hash::LENGTH],
+            )),
+            payload_hash: Hash::new([subject_seed]),
         },
+        execution_commitment,
+        signer: 0,
+        signature: vec![subject_seed; 96],
     };
     Evidence {
-        kind: EvidenceKind::InvalidQc,
-        payload: EvidencePayload::InvalidQc {
-            certificate,
-            reason: "test".to_string(),
-        },
-    }
-}
-fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
-    fn vote(height: u64, signer: u32, seed: u8, phase: Phase) -> Vote {
-        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-        Vote {
-            phase,
-            block_hash: hash,
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer,
-            bls_sig: Vec::new(),
-        }
-    }
-    Evidence {
-        kind: EvidenceKind::DoublePrepare,
-        payload: EvidencePayload::DoubleVote {
-            v1: vote(height, 1, seed, Phase::Prepare),
-            v2: vote(height, 1, seed.wrapping_add(1), Phase::Prepare),
+        equivocation: SumeragiV2EquivocationEvidence {
+            context,
+            proofs_of_possession: vec![vec![seed; 96]],
+            conflict: SumeragiV2Equivocation::PhaseVote {
+                first: vote(seed),
+                second: vote(seed.wrapping_add(1)),
+            },
         },
     }
 }
@@ -90,7 +111,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     let mut state = state;
     let records = [
         EvidenceRecord {
-            evidence: make_invalid_commit_qc_evidence(10, 0xA1),
+            evidence: make_phase_vote_evidence(10, 0xA1),
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 10,
@@ -101,7 +122,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             consensus_admitted_at_height: None,
         },
         EvidenceRecord {
-            evidence: make_double_prevote_evidence(20, 0xB2),
+            evidence: make_phase_vote_evidence(20, 0xB2),
             recorded_at_height: 2,
             recorded_at_view: 0,
             recorded_at_ms: 20,
@@ -112,7 +133,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             consensus_admitted_at_height: None,
         },
         EvidenceRecord {
-            evidence: make_invalid_commit_qc_evidence(30, 0xC3),
+            evidence: make_phase_vote_evidence(30, 0xC3),
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
@@ -155,11 +176,11 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     assert_eq!(items.len(), 2);
     assert_eq!(
         items[0].get("kind").and_then(norito::json::Value::as_str),
-        Some("InvalidQc")
+        Some("SumeragiV2Equivocation")
     );
     assert_eq!(
         items[1].get("kind").and_then(norito::json::Value::as_str),
-        Some("DoublePrepare")
+        Some("SumeragiV2Equivocation")
     );
     assert!(matches!(
         items[0].get("consensus_admitted_height"),
@@ -168,7 +189,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),
-        kind: Some("InvalidQc".to_string()),
+        kind: Some("SumeragiV2Equivocation".to_string()),
     };
     let response_filtered =
         handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query_filtered), None)
@@ -186,7 +207,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         json_filtered
             .get("total")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(3)
     );
     let filtered_items = json_filtered
         .get("items")
@@ -196,19 +217,11 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     assert_eq!(filtered_items.len(), 1);
     assert_eq!(
         filtered_items[0]
-            .get("subject_block_hash")
-            .and_then(norito::json::Value::as_str)
-            .map(str::len),
-        Some(64),
+            .get("class")
+            .and_then(norito::json::Value::as_str),
+        Some("phase_vote"),
     );
-    for kind in [
-        "DoublePrepare",
-        "DoubleCommit",
-        "InvalidQc",
-        "InvalidProposal",
-        "Censorship",
-        "SumeragiV2Equivocation",
-    ] {
+    for kind in ["SumeragiV2Equivocation"] {
         let query = EvidenceListQuery {
             limit: None,
             offset: None,
@@ -224,6 +237,11 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     for kind in [
         "DoublePrevote",
         "DoublePrecommit",
+        "DoublePrepare",
+        "DoubleCommit",
+        "InvalidQc",
+        "InvalidProposal",
+        "Censorship",
         "InvalidQC",
         "doubleprepare",
         " InvalidQc",

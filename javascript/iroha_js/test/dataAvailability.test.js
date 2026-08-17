@@ -91,6 +91,7 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
     governance_tag: ["da.custom"],
   });
   assert.equal(request.compression, "Zstd");
+  assert.equal(request.norito_manifest, null);
   assert.deepEqual(request.metadata.items, [
     {
       key: "note",
@@ -107,6 +108,35 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
     signingDigest,
     "resource-sensitive erasure fields must be signed",
   );
+});
+
+test("DA signing digest rejects pre-release requests with omitted V1 fields", () => {
+  const { request } = buildDaIngestRequest({
+    payload: PAYLOAD,
+    networkId: NETWORK_ID,
+    owner: OWNER,
+    clientBlobId: CLIENT_BLOB_ID,
+    signerPublicKey:
+      "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
+    signatureHex: "aa".repeat(64),
+  });
+  assert.equal(request.compression, "Identity");
+  assert.equal(request.norito_manifest, null);
+
+  for (const path of [
+    ["compression"],
+    ["norito_manifest"],
+    ["erasure_profile", "row_parity_stripes"],
+  ]) {
+    const incomplete = structuredClone(request);
+    const parent = path.slice(0, -1).reduce((value, key) => value[key], incomplete);
+    delete parent[path.at(-1)];
+    assert.throws(
+      () => computeDaIngestSigningDigest(incomplete),
+      /compression|norito_manifest|row_parity_stripes/u,
+      `omitted ${path.join(".")} must reject`,
+    );
+  }
 });
 
 test("DA intent digest matches the shared Rust protocol vector", () => {

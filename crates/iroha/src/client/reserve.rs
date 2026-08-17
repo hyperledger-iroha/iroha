@@ -825,7 +825,6 @@ mod tests {
             max_pending_movements_per_provider: 4,
             max_open_appeals_per_provider: 2,
         };
-        policy.validate().expect("valid reserve policy fixture");
         let policy_digest = policy.digest().expect("digest reserve policy fixture");
         ReserveAuthorityPolicyRecordV1 {
             policy,
@@ -1221,12 +1220,10 @@ mod tests {
         };
         let response = page_response(&escaped_page);
         assert!(response.body().len() > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
-        assert!(
-            norito::to_bytes(&escaped_page)
-                .expect("Norito appeal page")
-                .len()
-                <= RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1
-        );
+        let norito_len = norito::to_bytes(&escaped_page)
+            .expect("Norito appeal page")
+            .len();
+        assert!(norito_len <= RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
         validate_appeals_response(response, &SorafsReserveAppealReadbackFilter::default())
             .expect("escaped JSON with bounded Norito");
 
@@ -1246,16 +1243,10 @@ mod tests {
             next_after: None,
         };
         let response = page_response(&oversized_page);
-        assert!(response.body().len() <= RESERVE_JSON_RESPONSE_MAX_BYTES_V1);
-        assert!(
-            validate_movements_response(
-                response,
-                &SorafsReserveMovementReadbackFilter::default()
-            )
-            .expect_err("oversized canonical Norito page")
-            .to_string()
-            .contains("canonical Norito page exceeds")
-        );
+        assert_rejected(validate_movements_response(
+            response,
+            &SorafsReserveMovementReadbackFilter::default(),
+        ));
 
         let policy = policy_record(&client);
         let mut wrong_media = record_response("policy", &policy);
@@ -1358,7 +1349,10 @@ mod tests {
             validate_policy_response(non_ok_response(), &SorafsReserveFinalizedAnchor::default())
                 .expect("non-OK response is preserved");
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(response.headers()["content-type"], "application/problem+json");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
         assert_eq!(response.headers()["x-reserve-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
 

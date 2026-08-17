@@ -473,8 +473,35 @@ def _require_uint(value: object, field: str, *, positive: bool = False) -> int:
     return value
 
 
+def _literal_crc16(tag: str, body: str) -> int:
+    """Return the canonical Norito literal CRC-16/CCITT-FALSE checksum."""
+
+    crc = 0xFFFF
+    for byte in f"{tag}:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc
+
+
 def _require_hash(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value.startswith("hash:") or len(value) <= 5:
+    if not isinstance(value, str):
+        raise SmokeError(f"lane lifecycle reported invalid `{field}` commitment")
+    prefix = "hash:"
+    if not value.startswith(prefix) or value.count("#") != 1:
+        raise SmokeError(f"lane lifecycle reported invalid `{field}` commitment")
+    body, checksum = value[len(prefix) :].split("#", 1)
+    if (
+        len(body) != 64
+        or any(character not in "0123456789ABCDEF" for character in body)
+        or int(body[-2:], 16) & 1 != 1
+        or len(checksum) != 4
+        or any(character not in "0123456789ABCDEF" for character in checksum)
+        or int(checksum, 16) != _literal_crc16("hash", body)
+    ):
         raise SmokeError(f"lane lifecycle reported invalid `{field}` commitment")
     return value
 

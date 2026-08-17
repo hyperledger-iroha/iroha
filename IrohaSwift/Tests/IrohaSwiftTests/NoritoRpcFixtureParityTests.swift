@@ -807,15 +807,14 @@ private struct NoritoRpcFixtureLoader {
         init(from decoder: Decoder) throws {
             let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
             let actual = Set(dynamic.allKeys.map(\.stringValue))
-            guard actual == ["charge_limits"] || actual == ["charge_limits", "gas_limit"] else {
+            guard actual == ["charge_limits", "gas_limit"] else {
                 throw DecodingError.dataCorrupted(
                     .init(codingPath: decoder.codingPath, debugDescription: "invalid fee value fields")
                 )
             }
             let container = try decoder.container(keyedBy: CodingKeys.self)
             _ = try container.decode([SharedChargeLimit].self, forKey: .chargeLimits)
-            if container.contains(.gasLimit) {
-                let gasLimit = try container.decode(UInt64.self, forKey: .gasLimit)
+            if let gasLimit = try container.decodeIfPresent(UInt64.self, forKey: .gasLimit) {
                 guard gasLimit > 0 else {
                     throw DecodingError.dataCorruptedError(
                         forKey: .gasLimit,

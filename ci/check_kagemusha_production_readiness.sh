@@ -97,6 +97,34 @@ promotion_stat_fingerprint() {
   printf '%s\n' "${observed}"
 }
 
+promotion_assert_no_extended_acl() {
+  local target="${1}"
+  local label="${2}"
+  local listing
+  local mode_marker
+  local ignored
+  if [[ "${OSTYPE}" != darwin* ]]; then
+    return 0
+  fi
+  if [[ ! -x /bin/ls ]]; then
+    echo "${label} ACL metadata is unavailable" >&2
+    return 1
+  fi
+  listing="$(LC_ALL=C /bin/ls -lde -- "${target}" 2>/dev/null)" || {
+    echo "${label} ACL metadata is unavailable" >&2
+    return 1
+  }
+  read -r mode_marker ignored <<<"${listing}"
+  if [[ -z "${mode_marker}" ]]; then
+    echo "${label} ACL metadata is malformed" >&2
+    return 1
+  fi
+  if [[ "${mode_marker}" == *+ ]]; then
+    echo "${label} has an extended ACL" >&2
+    return 1
+  fi
+}
+
 promotion_assert_root_custody() {
   local target="${1}"
   local label="${2}"
@@ -127,6 +155,11 @@ promotion_assert_root_custody() {
     echo "${label} filesystem root is group/world writable" >&2
     return 1
   fi
+  promotion_assert_no_extended_acl "/" "${label} filesystem root" || return 1
+  if [[ "$(promotion_stat_fingerprint "/")" != "${fingerprint}" ]]; then
+    echo "${label} filesystem root changed during ACL validation" >&2
+    return 1
+  fi
   while [[ -n "${remainder}" ]]; do
     if [[ "${remainder}" == */* ]]; then
       component="${remainder%%/*}"
@@ -154,6 +187,11 @@ promotion_assert_root_custody() {
       echo "${label} path component is group/world writable" >&2
       return 1
     fi
+    promotion_assert_no_extended_acl "${current}" "${label} path component" || return 1
+    if [[ "$(promotion_stat_fingerprint "${current}")" != "${fingerprint}" ]]; then
+      echo "${label} path component changed during ACL validation" >&2
+      return 1
+    fi
   done
 }
 
@@ -163,7 +201,7 @@ if [[ "${MODE}" == "promotion" ]]; then
     exit 2
   fi
   # Bootstrap contract: an independently authenticated controller must install
-  # the reviewed checkout below this root-owned, non-group/world-writable path
+  # the reviewed checkout below this root-owned, ACL-free, non-group/world-writable path
   # and verify the reviewed gate digest before invoking this exact path.  The
   # digest environment value repeats that launcher's decision; it cannot replace
   # the external pre-exec check because a substituted script could omit its own
@@ -266,14 +304,19 @@ fi
   "${GATE_PIN_FD}" "${GATE_PATH_FINGERPRINT}" <<'PY'
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -392,6 +435,14 @@ MAX_REVIEWED_HELPER_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_ALLOWED_SIGNERS_BYTES = 64 * 1024
 MAX_SOURCE_REVOCATION_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_SEAL_PROJECTION_BYTES = 16 * 1024
+KAGAMI_VERIFIER_TIMEOUT_SECONDS = 300.0
+KAGAMI_VERIFIER_TERMINATE_GRACE_SECONDS = 0.25
+KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS = 2.0
+KAGAMI_VERIFIER_EXIT_POLL_SECONDS = 0.01
+MAX_KAGAMI_VERIFIER_STDOUT_BYTES = 1024 * 1024
+MAX_KAGAMI_VERIFIER_STDERR_BYTES = 256 * 1024
+VERIFIER_IO_CHUNK_BYTES = 64 * 1024
+WAITID_SIGINFO_BUFFER_BYTES = 256
 MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 10 * 1024 * 1024 * 1024
 MAX_CATALOG_AGGREGATE_BYTES = 12 * 1024 * 1024 * 1024
@@ -402,6 +453,14 @@ BOUNDED_AUTHENTICATED_METADATA = (
 )
 KAGAMI_VERIFIER_PATH_ENV = "KAGEMUSHA_V4_KAGAMI_BIN"
 KAGAMI_VERIFIER_SHA256_ENV = "KAGEMUSHA_V4_KAGAMI_SHA256"
+AUTHENTICATED_TOOL_CONTROLLER_PATH_ENV = (
+    "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+)
+AUTHENTICATED_TOOL_CONTROLLER_SHA256_ENV = (
+    "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+)
+AUTHENTICATED_TOOL_CONTROLLER_CONTRACT = "iroha.authenticated-tool-os-isolation.v1"
+AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND = "run-v1"
 SANITIZED_VERIFIER_ENV = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -414,10 +473,37 @@ READ_CHUNK_BYTES = 1024 * 1024
 # its digest-pinned Python interpreter, and the independently reviewed source
 # closure are trusted code.
 # Every operator-supplied production input is required to live below a
-# symlink-free, root-owned path chain that is not writable by group or other.
+# symlink-free, root-owned path chain that has no macOS ACL and is not writable
+# by group or other.
 # Root itself remains the production trust principal; this gate does not try to
 # defend against a malicious caller that can replace the gate while it runs.
 PRODUCTION_TRUSTED_UID = 0
+MACOS_ACL_TYPE_EXTENDED = 0x00000100
+MACOS_ACL_FIRST_ENTRY = 0
+if sys.platform == "darwin":
+    MACOS_LIBC = ctypes.CDLL(None, use_errno=True)
+    MACOS_LIBC.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    MACOS_LIBC.acl_get_fd_np.restype = ctypes.c_void_p
+    MACOS_LIBC.acl_get_entry.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    MACOS_LIBC.acl_get_entry.restype = ctypes.c_int
+    MACOS_LIBC.acl_free.argtypes = [ctypes.c_void_p]
+    MACOS_LIBC.acl_free.restype = ctypes.c_int
+else:
+    MACOS_LIBC = None
+WAITID_LIBC = ctypes.CDLL(None, use_errno=True)
+if not hasattr(WAITID_LIBC, "waitid"):
+    raise ValueError("authenticated verifier waitid support is unavailable")
+WAITID_LIBC.waitid.argtypes = [
+    ctypes.c_int,
+    ctypes.c_uint,
+    ctypes.c_void_p,
+    ctypes.c_int,
+]
+WAITID_LIBC.waitid.restype = ctypes.c_int
 REVIEWED_SOURCE_CLOSURE_KEYS = {
     "schema",
     "base_commit",
@@ -816,6 +902,7 @@ def validate_inherited_promotion_python() -> None:
         or opened.st_size > MAX_KAGAMI_VERIFIER_BYTES
     ):
         raise ValueError("promotion Python descriptor does not have production custody")
+    require_no_macos_extended_acl(trusted_python_fd, "inherited promotion Python")
     observed_fingerprint = " ".join(
         (
             str(opened.st_uid),
@@ -876,6 +963,7 @@ def validate_inherited_promotion_gate() -> None:
         or opened.st_size > MAX_READINESS_GATE_BYTES
     ):
         raise ValueError("promotion gate descriptor does not have production custody")
+    require_no_macos_extended_acl(trusted_gate_fd, "inherited promotion gate")
     observed_fingerprint = " ".join(
         (
             str(opened.st_uid),
@@ -967,14 +1055,47 @@ def inspect_pinned_prefix(
     return prefix
 
 
+def require_no_macos_extended_acl(descriptor: int, label: str) -> None:
+    """Reject every extended macOS ACL entry on an exact pinned descriptor."""
+
+    if MACOS_LIBC is None:
+        return
+    ctypes.set_errno(0)
+    acl = MACOS_LIBC.acl_get_fd_np(descriptor, MACOS_ACL_TYPE_EXTENDED)
+    if not acl:
+        error_number = ctypes.get_errno()
+        if error_number == errno.ENOENT:
+            return
+        raise OSError(
+            error_number,
+            f"could not inspect the extended ACL on {label}",
+        )
+    entry = ctypes.c_void_p()
+    ctypes.set_errno(0)
+    entry_status = MACOS_LIBC.acl_get_entry(
+        acl, MACOS_ACL_FIRST_ENTRY, ctypes.byref(entry)
+    )
+    entry_error = ctypes.get_errno()
+    ctypes.set_errno(0)
+    free_status = MACOS_LIBC.acl_free(acl)
+    free_error = ctypes.get_errno()
+    if entry_status < 0:
+        raise OSError(entry_error, f"could not inspect the extended ACL on {label}")
+    if free_status != 0:
+        raise OSError(free_error, f"could not release the extended ACL for {label}")
+    if entry_status == 0:
+        raise ValueError(f"{label} must not have an extended ACL")
+
+
 def require_production_root_custody(descriptor: int, label: str) -> None:
-    """Mirror runtime root ownership and group/world write rejection."""
+    """Enforce root ownership without mode-bit or macOS ACL write delegation."""
 
     metadata = os.fstat(descriptor)
     if metadata.st_uid != PRODUCTION_TRUSTED_UID:
         raise ValueError(f"{label} must be owned by root")
     if stat.S_IMODE(metadata.st_mode) & 0o022:
         raise ValueError(f"{label} must not be group/world writable")
+    require_no_macos_extended_acl(descriptor, label)
 
 
 def snapshot_private_bytes(
@@ -1498,9 +1619,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         'KAGAMI_VERIFIER_PATH_ENV = "KAGEMUSHA_V4_KAGAMI_BIN"',
         'KAGAMI_VERIFIER_SHA256_ENV = "KAGEMUSHA_V4_KAGAMI_SHA256"',
+        '"KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"',
+        '"KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"',
+        'AUTHENTICATED_TOOL_CONTROLLER_CONTRACT = "iroha.authenticated-tool-os-isolation.v1"',
         "hash_pinned_descriptor(",
         "def validate_kagami_verification_report(",
-        "env=SANITIZED_VERIFIER_ENV",
+        "environment=SANITIZED_VERIFIER_ENV",
         'cwd=Path("/")',
         "validate_kagami_verification_report(",
         "promotion requires signed physical-iOS raw evidence",
@@ -1508,6 +1632,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "read_pinned_descriptor(",
         "PRODUCTION_TRUSTED_UID = 0",
         "def require_production_root_custody(",
+        "def require_no_macos_extended_acl(",
+        "MACOS_LIBC.acl_get_fd_np",
+        'require_no_macos_extended_acl(trusted_python_fd, "inherited promotion Python")',
+        'require_no_macos_extended_acl(trusted_gate_fd, "inherited promotion gate")',
         "production promotion must run as root",
         "def snapshot_private_bytes(",
         "evidence_bytes_are_non_placeholder(",
@@ -1530,6 +1658,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "PRODUCTION_IOS_EVIDENCE_MODULE",
         "validate_production_signed_evidence",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY",
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID",
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY",
+        "online-freshness-consumption-receipt-v1.json",
         "static candidate corridor passed;",
         "production promotion was not evaluated.",
     )
@@ -1540,22 +1671,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "iroha.kagemusha.ios_device_lab.production_signed_evidence.v1",
         "iroha.kagemusha.ios.production_device_policy.v1",
         "def validate_production_signed_evidence(",
-        "PLATFORM_TRUST_BLOCKER",
-        "Apple X.509 chain",
-        "freshness/replay state",
-    )
-    production_ios_validation = texts[PRODUCTION_IOS_EVIDENCE_MODULE].rsplit(
-        "def validate_production_signed_evidence(", 1
-    )[-1]
-    require_pattern(
-        production_ios_validation,
-        PRODUCTION_IOS_EVIDENCE_MODULE,
-        errors,
-        (
-            r"errors\.append\(PLATFORM_TRUST_BLOCKER\)\s*"
-            r"return errors\s*$"
-        ),
-        "unconditional production App Attest trust blocker",
+        "def _parse_x509_certificate(",
+        "def _validate_attestation_certificate_chain(",
+        "OID_APP_ATTEST_NONCE",
+        "iroha.kagemusha.ios.app_attest_online_freshness_consumption_receipt.v1",
+        "def _validate_online_freshness_receipt(",
+        '"previous_assertion_counter"',
+        '"consumption_id"',
     )
     shell_bootstrap = texts[READINESS].split("<<'PY'", 1)[0]
     require(
@@ -1565,6 +1687,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'SCRIPT_SOURCE_ORIGINAL="${BASH_SOURCE[0]}"',
         "builtin pwd -P",
         "promotion_assert_root_custody",
+        "promotion_assert_no_extended_acl",
+        "/bin/ls -lde",
+        "changed during ACL validation",
         'promotion_assert_root_custody "${DERIVED_ROOT_DIR}" "promotion readiness checkout"',
         'promotion_assert_root_custody "${SCRIPT_PATH}" "promotion readiness gate"',
         'exec 8<"${SCRIPT_PATH}"',
@@ -1580,6 +1705,43 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "requires Python 3.10 or newer",
         '/usr/bin/git -C "${ROOT_DIR}" diff --quiet --diff-filter=U --',
         "readiness rejects unresolved Git index entries",
+    )
+    shell_custody_function = shell_bootstrap.split(
+        "promotion_assert_root_custody() {", 1
+    )[-1].split("\n}\n\nif [[ \"${MODE}\" == \"promotion\" ]]", 1)[0]
+    shell_acl_function = shell_bootstrap.split(
+        "promotion_assert_no_extended_acl() {", 1
+    )[-1].split("\n}\n\npromotion_assert_root_custody() {", 1)[0]
+    require_pattern(
+        shell_acl_function,
+        "promotion shell ACL custody",
+        errors,
+        (
+            r'\[\[ "\$\{OSTYPE\}" != darwin\* \]\].*?'
+            r'/bin/ls -lde -- "\$\{target\}".*?'
+            r'\[\[ "\$\{mode_marker\}" == \*\+ \]\].*?has an extended ACL'
+        ),
+        "fail-closed macOS extended-ACL inspection",
+    )
+    if shell_custody_function.count("promotion_assert_no_extended_acl") != 2:
+        errors.append(
+            f"{READINESS}: promotion shell custody does not reject ACLs on the root and every path component"
+        )
+    descriptor_custody_functions = texts[READINESS].split(
+        "def require_no_macos_extended_acl(", 1
+    )[-1].split("def snapshot_private_bytes(", 1)[0]
+    require_pattern(
+        descriptor_custody_functions,
+        READINESS,
+        errors,
+        (
+            r"MACOS_LIBC\.acl_get_fd_np\(descriptor, MACOS_ACL_TYPE_EXTENDED\).*?"
+            r"entry_status\s*=\s*MACOS_LIBC\.acl_get_entry\(.*?"
+            r"if entry_status == 0:.*?must not have an extended ACL.*?"
+            r"def require_production_root_custody\(.*?"
+            r"require_no_macos_extended_acl\(descriptor, label\)"
+        ),
+        "descriptor-exact macOS ACL rejection in production custody",
     )
     forbid(
         shell_bootstrap,
@@ -1625,6 +1787,59 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         '"cargo"',
         '"run"',
     )
+    verifier_execution = texts[READINESS].rsplit(
+        "def terminate_authenticated_verifier_process_group(", 1
+    )[-1].split("def release_verifier_command(", 1)[0]
+    require(
+        verifier_execution,
+        "authenticated Kagami verifier execution",
+        errors,
+        "selectors.DefaultSelector()",
+        "preexec_fn=os.setpgrp",
+        "time.monotonic() + timeout_seconds",
+        "os.killpg(observed_process_group, signal.SIGTERM)",
+        "os.killpg(observed_process_group, signal.SIGKILL)",
+        "len(capture) > limit",
+        "KAGAMI_VERIFIER_TIMEOUT_SECONDS",
+        "MAX_KAGAMI_VERIFIER_STDOUT_BYTES",
+        "MAX_KAGAMI_VERIFIER_STDERR_BYTES",
+        "environment=SANITIZED_VERIFIER_ENV",
+        "authenticated_verifier_exit_diagnostic",
+        "authenticated_verifier_exited_without_reaping(process)",
+        "authenticated_verifier_controller_command(controller, command)",
+        '"--use-attested-runtime-identity"',
+        '"--no-new-privileges"',
+        '"--close-inherited-fds"',
+        '"--forward-tool-exit-status"',
+        '"--exact-tool-stdio"',
+        '"--deny-network"',
+        '"--deny-tool-process-spawn"',
+        '"--deny-all-writes"',
+        '"--require-empty-process-tree"',
+        '"--account-unlinked-write-bytes"',
+        '"--cumulative-write-limit-bytes"',
+        '"--maximum-live-write-root-bytes"',
+    )
+    require_pattern(
+        verifier_execution,
+        "authenticated Kagami verifier execution",
+        errors,
+        (
+            r"if authenticated_verifier_exited_without_reaping\(process\):"
+            r".*?terminate_authenticated_verifier_process_group\(\s*"
+            r"process,\s*leader_exit_observed=True,\s*\)"
+            r".*?returncode\s*=\s*process\.returncode"
+        ),
+        "unconditional success-path verifier process-group sweep before leader reap",
+    )
+    forbid(
+        verifier_execution,
+        "authenticated Kagami verifier execution",
+        errors,
+        "capture_output=True",
+        "text=True",
+        "shell=True",
+    )
     ios_validator_function = texts[READINESS].rsplit(
         "def verify_ios_evidence(", 1
     )[-1].split("def promotion_errors(", 1)[0]
@@ -1635,7 +1850,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"validation_errors\s*=\s*validator\(\s*evidence_snapshot_path,"
             r".*?trusted_public_key_snapshot,\s*"
-            r"trusted_production_policy_snapshot,\s*\).*?"
+            r"trusted_production_policy_snapshot,\s*"
+            r"freshness_snapshot_path,\s*"
+            r"freshness_key_id,\s*"
+            r"trusted_freshness_public_key_snapshot,\s*\).*?"
             r"evidence\s*=\s*strict_json_bytes\(\s*evidence_bytes,"
         ),
         "same pinned evidence, trusted key, and production policy snapshots for validation and digest binding",
@@ -1652,6 +1870,34 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     promotion_function = texts[READINESS].rsplit("def promotion_errors(", 1)[-1].split(
         "errors = static_errors()", 1
     )[0]
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"tool_controller_text\s*=\s*os\.environ\.get\(.*?"
+            r"tool_controller_sha256\s*=\s*os\.environ\.get\(.*?"
+            r"tool_controller_sha256\s*==\s*verifier_sha256.*?"
+            r"require_production_root_custody\(descriptor, label\).*?"
+            r"!=\s*tool_controller_sha256.*?"
+            r"tool_controller_snapshot, tool_controller_exec\s*=\s*"
+            r"snapshot_pinned_executable\(.*?"
+            r"run_authenticated_verifier\(command, tool_controller_exec\)"
+        ),
+        "distinct digest-pinned authenticated tool controller and snapshot execution",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"release_verifier_command\(verifier_exec, directory, policy\).*?"
+            r"run_authenticated_verifier\(command, tool_controller_exec\).*?"
+            r"authenticated_verifier_exit_diagnostic\(verified\.returncode\).*?"
+            r"strict_json_bytes\(\s*verified\.stdout,"
+        ),
+        "bounded authenticated verifier execution and deterministic diagnostics",
+    )
     require_pattern(
         promotion_function,
         READINESS,
@@ -1680,6 +1926,16 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors.append(
             f"{READINESS}: promotion does not root-custody every production trust class"
         )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"if path in production_directory_paths:\s*try:\s*"
+            r"require_production_root_custody\(descriptor, label\)"
+        ),
+        "root-custody the complete production path-component set",
+    )
     require_pattern(
         promotion_function,
         READINESS,
@@ -1848,9 +2104,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "scripts/tests/stage_kagemusha_candidate_android_lab_test.py",
         "pytests/scripts/run_kagemusha_v4_generation_test.py",
         "pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py",
+        "cargo test -p iroha_data_model receiver_snapshot --lib",
         "cargo test -p iroha_core kagemusha_v4 --lib",
         "cargo test -p iroha_core offline_device_attestation_policy --lib",
         "cargo test -p iroha_core device_registration_ --lib",
+        "cargo test -p iroha_core kagemusha_online_registration_ --lib",
+        "cargo test -p iroha_core active_receiver_snapshot_ --lib",
         "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
         "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
         "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
@@ -1864,8 +2123,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p iroha_kagami --bin kagami harden_private_tree",
         "cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash",
         "cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed",
-        "cargo test -p iroha_kagami --bin kagami atomic_activation_policy_",
-        "cargo test -p iroha_kagami --bin kagami atomic_activation_rejects_noncanonical_app_policy_text",
+        "cargo test -p iroha_kagami --bin kagami atomic_activation_",
+        "cargo test -p iroha_kagami --bin kagami backing_",
         "cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p iroha_torii offline_commands --lib -- --nocapture",
@@ -2069,6 +2328,340 @@ def authenticate_reviewed_source_file(
         raise ValueError(f"reviewed helper {relative} differs from the source closure")
 
 
+def authenticated_verifier_exited_without_reaping(
+    process: subprocess.Popen[bytes],
+) -> bool:
+    """Observe one verifier leader's exit while preserving its process-group identity."""
+
+    information = ctypes.create_string_buffer(WAITID_SIGINFO_BUFFER_BYTES)
+    ctypes.set_errno(0)
+    result = WAITID_LIBC.waitid(
+        os.P_PID,
+        process.pid,
+        ctypes.byref(information),
+        os.WEXITED | os.WNOHANG | os.WNOWAIT,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise ValueError(
+            f"authenticated verifier exit observation failed (errno {error_number})"
+        )
+    # siginfo_t begins with si_signo on every supported POSIX target. waitid with
+    # WNOHANG leaves a zeroed structure when no child state is available.
+    return ctypes.c_int.from_buffer(information).value != 0
+
+
+def terminate_authenticated_verifier_process_group(
+    process: subprocess.Popen[bytes],
+    *,
+    leader_exit_observed: bool = False,
+) -> None:
+    """Terminate the verifier group and reap its direct child exactly once."""
+
+    try:
+        observed_process_group = os.getpgid(process.pid)
+    except ProcessLookupError:
+        observed_process_group = process.pid
+    try:
+        os.killpg(observed_process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError as error:
+        if leader_exit_observed:
+            # Darwin returns EPERM when the unreaped leader is the group's only
+            # remaining member. A live same-UID descendant keeps the group
+            # signalable; production root can signal every descendant UID.
+            process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+            return
+        # Promotion always runs as root and therefore fails closed if group
+        # signaling is denied. Candidate self-tests may execute under a host
+        # harness whose helper processes have mixed effective UIDs; terminate
+        # the direct child there while static mutation coverage still proves
+        # that the production runner retains process-group cleanup.
+        if os.geteuid() == PRODUCTION_TRUSTED_UID:
+            raise ValueError(
+                "authenticated verifier process-group SIGTERM cleanup failed"
+            ) from error
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        except OSError as direct_error:
+            raise ValueError(
+                "authenticated verifier candidate cleanup failed"
+            ) from direct_error
+        try:
+            process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as wait_error:
+            try:
+                process.kill()
+                process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+            except (OSError, subprocess.TimeoutExpired) as kill_error:
+                raise ValueError(
+                    "authenticated verifier candidate cleanup failed"
+                ) from kill_error
+        return
+    except OSError as error:
+        raise ValueError(
+            "authenticated verifier process-group SIGTERM cleanup failed"
+        ) from error
+    # Keep the group leader unreaped during the grace period so its process-group
+    # identifier cannot be recycled before the mandatory SIGKILL sweep.
+    time.sleep(KAGAMI_VERIFIER_TERMINATE_GRACE_SECONDS)
+    try:
+        os.killpg(observed_process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError as error:
+        if leader_exit_observed:
+            process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+            return
+        if os.geteuid() == PRODUCTION_TRUSTED_UID:
+            raise ValueError(
+                "authenticated verifier process-group SIGKILL cleanup failed"
+            ) from error
+        try:
+            process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as wait_error:
+            try:
+                process.kill()
+                process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+            except (OSError, subprocess.TimeoutExpired) as kill_error:
+                raise ValueError(
+                    "authenticated verifier candidate cleanup failed"
+                ) from kill_error
+        return
+    except OSError as error:
+        raise ValueError(
+            "authenticated verifier process-group SIGKILL cleanup failed"
+        ) from error
+    try:
+        process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("authenticated verifier process-group reap failed") from error
+
+
+def run_bounded_authenticated_process(
+    command: list[str],
+    *,
+    timeout_seconds: float,
+    stdout_limit: int,
+    stderr_limit: int,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one isolated process with a deadline and independently bounded pipes."""
+
+    if timeout_seconds <= 0 or stdout_limit <= 0 or stderr_limit <= 0:
+        raise ValueError("authenticated verifier execution bounds are invalid")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=Path("/"),
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+            preexec_fn=os.setpgrp,
+            bufsize=0,
+        )
+    except OSError as error:
+        error_number = error.errno if error.errno is not None else 0
+        raise ValueError(
+            f"authenticated verifier could not start (errno {error_number})"
+        ) from None
+    selector = selectors.DefaultSelector()
+    stdout = bytearray()
+    stderr = bytearray()
+    failure: str | None = None
+    leader_exit_was_observed = False
+    try:
+        assert process.stdout is not None
+        assert process.stderr is not None
+        streams = (
+            (process.stdout, "stdout", stdout, stdout_limit),
+            (process.stderr, "stderr", stderr, stderr_limit),
+        )
+        for stream, name, capture, limit in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, (name, capture, limit))
+        deadline = time.monotonic() + timeout_seconds
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = (
+                    f"authenticated verifier exceeded its {timeout_seconds:g}-second timeout"
+                )
+                break
+            try:
+                ready = selector.select(remaining)
+            except InterruptedError:
+                continue
+            if not ready:
+                failure = (
+                    f"authenticated verifier exceeded its {timeout_seconds:g}-second timeout"
+                )
+                break
+            for key, _ in ready:
+                name, capture, limit = key.data
+                try:
+                    chunk = os.read(
+                        key.fd,
+                        min(
+                            VERIFIER_IO_CHUNK_BYTES,
+                            max(1, limit + 1 - len(capture)),
+                        ),
+                    )
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                capture.extend(chunk)
+                if len(capture) > limit:
+                    failure = (
+                        f"authenticated verifier {name} exceeded its {limit}-byte limit"
+                    )
+                    break
+            if failure is not None:
+                break
+        if failure is None:
+            while True:
+                if authenticated_verifier_exited_without_reaping(process):
+                    leader_exit_was_observed = True
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = (
+                        f"authenticated verifier exceeded its {timeout_seconds:g}-second timeout"
+                    )
+                    break
+                time.sleep(min(KAGAMI_VERIFIER_EXIT_POLL_SECONDS, remaining))
+        if failure is not None:
+            if not leader_exit_was_observed:
+                leader_exit_was_observed = (
+                    authenticated_verifier_exited_without_reaping(process)
+                )
+            terminate_authenticated_verifier_process_group(
+                process,
+                leader_exit_observed=leader_exit_was_observed,
+            )
+            raise ValueError(failure)
+        # Keep the exited leader unreaped until both signals have swept its
+        # original process group. This prevents a successful verifier from
+        # leaving a pipe-closing descendant alive past promotion.
+        terminate_authenticated_verifier_process_group(
+            process,
+            leader_exit_observed=True,
+        )
+        returncode = process.returncode
+        if returncode is None:
+            raise ValueError("authenticated verifier leader was not reaped")
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            stdout=bytes(stdout),
+            stderr=bytes(stderr),
+        )
+    except BaseException:
+        if process.returncode is None:
+            terminate_authenticated_verifier_process_group(
+                process,
+                leader_exit_observed=leader_exit_was_observed,
+            )
+        raise
+    finally:
+        selector.close()
+        if process.stdout is not None and not process.stdout.closed:
+            process.stdout.close()
+        if process.stderr is not None and not process.stderr.closed:
+            process.stderr.close()
+
+
+def authenticated_tool_platform() -> str:
+    """Return the exact supported platform named by the isolation contract."""
+
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    raise ValueError(
+        "authenticated tool isolation is supported only on macOS and Linux"
+    )
+
+
+def authenticated_verifier_controller_command(
+    controller: Path,
+    verifier_command: list[str],
+) -> list[str]:
+    """Build the mandatory OS-isolation request for one untrusted verifier.
+
+    The independently reviewed controller must deny every filesystem write,
+    network access, and child-process creation, and must attest an empty job at
+    return.  Local pipe, deadline, and process-group bounds remain defense in
+    depth; they cannot contain open-unlinked writes or ``setsid`` escapes.
+    """
+
+    if not controller.is_absolute() or not verifier_command:
+        raise ValueError("authenticated verifier controller request is incomplete")
+    return [
+        str(controller),
+        AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND,
+        "--contract",
+        AUTHENTICATED_TOOL_CONTROLLER_CONTRACT,
+        "--platform",
+        authenticated_tool_platform(),
+        "--working-directory",
+        "/",
+        "--use-attested-runtime-identity",
+        "--no-new-privileges",
+        "--close-inherited-fds",
+        "--forward-tool-exit-status",
+        "--exact-tool-stdio",
+        "--deny-network",
+        "--deny-tool-process-spawn",
+        "--deny-all-writes",
+        "--account-unlinked-write-bytes",
+        "--require-empty-process-tree",
+        "--cumulative-write-limit-bytes",
+        "0",
+        "--maximum-live-write-root-bytes",
+        "0",
+        "--wall-time-seconds",
+        str(KAGAMI_VERIFIER_TIMEOUT_SECONDS),
+        "--stdout-limit-bytes",
+        str(MAX_KAGAMI_VERIFIER_STDOUT_BYTES),
+        "--stderr-limit-bytes",
+        str(MAX_KAGAMI_VERIFIER_STDERR_BYTES),
+        "--",
+        *verifier_command,
+    ]
+
+
+def run_authenticated_verifier(
+    command: list[str],
+    controller: Path,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run Kagami only through the independently pinned isolation controller."""
+
+    return run_bounded_authenticated_process(
+        authenticated_verifier_controller_command(controller, command),
+        timeout_seconds=KAGAMI_VERIFIER_TIMEOUT_SECONDS,
+        stdout_limit=MAX_KAGAMI_VERIFIER_STDOUT_BYTES,
+        stderr_limit=MAX_KAGAMI_VERIFIER_STDERR_BYTES,
+        environment=SANITIZED_VERIFIER_ENV,
+    )
+
+
+def authenticated_verifier_exit_diagnostic(returncode: int) -> str:
+    """Describe verifier failure without reflecting attacker-controlled output."""
+
+    if returncode < 0:
+        return f"terminated by signal {-returncode}"
+    return f"exited with status {returncode}"
+
+
 def release_verifier_command(verifier: Path, directory: Path, policy: Path) -> list[str]:
     """Use one explicitly digest-pinned Kagami verifier for promotion decisions."""
     return [
@@ -2215,7 +2808,7 @@ def validate_kagami_verification_report(
 
 def ios_evidence_configuration(
     errors: list[str],
-) -> tuple[Path, str, Path, Path] | None:
+) -> tuple[Path, str, Path, Path, str, Path] | None:
     """Return the complete opt-in physical-iOS evidence configuration."""
 
     root_text = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", "")
@@ -2226,6 +2819,12 @@ def ios_evidence_configuration(
     production_policy_text = os.environ.get(
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY", ""
     )
+    freshness_key_id = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID", ""
+    )
+    freshness_public_key_text = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY", ""
+    )
     present = tuple(
         bool(value)
         for value in (
@@ -2233,12 +2832,14 @@ def ios_evidence_configuration(
             key_id,
             public_key_text,
             production_policy_text,
+            freshness_key_id,
+            freshness_public_key_text,
         )
     )
     if not any(present):
         errors.append(
             "promotion requires signed production physical-iOS raw evidence, trusted key id, "
-            "public key, and production policy"
+            "public key, production policy, and independent online freshness authority"
         )
         return None
     if not all(present):
@@ -2246,12 +2847,15 @@ def ios_evidence_configuration(
             "physical-iOS evidence requires KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT, "
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID, and "
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY, and "
-            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY together"
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY, "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID, and "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY together"
         )
         return None
     ios_root = Path(root_text)
     public_key = Path(public_key_text)
     production_policy = Path(production_policy_text)
+    freshness_public_key = Path(freshness_public_key_text)
     if (
         not ios_root.is_absolute()
         or ios_root.resolve(strict=False) != ios_root
@@ -2280,7 +2884,27 @@ def ios_evidence_configuration(
             "physical-iOS production policy must be a canonical absolute bounded regular file"
         )
         return None
-    return ios_root, key_id, public_key, production_policy
+    if (
+        freshness_key_id == key_id
+        or freshness_public_key == public_key
+        or not freshness_public_key.is_absolute()
+        or freshness_public_key.resolve(strict=False) != freshness_public_key
+        or not freshness_public_key.is_file()
+        or freshness_public_key.is_symlink()
+    ):
+        errors.append(
+            "physical-iOS online freshness authority must use a distinct key id and "
+            "canonical absolute regular public-key file"
+        )
+        return None
+    return (
+        ios_root,
+        key_id,
+        public_key,
+        production_policy,
+        freshness_key_id,
+        freshness_public_key,
+    )
 
 
 def load_ios_evidence_validator(
@@ -2288,7 +2912,7 @@ def load_ios_evidence_validator(
     candidate_module_path: Path,
     production_module_bytes: bytes,
     production_module_path: Path,
-) -> Callable[[Path, Path, str, Path, Path], list[str]]:
+) -> Callable[[Path, Path, str, Path, Path, Path, str, Path], list[str]]:
     """Load both reviewed validators from already pinned source bytes."""
 
     module_name = "_iroha_pinned_kagemusha_candidate_ios_evidence"
@@ -2330,6 +2954,9 @@ def load_ios_evidence_validator(
             trusted_key_id: str,
             trusted_public_key_path: Path,
             production_policy_path: Path,
+            freshness_receipt_path: Path,
+            trusted_freshness_key_id: str,
+            trusted_freshness_public_key_path: Path,
         ) -> list[str]:
             return production_validator(
                 evidence_path,
@@ -2338,6 +2965,9 @@ def load_ios_evidence_validator(
                 trusted_public_key_path,
                 production_policy_path,
                 module,
+                freshness_receipt_path=freshness_receipt_path,
+                trusted_freshness_key_id=trusted_freshness_key_id,
+                trusted_freshness_public_key_path=trusted_freshness_public_key_path,
             )
 
         return validate
@@ -2349,19 +2979,24 @@ def load_ios_evidence_validator(
 
 def verify_ios_evidence(
     directory: Path,
-    ios_configuration: tuple[Path, str, Path, Path],
-    validator: Callable[[Path, Path, str, Path, Path], list[str]],
+    ios_configuration: tuple[Path, str, Path, Path, str, Path],
+    validator: Callable[[Path, Path, str, Path, Path, Path, str, Path], list[str]],
     evidence_bytes: bytes,
     trusted_public_key_snapshot: Path,
     trusted_production_policy_snapshot: Path,
+    trusted_freshness_public_key_snapshot: Path,
     directory_pins: list[tuple[Path, int, tuple[int, ...], str]],
+    file_pins: list[tuple[Path, int, tuple[int, ...], str]],
     staging_parent: Path,
 ) -> tuple[str | None, str | None]:
     """Verify one signed raw slot from the exact bytes used for its candidate digest."""
 
-    ios_root, key_id, _, _ = ios_configuration
+    ios_root, key_id, _, _, freshness_key_id, _ = ios_configuration
     release_root = ios_root / directory.name
     raw_root = release_root / "raw"
+    freshness_receipt = (
+        release_root / "online-freshness-consumption-receipt-v1.json"
+    )
     if (
         not release_root.is_dir()
         or release_root.is_symlink()
@@ -2388,22 +3023,45 @@ def verify_ios_evidence(
                 os.close(descriptor)
                 raise
             directory_pins.append((path, descriptor, fingerprint, label))
-        evidence_snapshot, evidence_snapshot_path = snapshot_private_bytes(
-            evidence_bytes,
-            "physical-device-benchmark.evidence",
-            "signed physical-iOS evidence",
+        label = f"physical-iOS online freshness receipt {freshness_receipt}"
+        descriptor, fingerprint = pin_regular_metadata(freshness_receipt, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        freshness_receipt_bytes = read_pinned_descriptor(
+            descriptor, fingerprint, 64 * 1024, label
+        )
+        file_pins.append((freshness_receipt, descriptor, fingerprint, label))
+        freshness_snapshot, freshness_snapshot_path = snapshot_private_bytes(
+            freshness_receipt_bytes,
+            "online-freshness-consumption-receipt-v1.json",
+            "physical-iOS online freshness/consumption receipt",
             staging_parent,
         )
         try:
-            validation_errors = validator(
-                evidence_snapshot_path,
-                raw_root,
-                key_id,
-                trusted_public_key_snapshot,
-                trusted_production_policy_snapshot,
+            evidence_snapshot, evidence_snapshot_path = snapshot_private_bytes(
+                evidence_bytes,
+                "physical-device-benchmark.evidence",
+                "signed physical-iOS evidence",
+                staging_parent,
             )
+            try:
+                validation_errors = validator(
+                    evidence_snapshot_path,
+                    raw_root,
+                    key_id,
+                    trusted_public_key_snapshot,
+                    trusted_production_policy_snapshot,
+                    freshness_snapshot_path,
+                    freshness_key_id,
+                    trusted_freshness_public_key_snapshot,
+                )
+            finally:
+                evidence_snapshot.cleanup()
         finally:
-            evidence_snapshot.cleanup()
+            freshness_snapshot.cleanup()
         if validation_errors:
             return None, (
                 f"{directory.name}: physical-iOS evidence verification failed: "
@@ -2460,6 +3118,13 @@ def promotion_errors() -> list[str]:
     verifier_text = os.environ.get(KAGAMI_VERIFIER_PATH_ENV, "")
     verifier_sha256 = os.environ.get(KAGAMI_VERIFIER_SHA256_ENV, "")
     verifier = Path(verifier_text) if verifier_text else None
+    tool_controller_text = os.environ.get(
+        AUTHENTICATED_TOOL_CONTROLLER_PATH_ENV, ""
+    )
+    tool_controller_sha256 = os.environ.get(
+        AUTHENTICATED_TOOL_CONTROLLER_SHA256_ENV, ""
+    )
+    tool_controller = Path(tool_controller_text) if tool_controller_text else None
     if (
         not policy.is_absolute()
         or not artifact_root.is_absolute()
@@ -2489,6 +3154,24 @@ def promotion_errors() -> list[str]:
         errors.append(
             "promotion requires a canonical absolute digest-pinned Kagami executable via "
             f"{KAGAMI_VERIFIER_PATH_ENV} and {KAGAMI_VERIFIER_SHA256_ENV}"
+        )
+        return errors
+    if (
+        tool_controller is None
+        or not tool_controller.is_absolute()
+        or tool_controller.resolve(strict=False) != tool_controller
+        or not tool_controller.is_file()
+        or tool_controller.is_symlink()
+        or re.fullmatch(r"[0-9a-f]{64}", tool_controller_sha256) is None
+        or tool_controller_sha256 == "0" * 64
+        or tool_controller == verifier
+        or tool_controller_sha256 == verifier_sha256
+    ):
+        errors.append(
+            "promotion requires a distinct canonical absolute digest-pinned "
+            f"{AUTHENTICATED_TOOL_CONTROLLER_CONTRACT} controller via "
+            f"{AUTHENTICATED_TOOL_CONTROLLER_PATH_ENV} and "
+            f"{AUTHENTICATED_TOOL_CONTROLLER_SHA256_ENV}"
         )
         return errors
     ios_configuration = ios_evidence_configuration(errors)
@@ -2568,12 +3251,16 @@ def promotion_errors() -> list[str]:
     catalog_directory_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     trusted_file_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     policy_sha256 = ""
-    ios_validator: Callable[[Path, Path, str, Path, Path], list[str]] | None = None
+    ios_validator: Callable[
+        [Path, Path, str, Path, Path, Path, str, Path], list[str]
+    ] | None = None
     ios_validator_path = root / IOS_EVIDENCE_MODULE
     production_ios_validator_path = root / PRODUCTION_IOS_EVIDENCE_MODULE
     source_helper_path = root / SOURCE_TREE_SEAL
     verifier_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    tool_controller_snapshot: tempfile.TemporaryDirectory[str] | None = None
     public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    freshness_public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
     ios_policy_snapshot: tempfile.TemporaryDirectory[str] | None = None
     closure_snapshot: tempfile.TemporaryDirectory[str] | None = None
     source_projection_snapshot: tempfile.TemporaryDirectory[str] | None = None
@@ -2584,6 +3271,7 @@ def promotion_errors() -> list[str]:
     ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
     production_ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
     trusted_public_key_snapshot: Path | None = None
+    trusted_freshness_public_key_snapshot: Path | None = None
     trusted_ios_policy_snapshot: Path | None = None
     trusted_closure_snapshot: Path | None = None
     trusted_allowed_signers_snapshot: Path | None = None
@@ -2591,6 +3279,7 @@ def promotion_errors() -> list[str]:
     trusted_source_trust_home: Path | None = None
     trusted_source_helper_snapshot: Path | None = None
     verifier_exec = verifier
+    tool_controller_exec = tool_controller
 
     def cleanup_private_snapshots() -> None:
         if production_ios_validator_snapshot is not None:
@@ -2611,10 +3300,14 @@ def promotion_errors() -> list[str]:
             closure_snapshot.cleanup()
         if public_key_snapshot is not None:
             public_key_snapshot.cleanup()
+        if freshness_public_key_snapshot is not None:
+            freshness_public_key_snapshot.cleanup()
         if ios_policy_snapshot is not None:
             ios_policy_snapshot.cleanup()
         if verifier_snapshot is not None:
             verifier_snapshot.cleanup()
+        if tool_controller_snapshot is not None:
+            tool_controller_snapshot.cleanup()
 
     try:
         python_runtime = Path(sys.executable)
@@ -2646,6 +3339,7 @@ def promotion_errors() -> list[str]:
             artifact_root,
             policy.parent,
             verifier.parent,
+            tool_controller.parent,
             python_runtime.parent,
             PROMOTION_STAGING_PARENT,
             SOURCE_GIT.parent,
@@ -2664,6 +3358,7 @@ def promotion_errors() -> list[str]:
                     ios_configuration[0],
                     ios_configuration[2].parent,
                     ios_configuration[3].parent,
+                    ios_configuration[5].parent,
                 ]
             )
         production_directory_paths = {
@@ -2777,6 +3472,87 @@ def promotion_errors() -> list[str]:
                 snapshot_descriptor,
                 snapshot_fingerprint,
                 snapshot_label,
+            )
+        )
+        label = f"authenticated tool isolation controller {tool_controller}"
+        descriptor, fingerprint = pin_regular_metadata(tool_controller, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if fingerprint[4] > MAX_KAGAMI_VERIFIER_BYTES or not fingerprint[3] & 0o111:
+            os.close(descriptor)
+            raise ValueError(
+                "authenticated tool isolation controller must be executable and "
+                "within its size limit"
+            )
+        if (
+            hash_pinned_descriptor(
+                descriptor,
+                fingerprint,
+                MAX_KAGAMI_VERIFIER_BYTES,
+                label,
+            )
+            != tool_controller_sha256
+        ):
+            os.close(descriptor)
+            raise ValueError(
+                "authenticated tool isolation controller differs from its trusted SHA-256"
+            )
+        trusted_file_pins.append(
+            (tool_controller, descriptor, fingerprint, label)
+        )
+        tool_controller_snapshot, tool_controller_exec = snapshot_pinned_executable(
+            descriptor,
+            fingerprint,
+            label,
+            PROMOTION_STAGING_PARENT,
+        )
+        controller_snapshot_root = tool_controller_exec.parent
+        controller_snapshot_label = (
+            "private authenticated tool controller snapshot directory "
+            f"{controller_snapshot_root}"
+        )
+        controller_snapshot_descriptor, controller_snapshot_fingerprint = (
+            pin_directory_metadata(
+                controller_snapshot_root,
+                controller_snapshot_label,
+            )
+        )
+        catalog_directory_pins.append(
+            (
+                controller_snapshot_root,
+                controller_snapshot_descriptor,
+                controller_snapshot_fingerprint,
+                controller_snapshot_label,
+            )
+        )
+        controller_snapshot_label = (
+            f"private authenticated tool controller snapshot {tool_controller_exec}"
+        )
+        controller_snapshot_descriptor, controller_snapshot_fingerprint = (
+            pin_regular_metadata(tool_controller_exec, controller_snapshot_label)
+        )
+        if (
+            hash_pinned_descriptor(
+                controller_snapshot_descriptor,
+                controller_snapshot_fingerprint,
+                MAX_KAGAMI_VERIFIER_BYTES,
+                controller_snapshot_label,
+            )
+            != tool_controller_sha256
+        ):
+            os.close(controller_snapshot_descriptor)
+            raise ValueError(
+                "private authenticated tool isolation controller snapshot digest changed"
+            )
+        trusted_file_pins.append(
+            (
+                tool_controller_exec,
+                controller_snapshot_descriptor,
+                controller_snapshot_fingerprint,
+                controller_snapshot_label,
             )
         )
         label = f"promotion Python runtime {python_runtime}"
@@ -3062,6 +3838,39 @@ def promotion_errors() -> list[str]:
                 public_key_bytes,
                 "trusted-physical-ios-public-key.pem",
                 "physical-iOS trusted public key",
+                PROMOTION_STAGING_PARENT,
+            )
+            freshness_public_key = ios_configuration[5]
+            label = (
+                "physical-iOS online freshness authority public key "
+                f"{freshness_public_key}"
+            )
+            descriptor, fingerprint = pin_regular_metadata(
+                freshness_public_key, label
+            )
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            if fingerprint[4] > 64 * 1024:
+                os.close(descriptor)
+                raise ValueError(
+                    "physical-iOS online freshness authority public key is oversized"
+                )
+            freshness_public_key_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, 64 * 1024, label
+            )
+            trusted_file_pins.append(
+                (freshness_public_key, descriptor, fingerprint, label)
+            )
+            (
+                freshness_public_key_snapshot,
+                trusted_freshness_public_key_snapshot,
+            ) = snapshot_private_bytes(
+                freshness_public_key_bytes,
+                "trusted-physical-ios-freshness-authority-public-key.pem",
+                "physical-iOS online freshness authority public key",
                 PROMOTION_STAGING_PARENT,
             )
             production_ios_policy = ios_configuration[3]
@@ -3433,6 +4242,7 @@ def promotion_errors() -> list[str]:
             and ios_validator is not None
             and evidence_bytes is not None
             and trusted_public_key_snapshot is not None
+            and trusted_freshness_public_key_snapshot is not None
             and trusted_ios_policy_snapshot is not None
             and len(errors) == directory_error_count
         ):
@@ -3443,7 +4253,9 @@ def promotion_errors() -> list[str]:
                 evidence_bytes,
                 trusted_public_key_snapshot,
                 trusted_ios_policy_snapshot,
+                trusted_freshness_public_key_snapshot,
                 catalog_directory_pins,
+                trusted_file_pins,
                 PROMOTION_STAGING_PARENT,
             )
             if ios_error is not None:
@@ -3459,26 +4271,22 @@ def promotion_errors() -> list[str]:
                 )
                 continue
             command = release_verifier_command(verifier_exec, directory, policy)
-            verified = subprocess.run(
-                command,
-                cwd=Path("/"),
-                env=SANITIZED_VERIFIER_ENV,
-                stdin=subprocess.DEVNULL,
-                check=False,
-                capture_output=True,
-                text=True,
-                close_fds=True,
-            )
-            if verified.returncode != 0:
-                detail = (verified.stderr or verified.stdout).strip().splitlines()
-                suffix = f": {detail[-1]}" if detail else ""
+            try:
+                verified = run_authenticated_verifier(command, tool_controller_exec)
+            except ValueError as error:
                 errors.append(
-                    f"{directory.name}: authenticated V4 release verification failed{suffix}"
+                    f"{directory.name}: authenticated V4 release verification failed: {error}"
+                )
+                continue
+            if verified.returncode != 0:
+                errors.append(
+                    f"{directory.name}: authenticated V4 release verification failed: "
+                    f"{authenticated_verifier_exit_diagnostic(verified.returncode)}"
                 )
             else:
                 try:
                     report = strict_json_bytes(
-                        verified.stdout.encode("utf-8"),
+                        verified.stdout,
                         "Kagami V4 verification report",
                     )
                     validate_kagami_verification_report(
@@ -3518,387 +4326,203 @@ if mode == "promotion":
 
 if self_test:
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="kagemusha-symlink-invocation-self-test-"
-        ) as temporary:
-            invocation = Path(temporary) / "readiness-symlink"
+        with tempfile.TemporaryDirectory(prefix='kagemusha-symlink-invocation-self-test-') as temporary:
+            invocation = Path(temporary) / 'readiness-symlink'
             invocation.symlink_to(root / READINESS)
-            rejected = subprocess.run(
-                ["/bin/bash", str(invocation), "candidate"],
-                cwd=Path("/"),
-                env={"LANG": "C", "LC_ALL": "C", "PATH": "/untrusted/bin"},
-                stdin=subprocess.DEVNULL,
-                check=False,
-                capture_output=True,
-                text=True,
-                close_fds=True,
-            )
-            if (
-                rejected.returncode != 2
-                or "rejects missing or symlinked script invocation"
-                not in rejected.stderr
-            ):
-                errors.append("self-test failed to reject symlinked gate invocation")
+            rejected = subprocess.run(['/bin/bash', str(invocation), 'candidate'], cwd=Path('/'), env={'LANG': 'C', 'LC_ALL': 'C',
+                'PATH': '/untrusted/bin'}, stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, close_fds=True)
+            if rejected.returncode != 2 or 'rejects missing or symlinked script invocation' not in rejected.stderr:
+                errors.append('self-test failed to reject symlinked gate invocation')
     except OSError as error:
-        errors.append(f"symlink invocation self-test failed unexpectedly: {error}")
+        errors.append(f'symlink invocation self-test failed unexpectedly: {error}')
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="kagemusha-untrusted-gate-self-test-"
-        ) as temporary:
-            untrusted_checkout = (
-                Path(temporary).resolve(strict=True) / "untrusted-checkout"
-            )
-            untrusted_ci = untrusted_checkout / "ci"
+        with tempfile.TemporaryDirectory(prefix='kagemusha-untrusted-gate-self-test-') as temporary:
+            untrusted_checkout = Path(temporary).resolve(strict=True) / 'untrusted-checkout'
+            untrusted_ci = untrusted_checkout / 'ci'
             untrusted_ci.mkdir(parents=True)
             untrusted_gate = untrusted_ci / Path(READINESS).name
             untrusted_gate.write_bytes((root / READINESS).read_bytes())
             untrusted_gate.chmod(0o700)
             untrusted_ci.chmod(0o700)
-            # This stays invalid even when the self-test itself runs as root.
             untrusted_checkout.chmod(0o770)
-            rejected = subprocess.run(
-                ["/bin/bash", str(untrusted_gate), "promotion"],
-                cwd=Path("/"),
-                env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-                stdin=subprocess.DEVNULL,
-                check=False,
-                capture_output=True,
-                text=True,
-                close_fds=True,
-            )
+            rejected = subprocess.run(['/bin/bash', str(untrusted_gate), 'promotion'], cwd=Path('/'), env={'LANG': 'C', 'LC_ALL': 'C',
+                'PATH': '/usr/bin:/bin'}, stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, close_fds=True)
             if (
                 rejected.returncode != 2
-                or "promotion readiness checkout" not in rejected.stderr
+                or 'promotion readiness checkout' not in rejected.stderr
                 or not any(
                     marker in rejected.stderr
-                    for marker in ("not root-owned", "group/world writable")
+                    for marker in ('not root-owned', 'group/world writable')
                 )
             ):
-                errors.append(
-                    "self-test failed to reject a user-controlled promotion gate checkout"
-                )
+                errors.append('self-test failed to reject a user-controlled promotion gate checkout')
     except OSError as error:
-        errors.append(f"untrusted gate self-test failed unexpectedly: {error}")
+        errors.append(f'untrusted gate self-test failed unexpectedly: {error}')
     try:
-        head_result = subprocess.run(
-            [str(SOURCE_GIT), "-C", str(root), "rev-parse", "--verify", "HEAD"],
-            cwd=Path("/"),
-            env=source_git_environment(),
-            stdin=subprocess.DEVNULL,
-            check=False,
-            capture_output=True,
-            text=True,
-            close_fds=True,
-        )
+        head_result = subprocess.run([str(SOURCE_GIT), '-C', str(root), 'rev-parse', '--verify', 'HEAD'], cwd=Path('/'),
+            env=source_git_environment(), stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, close_fds=True)
         head_commit = head_result.stdout.strip()
-        if (
-            head_result.returncode != 0
-            or head_result.stderr
-            or re.fullmatch(r"[0-9a-f]{40}", head_commit) is None
-        ):
-            raise ValueError("could not resolve self-test HEAD")
+        if head_result.returncode != 0 or head_result.stderr or re.fullmatch('[0-9a-f]{40}', head_commit) is None:
+            raise ValueError('could not resolve self-test HEAD')
         try:
-            authenticate_reviewed_source_file(
-                SOURCE_TREE_SEAL,
-                b"mutated helper bytes",
-                head_commit,
-                MAX_REVIEWED_HELPER_BYTES,
-            )
+            authenticate_reviewed_source_file(SOURCE_TREE_SEAL, b'mutated helper bytes', head_commit, MAX_REVIEWED_HELPER_BYTES)
         except ValueError as error:
-            if "differs from the source closure" not in str(error):
+            if 'differs from the source closure' not in str(error):
                 raise
         else:
-            errors.append("self-test failed to reject a source-helper byte mutation")
+            errors.append('self-test failed to reject a source-helper byte mutation')
     except (OSError, ValueError) as error:
-        errors.append(f"source-helper authentication self-test failed unexpectedly: {error}")
+        errors.append(f'source-helper authentication self-test failed unexpectedly: {error}')
     system_git_descriptor = -1
     try:
-        system_git_descriptor, system_git_fingerprint = pin_regular_metadata(
-            SOURCE_GIT,
-            "self-test source-authentication Git",
-            require_single_link=False,
-        )
-        require_production_root_custody(
-            system_git_descriptor, "self-test source-authentication Git"
-        )
+        (system_git_descriptor, system_git_fingerprint) = pin_regular_metadata(SOURCE_GIT, 'self-test source-authentication Git',
+            require_single_link=False)
+        require_production_root_custody(system_git_descriptor, 'self-test source-authentication Git')
         if not system_git_fingerprint[3] & 0o111:
-            raise ValueError("fixed source-authentication Git is not executable")
-        revalidate_pinned_metadata(
-            SOURCE_GIT,
-            system_git_descriptor,
-            system_git_fingerprint,
-            "self-test source-authentication Git",
-        )
+            raise ValueError('fixed source-authentication Git is not executable')
+        revalidate_pinned_metadata(SOURCE_GIT, system_git_descriptor, system_git_fingerprint, 'self-test source-authentication Git')
     except (OSError, ValueError) as error:
-        errors.append(f"fixed Git custody self-test failed unexpectedly: {error}")
+        errors.append(f'fixed Git custody self-test failed unexpectedly: {error}')
     finally:
         if system_git_descriptor >= 0:
             os.close(system_git_descriptor)
+    # Validate closure-bound source trust and its exact byte ceilings.
     try:
-        source_commit = "1" * 40
-        source_tree_sha256 = "2" * 64
-        closure_value: dict[str, object] = {
-            "schema": "iroha.reviewed-source-closure.v1",
-            "base_commit": source_commit,
-            "source_commit": source_commit,
-            "source_repo_dirty": False,
-            "source_tree_sha256": source_tree_sha256,
-            "tracked_binary_diff_sha256": "3" * 64,
-            "untracked_file_count": 0,
-            "untracked_path_mode_blob_oid_manifest": [],
-            "untracked_path_mode_blob_oid_manifest_sha256": "4" * 64,
-            "ignored_cargo_lock_size_bytes": 1,
-            "ignored_cargo_lock_sha256": "5" * 64,
-            "combined_source_fingerprint_sha256": "6" * 64,
-        }
-        closure_bytes = (
-            json.dumps(closure_value, sort_keys=True, separators=(",", ":")) + "\n"
-        ).encode("utf-8")
+        source_commit = '1' * 40
+        source_tree_sha256 = '2' * 64
+        closure_value: dict[str, object] = {'schema': 'iroha.reviewed-source-closure.v1', 'base_commit': source_commit,
+            'source_commit': source_commit, 'source_repo_dirty': False, 'source_tree_sha256': source_tree_sha256,
+            'tracked_binary_diff_sha256': '3' * 64, 'untracked_file_count': 0, 'untracked_path_mode_blob_oid_manifest': [],
+            'untracked_path_mode_blob_oid_manifest_sha256': '4' * 64, 'ignored_cargo_lock_size_bytes': 1,
+            'ignored_cargo_lock_sha256': '5' * 64, 'combined_source_fingerprint_sha256': '6' * 64}
+        closure_bytes = (json.dumps(closure_value, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
         closure_sha256 = hashlib.sha256(closure_bytes).hexdigest()
-        allowed_sha256 = "7" * 64
-        revocation_sha256 = "8" * 64
-        projection = {
-            "build_script_observed": {},
-            "outer_policy": {},
-            "reviewed_source_closure_hex": closure_bytes.hex(),
-            "reviewed_source_closure_sha256": closure_sha256,
-            "schema": "iroha.kagemusha.authenticated_source_seal_projection.v1",
-            "source_authority": {
-                "commit": source_commit,
-                "commit_object_sha256": "9" * 64,
-                "commit_object_size": 1,
-                "committer_epoch": 1,
-                "git_tree": "a" * 40,
-                "ordered_parents": ["b" * 40],
-                "parent_commit": "b" * 40,
-                "parent_tree": "c" * 40,
-                "signature": {
-                    "allowed_signers_sha256": allowed_sha256,
-                    "mechanism": "git-commit-ssh-signature-v1",
-                    "principal": "reviewer@example.test",
-                    "public_key_sha256": "d" * 64,
-                    "revocation_sha256": revocation_sha256,
-                    "signature_namespace": "git",
-                },
-            },
-            "source_commit": source_commit,
-            "source_date_epoch": 1,
-            "source_repo_dirty": False,
-            "source_tree_sha256": source_tree_sha256,
-        }
-        projection_bytes = (
-            json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
-        ).encode("utf-8")
-        validate_source_trust_projection(
-            projection_bytes,
-            closure_bytes,
-            closure_sha256,
-            source_commit,
-            allowed_sha256,
-            revocation_sha256,
-        )
+        allowed_sha256 = '7' * 64
+        revocation_sha256 = '8' * 64
+        projection = {'build_script_observed': {}, 'outer_policy': {}, 'reviewed_source_closure_hex': closure_bytes.hex(),
+            'reviewed_source_closure_sha256': closure_sha256, 'schema': 'iroha.kagemusha.authenticated_source_seal_projection.v1',
+            'source_authority': {'commit': source_commit, 'commit_object_sha256': '9' * 64, 'commit_object_size': 1, 'committer_epoch': 1,
+            'git_tree': 'a' * 40, 'ordered_parents': ['b' * 40], 'parent_commit': 'b' * 40, 'parent_tree': 'c' * 40,
+            'signature': {'allowed_signers_sha256': allowed_sha256, 'mechanism': 'git-commit-ssh-signature-v1',
+            'principal': 'reviewer@example.test', 'public_key_sha256': 'd' * 64, 'revocation_sha256': revocation_sha256,
+            'signature_namespace': 'git'}}, 'source_commit': source_commit, 'source_date_epoch': 1, 'source_repo_dirty': False,
+            'source_tree_sha256': source_tree_sha256}
+        projection_bytes = (json.dumps(projection, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
+        validate_source_trust_projection(projection_bytes, closure_bytes, closure_sha256, source_commit, allowed_sha256, revocation_sha256)
         try:
-            validate_source_trust_projection(
-                projection_bytes,
-                closure_bytes,
-                closure_sha256,
-                source_commit,
-                "e" * 64,
-                revocation_sha256,
-            )
+            validate_source_trust_projection(projection_bytes, closure_bytes, closure_sha256, source_commit, 'e' * 64, revocation_sha256)
         except ValueError as error:
-            if "trust-policy digests" not in str(error):
+            if 'trust-policy digests' not in str(error):
                 raise
         else:
-            errors.append(
-                "self-test failed to bind SSH trust-policy digests to the reviewed closure"
-            )
+            errors.append('self-test failed to bind SSH trust-policy digests to the reviewed closure')
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
-        errors.append(f"source trust-projection self-test failed unexpectedly: {error}")
+        errors.append(f'source trust-projection self-test failed unexpectedly: {error}')
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="kagemusha-source-projection-bound-self-test-"
-        ) as temporary:
+        with tempfile.TemporaryDirectory(prefix='kagemusha-source-projection-bound-self-test-') as temporary:
             boundary_root = Path(temporary)
-            exact = boundary_root / "exact-projection"
-            exact.write_bytes(b"x" * MAX_SOURCE_SEAL_PROJECTION_BYTES)
-            descriptor, fingerprint = pin_regular_metadata(
-                exact, "self-test exact source projection"
-            )
+            exact = boundary_root / 'exact-projection'
+            exact.write_bytes(b'x' * MAX_SOURCE_SEAL_PROJECTION_BYTES)
+            (descriptor, fingerprint) = pin_regular_metadata(exact, 'self-test exact source projection')
             try:
-                payload = read_pinned_descriptor(
-                    descriptor,
-                    fingerprint,
-                    MAX_SOURCE_SEAL_PROJECTION_BYTES,
-                    "self-test exact source projection",
-                )
+                payload = read_pinned_descriptor(descriptor, fingerprint, MAX_SOURCE_SEAL_PROJECTION_BYTES,
+                    'self-test exact source projection')
             finally:
                 os.close(descriptor)
             if len(payload) != MAX_SOURCE_SEAL_PROJECTION_BYTES:
-                errors.append("self-test failed at the exact source-projection byte bound")
-            oversized = boundary_root / "oversized-projection"
-            oversized.write_bytes(b"x" * (MAX_SOURCE_SEAL_PROJECTION_BYTES + 1))
-            descriptor, fingerprint = pin_regular_metadata(
-                oversized, "self-test oversized source projection"
-            )
+                errors.append('self-test failed at the exact source-projection byte bound')
+            oversized = boundary_root / 'oversized-projection'
+            oversized.write_bytes(b'x' * (MAX_SOURCE_SEAL_PROJECTION_BYTES + 1))
+            (descriptor, fingerprint) = pin_regular_metadata(oversized, 'self-test oversized source projection')
             try:
                 try:
-                    read_pinned_descriptor(
-                        descriptor,
-                        fingerprint,
-                        MAX_SOURCE_SEAL_PROJECTION_BYTES,
-                        "self-test oversized source projection",
-                    )
+                    read_pinned_descriptor(descriptor, fingerprint, MAX_SOURCE_SEAL_PROJECTION_BYTES,
+                        'self-test oversized source projection')
                 except ValueError as error:
-                    if "16384-byte size limit" not in str(error):
+                    if '16384-byte size limit' not in str(error):
                         raise
                 else:
-                    errors.append("self-test accepted an oversized source projection")
+                    errors.append('self-test accepted an oversized source projection')
             finally:
                 os.close(descriptor)
     except (OSError, ValueError) as error:
-        errors.append(f"source-projection bound self-test failed unexpectedly: {error}")
-    if (
-        "recursive-step-two-qualification-v4.norito" not in FINAL_METADATA
-        or MAX_RELEASE_INVENTORY_ENTRIES != 17
-        or MAX_QUALIFICATION_RECEIPT_BYTES != 802_816
-    ):
-        errors.append(
-            "self-test failed to pin the final recursive qualification receipt inventory"
-        )
-    for invalid_catalog_path in (
-        Path("relative/catalog"),
-        Path("/trusted/staging/../catalog"),
-    ):
+        errors.append(f'source-projection bound self-test failed unexpectedly: {error}')
+    if 'recursive-step-two-qualification-v4.norito' not in FINAL_METADATA or MAX_RELEASE_INVENTORY_ENTRIES != 17 or MAX_QUALIFICATION_RECEIPT_BYTES != 802_816:
+        errors.append('self-test failed to pin the final recursive qualification receipt inventory')
+    for invalid_catalog_path in (Path('relative/catalog'), Path('/trusted/staging/../catalog')):
         try:
             absolute_directory_chain(invalid_catalog_path)
         except ValueError:
             pass
         else:
-            errors.append(
-                "self-test failed to reject a noncanonical catalog path chain"
-            )
+            errors.append('self-test failed to reject a noncanonical catalog path chain')
     aggregate_boundary = 0
     try:
-        for release_bytes in (
-            MAX_CATALOG_AGGREGATE_BYTES // 2,
-            MAX_CATALOG_AGGREGATE_BYTES // 2,
-        ):
-            aggregate_boundary = checked_catalog_aggregate_total(
-                aggregate_boundary, release_bytes
-            )
+        for release_bytes in (MAX_CATALOG_AGGREGATE_BYTES // 2, MAX_CATALOG_AGGREGATE_BYTES // 2):
+            aggregate_boundary = checked_catalog_aggregate_total(aggregate_boundary, release_bytes)
         checked_catalog_aggregate_total(aggregate_boundary, 1)
     except ValueError:
         if aggregate_boundary != MAX_CATALOG_AGGREGATE_BYTES:
-            errors.append("self-test failed at the whole-catalog byte boundary")
+            errors.append('self-test failed at the whole-catalog byte boundary')
     else:
-        errors.append("self-test failed to reject an oversized multi-release catalog")
+        errors.append('self-test failed to reject an oversized multi-release catalog')
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="kagemusha-self-test-staging-parent-"
-        ) as staging_text, tempfile.TemporaryDirectory(
-            prefix="kagemusha-self-test-attacker-tmpdir-"
-        ) as attacker_tmpdir:
+        with (
+            tempfile.TemporaryDirectory(
+                prefix='kagemusha-self-test-staging-parent-'
+            ) as staging_text,
+            tempfile.TemporaryDirectory(
+                prefix='kagemusha-self-test-attacker-tmpdir-'
+            ) as attacker_tmpdir,
+        ):
             staging_parent = Path(staging_text).resolve(strict=True)
-            prior_tmpdir = os.environ.get("TMPDIR")
-            os.environ["TMPDIR"] = attacker_tmpdir
+            prior_tmpdir = os.environ.get('TMPDIR')
+            os.environ['TMPDIR'] = attacker_tmpdir
             try:
-                snapshot, snapshot_path = snapshot_private_bytes(
-                    b"authenticated physical-iOS evidence bytes",
-                    "evidence.json",
-                    "self-test evidence",
-                    staging_parent,
-                )
+                (snapshot, snapshot_path) = snapshot_private_bytes(b'authenticated physical-iOS evidence bytes', 'evidence.json',
+                    'self-test evidence', staging_parent)
                 try:
                     snapshot_metadata = snapshot_path.lstat()
                     if (
                         snapshot_path.read_bytes()
-                        != b"authenticated physical-iOS evidence bytes"
+                        != b'authenticated physical-iOS evidence bytes'
                         or snapshot_path.parent.parent != staging_parent
                         or Path(attacker_tmpdir).resolve(strict=True)
                         in snapshot_path.parents
                         or stat.S_IMODE(snapshot_metadata.st_mode) != 0o600
                         or stat.S_IMODE(snapshot_path.parent.lstat().st_mode) != 0o700
                     ):
-                        errors.append(
-                            "self-test failed to create an exact fixed-parent evidence snapshot"
-                        )
+                        errors.append('self-test failed to create an exact fixed-parent evidence snapshot')
                 finally:
                     snapshot.cleanup()
-                empty_snapshot, empty_snapshot_path = snapshot_private_bytes(
-                    b"",
-                    "revocation",
-                    "self-test empty SSH revocation policy",
-                    staging_parent,
-                    allow_empty=True,
-                )
+                (empty_snapshot, empty_snapshot_path) = snapshot_private_bytes(b'', 'revocation', 'self-test empty SSH revocation policy',
+                    staging_parent, allow_empty=True)
                 try:
                     if (
                         empty_snapshot_path.stat().st_size != 0
                         or hashlib.sha256(empty_snapshot_path.read_bytes()).hexdigest()
-                        != hashlib.sha256(b"").hexdigest()
+                        != hashlib.sha256(b'').hexdigest()
                     ):
-                        errors.append(
-                            "self-test failed to preserve an explicitly pinned empty revocation policy"
-                        )
+                        errors.append('self-test failed to preserve an explicitly pinned empty revocation policy')
                 finally:
                     empty_snapshot.cleanup()
-                allowed_snapshot, allowed_path = snapshot_private_bytes(
-                    b"reviewer@example.test ssh-ed25519 AAAA\n",
-                    "allowed-signers",
-                    "self-test SSH allowed-signers policy",
-                    staging_parent,
-                )
-                revocation_snapshot, revocation_path = snapshot_private_bytes(
-                    b"",
-                    "revocation",
-                    "self-test SSH revocation policy",
-                    staging_parent,
-                    allow_empty=True,
-                )
+                (allowed_snapshot, allowed_path) = snapshot_private_bytes(b'reviewer@example.test ssh-ed25519 AAAA\n', 'allowed-signers',
+                    'self-test SSH allowed-signers policy', staging_parent)
+                (revocation_snapshot, revocation_path) = snapshot_private_bytes(b'', 'revocation', 'self-test SSH revocation policy',
+                    staging_parent, allow_empty=True)
                 config_snapshot: tempfile.TemporaryDirectory[str] | None = None
                 try:
-                    config_payload = isolated_source_trust_git_config(
-                        allowed_path, revocation_path
-                    )
-                    config_snapshot, config_path = snapshot_private_bytes(
-                        config_payload,
-                        ".gitconfig",
-                        "self-test isolated source SSH Git config",
-                        staging_parent,
-                    )
+                    config_payload = isolated_source_trust_git_config(allowed_path, revocation_path)
+                    (config_snapshot, config_path) = snapshot_private_bytes(config_payload, '.gitconfig',
+                        'self-test isolated source SSH Git config', staging_parent)
                     config_environment = source_git_environment()
-                    config_environment.pop("GIT_CONFIG_GLOBAL", None)
-                    config_environment["HOME"] = str(config_path.parent)
-                    for key, expected in (
-                        ("gpg.ssh.allowedSignersFile", allowed_path),
-                        ("gpg.ssh.revocationFile", revocation_path),
-                    ):
-                        configured = subprocess.run(
-                            [
-                                str(SOURCE_GIT),
-                                "config",
-                                "--global",
-                                "--path",
-                                "--get",
-                                key,
-                            ],
-                            cwd=Path("/"),
-                            env=config_environment,
-                            stdin=subprocess.DEVNULL,
-                            check=False,
-                            capture_output=True,
-                            text=True,
-                            close_fds=True,
-                        )
-                        if (
-                            configured.returncode != 0
-                            or configured.stderr
-                            or configured.stdout != f"{expected}\n"
-                        ):
-                            errors.append(
-                                "self-test failed to expose only the snapshotted source SSH trust policy"
-                            )
+                    config_environment.pop('GIT_CONFIG_GLOBAL', None)
+                    config_environment['HOME'] = str(config_path.parent)
+                    for (key, expected) in (('gpg.ssh.allowedSignersFile', allowed_path), ('gpg.ssh.revocationFile', revocation_path)):
+                        configured = subprocess.run([str(SOURCE_GIT), 'config', '--global', '--path', '--get', key], cwd=Path('/'),
+                            env=config_environment, stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, close_fds=True)
+                        if configured.returncode != 0 or configured.stderr or configured.stdout != f'{expected}\n':
+                            errors.append('self-test failed to expose only the snapshotted source SSH trust policy')
                 finally:
                     if config_snapshot is not None:
                         config_snapshot.cleanup()
@@ -3906,443 +4530,223 @@ if self_test:
                     allowed_snapshot.cleanup()
             finally:
                 if prior_tmpdir is None:
-                    os.environ.pop("TMPDIR", None)
+                    os.environ.pop('TMPDIR', None)
                 else:
-                    os.environ["TMPDIR"] = prior_tmpdir
+                    os.environ['TMPDIR'] = prior_tmpdir
     except (OSError, ValueError) as error:
-        errors.append(f"private evidence snapshot self-test failed unexpectedly: {error}")
+        errors.append(f'private evidence snapshot self-test failed unexpectedly: {error}')
     try:
-        with tempfile.TemporaryDirectory(prefix="kagemusha-custody-self-test-") as temporary:
-            writable = Path(temporary) / "writable"
-            writable.write_bytes(b"untrusted")
-            writable.chmod(0o622)
-            descriptor, _ = pin_regular_metadata(writable, "self-test writable file")
+        with tempfile.TemporaryDirectory(prefix='kagemusha-custody-self-test-') as temporary:
+            writable = Path(temporary) / 'writable'
+            writable.write_bytes(b'untrusted')
+            writable.chmod(402)
+            (descriptor, _) = pin_regular_metadata(writable, 'self-test writable file')
             try:
                 try:
-                    require_production_root_custody(
-                        descriptor, "self-test writable file"
-                    )
+                    require_production_root_custody(descriptor, 'self-test writable file')
                 except ValueError:
                     pass
                 else:
-                    errors.append(
-                        "self-test failed to reject a caller-writable production input"
-                    )
+                    errors.append('self-test failed to reject a caller-writable production input')
             finally:
                 os.close(descriptor)
     except (OSError, ValueError) as error:
-        errors.append(f"production custody self-test failed unexpectedly: {error}")
-    report_manifest_artifacts = [
-        {
-            "file_name": name,
-            "size_bytes": index + 1,
-            "sha256": f"{index + 1:x}" * 64,
-            "payload_size_bytes": index + 2,
-            "payload_sha256": f"{index + 2:x}" * 64,
-        }
-        for index, name in enumerate(ARTIFACTS)
-    ]
-    report_manifest = {
-        "generation": "self-test",
-        "generation_memory_limit_bytes": 1,
-        "generation_memory_enforcement_profile": "self-test-profile",
-        "network_id": "self-test-network",
-        "asset": "self-test-asset",
-        "asset_scale": 2,
-        "authenticated_source_seal_projection_sha256": "b" * 64,
-        "reviewed_cargo_binary_sha256": "c" * 64,
-        "reviewed_rustc_binary_sha256": "d" * 64,
-        "qualified_candidate_sha256": "7" * 64,
-        "profiles": [
-            {"artifacts": report_manifest_artifacts[:4]},
-            {"artifacts": report_manifest_artifacts[4:]},
-        ],
-        "topup_finality_roster_artifact": {
-            "file_name": "topup-finality-roster-v4.norito",
-            "size_bytes": 17,
-            "sha256": "a" * 64,
-        },
-    }
-    report_artifacts = [
-        {
-            "purpose": purpose,
-            "file_name": artifact["file_name"],
-            "size_bytes": artifact["size_bytes"],
-            "sha256": artifact["sha256"],
-            "payload_size_bytes": artifact["payload_size_bytes"],
-            "payload_sha256": artifact["payload_sha256"],
-        }
-        for purpose, artifact in zip(
-            REPORT_ARTIFACT_PURPOSES, report_manifest_artifacts, strict=True
-        )
-    ]
-    report_artifacts.append(
-        {
-            "purpose": "topup_finality_roster",
-            "file_name": "topup-finality-roster-v4.norito",
-            "size_bytes": 17,
-            "sha256": "a" * 64,
-            "payload_size_bytes": None,
-            "payload_sha256": None,
-        }
-    )
-    verifier_report = {
-        "status": "verified",
-        "envelope_sha256": "1" * 64,
-        "manifest_body_sha256": "2" * 64,
-        "candidate_sha256": "3" * 64,
-        "qualification_receipt_sha256": "4" * 64,
-        "qualified_candidate_sha256": "7" * 64,
-        "authenticated_source_seal_projection_sha256": "b" * 64,
-        "reviewed_cargo_binary_sha256": "c" * 64,
-        "reviewed_rustc_binary_sha256": "d" * 64,
-        "promotion_record_sha256": "6" * 64,
-        "release_policy_sha256": "5" * 64,
-        "generation": "self-test",
-        "generation_memory_limit_bytes": 1,
-        "generation_memory_enforcement_profile": "self-test-profile",
-        "network_id": "self-test-network",
-        "asset_definition_id": "self-test-asset",
-        "asset_scale": 2,
-        "bridge_abi_version": 22,
-        "recursive_step_verifier_commitment": "9" * 64,
-        "artifacts": report_artifacts,
-    }
-    try:
-        validate_kagami_verification_report(
-            verifier_report,
-            directory=Path("/release") / ("1" * 64),
-            manifest=report_manifest,
-            policy_sha256="5" * 64,
-            promotion_record_sha256="6" * 64,
-            qualification_receipt_sha256="4" * 64,
-            ios_candidate_sha256="3" * 64,
-        )
-        invalid_report = dict(verifier_report)
-        invalid_report["status"] = "unverified"
-        validate_kagami_verification_report(
-            invalid_report,
-            directory=Path("/release") / ("1" * 64),
-            manifest=report_manifest,
-            policy_sha256="5" * 64,
-            promotion_record_sha256="6" * 64,
-            qualification_receipt_sha256="4" * 64,
-            ios_candidate_sha256="3" * 64,
-        )
-    except ValueError as error:
-        if "did not report one verified" not in str(error):
-            errors.append(f"authenticated report self-test failed unexpectedly: {error}")
-    else:
-        errors.append("self-test failed to reject an unverified Kagami report")
-    for field in (
-        "authenticated_source_seal_projection_sha256",
-        "reviewed_cargo_binary_sha256",
-        "reviewed_rustc_binary_sha256",
-    ):
-        mismatched_report = dict(verifier_report)
-        mismatched_report[field] = "e" * 64
+        errors.append(f'production custody self-test failed unexpectedly: {error}')
+    if sys.platform == 'darwin':
         try:
-            validate_kagami_verification_report(
-                mismatched_report,
-                directory=Path("/release") / ("1" * 64),
-                manifest=report_manifest,
-                policy_sha256="5" * 64,
-                promotion_record_sha256="6" * 64,
-                qualification_receipt_sha256="4" * 64,
-                ios_candidate_sha256="3" * 64,
-            )
-        except ValueError as error:
-            if "differs from the manifest" not in str(error):
-                errors.append(f"authenticated report {field} self-test failed unexpectedly: {error}")
-        else:
-            errors.append(f"self-test failed to reject a mismatched Kagami report {field}")
+            with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
+                acl_path = Path(temporary) / 'acl-input'
+                acl_path.write_bytes(b'root-custody-acl-test')
+                acl_path.chmod(384)
+                (descriptor, _) = pin_regular_metadata(acl_path, 'self-test macOS ACL input')
+                try:
+                    require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+                finally:
+                    os.close(descriptor)
+                added_acl = subprocess.run(['/bin/chmod', '+a', 'everyone allow read', str(acl_path)], cwd=Path('/'), env={'LANG': 'C',
+                    'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}, stdin=subprocess.DEVNULL, check=False, capture_output=True, close_fds=True)
+                if added_acl.returncode != 0:
+                    errors.append('self-test could not install a macOS extended ACL')
+                else:
+                    (descriptor, _) = pin_regular_metadata(acl_path, 'self-test extended-ACL macOS input')
+                    try:
+                        try:
+                            require_no_macos_extended_acl(descriptor, 'self-test extended-ACL macOS input')
+                        except ValueError as error:
+                            if 'must not have an extended ACL' not in str(error):
+                                errors.append('self-test produced a nondeterministic macOS ACL rejection')
+                        else:
+                            errors.append('self-test failed to reject a macOS extended ACL')
+                    finally:
+                        os.close(descriptor)
+        except (OSError, ValueError) as error:
+            errors.append(f'macOS ACL custody self-test failed unexpectedly: {error}')
+    # Build one canonical authenticated report fixture for all report mutations.
+    report_manifest_artifacts = [{'file_name': name, 'size_bytes': index + 1, 'sha256': f'{index + 1:x}' * 64,
+        'payload_size_bytes': index + 2, 'payload_sha256': f'{index + 2:x}' * 64} for (index, name) in enumerate(ARTIFACTS)]
+    report_manifest = {'generation': 'self-test', 'generation_memory_limit_bytes': 1,
+        'generation_memory_enforcement_profile': 'self-test-profile', 'network_id': 'self-test-network', 'asset': 'self-test-asset',
+        'asset_scale': 2, 'authenticated_source_seal_projection_sha256': 'b' * 64, 'reviewed_cargo_binary_sha256': 'c' * 64,
+        'reviewed_rustc_binary_sha256': 'd' * 64, 'qualified_candidate_sha256': '7' * 64,
+        'profiles': [{'artifacts': report_manifest_artifacts[:4]}, {'artifacts': report_manifest_artifacts[4:]}],
+        'topup_finality_roster_artifact': {'file_name': 'topup-finality-roster-v4.norito', 'size_bytes': 17, 'sha256': 'a' * 64}}
+    report_artifacts = [{'purpose': purpose, 'file_name': artifact['file_name'], 'size_bytes': artifact['size_bytes'],
+        'sha256': artifact['sha256'], 'payload_size_bytes': artifact['payload_size_bytes'],
+        'payload_sha256': artifact['payload_sha256']} for (purpose, artifact) in zip(REPORT_ARTIFACT_PURPOSES, report_manifest_artifacts,
+        strict=True)]
+    report_artifacts.append({'purpose': 'topup_finality_roster', 'file_name': 'topup-finality-roster-v4.norito', 'size_bytes': 17,
+        'sha256': 'a' * 64, 'payload_size_bytes': None, 'payload_sha256': None})
+    verifier_report = {'status': 'verified', 'envelope_sha256': '1' * 64, 'manifest_body_sha256': '2' * 64, 'candidate_sha256': '3' * 64,
+        'qualification_receipt_sha256': '4' * 64, 'qualified_candidate_sha256': '7' * 64,
+        'authenticated_source_seal_projection_sha256': 'b' * 64, 'reviewed_cargo_binary_sha256': 'c' * 64,
+        'reviewed_rustc_binary_sha256': 'd' * 64, 'promotion_record_sha256': '6' * 64, 'release_policy_sha256': '5' * 64,
+        'generation': 'self-test', 'generation_memory_limit_bytes': 1, 'generation_memory_enforcement_profile': 'self-test-profile',
+        'network_id': 'self-test-network', 'asset_definition_id': 'self-test-asset', 'asset_scale': 2, 'bridge_abi_version': 22,
+        'recursive_step_verifier_commitment': '9' * 64, 'artifacts': report_artifacts}
     try:
-        with tempfile.TemporaryDirectory(prefix="kagemusha-catalog-pin-self-test-") as temporary:
+        validate_kagami_verification_report(verifier_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
+            policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64, ios_candidate_sha256='3' * 64)
+        invalid_report = dict(verifier_report)
+        invalid_report['status'] = 'unverified'
+        validate_kagami_verification_report(invalid_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
+            policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64, ios_candidate_sha256='3' * 64)
+    except ValueError as error:
+        if 'did not report one verified' not in str(error):
+            errors.append(f'authenticated report self-test failed unexpectedly: {error}')
+    else:
+        errors.append('self-test failed to reject an unverified Kagami report')
+    for field in ('authenticated_source_seal_projection_sha256', 'reviewed_cargo_binary_sha256', 'reviewed_rustc_binary_sha256'):
+        mismatched_report = dict(verifier_report)
+        mismatched_report[field] = 'e' * 64
+        try:
+            validate_kagami_verification_report(mismatched_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
+                policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64,
+                ios_candidate_sha256='3' * 64)
+        except ValueError as error:
+            if 'differs from the manifest' not in str(error):
+                errors.append(f'authenticated report {field} self-test failed unexpectedly: {error}')
+        else:
+            errors.append(f'self-test failed to reject a mismatched Kagami report {field}')
+    try:
+        with tempfile.TemporaryDirectory(prefix='kagemusha-catalog-pin-self-test-') as temporary:
             catalog_root = Path(temporary).resolve(strict=True)
-            release = catalog_root / "release"
-            replacement = catalog_root / "replacement"
+            release = catalog_root / 'release'
+            replacement = catalog_root / 'replacement'
             release.mkdir()
             replacement.mkdir()
-            release_file = release / "artifact"
-            release_file.write_bytes(b"pinned release artifact")
-            (replacement / "artifact").write_bytes(b"substituted release artifact")
+            release_file = release / 'artifact'
+            release_file.write_bytes(b'pinned release artifact')
+            (replacement / 'artifact').write_bytes(b'substituted release artifact')
             pins: list[tuple[Path, int, tuple[int, ...], str]] = []
             try:
                 for component in absolute_directory_chain(catalog_root):
-                    label = f"self-test catalog path component {component}"
-                    descriptor, fingerprint = pin_directory_metadata(component, label)
+                    label = f'self-test catalog path component {component}'
+                    (descriptor, fingerprint) = pin_directory_metadata(component, label)
                     pins.append((component, descriptor, fingerprint, label))
-                release_label = "self-test release directory"
-                release_descriptor, release_fingerprint = pin_directory_metadata(
-                    release, release_label
-                )
-                pins.append(
-                    (release, release_descriptor, release_fingerprint, release_label)
-                )
-                file_label = "self-test release file"
-                file_descriptor, file_fingerprint = pin_regular_metadata(
-                    release_file, file_label
-                )
+                release_label = 'self-test release directory'
+                (release_descriptor, release_fingerprint) = pin_directory_metadata(release, release_label)
+                pins.append((release, release_descriptor, release_fingerprint, release_label))
+                file_label = 'self-test release file'
+                (file_descriptor, file_fingerprint) = pin_regular_metadata(release_file, file_label)
                 pins.append((release_file, file_descriptor, file_fingerprint, file_label))
-                for path, descriptor, fingerprint, label in pins:
+                for (path, descriptor, fingerprint, label) in pins:
                     revalidate_pinned_metadata(path, descriptor, fingerprint, label)
-
-                displaced = catalog_root / "displaced"
+                displaced = catalog_root / 'displaced'
                 release.rename(displaced)
                 replacement.rename(release)
                 try:
-                    revalidate_pinned_metadata(
-                        release,
-                        release_descriptor,
-                        release_fingerprint,
-                        release_label,
-                    )
+                    revalidate_pinned_metadata(release, release_descriptor, release_fingerprint, release_label)
                 except (OSError, ValueError):
                     pass
                 else:
-                    errors.append(
-                        "self-test failed to reject a substituted release directory"
-                    )
+                    errors.append('self-test failed to reject a substituted release directory')
             finally:
-                for _, descriptor, _, _ in reversed(pins):
+                for (_, descriptor, _, _) in reversed(pins):
                     os.close(descriptor)
     except (OSError, ValueError) as error:
-        errors.append(f"catalog pin self-test failed unexpectedly: {error}")
-    baseline = {
-        READINESS: read(READINESS, []),
-        MODEL: read_reviewed_model([], {}),
-        MODEL_COMPONENT: read(MODEL_COMPONENT, []),
-        MODEL_VERIFIER_COMPONENT: read(MODEL_VERIFIER_COMPONENT, []),
-        PRIVACY: read(PRIVACY, []),
-        PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
-        CATALOG: read_reviewed_catalog([], {}),
-        CORE: read(CORE, []),
-        KAGAMI: read(KAGAMI, []),
-        BUNDLE: read(BUNDLE, []),
-        WORKFLOW: read(WORKFLOW, []),
-        PRODUCTION_IOS_EVIDENCE_MODULE: read(
-            PRODUCTION_IOS_EVIDENCE_MODULE, []
-        ),
-    }
-    conflicted_model = (
-        baseline[MODEL]
-        + "\n<<<<<<< HEAD\nreviewed-side\n=======\nincoming-side\n>>>>>>> origin/reviewed\n"
-    )
-    conflict_errors = static_errors({MODEL: conflicted_model})
-    if not any("unresolved Git merge conflict marker" in error for error in conflict_errors):
-        errors.append("self-test failed to reject a reviewed merge conflict")
-    missing_python_version_check = baseline[READINESS].replace(
-        "sys.version_info >= (3, 10)", "True", 1
-    )
-    python_version_errors = static_errors(
-        {READINESS: missing_python_version_check}
-    )
-    if not any("sys.version_info >= (3, 10)" in error for error in python_version_errors):
-        errors.append("self-test failed to reject a missing Python version preflight")
-    missing_index_check = baseline[READINESS].replace(
-        "--diff-filter=U", "--diff-filter=M", 1
-    )
-    index_check_errors = static_errors({READINESS: missing_index_check})
-    if not any("--diff-filter=U" in error for error in index_check_errors):
-        errors.append("self-test failed to reject a missing unresolved-index preflight")
-    bypassed_production_ios_blocker = baseline[
-        PRODUCTION_IOS_EVIDENCE_MODULE
-    ].replace(
-        "    errors.append(PLATFORM_TRUST_BLOCKER)\n    return errors\n",
-        "    return errors\n",
-        1,
-    )
-    bypassed_production_ios_errors = static_errors(
-        {PRODUCTION_IOS_EVIDENCE_MODULE: bypassed_production_ios_blocker}
-    )
-    if not any(
-        "unconditional production App Attest trust blocker" in error
-        for error in bypassed_production_ios_errors
-    ):
-        errors.append(
-            "self-test failed to reject removal of the production App Attest trust blocker"
-        )
-    mutated = baseline[MODEL].replace(
-        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22",
-        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
-    )
-    if not static_errors({MODEL: mutated}):
-        errors.append("self-test failed to reject ABI-21 substitution")
-    detached_model_component = baseline[MODEL_COMPONENT].replace(
-        "pub enum KagemushaPastaCycleArtifactKindV4",
-        "pub enum DetachedKagemushaPastaCycleArtifactKindV4",
-        1,
-    )
-    if not static_errors({MODEL_COMPONENT: detached_model_component}):
-        errors.append("self-test failed to authenticate the split model component")
-    detached_verifier_component = baseline[MODEL_VERIFIER_COMPONENT].replace(
-        "const VERIFIER_IDENTITY_SCHEMA_V4",
-        "const DETACHED_VERIFIER_IDENTITY_SCHEMA_V4",
-        1,
-    )
-    if not static_errors({MODEL_VERIFIER_COMPONENT: detached_verifier_component}):
-        errors.append("self-test failed to authenticate the release-verifier component")
-    sixteen_file_verifier = baseline[KAGAMI].replace(
-        "if expected.len() != 17",
-        "if expected.len() != 16",
-        1,
-    )
-    if not static_errors({KAGAMI: sixteen_file_verifier}):
-        errors.append(
-            "self-test failed to reject a sixteen-file final release verifier"
-        )
-    verifier_without_receipt = baseline[KAGAMI].replace(
-        """        (
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
-            "qualification receipt",
-        ),
-""",
-        "",
-        1,
-    )
-    verifier_without_receipt_errors = static_errors(
-        {KAGAMI: verifier_without_receipt}
-    )
-    if not any(
-        "function-scoped 17-file verifier inventory" in error
-        for error in verifier_without_receipt_errors
-    ):
-        errors.append(
-            "self-test failed to reject a verifier inventory without the qualification receipt"
-        )
-    sixteen_file_finalizer = baseline[BUNDLE].replace(
-        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;",
-        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 16;",
-        1,
-    )
-    if not static_errors({BUNDLE: sixteen_file_finalizer}):
-        errors.append(
-            "self-test failed to reject a sixteen-file final release producer"
-        )
-    producer_without_receipt = baseline[BUNDLE].replace(
-        """            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
-            PROMOTION_RECORD_FILE_NAME_V4,
-""",
-        """            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-            PROMOTION_RECORD_FILE_NAME_V4,
-""",
-        1,
-    )
-    producer_without_receipt_errors = static_errors(
-        {BUNDLE: producer_without_receipt}
-    )
-    if not any(
-        "function-scoped 17-file producer inventory" in error
-        for error in producer_without_receipt_errors
-    ):
-        errors.append(
-            "self-test failed to reject a producer inventory without the qualification receipt"
-        )
-    renamed_inventory_test = baseline[BUNDLE].replace(
-        "fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()",
-        "fn retired_final_release_inventory_test()",
-        1,
-    )
-    renamed_inventory_test_errors = static_errors({BUNDLE: renamed_inventory_test})
-    if not any(
-        "fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()"
-        in error
-        for error in renamed_inventory_test_errors
-    ):
-        errors.append("self-test failed to reject a missing producer inventory test")
-    receipt_bound_drift = baseline[MODEL].replace(
-        "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;",
-        "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 385 * 1024;",
-        1,
-    )
-    receipt_bound_drift_errors = static_errors({MODEL: receipt_bound_drift})
-    if not any(
-        "384 KiB absolute V4 proof-pair bound" in error
-        for error in receipt_bound_drift_errors
-    ):
-        errors.append("self-test failed to reject qualification receipt bound drift")
-    receipt_text_scan = baseline[READINESS].replace(
-        """    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),
-)""",
-        """    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),
-    ("recursive-step-two-qualification-v4.norito", MAX_QUALIFICATION_RECEIPT_BYTES),
-)""",
-        1,
-    )
-    receipt_text_scan_errors = static_errors({READINESS: receipt_text_scan})
-    if not any(
-        "opaque qualification receipt is routed through textual evidence scanning" in error
-        for error in receipt_text_scan_errors
-    ):
-        errors.append("self-test failed to reject textual scanning of an opaque receipt")
-    shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
-        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
-        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
-        1,
-    )
-    if not static_errors({PRIVACY_PROTOCOL: shared_bridge_abi_drift}):
-        errors.append("self-test failed to reject shared bridge ABI-21 substitution")
-    detached_protocol_surface = baseline[PRIVACY].replace(
-        'include!("privacy/protocol.rs");',
-        "// protocol include removed",
-        1,
-    )
-    if not static_errors({PRIVACY: detached_protocol_surface}):
-        errors.append("self-test failed to reject detached privacy protocol surface")
-    flipped_availability = baseline[MODEL].replace(
-        'cfg!(feature = "kagemusha-production-enabled")',
-        "true",
-        1,
-    )
-    if not static_errors({MODEL: flipped_availability}):
-        errors.append("self-test failed to reject an invalid availability state")
-    seven_artifacts = baseline[CATALOG].replace(
-        "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();",
-        "7;",
-        1,
-    )
-    seven_artifact_errors = static_errors({CATALOG: seven_artifacts})
-    if not any("exact-eight manifest inventory check" in error for error in seven_artifact_errors):
-        errors.append("self-test failed to reject a seven-artifact manifest check")
-    unguarded_change = baseline[CORE].replace(
-        "change_release.as_ref().is_some_and(|release|",
-        "change_release.as_ref().is_none_or(|release|",
-        1,
-    )
-    unguarded_change_errors = static_errors({CORE: unguarded_change})
-    if not any(
-        "offline-change withdrawal-height issuance check" in error
-        for error in unguarded_change_errors
-    ):
-        errors.append("self-test failed to reject an unguarded offline-change issuance path")
-    missing_frontier_filter = baseline[WORKFLOW].replace(
-        "cargo test -p iroha_core output_membership --lib",
-        "cargo test -p iroha_core retired_output_membership_filter --lib",
-        1,
-    )
-    missing_frontier_filter_errors = static_errors({WORKFLOW: missing_frontier_filter})
-    if not any(
-        "cargo test -p iroha_core output_membership --lib" in error
-        for error in missing_frontier_filter_errors
-    ):
-        errors.append("self-test failed to reject a missing frontier-test workflow filter")
-    boundary_artifacts = {
-        name: MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES // len(ARTIFACTS)
-        for name in ARTIFACTS
-    }
-    if (
-        checked_declared_artifact_total(boundary_artifacts)
-        != MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES
-    ):
-        errors.append("self-test failed to accept the exact artifact aggregate limit")
+        errors.append(f'catalog pin self-test failed unexpectedly: {error}')
+    # Mutate exact reviewed snippets and require the matching static diagnostic.
+    baseline = {READINESS: read(READINESS, []), MODEL: read_reviewed_model([], {}), MODEL_COMPONENT: read(MODEL_COMPONENT, []),
+        MODEL_VERIFIER_COMPONENT: read(MODEL_VERIFIER_COMPONENT, []), PRIVACY: read(PRIVACY, []), PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL,
+        []), CATALOG: read_reviewed_catalog([], {}), CORE: read(CORE, []), KAGAMI: read(KAGAMI, []), BUNDLE: read(BUNDLE, []),
+        WORKFLOW: read(WORKFLOW, []), PRODUCTION_IOS_EVIDENCE_MODULE: read(PRODUCTION_IOS_EVIDENCE_MODULE, [])}
+
+    def expect_static_rejection(overrides: dict[str, str], failure: str, *needles: str) -> None:
+        mutation_errors = static_errors(overrides)
+        if mutation_errors and (not needles or any((needle in error for error in mutation_errors for needle in needles))):
+            return
+        errors.append(failure)
+
+    def expect_static_mutation(relative: str, before: str, after: str, failure: str, *needles: str, count: int=1) -> None:
+        expect_static_rejection({relative: baseline[relative].replace(before, after, count)}, failure, *needles)
+    conflicted_model = baseline[MODEL] + '\n<<<<<<< HEAD\nreviewed-side\n=======\nincoming-side\n>>>>>>> origin/reviewed\n'
+    expect_static_rejection({MODEL: conflicted_model}, 'self-test failed to reject a reviewed merge conflict',
+        'unresolved Git merge conflict marker')
+    expect_static_mutation(READINESS, 'sys.version_info >= (3, 10)', 'True',
+        'self-test failed to reject a missing Python version preflight', 'sys.version_info >= (3, 10)')
+    expect_static_mutation(READINESS, '--diff-filter=U', '--diff-filter=M',
+        'self-test failed to reject a missing unresolved-index preflight', '--diff-filter=U')
+    expect_static_mutation(PRODUCTION_IOS_EVIDENCE_MODULE, 'def _validate_online_freshness_receipt(\n',
+        'def _unchecked_online_freshness_receipt(\n', 'self-test failed to reject removal of online App Attest freshness validation',
+        'def _validate_online_freshness_receipt(')
+    expect_static_mutation(MODEL, 'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22',
+        'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21', 'self-test failed to reject ABI-21 substitution')
+    expect_static_mutation(MODEL_COMPONENT, 'pub enum KagemushaPastaCycleArtifactKindV4',
+        'pub enum DetachedKagemushaPastaCycleArtifactKindV4', 'self-test failed to authenticate the split model component')
+    expect_static_mutation(MODEL_VERIFIER_COMPONENT, 'const VERIFIER_IDENTITY_SCHEMA_V4', 'const DETACHED_VERIFIER_IDENTITY_SCHEMA_V4',
+        'self-test failed to authenticate the release-verifier component')
+    expect_static_mutation(KAGAMI, 'if expected.len() != 17', 'if expected.len() != 16',
+        'self-test failed to reject a sixteen-file final release verifier')
+    expect_static_mutation(KAGAMI,
+        '        (\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n            "qualification receipt",\n        ),\n',
+        '', 'self-test failed to reject a verifier inventory without the qualification receipt',
+        'function-scoped 17-file verifier inventory')
+    expect_static_mutation(BUNDLE, 'const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;',
+        'const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 16;', 'self-test failed to reject a sixteen-file final release producer')
+    expect_static_mutation(BUNDLE,
+        '            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n            PROMOTION_RECORD_FILE_NAME_V4,\n',
+        '            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,\n            PROMOTION_RECORD_FILE_NAME_V4,\n',
+        'self-test failed to reject a producer inventory without the qualification receipt', 'function-scoped 17-file producer inventory')
+    expect_static_mutation(BUNDLE, 'fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()',
+        'fn retired_final_release_inventory_test()', 'self-test failed to reject a missing producer inventory test',
+        'fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()')
+    expect_static_mutation(MODEL, 'KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;',
+        'KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 385 * 1024;',
+        'self-test failed to reject qualification receipt bound drift', '384 KiB absolute V4 proof-pair bound')
+    expect_static_mutation(READINESS, '    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),\n)',
+        '    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),\n    ("recursive-step-two-qualification-v4.norito", MAX_QUALIFICATION_RECEIPT_BYTES),\n)',
+        'self-test failed to reject textual scanning of an opaque receipt',
+        'opaque qualification receipt is routed through textual evidence scanning')
+    expect_static_mutation(PRIVACY_PROTOCOL, 'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;',
+        'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;', 'self-test failed to reject shared bridge ABI-21 substitution')
+    expect_static_mutation(PRIVACY, 'include!("privacy/protocol.rs");', '// protocol include removed',
+        'self-test failed to reject detached privacy protocol surface')
+    expect_static_mutation(MODEL, 'cfg!(feature = "kagemusha-production-enabled")', 'true',
+        'self-test failed to reject an invalid availability state')
+    expect_static_mutation(CATALOG, 'KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();', '7;',
+        'self-test failed to reject a seven-artifact manifest check', 'exact-eight manifest inventory check')
+    expect_static_mutation(CORE, 'change_release.as_ref().is_some_and(|release|', 'change_release.as_ref().is_none_or(|release|',
+        'self-test failed to reject an unguarded offline-change issuance path', 'offline-change withdrawal-height issuance check')
+    expect_static_mutation(WORKFLOW, 'cargo test -p iroha_core output_membership --lib',
+        'cargo test -p iroha_core retired_output_membership_filter --lib',
+        'self-test failed to reject a missing frontier-test workflow filter', 'cargo test -p iroha_core output_membership --lib')
+    for (required_filter, retired_filter, label) in (('cargo test -p iroha_data_model receiver_snapshot --lib',
+        'cargo test -p iroha_data_model retired_receiver_snapshot_filter --lib', 'receiver-snapshot data-model'),
+        ('cargo test -p iroha_core kagemusha_online_registration_ --lib', 'cargo test -p iroha_core retired_registration_filter --lib',
+        'compact registration'), ('cargo test -p iroha_core active_receiver_snapshot_ --lib',
+        'cargo test -p iroha_core retired_active_receiver_filter --lib', 'active-receiver resolver'),
+        ('cargo test -p iroha_kagami --bin kagami atomic_activation_', 'cargo test -p iroha_kagami --bin kagami retired_activation_filter',
+        'activation-policy parity'), ('cargo test -p iroha_kagami --bin kagami backing_',
+        'cargo test -p iroha_kagami --bin kagami retired_backing_filter', 'ordered Taira backing')):
+        expect_static_mutation(WORKFLOW, required_filter, retired_filter, f'self-test failed to reject a missing {label} workflow filter',
+            required_filter)
+    boundary_artifacts = {name: MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES // len(ARTIFACTS) for name in ARTIFACTS}
+    if checked_declared_artifact_total(boundary_artifacts) != MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES:
+        errors.append('self-test failed to accept the exact artifact aggregate limit')
     exact_file_artifacts = {name: 1 for name in ARTIFACTS}
     exact_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES
-    if (
-        checked_declared_artifact_total(exact_file_artifacts)
-        != MAX_DECLARED_ARTIFACT_FILE_BYTES + len(ARTIFACTS) - 1
-    ):
-        errors.append("self-test failed to accept the exact artifact file limit")
+    if checked_declared_artifact_total(exact_file_artifacts) != MAX_DECLARED_ARTIFACT_FILE_BYTES + len(ARTIFACTS) - 1:
+        errors.append('self-test failed to accept the exact artifact file limit')
     oversized_file_artifacts = dict(boundary_artifacts)
     oversized_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES + 1
     try:
@@ -4350,7 +4754,7 @@ if self_test:
     except ValueError:
         pass
     else:
-        errors.append("self-test failed to reject an oversized artifact file")
+        errors.append('self-test failed to reject an oversized artifact file')
     oversized_aggregate_artifacts = dict(boundary_artifacts)
     oversized_aggregate_artifacts[ARTIFACTS[0]] += 1
     try:
@@ -4358,239 +4762,190 @@ if self_test:
     except ValueError:
         pass
     else:
-        errors.append("self-test failed to reject an oversized artifact aggregate")
-    verifier_command = release_verifier_command(
-        Path("/trusted/kagami"), Path("/release"), Path("/policy.norito")
-    )
-    if verifier_command[:3] != [
-        "/trusted/kagami",
-        "kagemusha",
-        "verify-release-v4",
-    ]:
-        errors.append("self-test failed to pin the explicit Kagami release verifier")
-    cargo_verifier = baseline[READINESS].replace(
-        "        str(verifier),\n        \"kagemusha\",",
-        "        \"cargo\",\n        \"run\",",
-        1,
-    )
-    cargo_verifier_errors = static_errors({READINESS: cargo_verifier})
-    if not any(
-        "promotion verifier command" in error for error in cargo_verifier_errors
+        errors.append('self-test failed to reject an oversized artifact aggregate')
+    # Exercise exact output bounds, timeouts, and descendant cleanup.
+    bounded_test_environment = {'LANG': 'C', 'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}
+    try:
+        exact_capture = run_bounded_authenticated_process([sys.executable, '-I', '-c',
+            "import os; os.write(1, b'x' * 32); os.write(2, b'y' * 16)"], timeout_seconds=2.0, stdout_limit=32, stderr_limit=16,
+            environment=bounded_test_environment)
+        if exact_capture.returncode != 0 or exact_capture.stdout != b'x' * 32 or exact_capture.stderr != b'y' * 16:
+            errors.append('self-test failed to preserve exact-limit authenticated verifier output')
+        for (stream_number, stream_name) in ((1, 'stdout'), (2, 'stderr')):
+            try:
+                run_bounded_authenticated_process([sys.executable, '-I', '-c', f"import os; os.write({stream_number}, b'z' * 33)"],
+                    timeout_seconds=2.0, stdout_limit=32, stderr_limit=32, environment=bounded_test_environment)
+            except ValueError as error:
+                if str(error) != f'authenticated verifier {stream_name} exceeded its 32-byte limit':
+                    errors.append(f'self-test produced a nondeterministic verifier {stream_name} limit rejection: {error}')
+            else:
+                errors.append(f'self-test failed to reject oversized verifier {stream_name}')
+        with tempfile.TemporaryDirectory(prefix='kagemusha-verifier-timeout-self-test-') as temporary:
+            descendant_pid_path = Path(temporary) / 'descendant.pid'
+            if os.geteuid() == PRODUCTION_TRUSTED_UID:
+                timeout_source = (
+                    "import pathlib,subprocess,sys,time; "
+                    "child=subprocess.Popen([sys.executable, '-I', '-c', "
+                    "'import time; time.sleep(30)']); "
+                    "pathlib.Path(sys.argv[1]).write_text(str(child.pid), "
+                    "encoding='ascii'); time.sleep(30)"
+                )
+            else:
+                timeout_source = 'import time; time.sleep(30)'
+            try:
+                run_bounded_authenticated_process([sys.executable, '-I', '-c', timeout_source, str(descendant_pid_path)],
+                    timeout_seconds=0.1, stdout_limit=32, stderr_limit=32, environment=bounded_test_environment)
+            except ValueError as error:
+                if str(error) != 'authenticated verifier exceeded its 0.1-second timeout':
+                    errors.append(f'self-test produced a nondeterministic verifier timeout rejection: {error}')
+            else:
+                errors.append('self-test failed to time out a stalled verifier')
+            if os.geteuid() == PRODUCTION_TRUSTED_UID and (not descendant_pid_path.is_file()):
+                errors.append('self-test verifier did not launch its process-group descendant')
+            elif descendant_pid_path.is_file():
+                descendant_pid = int(descendant_pid_path.read_text(encoding='ascii'))
+                descendant_deadline = time.monotonic() + 1.0
+                while True:
+                    try:
+                        os.kill(descendant_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    if time.monotonic() >= descendant_deadline:
+                        errors.append('self-test failed to clean up the verifier process group')
+                        break
+                    time.sleep(0.01)
+        with tempfile.TemporaryDirectory(prefix='kagemusha-verifier-success-descendant-self-test-') as temporary:
+            descendant_pid_path = Path(temporary) / 'descendant.pid'
+            success_source = (
+                "import pathlib,subprocess,sys; "
+                "child=subprocess.Popen([sys.executable, '-I', '-c', "
+                "'import time; time.sleep(30)'], stdin=subprocess.DEVNULL, "
+                "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+                "close_fds=True); "
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='ascii')"
+            )
+            successful = run_bounded_authenticated_process([sys.executable, '-I', '-c', success_source, str(descendant_pid_path)],
+                timeout_seconds=2.0, stdout_limit=32, stderr_limit=32, environment=bounded_test_environment)
+            if successful.returncode != 0:
+                errors.append('self-test verifier leader did not exit successfully')
+            if not descendant_pid_path.is_file():
+                errors.append('self-test successful verifier did not launch its descendant')
+            else:
+                descendant_pid = int(descendant_pid_path.read_text(encoding='ascii'))
+                descendant_deadline = time.monotonic() + 1.0
+                while True:
+                    try:
+                        os.kill(descendant_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    if time.monotonic() >= descendant_deadline:
+                        errors.append('self-test failed to sweep a successful verifier descendant')
+                        break
+                    time.sleep(0.01)
+        if authenticated_verifier_exit_diagnostic(7) != 'exited with status 7':
+            errors.append('self-test verifier exit-status diagnostic is not deterministic')
+        if authenticated_verifier_exit_diagnostic(-9) != 'terminated by signal 9':
+            errors.append('self-test verifier signal diagnostic is not deterministic')
+    except (OSError, ValueError) as error:
+        errors.append(f'bounded verifier self-test failed unexpectedly: {error}')
+    verifier_command = release_verifier_command(Path('/trusted/kagami'), Path('/release'), Path('/policy.norito'))
+    if verifier_command[:3] != ['/trusted/kagami', 'kagemusha', 'verify-release-v4']:
+        errors.append('self-test failed to pin the explicit Kagami release verifier')
+    controlled_verifier_command = authenticated_verifier_controller_command(Path('/trusted/isolation-controller'), verifier_command)
+    controlled_separator = controlled_verifier_command.index('--')
+    if (
+        controlled_verifier_command[:4]
+        != [
+            '/trusted/isolation-controller',
+            AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND,
+            '--contract',
+            AUTHENTICATED_TOOL_CONTROLLER_CONTRACT,
+        ]
+        or controlled_verifier_command[controlled_separator + 1:]
+        != verifier_command
+        or not {
+            '--use-attested-runtime-identity',
+            '--no-new-privileges',
+            '--close-inherited-fds',
+            '--forward-tool-exit-status',
+            '--exact-tool-stdio',
+            '--deny-network',
+            '--deny-tool-process-spawn',
+            '--deny-all-writes',
+            '--account-unlinked-write-bytes',
+            '--require-empty-process-tree',
+            '--cumulative-write-limit-bytes',
+            '--maximum-live-write-root-bytes',
+        }
+        <= set(controlled_verifier_command[:controlled_separator])
     ):
-        errors.append("self-test failed to reject a PATH-resolved Cargo verifier")
-    reopened_ios_evidence = baseline[READINESS].replace(
-        "                evidence_snapshot_path,\n                raw_root,",
-        "                directory / \"physical-device-benchmark.evidence\",\n"
-        "                raw_root,",
-        1,
-    )
-    reopened_ios_evidence_errors = static_errors(
-        {READINESS: reopened_ios_evidence}
-    )
-    if not any(
-        "same pinned evidence, trusted key, and production policy snapshots" in error
-        for error in reopened_ios_evidence_errors
-    ):
-        errors.append(
-            "self-test failed to reject reopening physical-iOS evidence for validation"
-        )
-    reopened_ios_key = baseline[READINESS].replace(
-        "                trusted_public_key_snapshot,\n"
-        "                trusted_production_policy_snapshot,\n",
-        "                ios_configuration[2],\n"
-        "                trusted_production_policy_snapshot,\n",
-        1,
-    )
-    reopened_ios_key_errors = static_errors({READINESS: reopened_ios_key})
-    if not any(
-        "same pinned evidence, trusted key, and production policy snapshots" in error
-        for error in reopened_ios_key_errors
-    ):
-        errors.append("self-test failed to reject reopening the physical-iOS trust key")
-    reopened_ios_policy = baseline[READINESS].replace(
-        "                trusted_production_policy_snapshot,\n",
-        "                ios_configuration[3],\n",
-        1,
-    )
-    reopened_ios_policy_errors = static_errors({READINESS: reopened_ios_policy})
-    if not any(
-        "same pinned evidence, trusted key, and production policy snapshots" in error
-        for error in reopened_ios_policy_errors
-    ):
-        errors.append("self-test failed to reject reopening the physical-iOS production policy")
-    accepted_testnet_ios_evidence = baseline[READINESS].replace(
-        'production_module.__dict__.get(\n            "validate_production_signed_evidence"\n        )',
+        errors.append('self-test failed to bind Kagami to the authenticated OS-isolation controller')
+    pinned_ios_diagnostic = 'same pinned evidence, trusted key, and production policy snapshots'
+    readiness_mutations = (('        str(verifier),\n        "kagemusha",', '        "cargo",\n        "run",',
+        'self-test failed to reject a PATH-resolved Cargo verifier', ('promotion verifier command',), 1),
+        ('                verified = run_authenticated_verifier(command, tool_controller_exec)',
+        '                verified = subprocess.run(command, capture_output=True)',
+        'self-test failed to reject a Kagami verifier outside the authenticated isolation controller',
+        ('bounded authenticated verifier execution and deterministic diagnostics',), 1), ('            preexec_fn=os.setpgrp,',
+        '            # verifier process-group isolation removed',
+        'self-test failed to reject a verifier sharing the readiness process group', ('authenticated Kagami verifier execution',), 1),
+        ('        "--deny-all-writes",', '        "--allow-ambient-writes",',
+        'self-test failed to reject a verifier controller with ambient filesystem writes', ('authenticated Kagami verifier execution',),
+        1),
+        ('        terminate_authenticated_verifier_process_group(\n            process,\n            leader_exit_observed=True,\n        )\n        returncode = process.returncode',
+        '        process.wait(timeout=KAGAMI_VERIFIER_REAP_TIMEOUT_SECONDS)\n        returncode = process.returncode',
+        'self-test failed to reject reaping a successful verifier before its process-group sweep',
+        ('unconditional success-path verifier process-group sweep before leader reap',), 1),
+        ('    require_no_macos_extended_acl(descriptor, label)\n\n\ndef snapshot_private_bytes',
+        '    # descriptor ACL custody removed\n\n\ndef snapshot_private_bytes',
+        'self-test failed to reject missing descriptor ACL custody', ('descriptor-exact macOS ACL rejection',), 1),
+        ('    promotion_assert_no_extended_acl "${current}" "${label} path component" || return 1', '    # component ACL custody removed',
+        'self-test failed to reject missing shell path-component ACL custody', ('root and every path component',), 1),
+        ('  if [[ "${mode_marker}" == *+ ]]; then', '  if [[ "${mode_marker}" == "never-an-acl" ]]; then',
+        'self-test failed to reject bypassed shell ACL detection', ('fail-closed macOS extended-ACL inspection',), 1),
+        ('                    evidence_snapshot_path,\n                    raw_root,',
+        '                    directory / "physical-device-benchmark.evidence",\n                    raw_root,',
+        'self-test failed to reject reopening physical-iOS evidence for validation', (pinned_ios_diagnostic,), 1),
+        ('                    trusted_public_key_snapshot,\n                    trusted_production_policy_snapshot,\n',
+        '                    ios_configuration[2],\n                    trusted_production_policy_snapshot,\n',
+        'self-test failed to reject reopening the physical-iOS trust key', (pinned_ios_diagnostic,), 1),
+        ('                    trusted_production_policy_snapshot,\n', '                    ios_configuration[3],\n',
+        'self-test failed to reject reopening the physical-iOS production policy', (pinned_ios_diagnostic,), 1),
+        ('                    freshness_snapshot_path,\n', '                    freshness_receipt,\n',
+        'self-test failed to reject reopening the physical-iOS freshness receipt', (pinned_ios_diagnostic,), 1),
+        ('                    trusted_freshness_public_key_snapshot,\n', '                    ios_configuration[5],\n',
+        'self-test failed to reject reopening the physical-iOS freshness authority key', (pinned_ios_diagnostic,), 1),
+        ('production_module.__dict__.get(\n            "validate_production_signed_evidence"\n        )',
         'production_module.__dict__.get("validate_signed_evidence")',
-        1,
-    )
-    accepted_testnet_ios_errors = static_errors({READINESS: accepted_testnet_ios_evidence})
-    if not any(
-        "production-only iOS evidence validator entrypoint" in error
-        for error in accepted_testnet_ios_errors
-    ):
-        errors.append(
-            "self-test failed to reject the testnet-only iOS validator in promotion"
-        )
-    missing_root_custody = baseline[READINESS].replace(
-        "                        require_production_root_custody(descriptor, label)",
-        "                        # production root custody removed",
-        1,
-    )
-    missing_root_custody_errors = static_errors({READINESS: missing_root_custody})
-    if not any(
-        "root-custody every production trust class" in error
-        for error in missing_root_custody_errors
-    ):
-        errors.append("self-test failed to reject a missing production custody check")
-    unpinned_running_python = baseline[READINESS].replace(
-        "            != trusted_python_sha256",
-        "            != hash_pinned_descriptor(\n"
-        "                descriptor, fingerprint, MAX_KAGAMI_VERIFIER_BYTES, label\n"
-        "            )",
-        1,
-    )
-    unpinned_running_python_errors = static_errors(
-        {READINESS: unpinned_running_python}
-    )
-    if not any(
-        "running promotion interpreter digest revalidation" in error
-        for error in unpinned_running_python_errors
-    ):
-        errors.append("self-test failed to reject an unpinned running Python runtime")
-    path_reopened_python = baseline[READINESS].replace(
-        '"/dev/fd/${PYTHON_PIN_FD}"',
-        '"${PYTHON_BIN}"',
-    )
-    path_reopened_python_errors = static_errors({READINESS: path_reopened_python})
-    if not any(
-        "pre-exec Python descriptor custody" in error
-        for error in path_reopened_python_errors
-    ):
-        errors.append("self-test failed to reject path-reopened pre-exec Python")
-    ambient_snapshot_parent = baseline[READINESS].replace(
-        'prefix="kagemusha-pinned-input-", dir=staging_parent',
-        'prefix="kagemusha-pinned-input-"',
-        1,
-    )
-    ambient_snapshot_parent_errors = static_errors(
-        {READINESS: ambient_snapshot_parent}
-    )
-    if not any(
-        "explicit staging parent" in error
-        for error in ambient_snapshot_parent_errors
-    ):
-        errors.append("self-test failed to reject ambient-TMPDIR promotion staging")
-    ambient_source_helper_tmpdir = baseline[READINESS].replace(
-        '"TMPDIR": str(PROMOTION_STAGING_PARENT),',
-        '"TMPDIR": "/tmp",',
-        1,
-    )
-    ambient_source_helper_tmpdir_errors = static_errors(
-        {READINESS: ambient_source_helper_tmpdir}
-    )
-    if not any(
-        "fixed staging parent" in error
-        for error in ambient_source_helper_tmpdir_errors
-    ):
-        errors.append(
-            "self-test failed to reject ambient-TMPDIR promotion subprocess staging"
-        )
-    path_executed_source_helper = baseline[READINESS].replace(
-        "                str(trusted_source_helper_snapshot),",
-        "                str(source_helper_path),",
-        1,
-    )
-    path_executed_source_helper_errors = static_errors(
-        {READINESS: path_executed_source_helper}
-    )
-    if not any(
-        "source-closure-authenticated source-tree helper snapshot" in error
-        for error in path_executed_source_helper_errors
-    ):
-        errors.append("self-test failed to reject a path-executed source helper")
-    path_loaded_ios_validator = baseline[READINESS].replace(
-        "                validator_bytes,\n"
-        "                trusted_ios_validator_snapshot,",
-        "                validator_bytes,\n"
-        "                ios_validator_path,",
-        1,
-    )
-    path_loaded_ios_validator_errors = static_errors(
-        {READINESS: path_loaded_ios_validator}
-    )
-    if not any(
-        "source-closure-authenticated candidate and production iOS validator snapshots" in error
-        for error in path_loaded_ios_validator_errors
-    ):
-        errors.append("self-test failed to reject a path-loaded iOS validator")
-    ambient_source_trust_home = baseline[READINESS].replace(
-        '"HOME": str(trusted_source_trust_home),',
-        '"HOME": "/var/empty",',
-        1,
-    )
-    ambient_source_trust_home_errors = static_errors(
-        {READINESS: ambient_source_trust_home}
-    )
-    if not any(
-        "source SSH trust" in error
-        or "closure-bound snapshotted" in error
-        for error in ambient_source_trust_home_errors
-    ):
-        errors.append("self-test failed to reject an unconfigured source trust HOME")
-    unbound_source_trust_projection = baseline[READINESS].replace(
-        "        validate_source_trust_projection(\n"
-        "            source_projection_bytes,",
-        "        bypass_source_trust_projection(\n"
-        "            source_projection_bytes,",
-        1,
-    )
-    unbound_source_trust_projection_errors = static_errors(
-        {READINESS: unbound_source_trust_projection}
-    )
-    if not any(
-        "closure-bound snapshotted source SSH trust policies" in error
-        for error in unbound_source_trust_projection_errors
-    ):
-        errors.append("self-test failed to reject unbound source SSH trust policies")
-    missing_gate_checkout_custody = baseline[READINESS].replace(
-        '  promotion_assert_root_custody "${DERIVED_ROOT_DIR}" '
-        '"promotion readiness checkout" || exit 2',
-        "  # promotion checkout custody removed",
-        1,
-    )
-    missing_gate_checkout_custody_errors = static_errors(
-        {READINESS: missing_gate_checkout_custody}
-    )
-    if not any(
-        "root-custodied gate bootstrap" in error
-        or "promotion_assert_root_custody" in error
-        for error in missing_gate_checkout_custody_errors
-    ):
-        errors.append("self-test failed to reject an untrusted gate checkout")
-    bypassed_gate_digest = baseline[READINESS].replace(
-        '  if [[ "${OBSERVED_GATE_SHA256}" != "${GATE_SHA256}" ]]; then',
-        "  if false; then",
-        1,
-    )
-    bypassed_gate_digest_errors = static_errors(
-        {READINESS: bypassed_gate_digest}
-    )
-    if not any(
-        "root-custodied gate bootstrap" in error
-        for error in bypassed_gate_digest_errors
-    ):
-        errors.append("self-test failed to reject a bypassed reviewed gate digest")
-    forged_dirname_root = baseline[READINESS].replace(
-        'SCRIPT_DIRECTORY_LEXICAL="${SCRIPT_PATH_LEXICAL%/*}"',
-        'SCRIPT_DIRECTORY_LEXICAL="$(dirname "${SCRIPT_PATH_LEXICAL}")"',
-        1,
-    )
-    forged_dirname_root_errors = static_errors({READINESS: forged_dirname_root})
-    if not any(
-        "promotion shell bootstrap" in error
-        for error in forged_dirname_root_errors
-    ):
-        errors.append("self-test failed to reject PATH-resolved root derivation")
+        'self-test failed to reject the testnet-only iOS validator in promotion', ('production-only iOS evidence validator entrypoint',),
+        1), ('                        require_production_root_custody(descriptor, label)',
+        '                        # production root custody removed', 'self-test failed to reject a missing production custody check',
+        ('root-custody the complete production path-component set',), 1), ('            != trusted_python_sha256',
+        '            != hash_pinned_descriptor(\n                descriptor, fingerprint, MAX_KAGAMI_VERIFIER_BYTES, label\n            )',
+        'self-test failed to reject an unpinned running Python runtime', ('running promotion interpreter digest revalidation',), 1),
+        ('"/dev/fd/${PYTHON_PIN_FD}"', '"${PYTHON_BIN}"', 'self-test failed to reject path-reopened pre-exec Python',
+        ('pre-exec Python descriptor custody',), -1), ('prefix="kagemusha-pinned-input-", dir=staging_parent',
+        'prefix="kagemusha-pinned-input-"', 'self-test failed to reject ambient-TMPDIR promotion staging', ('explicit staging parent',),
+        1), ('"TMPDIR": str(PROMOTION_STAGING_PARENT),', '"TMPDIR": "/tmp",',
+        'self-test failed to reject ambient-TMPDIR promotion subprocess staging', ('fixed staging parent',), 1),
+        ('                str(trusted_source_helper_snapshot),', '                str(source_helper_path),',
+        'self-test failed to reject a path-executed source helper', ('source-closure-authenticated source-tree helper snapshot',), 1),
+        ('                validator_bytes,\n                trusted_ios_validator_snapshot,',
+        '                validator_bytes,\n                ios_validator_path,', 'self-test failed to reject a path-loaded iOS validator',
+        ('source-closure-authenticated candidate and production iOS validator snapshots',), 1), ('"HOME": str(trusted_source_trust_home),',
+        '"HOME": "/var/empty",', 'self-test failed to reject an unconfigured source trust HOME', ('source SSH trust',
+        'closure-bound snapshotted'), 1), ('        validate_source_trust_projection(\n            source_projection_bytes,',
+        '        bypass_source_trust_projection(\n            source_projection_bytes,',
+        'self-test failed to reject unbound source SSH trust policies', ('closure-bound snapshotted source SSH trust policies',), 1),
+        ('  promotion_assert_root_custody "${DERIVED_ROOT_DIR}" "promotion readiness checkout" || exit 2',
+        '  # promotion checkout custody removed', 'self-test failed to reject an untrusted gate checkout',
+        ('root-custodied gate bootstrap', 'promotion_assert_root_custody'), 1),
+        ('  if [[ "${OBSERVED_GATE_SHA256}" != "${GATE_SHA256}" ]]; then', '  if false; then',
+        'self-test failed to reject a bypassed reviewed gate digest', ('root-custodied gate bootstrap',), 1),
+        ('SCRIPT_DIRECTORY_LEXICAL="${SCRIPT_PATH_LEXICAL%/*}"', 'SCRIPT_DIRECTORY_LEXICAL="$(dirname "${SCRIPT_PATH_LEXICAL}")"',
+        'self-test failed to reject PATH-resolved root derivation', ('promotion shell bootstrap',), 1))
+    for (before, after, failure, needles, count) in readiness_mutations:
+        expect_static_mutation(READINESS, before, after, failure, *needles, count=count)
 
 if errors:
     print(

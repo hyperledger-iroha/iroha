@@ -389,6 +389,14 @@ final class TransactionPayloadFixtures {
       final String payer = asString(payment.get("payer"), "fee_payment.payer");
       final Map<String, Object> paymentValue =
           asMap(payment.get("value"), "fee_payment.value", fixtureName);
+      requireExactFields(payment, List.of("payer", "value"), fixtureName, "fee_payment");
+      requireExactFields(
+          paymentValue,
+          "sponsor".equals(payer)
+              ? List.of("program_id", "program_revision", "charge_limits", "gas_limit")
+              : List.of("charge_limits", "gas_limit"),
+          fixtureName,
+          "fee_payment.value");
       final List<?> limitsRaw =
           asList(paymentValue.get("charge_limits"), "fee_payment.value.charge_limits");
       final List<FeeChargeLimit> limits = new ArrayList<>(limitsRaw.size());

@@ -213,6 +213,16 @@ jobs:
           python3 -I -S scripts/check_jni_sdk_android_pairs.py
           python3 scripts/check_dependency_budget.py
           python3 scripts/check_source_file_budget.py --require-objective
+          python3 -I -S scripts/check_telemetry_metric_catalog_v2.py
+          python3 -I -S scripts/check_telemetry_metric_catalog_v2.py --self-test
+          python3 -m unittest \
+            scripts.tests.connect_gating_fixture_compaction_source_test \
+            scripts.tests.halo2_backend_shared_circuit_source_test \
+            scripts.tests.integration_target_consolidation_source_test \
+            scripts.tests.isi_instruction_box_macro_source_test \
+            scripts.tests.kotodama_typed_case_registry_source_test \
+            scripts.tests.norito_columnar_derive_compaction_source_test \
+            scripts.tests.shared_proc_macro_emitter_source_test
           python3 scripts/check_generated_artifacts.py
           python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure

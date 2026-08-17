@@ -1051,12 +1051,9 @@ fn telemetry_operator_get_tools_are_operator_only_when_feature_enabled() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
-    let mut tools = vec![
-        iroha_sumeragi_pacemaker_tool(),
-        iroha_sumeragi_phases_tool(),
-    ];
+    let mut tools = vec![iroha_sumeragi_pacemaker_tool()];
     retain_catalog_mcp_tools(&mut tools, TELEMETRY_GROUPS);
-    assert_eq!(tools.len(), 2, "telemetry feature keeps both exact routes");
+    assert_eq!(tools.len(), 1, "telemetry feature keeps the exact route");
     apply_catalog_operator_effects_to_manual_tools(&mut tools, TELEMETRY_GROUPS);
     apply_catalog_auth_schemas_to_tools(&mut tools, TELEMETRY_GROUPS);
     validate_tool_registry(&tools, TELEMETRY_GROUPS).expect("valid operator registry");

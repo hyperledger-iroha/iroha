@@ -37,58 +37,50 @@ spellings are rejected.
 
 ### `GET /v1/sumeragi/evidence`
 
-Lists recent evidence records from the in-memory snapshot. Supported query
+Lists recent evidence records from the bounded WSV snapshot. Supported query
 parameters (`EvidenceListQuery`):
 
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Must be a canonical unsigned decimal integer in `1..=1000`. |
 | `offset`  | `usize` | `0` | Canonical unsigned decimal offset into the ordered snapshot. |
-| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `InvalidQc`, `InvalidProposal`, `Censorship`, `SumeragiV2Equivocation`. |
+| `kind`    | `string` | _none_ | The sole accepted value is `SumeragiV2Equivocation`. |
 
 Response JSON is a Norito JSON object:
 
 ```json5
 {
-  "total": 4,
+  "total": 1,
   "items": [
     {
-      "kind": "DoublePrepare",
-      "phase": "Prepare",
+      "kind": "SumeragiV2Equivocation",
+      "class": "phase_vote",
       "height": 1024,
       "view": 8,
       "epoch": 0,
       "signer": 3,
-      "block_hash_1": "2c5a…",
-      "block_hash_2": "8f0d…",
+      "context_id": "2c5a…",
+      "artifact_hash_1": "8f0d…",
+      "artifact_hash_2": "4de1…",
       "recorded_height": 2048,
       "recorded_view": 16,
-      "recorded_ms": 1731883656123
-    },
-    {
-      "kind": "InvalidProposal",
-      "height": 1050,
-      "view": 12,
-      "epoch": 0,
-      "subject_block_hash": "4de1…",
-      "payload_hash": "f10a…",
-      "reason": "missing qc payload commitment",
-      "recorded_height": 2050,
-      "recorded_view": 18,
-      "recorded_ms": 1731883657451
+      "recorded_ms": 1731883656123,
+      "consensus_admitted_height": 2049
     }
   ]
 }
 ```
 
-The keys vary per `EvidenceKind` and mirror the JSON produced by
-`evidence_to_json`. When `Accept: application/x-norito` the response is a binary
+The fixed keys mirror the JSON produced by `evidence_to_json`. When
+`Accept: application/x-norito` the response is a binary
 `EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
 
 `SumeragiV2Equivocation` JSON includes `class`, `height`, `view`, `epoch`,
 `signer`, `context_id`, and canonical hashes of both retained signed artifacts.
 The binary record additionally contains the complete frozen context,
 roster-ordered BLS proofs of possession, and both exact artifacts.
+Retired global-v1 kind/payload layouts fail binary decode and are never
+upgraded or reconstructed by the endpoint.
 The JSON record includes `consensus_admitted_height`: `null` means the exact v2
 proof is only a node-local pending observation and is not slash-eligible. A
 numeric value is the committed block height that admitted the proof. Candidate

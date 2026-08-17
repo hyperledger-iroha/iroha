@@ -291,20 +291,12 @@ for sample in status.samples:
 print("RTT buckets:", status.rtt.buckets)
 
 # Sumeragi admin surfaces (new in PY6-P5)
-qc = client.get_sumeragi_qc()
-print("Highest QC height:", qc.highest_qc.height, "view", qc.highest_qc.view)
-
-telemetry = client.get_sumeragi_telemetry_typed()
-print("Availability votes ingested:", telemetry.availability.total_votes_ingested)
-for collector in telemetry.availability.collectors:
+qc = client.get_sumeragi_qc_typed()
+if qc.highest_prepare_qc is not None:
     print(
-        "Availability collector", collector.collector_idx,
-        "peer", collector.peer_id,
-        "votes", collector.votes_ingested,
+        "Highest PrepareQC height:", qc.highest_prepare_qc.round.height,
+        "view", qc.highest_prepare_qc.round.view,
     )
-
-phases = client.get_sumeragi_phases()
-print("Pipeline latency (ms):", phases.pipeline_total_ms)
 
 params = client.get_sumeragi_params()
 print(

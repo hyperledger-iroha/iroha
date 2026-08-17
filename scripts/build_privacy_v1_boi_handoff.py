@@ -328,18 +328,27 @@ def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
     return value
 
 
+def _require_native_qualification_authority(*, require_signing: bool) -> None:
+    try:
+        if require_signing:
+            taira_authority_client.preflight("qualification")
+        else:
+            taira_authority_client.preflight(
+                "qualification", require_signing=False
+            )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise QualificationHandoffError(
+            f"{BOI_QUALIFICATION_ISSUANCE_BARRIER}: {error}"
+        ) from error
+
+
 def require_native_qualification_isolation(
     trusted_qualification_external_signer_sha256: object,
 ) -> None:
     """Authenticate the fixed qualification service before caller path access."""
 
     del trusted_qualification_external_signer_sha256
-    try:
-        taira_authority_client.preflight("qualification")
-    except taira_authority_client.TairaAuthorityClientError as error:
-        raise QualificationHandoffError(
-            f"{BOI_QUALIFICATION_ISSUANCE_BARRIER}: {error}"
-        ) from error
+    _require_native_qualification_authority(require_signing=True)
 
 
 # Compatibility name retained for the existing installed controller CLI.
@@ -2439,7 +2448,7 @@ def verify_qualified_handoff(
 ) -> QualifiedHandoffSnapshot:
     """Independently authenticate and bind one closed qualified BOI handoff."""
 
-    require_native_qualification_isolation(None)
+    _require_native_qualification_authority(require_signing=False)
     root = _canonical_directory(Path(os.path.abspath(root)), "qualified BOI handoff")
     external_archive = Path(os.path.abspath(candidate_archive))
     external_authority = _canonical_directory(

@@ -31,6 +31,8 @@ use rustix::net::{
     RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
 };
+#[cfg(test)]
+use std::ffi::OsString;
 use std::{
     fs::{self, File, OpenOptions},
     io::{IoSlice, IoSliceMut, Read as _, Write as _},
@@ -111,6 +113,16 @@ impl TairaAuthorityClientV1 {
     /// Authenticate the request-side service and return its signed status object.
     pub fn status(&self) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
         self.qualify_status()
+    }
+
+    /// Submit one administrator-issued run assignment through the real
+    /// administrator endpoint in the isolated transport harness.
+    #[cfg(test)]
+    pub(super) fn assign_run_for_test(
+        &self,
+        assignment_json: Vec<u8>,
+    ) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
+        self.administer(AuthorityAdminCommandV1::AssignRun { assignment_json })
     }
 
     fn qualify_status(&self) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
@@ -282,6 +294,177 @@ impl TairaAuthorityServerV1 {
             self.policy,
         )
     }
+
+    /// Serve a fixed number of request-side sessions in the isolated native
+    /// transport harness.  Socket binding, peer credentials, framing, and
+    /// request dispatch are identical to production; only the finite session
+    /// count and authority clock are supplied by the test.
+    #[cfg(test)]
+    pub(super) fn serve_request_sessions_for_test(
+        self,
+        session_times_unix_millis: &[u64],
+    ) -> Result<(), TairaAuthorityErrorV1> {
+        let (listener, guard) = bind_endpoint(
+            &self.policy.request_socket,
+            self.policy.binding.signer.service_uid,
+        )
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+        let serve_sessions = || {
+            for now_unix_millis in session_times_unix_millis {
+                let (stream, _) = listener
+                    .accept()
+                    .map_err(|_| TairaAuthorityErrorV1::State)?;
+                serve_one_kernel_peer_with_test_time(
+                    stream,
+                    &self.service,
+                    Some(*now_unix_millis),
+                )?;
+            }
+            Ok(())
+        };
+        let result = if self.policy.binding.role == TairaAuthorityRoleV1::Qualification {
+            let (result, sandbox_runs) =
+                super::sandbox::with_qualification_test_sandbox(serve_sessions);
+            if sandbox_runs != 1 {
+                Err(TairaAuthorityErrorV1::State)
+            } else {
+                result
+            }
+        } else {
+            serve_sessions()
+        };
+        let cleanup = guard.cleanup().map_err(|_| TairaAuthorityErrorV1::State);
+        result?;
+        cleanup
+    }
+
+    /// Accept one real administrator-UID assignment followed by a finite
+    /// sequence of real client-UID sessions on the production endpoints.
+    #[cfg(test)]
+    pub(super) fn serve_assignment_and_request_sessions_for_test(
+        self,
+        assignment_time_unix_millis: u64,
+        request_session_times: &[u64],
+    ) -> Result<(), TairaAuthorityErrorV1> {
+        let (request_listener, request_guard) = bind_endpoint(
+            &self.policy.request_socket,
+            self.policy.binding.signer.service_uid,
+        )
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+        let (administrator_listener, administrator_guard) = match bind_endpoint(
+            &self.policy.administrator_socket,
+            self.policy.binding.signer.service_uid,
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                let _ = request_guard.cleanup();
+                return Err(TairaAuthorityErrorV1::State);
+            }
+        };
+        let serve_sessions = || {
+            let (administrator, _) = administrator_listener
+                .accept()
+                .map_err(|_| TairaAuthorityErrorV1::State)?;
+            serve_one_kernel_peer_kind_with_test_time(
+                administrator,
+                true,
+                &self.service,
+                Some(assignment_time_unix_millis),
+            )?;
+            for now_unix_millis in request_session_times {
+                let (request, _) = request_listener
+                    .accept()
+                    .map_err(|_| TairaAuthorityErrorV1::State)?;
+                serve_one_kernel_peer_kind_with_test_time(
+                    request,
+                    false,
+                    &self.service,
+                    Some(*now_unix_millis),
+                )?;
+            }
+            Ok(())
+        };
+        let result = if self.policy.binding.role == TairaAuthorityRoleV1::Qualification {
+            let (result, sandbox_runs) =
+                super::sandbox::with_qualification_test_sandbox(serve_sessions);
+            if sandbox_runs != 1 {
+                Err(TairaAuthorityErrorV1::State)
+            } else {
+                result
+            }
+        } else {
+            serve_sessions()
+        };
+        let request_cleanup = request_guard
+            .cleanup()
+            .map_err(|_| TairaAuthorityErrorV1::State);
+        let administrator_cleanup = administrator_guard
+            .cleanup()
+            .map_err(|_| TairaAuthorityErrorV1::State);
+        result?;
+        request_cleanup?;
+        administrator_cleanup
+    }
+
+    /// Serve both production endpoints indefinitely for the root namespace
+    /// Python/native integration harness.  Only the deterministic clock and
+    /// qualification fixture selection differ from `serve`.
+    #[cfg(test)]
+    fn serve_python_native_daemon_for_test(
+        self,
+        now_unix_millis: u64,
+    ) -> Result<(), TairaAuthorityErrorV1> {
+        let (request_listener, _request_guard) = bind_endpoint(
+            &self.policy.request_socket,
+            self.policy.binding.signer.service_uid,
+        )
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+        let (administrator_listener, _administrator_guard) = bind_endpoint(
+            &self.policy.administrator_socket,
+            self.policy.binding.signer.service_uid,
+        )
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+        request_listener
+            .set_nonblocking(true)
+            .map_err(|_| TairaAuthorityErrorV1::State)?;
+        administrator_listener
+            .set_nonblocking(true)
+            .map_err(|_| TairaAuthorityErrorV1::State)?;
+        loop {
+            let mut accepted = false;
+            for (listener, administrator) in
+                [(&administrator_listener, true), (&request_listener, false)]
+            {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        accepted = true;
+                        let operation = || {
+                            serve_one_kernel_peer_kind_with_test_time(
+                                stream,
+                                administrator,
+                                &self.service,
+                                Some(now_unix_millis),
+                            )
+                        };
+                        if self.policy.binding.role == TairaAuthorityRoleV1::Qualification
+                            && !administrator
+                        {
+                            let (result, _) =
+                                super::sandbox::with_qualification_test_sandbox(operation);
+                            result?;
+                        } else {
+                            operation()?;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => return Err(TairaAuthorityErrorV1::State),
+                }
+            }
+            if !accepted {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
 }
 
 fn serve_listeners(
@@ -395,10 +578,20 @@ fn admit_session(
 }
 
 fn serve_one(
+    stream: UnixStream,
+    administrator: bool,
+    authenticated_uid: u32,
+    service: &TairaAuthorityServiceV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    serve_one_with_test_time(stream, administrator, authenticated_uid, service, None)
+}
+
+fn serve_one_with_test_time(
     mut stream: UnixStream,
     administrator: bool,
     authenticated_uid: u32,
     service: &TairaAuthorityServiceV1,
+    test_now_unix_millis: Option<u64>,
 ) -> Result<(), TairaAuthorityErrorV1> {
     stream
         .set_read_timeout(Some(IO_TIMEOUT_V1))
@@ -416,8 +609,12 @@ fn serve_one(
         let request: AuthorityAdminRequestV1 =
             decode_body(&frame.body).map_err(|()| TairaAuthorityErrorV1::Rejected)?;
         service.binding_for_admin_request(request.binding_sha256, &request.command)?;
+        let request_time_unix_millis = match test_now_unix_millis {
+            Some(now_unix_millis) => now_unix_millis,
+            None => now_unix_millis()?,
+        };
         let response = service
-            .administer(request.command, now_unix_millis()?)
+            .administer(request.command, request_time_unix_millis)
             .unwrap_or_else(response_for_error);
         (FRAME_ADMIN_RESPONSE_V1, response)
     } else {
@@ -452,12 +649,16 @@ fn serve_one(
                 if request.binding_sha256 != binding_sha256 {
                     return Err(TairaAuthorityErrorV1::Binding);
                 }
+                let request_time_unix_millis = match test_now_unix_millis {
+                    Some(now_unix_millis) => now_unix_millis,
+                    None => now_unix_millis()?,
+                };
                 let response = service
                     .authorize_json(
                         &request.request_json,
                         descriptors,
                         authenticated_uid,
-                        now_unix_millis()?,
+                        request_time_unix_millis,
                     )
                     .unwrap_or_else(response_for_error);
                 (FRAME_AUTHORIZE_RESPONSE_V1, response)
@@ -488,6 +689,68 @@ pub(super) fn serve_one_for_test(
     service: &TairaAuthorityServiceV1,
 ) -> Result<(), TairaAuthorityErrorV1> {
     serve_one(stream, administrator, authenticated_uid, service)
+}
+
+#[cfg(test)]
+pub(super) fn serve_one_kernel_peer_for_test(
+    stream: UnixStream,
+    service: &TairaAuthorityServiceV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    serve_one_kernel_peer_with_test_time(stream, service, None)
+}
+
+#[cfg(test)]
+fn serve_one_kernel_peer_with_test_time(
+    stream: UnixStream,
+    service: &TairaAuthorityServiceV1,
+    test_now_unix_millis: Option<u64>,
+) -> Result<(), TairaAuthorityErrorV1> {
+    serve_one_kernel_peer_kind_with_test_time(stream, false, service, test_now_unix_millis)
+}
+
+#[cfg(test)]
+fn serve_one_kernel_peer_kind_with_test_time(
+    stream: UnixStream,
+    administrator: bool,
+    service: &TairaAuthorityServiceV1,
+    test_now_unix_millis: Option<u64>,
+) -> Result<(), TairaAuthorityErrorV1> {
+    let binding = service.public_binding()?;
+    let expected_uid = if administrator {
+        binding.signer.administrator_uid
+    } else {
+        binding.signer.client_uid
+    };
+    let clone = stream
+        .try_clone()
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    clone
+        .set_nonblocking(true)
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    let guard = runtime.enter();
+    let peer_uid = tokio::net::UnixStream::from_std(clone)
+        .map_err(|_| TairaAuthorityErrorV1::State)?
+        .peer_cred()
+        .map_err(|_| TairaAuthorityErrorV1::State)?
+        .uid();
+    drop(guard);
+    stream
+        .set_nonblocking(false)
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    if peer_uid != expected_uid {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    serve_one_with_test_time(
+        stream,
+        administrator,
+        peer_uid,
+        service,
+        test_now_unix_millis,
+    )
 }
 
 fn exchange<Request, Response>(
@@ -980,6 +1243,7 @@ where
     Ok(())
 }
 
+#[allow(unsafe_code)]
 fn permanently_drop_request_client_uid(client_uid: u32) -> Result<(), TairaAuthorityErrorV1> {
     use std::os::raw::{c_int, c_uint};
 
@@ -1203,7 +1467,22 @@ struct RevokeArgs {
 }
 
 pub(super) fn run_cli() -> Result<(), &'static str> {
-    match Cli::parse().command {
+    dispatch_cli_command(Cli::parse().command)
+}
+
+#[cfg(test)]
+pub(super) fn run_cli_args_for_test(args: Vec<OsString>) -> Result<(), &'static str> {
+    let command = Cli::try_parse_from(args)
+        .map_err(|_| "authority command failed")?
+        .command;
+    match command {
+        Command::Serve(args) => cli_serve_for_python_native_test(args),
+        command => dispatch_cli_command(command),
+    }
+}
+
+fn dispatch_cli_command(command: Command) -> Result<(), &'static str> {
+    match command {
         Command::PrepareRole(args) => cli_prepare_role(args),
         Command::Provision(args) => cli_provision(args),
         Command::InstallBinding(args) => cli_install_binding(args.role),
@@ -1491,6 +1770,23 @@ fn load_retained_genesis_key(fd: i32) -> Result<KeyPair, TairaAuthorityErrorV1> 
 }
 
 fn cli_serve(args: ServeArgs) -> Result<(), &'static str> {
+    cli_server(args)?.serve().map_err(cli_error)
+}
+
+#[cfg(test)]
+fn cli_serve_for_python_native_test(args: ServeArgs) -> Result<(), &'static str> {
+    let now_unix_millis = match args.role {
+        TairaAuthorityRoleV1::PrivacyGovernance => 1_800_000_000_001,
+        TairaAuthorityRoleV1::PublicSoakObservation => 1_800_000_001_000,
+        TairaAuthorityRoleV1::PublicSoakReplayAdmission => 1_800_000_003_000,
+        _ => 1_900_000_000_000,
+    };
+    cli_server(args)?
+        .serve_python_native_daemon_for_test(now_unix_millis)
+        .map_err(cli_error)
+}
+
+fn cli_server(args: ServeArgs) -> Result<TairaAuthorityServerV1, &'static str> {
     validate_fixed_command_paths(
         args.role,
         &args.binding,
@@ -1518,9 +1814,7 @@ fn cli_serve(args: ServeArgs) -> Result<(), &'static str> {
         binding,
     )
     .map_err(cli_error)?;
-    TairaAuthorityServerV1::try_new(service, policy)
-        .and_then(TairaAuthorityServerV1::serve)
-        .map_err(cli_error)
+    TairaAuthorityServerV1::try_new(service, policy).map_err(cli_error)
 }
 
 fn cli_recover(args: RecoverArgs) -> Result<(), &'static str> {
@@ -1598,6 +1892,7 @@ fn duplicate_inherited_descriptors(values: &[i32]) -> Result<Vec<OwnedFd>, Taira
         .collect()
 }
 
+#[allow(unsafe_code)]
 fn duplicate_inherited_descriptor(value: i32) -> Result<OwnedFd, TairaAuthorityErrorV1> {
     if value <= 2 {
         return Err(TairaAuthorityErrorV1::Rejected);
@@ -1605,8 +1900,7 @@ fn duplicate_inherited_descriptor(value: i32) -> Result<OwnedFd, TairaAuthorityE
     // SAFETY: the positive inherited descriptor is borrowed only for this
     // `fcntl` call.  The caller retains ownership of the original descriptor.
     let descriptor = unsafe { BorrowedFd::borrow_raw(value) };
-    rustix::io::fcntl_dupfd_cloexec(descriptor, 3)
-        .map_err(|_| TairaAuthorityErrorV1::Rejected)
+    rustix::io::fcntl_dupfd_cloexec(descriptor, 3).map_err(|_| TairaAuthorityErrorV1::Rejected)
 }
 
 fn read_stdin_bounded() -> Result<Vec<u8>, TairaAuthorityErrorV1> {
@@ -1788,8 +2082,7 @@ mod request_client_identity_tests {
     };
 
     use super::{
-        TairaAuthorityErrorV1, authenticate_request_client_uid_with,
-        duplicate_inherited_descriptor,
+        TairaAuthorityErrorV1, authenticate_request_client_uid_with, duplicate_inherited_descriptor,
     };
 
     #[test]
@@ -1864,7 +2157,12 @@ mod request_client_identity_tests {
     fn read_only_inherited_descriptor_survives_root_child_drop_planning() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("artifact");
-        let mut original = fs::File::create(&path).expect("create inherited artifact");
+        let mut original = fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("create inherited artifact");
         original
             .write_all(b"root-owned read-only artifact")
             .expect("write inherited artifact");

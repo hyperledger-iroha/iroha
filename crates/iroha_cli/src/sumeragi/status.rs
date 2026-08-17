@@ -1,8 +1,8 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
+use super::commands::{DiagnosticsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
+use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
 use norito::json::Value;
-use crate::{CliOutputFormat, RunContext};
-use super::commands::{DiagnosticsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
 pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_status_json()?;
@@ -162,29 +162,41 @@ fn summarize_params(value: &Value) -> String {
     format!("block_cadence={cadence}ms max_clock_drift={drift}ms chain_height={height}")
 }
 fn summarize_qc(value: &Value) -> String {
-    let hq = value.get("highest_qc").and_then(|v| v.as_object());
-    let lq = value.get("locked_qc").and_then(|v| v.as_object());
+    let hq = value.get("highest_prepare_qc").and_then(|v| v.as_object());
+    let lq = value.get("locked_prepare_qc").and_then(|v| v.as_object());
     let hqc_height = hq
+        .and_then(|o| o.get("round"))
+        .and_then(|v| v.as_object())
         .and_then(|o| o.get("height"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
     let hqc_view = hq
+        .and_then(|o| o.get("round"))
+        .and_then(|v| v.as_object())
         .and_then(|o| o.get("view"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
     let subj = hq
-        .and_then(|o| o.get("subject_block_hash"))
+        .and_then(|o| o.get("subject"))
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("block_hash"))
         .and_then(|v| v.as_str())
         .map_or("-", |s| if s.len() > 8 { &s[..8] } else { s });
     let lqc_height = lq
+        .and_then(|o| o.get("round"))
+        .and_then(|v| v.as_object())
         .and_then(|o| o.get("height"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
     let lqc_view = lq
+        .and_then(|o| o.get("round"))
+        .and_then(|v| v.as_object())
         .and_then(|o| o.get("view"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
-    format!("hqc={hqc_height}/{hqc_view} subj={subj} lqc={lqc_height}/{lqc_view}")
+    format!(
+        "highest_prepare_qc={hqc_height}/{hqc_view} subject={subj} locked_prepare_qc={lqc_height}/{lqc_view}"
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -256,16 +268,17 @@ mod tests {
     #[test]
     fn summarize_qc_reports_subject_hash() {
         let value = norito::json!({
-            "highest_qc": {
-                "height": 8,
-                "view": 1,
-                "subject_block_hash": "1234567890abcdef"
+            "highest_prepare_qc": {
+                "round": { "height": 8, "view": 1 },
+                "subject": { "block_hash": "1234567890abcdef" }
             },
-            "locked_qc": {
-                "height": 6,
-                "view": 0
+            "locked_prepare_qc": {
+                "round": { "height": 6, "view": 0 }
             }
         });
-        assert_eq!(summarize_qc(&value), "hqc=8/1 subj=12345678 lqc=6/0");
+        assert_eq!(
+            summarize_qc(&value),
+            "highest_prepare_qc=8/1 subject=12345678 locked_prepare_qc=6/0"
+        );
     }
 }

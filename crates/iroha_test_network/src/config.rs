@@ -881,7 +881,7 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     zk_config: Option<&ActualZk>,
     runtime_config: Option<&ActualRoot>,
 ) {
-    let tx_count = block.0.transactions_vec().len();
+    let tx_count = block.0.external_transactions().len();
     let result_count = block.0.results().count();
     let missing_results = tx_count > 0 && tx_count != result_count;
     let synthetic_results_need_preexecution = block.0.committed_fragment_count() == Some(0);
@@ -997,8 +997,8 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let query_handle = LiveQueryStore::start_test();
     let effective_genesis_account = block
         .0
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .map(|tx| tx.authority().clone())
         .unwrap_or_else(|| genesis_account.clone());
     let genesis_domain =
@@ -1212,7 +1212,10 @@ fn build_placeholder_block(
     template: &iroha_data_model::block::SignedBlock,
     genesis_key_pair: &KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
-    let transactions = template.transactions_vec().clone();
+    let transactions = template
+        .external_transactions()
+        .cloned()
+        .collect::<Vec<_>>();
     let hashes = transactions
         .iter()
         .map(|tx| tx.hash_as_entrypoint())
@@ -1236,7 +1239,10 @@ fn rebuild_block_with_results(
     template: &iroha_data_model::block::SignedBlock,
     genesis_key_pair: &KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
-    let transactions = template.transactions_vec().clone();
+    let transactions = template
+        .external_transactions()
+        .cloned()
+        .collect::<Vec<_>>();
     let time_triggers = template.time_triggers().cloned().collect::<Vec<_>>();
     let hashes = template.entrypoint_hashes().collect::<Vec<_>>();
     let results = template
@@ -1505,7 +1511,7 @@ mod tests {
         let placeholder = super::build_placeholder_block(&block.0, &genesis_key_pair);
         assert_eq!(
             placeholder.results().count(),
-            block.0.transactions_vec().len(),
+            block.0.external_transactions().len(),
             "placeholder block must still carry result rows for every transaction"
         );
         assert_eq!(
@@ -1977,7 +1983,7 @@ mod tests {
             block.0.has_results(),
             "fallback path must still populate synthetic results"
         );
-        let tx_count = block.0.transactions_vec().len();
+        let tx_count = block.0.external_transactions().len();
         assert_eq!(
             block.0.results().count(),
             tx_count,
@@ -2001,7 +2007,7 @@ mod tests {
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut register_pop = 0;
         let mut hsm_bound = 0;
-        for tx in block.0.transactions_vec() {
+        for tx in block.0.external_transactions() {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
                     for instr in isi {
@@ -2038,7 +2044,7 @@ mod tests {
             transaction::Executable,
         };
         fn embedded_manifest_crypto(block: &GenesisBlock) -> ManifestCrypto {
-            for tx in block.0.transactions_vec() {
+            for tx in block.0.external_transactions() {
                 let Executable::Instructions(instrs) = tx.instructions() else {
                     continue;
                 };
@@ -2114,7 +2120,7 @@ mod tests {
             );
             let mut saw_alice = false;
             let mut saw_carpenter = false;
-            for tx in block.0.transactions_vec() {
+            for tx in block.0.external_transactions() {
                 if let Executable::Instructions(instrs) = tx.instructions() {
                     for instr in instrs {
                         if let Some(RegisterBox::Account(isi)) =
@@ -2165,7 +2171,7 @@ mod tests {
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut saw_soracloud_permission = false;
         let mut saw_parliament_permission = false;
-        for tx in block.0.transactions_vec() {
+        for tx in block.0.external_transactions() {
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
             };
@@ -2217,7 +2223,7 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
-        let first_tx = block.0.transactions_vec().first().unwrap();
+        let first_tx = block.0.external_transactions().next().unwrap();
         let Executable::Instructions(isi) = first_tx.instructions() else {
             panic!("expected instructions in first transaction");
         };
@@ -2292,8 +2298,7 @@ mod tests {
         );
         let declared_hash = block
             .0
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .find_map(|tx| {
                 use iroha_data_model::{isi::SetParameter, transaction::Executable};
                 let Executable::Instructions(instrs) = tx.instructions() else {

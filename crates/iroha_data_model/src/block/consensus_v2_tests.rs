@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::DecodeAll as _;
-    use super::*;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
@@ -449,6 +449,249 @@ mod tests {
             Hash::new(executed_block_wire),
         )
         .expect("canonical fixture execution commitment")
+    }
+    #[test]
+    fn current_consensus_nullable_layouts_roundtrip_exactly() {
+        macro_rules! assert_roundtrip {
+            ($ty:ty, $value:expr) => {{
+                let value: $ty = $value;
+                let encoded = value.encode();
+                let mut cursor = encoded.as_slice();
+                let decoded = <$ty>::decode_all(&mut cursor).expect("decode current layout");
+                assert_eq!(decoded, value);
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        let round = round(&context, 0);
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"current genesis subject")),
+            payload_hash: Hash::new(b"current genesis payload"),
+        };
+        let commitment = execution_commitment(0x51);
+        let timeout_vote = TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x52; 48],
+        };
+        let timeout_signature = TimeoutVoteSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            round,
+            highest_prepare_qc: None,
+        };
+        let timeout_certificate = TimeoutCertificate {
+            round,
+            groups: vec![TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x53; 48],
+            }],
+        };
+        let timeout_ref = timeout_certificate.as_ref();
+        let parent_justification = ParentCommitJustification { certificate: None };
+        let timeout_justification = TimeoutJustification {
+            timeout_certificate: timeout_certificate.clone(),
+            highest_prepare_qc: None,
+        };
+        let native_leaf = NativeAmxApplicationManifestLeafV1 {
+            version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(8),
+            lane_incarnation: Hash::new(b"current native leaf incarnation"),
+            participant_height: 1,
+            participant_view: 0,
+            predecessor_height: 0,
+            predecessor_descriptor_hash: None,
+            descriptor_hash: Hash::new(b"current native leaf descriptor"),
+            proposal_hash: Hash::new(b"current native leaf proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"current native leaf settlement",
+            )),
+            members: Vec::new(),
+            application_block_height: 1,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"current native leaf application",
+            )),
+            executed_block_wire_hash: Hash::new(b"current native leaf wire"),
+        };
+
+        assert_roundtrip!(HeightContext, context);
+        assert_roundtrip!(BlockSubject, subject);
+        assert_roundtrip!(NativeAmxApplicationManifestLeafV1, native_leaf);
+        assert_roundtrip!(ExecutionCommitment, commitment);
+        assert_roundtrip!(TimeoutVote, timeout_vote);
+        assert_roundtrip!(TimeoutVoteSignaturePayload, timeout_signature);
+        assert_roundtrip!(TimeoutCertificate, timeout_certificate);
+        assert_roundtrip!(TimeoutCertificateRef, timeout_ref);
+        assert_roundtrip!(ParentCommitJustification, parent_justification);
+        assert_roundtrip!(TimeoutJustification, timeout_justification);
+    }
+    #[test]
+    fn pre_release_consensus_layouts_cannot_omit_nullable_slots() {
+        #[derive(Encode)]
+        struct PreReleaseHeightContextPrefix {
+            network_id: NetworkId,
+            protocol_version: u16,
+            height: Height,
+            epoch: u64,
+            epoch_end_height: Height,
+        }
+        #[derive(Encode)]
+        struct PreReleaseBlockSubject {
+            block_hash: HashOf<BlockHeader>,
+            payload_hash: Hash,
+        }
+        #[derive(Encode)]
+        struct PreReleaseNativeLeafPrefix {
+            version: u16,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
+            participant_height: u64,
+            participant_view: u64,
+            predecessor_height: u64,
+        }
+        #[derive(Encode)]
+        struct PreReleaseExecutionCommitmentPrefix {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVote {
+            round: ConsensusRound,
+            signer: ValidatorIndex,
+            signature: Vec<u8>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVoteSignaturePayload {
+            protocol_version: u16,
+            round: ConsensusRound,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVoteGroup {
+            signers: Vec<ValidatorIndex>,
+            aggregate_signature: Vec<u8>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutCertificateRefPrefix {
+            round: ConsensusRound,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutJustification {
+            timeout_certificate: TimeoutCertificate,
+        }
+        macro_rules! assert_rejected {
+            ($ty:ty, $encoded:expr, $label:literal) => {{
+                let encoded = $encoded;
+                let mut cursor = encoded.as_slice();
+                assert!(<$ty>::decode_all(&mut cursor).is_err(), $label);
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        let round = round(&context, 0);
+        let timeout_certificate = TimeoutCertificate {
+            round,
+            groups: vec![TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x61; 48],
+            }],
+        };
+        assert_rejected!(
+            HeightContext,
+            PreReleaseHeightContextPrefix {
+                network_id: context.network_id,
+                protocol_version: context.protocol_version,
+                height: context.height,
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+            }
+            .encode(),
+            "a shortened height context must not infer nullable consensus anchors"
+        );
+        assert_rejected!(
+            BlockSubject,
+            PreReleaseBlockSubject {
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xFE; Hash::LENGTH])),
+                payload_hash: Hash::new(b"pre-release subject payload"),
+            }
+            .encode(),
+            "a subject without its parent slot must fail closed"
+        );
+        assert_rejected!(
+            NativeAmxApplicationManifestLeafV1,
+            PreReleaseNativeLeafPrefix {
+                version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                lane_id: LaneId::new(7),
+                dataspace_id: DataSpaceId::new(8),
+                lane_incarnation: Hash::new(b"pre-release native leaf"),
+                participant_height: 1,
+                participant_view: 0,
+                predecessor_height: 0,
+            }
+            .encode(),
+            "a Native AMX leaf without its predecessor slot must fail closed"
+        );
+        assert_rejected!(
+            ExecutionCommitment,
+            PreReleaseExecutionCommitmentPrefix {
+                parent_state_root: Hash::new(b"pre-release parent state"),
+                post_state_root: Hash::new(b"pre-release post state"),
+                ordinary_writes_root: Hash::new(b"pre-release ordinary writes"),
+            }
+            .encode(),
+            "an execution commitment without its top-up slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVote,
+            PreReleaseTimeoutVote {
+                round,
+                signer: 7,
+                signature: vec![0x62; 48],
+            }
+            .encode(),
+            "a timeout vote without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVoteSignaturePayload,
+            PreReleaseTimeoutVoteSignaturePayload {
+                protocol_version: PROTOCOL_VERSION,
+                round,
+            }
+            .encode(),
+            "a timeout signature payload without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVoteGroup,
+            PreReleaseTimeoutVoteGroup {
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x63; 48],
+            }
+            .encode(),
+            "a timeout group without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutCertificateRef,
+            PreReleaseTimeoutCertificateRefPrefix { round }.encode(),
+            "a timeout reference without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            ParentCommitJustification,
+            Vec::<u8>::new(),
+            "a parent justification without its certificate slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutJustification,
+            PreReleaseTimeoutJustification {
+                timeout_certificate,
+            }
+            .encode(),
+            "a timeout justification without its highest-PrepareQC slot must fail closed"
+        );
     }
     fn qc(
         context: &HeightContext,
@@ -2556,6 +2799,242 @@ mod tests {
             .expect("envelope object")
             .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn current_consensus_json_requires_explicit_nullable_slots() {
+        macro_rules! assert_required_nullable_field {
+            ($ty:ty, $value:expr, $field:literal) => {{
+                let canonical: $ty = $value;
+                let value = norito::json::to_value(&canonical).expect("serialize current layout");
+                assert!(
+                    value.get($field).is_some_and(norito::json::Value::is_null),
+                    "nullable field `{}` must serialize as an explicit null",
+                    $field
+                );
+                assert_eq!(
+                    norito::json::from_value::<$ty>(value.clone())
+                        .expect("decode explicit nullable slot"),
+                    canonical
+                );
+
+                let mut missing = value.clone();
+                missing
+                    .as_object_mut()
+                    .expect("current consensus layout is an object")
+                    .remove($field);
+                let error = norito::json::from_value::<$ty>(missing)
+                    .expect_err("omitted nullable consensus slot must reject");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(concat!("missing field `", $field, "`")),
+                    "unexpected missing-field diagnostic for `{}`: {error}",
+                    $field
+                );
+
+                let mut unknown = value;
+                unknown
+                    .as_object_mut()
+                    .expect("current consensus layout is an object")
+                    .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+                assert!(
+                    norito::json::from_value::<$ty>(unknown).is_err(),
+                    "{} must reject unknown JSON fields",
+                    stringify!($ty)
+                );
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        assert_required_nullable_field!(HeightContext, context.clone(), "next_epoch_snapshot");
+        assert_required_nullable_field!(HeightContext, context.clone(), "parent_commit_qc");
+        assert_required_nullable_field!(HeightContext, context.clone(), "snapshot_bootstrap");
+
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"json genesis subject")),
+            payload_hash: Hash::new(b"json genesis payload"),
+        };
+        assert_required_nullable_field!(BlockSubject, subject, "parent_block_hash");
+
+        let native_leaf = NativeAmxApplicationManifestLeafV1 {
+            version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(8),
+            lane_incarnation: Hash::new(b"json native leaf incarnation"),
+            participant_height: 1,
+            participant_view: 0,
+            predecessor_height: 0,
+            predecessor_descriptor_hash: None,
+            descriptor_hash: Hash::new(b"json native leaf descriptor"),
+            proposal_hash: Hash::new(b"json native leaf proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"json native leaf settlement",
+            )),
+            members: Vec::new(),
+            application_block_height: 1,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"json native leaf application",
+            )),
+            executed_block_wire_hash: Hash::new(b"json native leaf wire"),
+        };
+        assert_required_nullable_field!(
+            NativeAmxApplicationManifestLeafV1,
+            native_leaf,
+            "predecessor_descriptor_hash"
+        );
+
+        let commitment = execution_commitment(0x71);
+        assert_required_nullable_field!(ExecutionCommitment, commitment, "topup_anchor_root");
+
+        let round = round(&context, 0);
+        let timeout_vote = TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x72; 48],
+        };
+        assert_required_nullable_field!(TimeoutVote, timeout_vote.clone(), "highest_prepare_qc");
+        assert_required_nullable_field!(
+            TimeoutVoteSignaturePayload,
+            TimeoutVoteSignaturePayload {
+                protocol_version: PROTOCOL_VERSION,
+                round,
+                highest_prepare_qc: None,
+            },
+            "highest_prepare_qc"
+        );
+        let timeout_group = TimeoutVoteGroup {
+            highest_prepare_qc: None,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x73; 48],
+        };
+        assert_required_nullable_field!(
+            TimeoutVoteGroup,
+            timeout_group.clone(),
+            "highest_prepare_qc"
+        );
+        let timeout_certificate = TimeoutCertificate {
+            round,
+            groups: vec![timeout_group],
+        };
+        assert_required_nullable_field!(
+            TimeoutCertificateRef,
+            timeout_certificate.as_ref(),
+            "highest_prepare_qc"
+        );
+        assert_required_nullable_field!(
+            ParentCommitJustification,
+            ParentCommitJustification { certificate: None },
+            "certificate"
+        );
+        assert_required_nullable_field!(
+            TimeoutJustification,
+            TimeoutJustification {
+                timeout_certificate,
+                highest_prepare_qc: None,
+            },
+            "highest_prepare_qc"
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
+        macro_rules! assert_unknown_rejected {
+            ($ty:ty, $value:expr) => {{
+                let mut value = norito::json::to_value(&$value).expect("serialize signed layer");
+                value
+                    .as_object_mut()
+                    .expect("signed layer is a JSON object")
+                    .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+                assert!(
+                    norito::json::from_value::<$ty>(value).is_err(),
+                    "{} must reject unknown JSON fields",
+                    stringify!($ty)
+                );
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        let round = round(&context, 0);
+        let subject = subject(0x81);
+        let payload = b"body";
+        let encoded_chunks = rs16_fixture_chunks(&context, payload);
+        let manifest = PayloadManifest::derive(
+            &context,
+            round,
+            subject,
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &encoded_chunks,
+        )
+        .expect("derive signed-layer manifest");
+        let chunk_payload = PayloadChunkSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            context_id: round.context_id,
+            epoch: context.epoch,
+            height: round.height,
+            view: round.view,
+            subject,
+            manifest_hash: HashOf::new(&manifest),
+            encoding: manifest.layout.encoding,
+            index: 0,
+            total_chunks: u32::try_from(manifest.chunk_hashes.len())
+                .expect("fixture chunk count fits u32"),
+            chunk_hash: manifest.chunk_hashes[0],
+            sender: 0,
+        };
+        assert_unknown_rejected!(PayloadChunkSignaturePayload, chunk_payload);
+
+        let proposal = Proposal {
+            round,
+            proposer: context.leader(round.view),
+            subject,
+            manifest: manifest.clone(),
+            justification: ProposalJustification::ParentCommit(ParentCommitJustification {
+                certificate: None,
+            }),
+            signature: vec![0x82; 48],
+        };
+        assert_unknown_rejected!(Proposal, proposal.clone());
+        assert_unknown_rejected!(ProposalJustification, proposal.justification.clone());
+
+        let timeout_vote = TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x83; 48],
+        };
+        assert_unknown_rejected!(
+            SumeragiV2Equivocation,
+            SumeragiV2Equivocation::TimeoutVote {
+                first: timeout_vote.clone(),
+                second: timeout_vote,
+            }
+        );
+        assert_unknown_rejected!(
+            CertifiedBodyResponseSignaturePayload,
+            CertifiedBodyResponseSignaturePayload {
+                protocol_version: PROTOCOL_VERSION,
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"signed-layer body request",
+                )),
+                manifest,
+                body_hash: Hash::new(payload),
+                responder: 0,
+            }
+        );
+        assert_unknown_rejected!(
+            CommitCertificateResponseSignaturePayload,
+            CommitCertificateResponseSignaturePayload {
+                protocol_version: PROTOCOL_VERSION,
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"signed-layer certificate request",
+                )),
+                certificate: qc(&context, 0, GlobalPhase::Commit, vec![0, 1, 2]),
+                responder: context.roster[0].validator.clone(),
+            }
+        );
     }
     #[cfg(feature = "json")]
     #[test]

@@ -1744,7 +1744,7 @@ mod tests {
         AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
-                account: "subject".to_owned(),
+                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
                 origin_dsid: Some(DataSpaceId::new(7)),
             },
             budget: HandleBudget {
@@ -2205,7 +2205,7 @@ mod tests {
         let valid_handle = AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
-                account: "subject".to_owned(),
+                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
                 origin_dsid: Some(DataSpaceId::new(7)),
             },
             budget: HandleBudget {
@@ -2411,8 +2411,8 @@ mod tests {
             asset_dsid: DataSpaceId::new(7),
             op: SpendOp {
                 kind: String::new(),
-                from: "from".to_owned(),
-                to: "to".to_owned(),
+                from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
+                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
                 amount: Some("1".parse().expect("canonical quantity")),
             },
         };
@@ -2420,8 +2420,8 @@ mod tests {
             asset_dsid: DataSpaceId::new(7),
             op: SpendOp {
                 kind: "transfer".to_owned(),
-                from: "from".to_owned(),
-                to: "to".to_owned(),
+                from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
+                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
                 amount: Some("1".parse().expect("canonical quantity")),
             },
         };

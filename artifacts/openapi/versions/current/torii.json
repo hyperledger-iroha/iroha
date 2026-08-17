@@ -5449,11 +5449,15 @@
                   "gas_limit": {
                     "format": "uint64",
                     "minimum": 1,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
-                  "charge_limits"
+                  "charge_limits",
+                  "gas_limit"
                 ],
                 "type": "object"
               }
@@ -5482,7 +5486,10 @@
                   "gas_limit": {
                     "format": "uint64",
                     "minimum": 1,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "program_id": {
                     "$ref": "#/components/schemas/FeeSponsorProgramId"
@@ -5496,7 +5503,8 @@
                 "required": [
                   "program_id",
                   "program_revision",
-                  "charge_limits"
+                  "charge_limits",
+                  "gas_limit"
                 ],
                 "type": "object"
               }
@@ -30332,7 +30340,10 @@
           "attachments": {
             "contentEncoding": "base64",
             "description": "Optional canonical bounded ProofAttachmentList frame encoded as padded base64.",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "authority": {
             "type": "string"
@@ -30372,7 +30383,8 @@
           "instructions",
           "time_to_live_ms",
           "fee_payment",
-          "metadata"
+          "metadata",
+          "attachments"
         ],
         "type": "object"
       },
@@ -30380,6 +30392,7 @@
         "additionalProperties": false,
         "properties": {
           "payload": {
+            "additionalProperties": false,
             "properties": {
               "entrypoint_hash": {
                 "type": "string"
@@ -30400,14 +30413,11 @@
               "submitted_at_ms": {
                 "format": "uint64",
                 "type": "integer"
-              },
-              "tx_hash": {
-                "type": "string"
               }
             },
             "required": [
-              "tx_hash",
               "entrypoint_hash",
+              "signed_transaction_hash",
               "submitted_at_ms",
               "submitted_at_height",
               "signer"
@@ -69862,28 +69872,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/phases": {
-      "get": {
-        "description": "Return consensus phase status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch phase status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/sumeragi/qc": {
       "get": {
         "description": "Return quorum certificate snapshots.",
@@ -69944,28 +69932,6 @@
           }
         },
         "summary": "Stream Sumeragi status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/telemetry": {
-      "get": {
-        "description": "Return Sumeragi telemetry snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch Sumeragi telemetry.",
         "tags": [
           "Sumeragi"
         ],

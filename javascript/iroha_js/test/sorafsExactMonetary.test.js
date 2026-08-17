@@ -56,6 +56,11 @@ function daReceiptFixture(rentQuote) {
     manifest_hash: [digest],
     storage_ticket: [digest],
     pdp_commitment: null,
+    stripe_layout: {
+      total_stripes: 1,
+      shards_per_stripe: 14,
+      row_parity_stripes: 0,
+    },
     queued_at_unix: 1234,
     operator_signature: "aa".repeat(64),
     rent_quote: rentQuote,

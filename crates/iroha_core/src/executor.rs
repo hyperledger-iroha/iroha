@@ -1,6 +1,5 @@
-// Detached executor note: Keep this handler minimal and side‑effect free; only record
-// deltas. Prefer performing complex checks during merge in `StateBlock::merge_into`.
-// Extend cautiously when adding new ISIs (Peer, Parameters, ExecuteTrigger, etc.).
+// Detached executor note: Keep this handler minimal and side-effect free; record only deltas.
+// Perform complex checks during `StateBlock::merge_into`; extend cautiously for new ISIs.
 //! Structures and impls related to processing Iroha Virtual Machine (IVM) runtime executors.
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
@@ -1217,42 +1216,14 @@ fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-fn account_literal_matches(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    literal: &str,
-    expected: &AccountId,
-    now_ms: u64,
-) -> bool {
-    if let Ok(canonical) = AccountId::canonicalize(literal)
-        && expected
-            .canonical_i105()
-            .ok()
-            .as_deref()
-            .is_some_and(|expected| expected == canonical)
-    {
-        return true;
-    }
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-        .as_ref()
-        .is_some_and(|account| account == expected)
-}
 fn successful_claim_fee_authority_allowed(
-    world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     authority: &AccountId,
-    now_ms: u64,
 ) -> bool {
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|literal| !literal.is_empty())
-        .any(|literal| {
-            account_literal_matches(world, world.dataspace_catalog(), literal, authority, now_ms)
-        })
+        .contains(authority)
 }
 fn successful_claim_fee_exempt_instructions(
     world: &impl WorldReadOnly,
@@ -1262,7 +1233,7 @@ fn successful_claim_fee_exempt_instructions(
     instructions: &[InstructionBox],
     observation_time_ms: u64,
 ) -> bool {
-    if !successful_claim_fee_authority_allowed(world, nexus, authority, observation_time_ms) {
+    if !successful_claim_fee_authority_allowed(nexus, authority) {
         return false;
     }
     let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
@@ -15023,7 +14994,10 @@ mod tests {
             None,
         );
         let authority_literal = payload.authority.to_string();
-        nexus.fees.successful_claim_fee_exempt_authorities = vec![authority_literal.clone()];
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .insert(payload.authority.clone());
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         payload.metadata.insert(
@@ -15044,6 +15018,23 @@ mod tests {
         ))]
         .into();
         assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
+    }
+    #[test]
+    fn successful_claim_fee_exemption_uses_exact_account_identity() {
+        let (_, mut nexus, _, payload) = multi_component_fee_quote_fixture();
+        let authority = payload.authority;
+        let (other_authority, _) = gen_account_in("fee_quote_other");
+
+        assert!(!successful_claim_fee_authority_allowed(&nexus, &authority));
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .insert(authority.clone());
+        assert!(successful_claim_fee_authority_allowed(&nexus, &authority));
+        assert!(!successful_claim_fee_authority_allowed(
+            &nexus,
+            &other_authority
+        ));
     }
     #[test]
     fn fee_quote_discovers_pipeline_gas_and_matches_strict_signed_payload_quote() {
@@ -15375,6 +15366,7 @@ mod tests {
                 verifier_version: "v1".to_owned(),
                 target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
                 effect_binding: None,
+                remote_spend_intent_commitments: Vec::new(),
             },
         )
     }

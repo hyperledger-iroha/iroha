@@ -15,7 +15,7 @@ fn gossip_batch_fails_closed_on_corrupt_native_amx_plan_index() {
     );
     assert_ne!(fixture.stale_plan, fixture.current_plan);
     let queue = Queue::test(config_factory(), &time_source);
-    let hash = fixture.tx.hash();
+    let hash = fixture.tx.hash_as_entrypoint();
     queue
         .push_with_gossip_payload_with_state_and_routing_plan(
             fixture.tx.clone(),
@@ -25,14 +25,6 @@ fn gossip_batch_fails_closed_on_corrupt_native_amx_plan_index() {
         )
         .expect("current Native AMX plan should enqueue");
     queue.routing_plans.insert(hash, fixture.stale_plan.clone());
-    queue
-        .routing_decisions
-        .insert(hash, fixture.stale_plan.coordinator_route());
-    crate::queue::routing_ledger::record_plan_bounded(
-        hash,
-        fixture.stale_plan.clone(),
-        queue.capacity.get(),
-    );
     let batch = queue.gossip_batch_with_state(1, &fixture.state);
     assert!(batch.is_empty());
     assert!(queue.accepted_work_validation_faulted());
@@ -42,12 +34,7 @@ fn gossip_batch_fails_closed_on_corrupt_native_amx_plan_index() {
         queue.routing_plans.get(&hash).map(|entry| entry.clone()),
         Some(fixture.stale_plan.clone())
     );
-    assert_eq!(
-        crate::queue::routing_ledger::get_plan(&hash),
-        Some(fixture.stale_plan)
-    );
-    let _ = crate::queue::routing_ledger::take_plan(&hash);
-    let _ = crate::queue::routing_ledger::take(&hash);
+    assert_eq!(queue.routing_plan_hint(&hash), Some(fixture.stale_plan));
 }
 #[test]
 fn route_for_gossip_with_state_uses_router_decision() {
@@ -80,11 +67,17 @@ fn route_for_gossip_with_state_prefers_no_state_router_path() {
         dataspace: DataSpaceId,
     }
     impl LaneRouter for PanicOnViewRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-            panic!("route() should not be called when route_without_state is available");
+        fn try_route(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
-        fn route_without_state(&self, _tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
-            Some(RoutingDecision::new(self.lane, self.dataspace))
+        fn try_route_without_state(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+            Ok(Some(RoutingDecision::new(self.lane, self.dataspace)))
         }
     }
     let kura = Kura::blank_kura_for_testing();
@@ -115,7 +108,7 @@ fn state_backed_queue_routes_reject_state_free_future_created_autoscale_hint() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = queue_with_state_free_future_created_router(&state, &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let route_err = queue
         .route_plan_with_state(&tx, &state)
         .expect_err("state-backed route must reject future-created state-free hint");
@@ -158,12 +151,11 @@ fn state_backed_queue_routes_reject_state_free_future_created_autoscale_hint() {
         );
     }
     assert!(!queue.txs.contains_key(&hash));
-    assert!(queue.routing_decisions.get(&hash).is_none());
     assert!(queue.routing_plans.get(&hash).is_none());
     assert_eq!(
-        routing_ledger::get_plan(&hash),
+        queue.routing_plan_hint(&hash),
         None,
-        "rejected inactive state-free route must not enter the local routing ledger"
+        "rejected inactive state-free route must not enter the queue plan index"
     );
 }
 #[test]
@@ -189,14 +181,14 @@ fn state_backed_queue_rejects_new_ownership_at_committed_drain_close() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = queue_with_state_free_future_created_router(&state, &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let failure = queue
         .push_with_lane_with_state(tx, &state)
         .expect_err("post-close ingress must not acquire ordinary queue ownership");
     assert!(matches!(failure.err, Error::UnresolvedRoute { .. }));
     assert!(!queue.txs.contains_key(&hash));
     assert!(queue.routing_plans.get(&hash).is_none());
-    assert_eq!(routing_ledger::get_plan(&hash), None);
+    assert_eq!(queue.routing_plan_hint(&hash), None);
 }
 #[test]
 fn state_backed_queue_routes_reject_unknown_dataspace_when_nexus_is_disabled() {

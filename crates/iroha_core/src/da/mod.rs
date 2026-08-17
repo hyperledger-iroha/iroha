@@ -707,8 +707,8 @@ fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry
         && lhs.key_prefix == rhs.key_prefix
         && lhs.manifest_policy == rhs.manifest_policy
         && lhs.confidential_compute == rhs.confidential_compute
-        && lhs.confidential_policy == rhs.confidential_policy
-        && lhs.confidential_access == rhs.confidential_access
+        && lhs.scheduler == rhs.scheduler
+        && lhs.settlement_buffer == rhs.settlement_buffer
 }
 /// Return the active DA proof policy for a catalog-backed lane.
 ///
@@ -1866,7 +1866,7 @@ mod tests {
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneCatalogError,
             LaneConfig as ModelLaneConfig, LaneStorageProfile,
         },
         peer::PeerId,
@@ -2685,26 +2685,21 @@ mod tests {
         ));
     }
     #[test]
-    fn validate_commitment_bundle_rejects_confidential_lane_without_policy() {
+    fn validate_commitment_bundle_rejects_retired_confidential_metadata() {
         let mut metadata = BTreeMap::new();
         metadata.insert("confidential_compute".to_string(), "true".to_string());
-        metadata.insert(
-            "confidential_mechanism".to_string(),
-            "encryption".to_string(),
-        );
-        let lane_config = lane_config_with(vec![ModelLaneConfig {
-            storage: LaneStorageProfile::SplitReplica,
-            metadata,
-            ..ModelLaneConfig::default()
-        }]);
-        let bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
-        let err = validate_commitment_bundle(&bundle, &lane_config)
-            .expect_err("confidential lane without key policy must fail");
+        let error = LaneCatalog::new(
+            NonZeroU32::new(1).expect("nonzero lane count"),
+            vec![ModelLaneConfig {
+                storage: LaneStorageProfile::SplitReplica,
+                metadata,
+                ..ModelLaneConfig::default()
+            }],
+        )
+        .expect_err("retired confidential metadata must fail at catalog admission");
         assert!(matches!(
-            err,
-            DaCommitmentValidationError::ConfidentialCompute(
-                ConfidentialComputeError::MissingPolicy
-            )
+            error,
+            LaneCatalogError::RetiredFunctionalMetadata { .. }
         ));
     }
     #[test]

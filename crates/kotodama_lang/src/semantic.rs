@@ -743,6 +743,9 @@ pub struct SemanticError {
     /// Human-readable diagnostic message without an embedded code prefix.
     pub(crate) message: String,
 }
+fn sem_err(code: &'static str, message: String) -> SemanticError {
+    SemanticError { code, message }
+}
 impl SemanticError {
     /// Return the stable machine-readable code.
     pub const fn code(&self) -> &'static str {
@@ -2544,11 +2547,7 @@ pub fn validate_linked_program(
                 .collect(),
         );
         let summary = FunctionSummary {
-            direct_effects: FunctionEffects {
-                host_side_effects: block_contains_host_side_effects(&function.body),
-                emits_instructions: block_contains_instruction_emission(&function.body),
-                mutates_durable_state: block_mutates_durable_state(&context, &function.body),
-            },
+            direct_effects: block_effects(&context, &function.body),
             calls: collect_called_functions(&context, &function.body),
         };
         context
@@ -5547,11 +5546,7 @@ fn analyze_function(
         }
     }
     let summary = FunctionSummary {
-        direct_effects: FunctionEffects {
-            host_side_effects: block_contains_host_side_effects(&body),
-            emits_instructions: block_contains_instruction_emission(&body),
-            mutates_durable_state: block_mutates_durable_state(context, &body),
-        },
+        direct_effects: block_effects(context, &body),
         calls: collect_called_functions(context, &body),
     };
     context
@@ -7162,6 +7157,412 @@ fn coerce_builtin_exact_numeric_literals(
     }
     Ok(())
 }
+fn typed_expr(expr: ExprKind, ty: Type) -> TypedExpr {
+    TypedExpr { expr, ty }
+}
+
+fn typed_call(name: &str, args: Vec<TypedExpr>, ty: Type) -> TypedExpr {
+    typed_expr(
+        ExprKind::Call {
+            name: name.to_owned(),
+            args,
+        },
+        ty,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum FixedBuiltinMessage {
+    Static(&'static str),
+    NameSuffix(&'static str),
+    SourceNameSuffix(&'static str),
+}
+
+impl FixedBuiltinMessage {
+    fn render(self, builtin: Builtin) -> String {
+        match self {
+            Self::Static(message) => message.to_owned(),
+            Self::NameSuffix(suffix) => format!("{}{suffix}", builtin.name()),
+            Self::SourceNameSuffix(suffix) => format!("{}{suffix}", builtin.source_name()),
+        }
+    }
+}
+
+fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
+    use FixedBuiltinMessage as M;
+
+    Some(match builtin {
+        Builtin::StateGet => M::Static("state_get expects (bytes StatePath)"),
+        Builtin::StateSet => M::Static("state_set expects (bytes StatePath, bytes value)"),
+        Builtin::StateDel => M::Static("state_del expects (bytes StatePath)"),
+        Builtin::StateKeys => {
+            M::Static("state_keys expects (bytes StatePath, int offset, int limit)")
+        }
+        Builtin::StateHas => M::Static("state_has expects (bytes StatePath)"),
+        Builtin::StateLen => M::Static("state_len expects (bytes StatePath)"),
+        Builtin::StateCount => M::Static("state_count expects (bytes StatePath)"),
+        Builtin::QueryExecuteNorito => {
+            M::Static("query_execute_norito expects (bytes) pointer to NoritoBytes QueryRequest")
+        }
+        Builtin::QueryGetParameter => M::Static("query_get_parameter expects (Name|bytes)"),
+        Builtin::QueryGetContractManifest => {
+            M::Static("query_get_contract_manifest expects (bytes) Norito Hash")
+        }
+        Builtin::QueryGetContractInstance => {
+            M::Static("query_get_contract_instance expects (Name|bytes)")
+        }
+        Builtin::ZkRootsGet => {
+            M::Static("zk_roots_get expects (bytes) pointer to NoritoBytes RootsGetRequest")
+        }
+        Builtin::ZkVoteGetTally => M::Static(
+            "zk_vote_get_tally expects (bytes) pointer to NoritoBytes VoteGetTallyRequest",
+        ),
+        Builtin::VrfEpochSeed => {
+            M::Static("vrf_epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest")
+        }
+        Builtin::BuildSubmitBallotInline => M::Static(
+            "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
+        ),
+        Builtin::RecordSccpMessage
+        | Builtin::ScExecuteSubmitBallot
+        | Builtin::ZkVerifyBatch
+        | Builtin::ZkVoteVerifyBallot
+        | Builtin::ZkVoteVerifyTally => M::NameSuffix(
+            " expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+        ),
+        Builtin::ExecuteQuery => M::NameSuffix(
+            " expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+        ),
+        Builtin::ResolveAccountAlias => M::Static("resolve_account_alias expects (string|bytes)"),
+        Builtin::SubscriptionBill | Builtin::SubscriptionRecordUsage => {
+            M::NameSuffix(" expects no arguments")
+        }
+        Builtin::VrfVerify => M::Static("vrf_verify expects one bytes-encoded VrfVerifyRequest"),
+        Builtin::VrfVerifyBatch => M::Static("vrf_verify_batch expects (bytes)"),
+        Builtin::Sm3Hash
+        | Builtin::Sha256Hash
+        | Builtin::Sha3Hash
+        | Builtin::Blake2b256Hash
+        | Builtin::Keccak256Hash
+        | Builtin::IrohaHash => M::NameSuffix(" expects (bytes) argument pointing to INPUT TLV"),
+        Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen => {
+            M::NameSuffix(" expects (bytes, bytes, bytes, bytes)")
+        }
+        Builtin::GetAccountBalance => {
+            M::Static("get_account_balance expects (AccountId, AssetDefinitionId)")
+        }
+        Builtin::GetPublicInput => M::Static("get_public_input expects (Name)"),
+        Builtin::DebugPrint => M::Static("debug_print expects (int value)"),
+        Builtin::DebugLog => M::Static("debug_log expects (Json|bytes payload)"),
+        Builtin::Require => M::Static("require expects (bool, ErrorEnum::Variant)"),
+        Builtin::Info => M::Static("info expects (string|int)"),
+        Builtin::AssertEq => M::Static("assert_eq expects two int args"),
+        Builtin::SetAccountDetail => {
+            M::Static("set_account_detail expects (AccountId, Name, Json)")
+        }
+        Builtin::MintAsset | Builtin::BurnAsset => {
+            M::NameSuffix(" expects (AccountId, AssetDefinitionId, quantity)")
+        }
+        Builtin::TransferAsset => M::Static(
+            "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)",
+        ),
+        Builtin::SetAssetTransferAvailability => M::Static(
+            "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)",
+        ),
+        Builtin::SetAssetTransferDailyLimit => M::Static(
+            "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
+        ),
+        Builtin::SetAssetHoldingLimit => M::Static(
+            "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
+        ),
+        Builtin::AccountRecoveryPropose => {
+            M::Static("ledger::account::recovery::propose expects (string, AccountId)")
+        }
+        Builtin::AccountRecoveryApprove
+        | Builtin::AccountRecoveryCancel
+        | Builtin::AccountRecoveryFinalize => M::SourceNameSuffix(" expects (string)"),
+        Builtin::NftMintAsset => M::Static("nft_mint_asset expects (NftId, AccountId)"),
+        Builtin::NftSetMetadata => M::Static("nft_set_metadata expects (NftId, Name, Json)"),
+        Builtin::NftBurnAsset => M::Static("nft_burn_asset expects (NftId)"),
+        Builtin::NftTransferAsset => {
+            M::Static("nft_transfer_asset expects (AccountId, NftId, AccountId)")
+        }
+        Builtin::RegisterDomain | Builtin::UnregisterDomain => M::NameSuffix(" expects (DomainId)"),
+        Builtin::TransferDomain => {
+            M::Static("transfer_domain expects (AccountId, DomainId, AccountId)")
+        }
+        Builtin::RegisterAccount | Builtin::UnregisterAccount => {
+            M::NameSuffix(" expects (AccountId)")
+        }
+        Builtin::RegisterAsset => {
+            M::Static("register_asset expects (AssetDefinitionId, string, int, int)")
+        }
+        Builtin::CreateNewAsset => {
+            M::Static("create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)")
+        }
+        Builtin::UnregisterAsset => M::Static("unregister_asset expects (AssetDefinitionId)"),
+        Builtin::RegisterPeer | Builtin::UnregisterPeer | Builtin::RegisterTrigger => {
+            M::NameSuffix(" expects (Json)")
+        }
+        Builtin::UnregisterTrigger
+        | Builtin::EscrowAccept
+        | Builtin::EscrowMarkPaymentSent
+        | Builtin::EscrowRelease
+        | Builtin::EscrowCancel => M::NameSuffix(" expects (Name)"),
+        Builtin::SetTriggerEnabled => M::Static("set_trigger_enabled expects (Name, int)"),
+        Builtin::CreateRole => M::Static("create_role expects (Name, Json)"),
+        Builtin::DeleteRole => M::Static("delete_role expects (Name)"),
+        Builtin::GrantRole | Builtin::RevokeRole => M::NameSuffix(" expects (AccountId, Name)"),
+        Builtin::GrantPermission | Builtin::RevokePermission => {
+            M::NameSuffix(" expects (AccountId, Name|Json)")
+        }
+        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
+            M::NameSuffix(" expects (AccountId, string)")
+        }
+        Builtin::Alloc => M::Static("alloc expects (int bytes)"),
+        Builtin::ProveExecution => M::Static("prove_execution expects no arguments"),
+        Builtin::GrowHeap => M::Static("grow_heap expects (int bytes)"),
+        Builtin::VerifyProof => {
+            M::Static("verify_proof expects (bytes) pointer to NoritoBytes OpenVerifyEnvelope")
+        }
+        Builtin::CommitOutput => M::Static("commit_output expects no arguments"),
+        Builtin::CreateNftsForAllUsers => {
+            M::Static("create_nfts_for_all_users expects no arguments")
+        }
+        Builtin::SetExecutionDepth => M::Static("set_execution_depth expects one int arg"),
+        Builtin::TransferV1BatchBegin | Builtin::TransferV1BatchEnd => M::NameSuffix(" expects ()"),
+        Builtin::TransferV1BatchApply => {
+            M::Static("transfer_v1_batch_apply expects (bytes) Norito TransferAssetBatch")
+        }
+        Builtin::AxtBegin => M::Static("axt_begin expects (AxtDescriptor)"),
+        Builtin::AxtCommit => M::Static("axt_commit expects no arguments"),
+        Builtin::DeactivateContractInstance
+        | Builtin::RemoveSmartContractBytes
+        | Builtin::RegisterSmartContractCode
+        | Builtin::RegisterSmartContractBytes
+        | Builtin::ActivateContractInstance => {
+            M::NameSuffix(" expects (bytes) pointer to NoritoBytes lifecycle request")
+        }
+        Builtin::SoracloudReadCommittedState
+        | Builtin::SoracloudEmitStateMutation
+        | Builtin::SoracloudEmitMailboxMessage
+        | Builtin::SoracloudAppendJournal
+        | Builtin::SoracloudPublishCheckpoint
+        | Builtin::SoracloudReadSecret
+        | Builtin::SoracloudReadCredential
+        | Builtin::SoracloudEgressFetch
+        | Builtin::SoracloudReadConfig
+        | Builtin::SoracloudReadSecretEnvelope => M::NameSuffix(" expects (SoracloudRequest)"),
+        Builtin::AddSignatory | Builtin::RemoveSignatory => {
+            M::NameSuffix(" expects (AccountId, Json)")
+        }
+        Builtin::Path => M::Static("path expects (Name, int|bytes)"),
+        Builtin::NameDecode => M::Static("name_decode expects (bytes)"),
+        Builtin::TlvEq => M::Static("tlv_eq expects (pointer-ABI, pointer-ABI)"),
+        Builtin::BytesLen => M::Static("bytes::len expects exactly one bytes argument"),
+        Builtin::JsonObject => M::Static("json_object expects no arguments"),
+        Builtin::JsonSetInt => M::Static("json_set_int expects (Json, Name, int)"),
+        Builtin::JsonSetAccountId => {
+            M::Static("json_set_account_id expects (Json, Name, AccountId)")
+        }
+        Builtin::EncodeInt => M::Static("encode_int expects (int)"),
+        Builtin::DecodeInt => M::Static("decode_int expects (bytes)"),
+        Builtin::EncodeJson => M::Static("encode_json expects (Json)"),
+        Builtin::DecodeJson => M::Static("decode_json expects (bytes)"),
+        Builtin::SchemaEncode => M::Static("encode_schema expects (Name, Json)"),
+        Builtin::SchemaDecode => M::Static("decode_schema expects (Name, bytes)"),
+        Builtin::SchemaInfo => M::Static("schema_info expects (Name)"),
+        Builtin::NumericToInt => M::Static("numeric_to_int expects (quantity|int)"),
+        Builtin::NumericToIntDirect => {
+            M::Static("numeric_to_int_direct expects (int); quantity uses its nominal V1 syscall")
+        }
+        Builtin::WrappingNeg => M::Static("wrapping_neg expects (int)"),
+        Builtin::WrappingAdd | Builtin::WrappingSub | Builtin::WrappingMul => {
+            M::NameSuffix(" expects (int, int)")
+        }
+        Builtin::Isqrt | Builtin::Abs => M::NameSuffix(" expects (int)"),
+        Builtin::Min | Builtin::Max | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => {
+            M::NameSuffix(" expects (int, int)")
+        }
+        Builtin::Poseidon2 => M::SourceNameSuffix(" expects two int arguments"),
+        Builtin::Valcom => {
+            M::SourceNameSuffix(" expects two typed Secret<int|decimal|quantity> arguments")
+        }
+        Builtin::Poseidon6 => M::SourceNameSuffix(" expects six int args"),
+        Builtin::Pubkgen => M::SourceNameSuffix(" expects one int arg"),
+        Builtin::SetVl => M::Static("setvl expects one int arg"),
+        Builtin::GetInt => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetDecimal => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetQuantity => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetJson => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetName => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetAccountId => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetAssetDefinitionId => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetNftId => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetBlobHex => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::Authority | Builtin::SysvarAuthority | Builtin::ContractSubject => {
+            M::NameSuffix(" expects no arguments")
+        }
+        Builtin::CurrentTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
+            M::NameSuffix(" expects no arguments")
+        }
+        Builtin::ChainId | Builtin::ContractAddress | Builtin::Entrypoint => {
+            M::NameSuffix(" expects no arguments")
+        }
+        _ => return None,
+    })
+}
+
+fn fixed_builtin_arg_accepts(builtin: Builtin, index: usize, descriptor: &str, ty: &Type) -> bool {
+    match (builtin, index) {
+        (Builtin::DebugLog, 0) => ty == &Type::Json || is_blob_like(ty),
+        (Builtin::SetAssetTransferAvailability, 2) => ty == &Type::Int,
+        (Builtin::NumericToIntDirect, 0) => resolve_struct_type(ty) == Type::Int,
+        (Builtin::TlvEq, _) => {
+            let ty = resolve_struct_type(ty);
+            is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json
+        }
+        _ => match descriptor {
+            "AccountId" => ty == &Type::AccountId,
+            "AssetDefinitionId" => ty == &Type::AssetDefinitionId,
+            "AxtDescriptor" => ty == &Type::AxtDescriptor,
+            "DataSpaceId" => ty == &Type::DataSpaceId,
+            "DomainId" => ty == &Type::DomainId,
+            "DomainId|Name" => matches!(ty, Type::DomainId | Type::Name),
+            "ErrorEnum::Variant" => ty == &Type::Int,
+            "Json" => ty == &Type::Json,
+            "Name" => ty == &Type::Name,
+            "Name|Json" => matches!(ty, Type::Name | Type::Json),
+            "Name|bytes" => ty == &Type::Name || is_blob_like(ty),
+            "NftId" => ty == &Type::NftId,
+            "Option<quantity>" => resolve_struct_type(ty) == Type::Option(Box::new(Type::Quantity)),
+            "Option<string>" => resolve_struct_type(ty) == Type::Option(Box::new(Type::String)),
+            "Secret<int|decimal|quantity>" => crate::secret::is_secret_numeric(ty),
+            "SoracloudRequest" => resolve_struct_type(ty) == Type::SoracloudRequest,
+            "bool" => ty == &Type::Bool,
+            "bytes" => is_blob_like(ty),
+            "int" => is_int_like(ty),
+            "int|bytes" => is_int_like(ty) || is_blob_like(ty),
+            "pointer-ABI" => {
+                let ty = resolve_struct_type(ty);
+                is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json
+            }
+            "quantity" => ty == &Type::Quantity,
+            "string" => ty == &Type::String,
+            "string|bytes" => ty == &Type::String || is_blob_like(ty),
+            "string|int" => ty == &Type::String || is_int_like(ty),
+            "wide-numeric" => is_wide_numeric_type(ty),
+            _ => unreachable!("fixed builtin has unsupported argument descriptor `{descriptor}`"),
+        },
+    }
+}
+
+fn fixed_builtin_result_type(descriptor: &str) -> Type {
+    let option = |payload| Type::Option(Box::new(payload));
+    match descriptor {
+        "()" => Type::Unit,
+        "AccountId" => Type::AccountId,
+        "Json" => Type::Json,
+        "Name" => Type::Name,
+        "Option<AccountId>" => option(Type::AccountId),
+        "Option<AssetDefinitionId>" => option(Type::AssetDefinitionId),
+        "Option<Json>" => option(Type::Json),
+        "Option<Name>" => option(Type::Name),
+        "Option<NftId>" => option(Type::NftId),
+        "Option<bytes>" => option(Type::Bytes),
+        "Option<decimal>" => option(Type::Decimal),
+        "Option<int>" => option(Type::Int),
+        "Option<quantity>" => option(Type::Quantity),
+        "SoracloudResponse" => Type::SoracloudResponse,
+        "bool" => Type::Bool,
+        "bytes" => Type::Bytes,
+        "int" => Type::Int,
+        "quantity" => Type::Quantity,
+        _ => unreachable!("fixed builtin has unsupported result descriptor `{descriptor}`"),
+    }
+}
+
+fn analyze_fixed_builtin_call(
+    builtin: Builtin,
+    args: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    let message = fixed_builtin_message(builtin).expect("remaining builtin has a fixed signature");
+    let signature = builtin.signature();
+    if args.len() != signature.parameters.len()
+        || args
+            .iter()
+            .enumerate()
+            .zip(signature.parameters.iter().copied())
+            .any(|((index, argument), descriptor)| {
+                !fixed_builtin_arg_accepts(builtin, index, descriptor, &argument.ty)
+            })
+    {
+        return Err(sem_err("K2003", message.render(builtin)));
+    }
+    Ok(typed_call(
+        builtin.name(),
+        args,
+        fixed_builtin_result_type(signature.return_type),
+    ))
+}
+
+fn analyze_map_get_or(
+    context: &SemanticContext,
+    builtin: Builtin,
+    mut args: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    let name = builtin.name();
+    let original_len = args.len();
+    if original_len != 2 && original_len != 3 {
+        return Err(sem_err(
+            "K2003",
+            format!("{name} expects (StateMap<K,V>, K[, V])"),
+        ));
+    }
+    let (key, value) = match resolve_struct_type(&args[0].ty) {
+        Type::StateMap(key, value) => (*key, *value),
+        other => {
+            return Err(sem_err(
+                "K2003",
+                format!(
+                    "{name} expects StateMap<K,V> as first arg, got {}",
+                    type_name(&other)
+                ),
+            ));
+        }
+    };
+    let key = resolve_struct_type(&key);
+    let value = resolve_struct_type(&value);
+    ensure_assignable_and_coerce(&key, &mut args[1])?;
+    ensure_in_memory_map_word_types(context, &args[0])?;
+    if original_len == 3 {
+        ensure_assignable_and_coerce(&value, &mut args[2])?;
+    } else {
+        match resolve_struct_type(&value) {
+            Type::Int => args.push(typed_expr(ExprKind::IntLiteral(BigInt::zero()), Type::Int)),
+            other if is_pointer_type(&other) => {
+                return Err(sem_err(
+                    "K2003",
+                    format!(
+                        "{name} requires an explicit default for pointer-valued maps (value type {})",
+                        type_name(&other)
+                    ),
+                ));
+            }
+            other => {
+                return Err(sem_err(
+                    "K2003",
+                    format!(
+                        "{name} auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
+                        type_name(&other)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(typed_call(name, args, value))
+}
+
 fn analyze_surface_builtin_call(
     context: &SemanticContext,
     builtin: Builtin,
@@ -7228,10 +7629,10 @@ fn analyze_surface_builtin_call(
                 });
             }
             let ExprKind::String(entrypoint) = arg_typed[1].kind() else {
-                return Err(SemanticError {
-                    code: "E_CONTRACT_ENTRYPOINT_LITERAL",
-                    message: "contract::invoke requires a literal `entrypoint` selector".into(),
-                });
+                return Err(sem_err(
+                    "E_CONTRACT_ENTRYPOINT_LITERAL",
+                    "contract::invoke requires a literal `entrypoint` selector".into(),
+                ));
             };
             if !ivm_abi::entrypoint::is_canonical_kotodama_identifier(entrypoint) {
                 return Err(SemanticError {
@@ -7248,36 +7649,24 @@ fn analyze_surface_builtin_call(
                             .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_owned(),
-                    args: arg_typed,
-                },
-                ty: Type::Quantity,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Quantity))
         }
         Builtin::PointerConstructor(constructor) => {
             let name = constructor.name();
             if arg_typed.len() != 1 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects one argument"),
-                });
+                return Err(sem_err("K2003", format!("{name} expects one argument")));
             }
             let arg_ty = resolve_struct_type(&arg_typed[0].ty);
             let ty = pointer_constructor_type(constructor);
             if arg_ty != Type::String {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects string"),
-                });
+                return Err(sem_err("K2003", format!("{name} expects string")));
             }
             if constructor == PointerConstructor::Json {
                 let ExprKind::String(raw) = arg_typed[0].kind() else {
-                    return Err(SemanticError {
-                        code: "E_JSON_LITERAL_REQUIRED",
-                        message: JSON_LITERAL_REQUIRED_MESSAGE.into(),
-                    });
+                    return Err(sem_err(
+                        "E_JSON_LITERAL_REQUIRED",
+                        JSON_LITERAL_REQUIRED_MESSAGE.into(),
+                    ));
                 };
                 parse_json_literal(raw)?;
             }
@@ -7291,10 +7680,10 @@ fn analyze_surface_builtin_call(
         }
         Builtin::GetOrDefault => {
             if arg_typed.len() != 3 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "get_or_default expects (StateMap<K,V>, K, V)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "get_or_default expects (StateMap<K,V>, K, V)".into(),
+                ));
             }
             let (key_ty, value_ty) = match &arg_typed[0].ty {
                 Type::StateMap(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
@@ -7315,32 +7704,24 @@ fn analyze_surface_builtin_call(
                 Type::StateMap(_, v) => *v,
                 _ => Type::Int,
             };
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: resolve_struct_type(&value_ty),
-            })
+            Ok(typed_call(
+                builtin.name(),
+                arg_typed,
+                resolve_struct_type(&value_ty),
+            ))
         }
         Builtin::Contains => {
             if arg_typed.len() != 2 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "contains expects (StateMap<K,V>, K)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "contains expects (StateMap<K,V>, K)".into(),
+                ));
             }
             match &arg_typed[0].ty {
                 Type::StateMap(k, _v) => {
                     ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
                     ensure_in_memory_map_word_types(context, &arg_typed[0])?;
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: builtin.name().to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bool,
-                    })
+                    Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
                 }
                 other => Err(SemanticError {
                     code: "K2003",
@@ -7351,70 +7732,7 @@ fn analyze_surface_builtin_call(
                 }),
             }
         }
-        Builtin::GetOr => {
-            let original_len = arg_typed.len();
-            if original_len != 2 && original_len != 3 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "get_or expects (StateMap<K,V>, K[, V])".into(),
-                });
-            }
-            let mut call_args = arg_typed;
-            let map_ty = resolve_struct_type(&call_args[0].ty);
-            let (map_key_ty, map_value_ty) = match map_ty {
-                Type::StateMap(k, v) => (*k, *v),
-                other => {
-                    return Err(SemanticError {
-                        code: "K2003",
-                        message: format!(
-                            "get_or expects StateMap<K,V> as first arg, got {}",
-                            type_name(&other)
-                        ),
-                    });
-                }
-            };
-            let resolved_key_ty = resolve_struct_type(&map_key_ty);
-            let resolved_value_ty = resolve_struct_type(&map_value_ty);
-            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
-            ensure_in_memory_map_word_types(context, &call_args[0])?;
-            if original_len == 2 {
-                match resolve_struct_type(&resolved_value_ty) {
-                    Type::Int => {
-                        call_args.push(TypedExpr {
-                            expr: ExprKind::IntLiteral(BigInt::zero()),
-                            ty: Type::Int,
-                        });
-                    }
-                    other => {
-                        if is_pointer_type(&other) {
-                            return Err(SemanticError {
-                                code: "K2003",
-                                message: format!(
-                                    "get_or requires an explicit default for pointer-valued maps (value type {})",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
-                        return Err(SemanticError {
-                            code: "K2003",
-                            message: format!(
-                                "get_or auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
-                                type_name(&other)
-                            ),
-                        });
-                    }
-                }
-            } else {
-                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: call_args,
-                },
-                ty: resolved_value_ty,
-            })
-        }
+        Builtin::GetOr => analyze_map_get_or(context, builtin, arg_typed),
         Builtin::Ensure => {
             let in_view = context
                 .current_function_modifiers
@@ -7422,80 +7740,16 @@ fn analyze_surface_builtin_call(
                 .as_ref()
                 .is_some_and(|modifiers| modifiers.kind == FunctionKind::View);
             if in_view {
-                return Err(SemanticError {
-                    code: "K2004",
-                    message: "`view fn` functions cannot use mutating map helper `ensure`; use `get_or` instead".into(),
-                });
+                return Err(sem_err("K2004", "`view fn` functions cannot use mutating map helper `ensure`; use `get_or` instead".into()));
             }
-            let original_len = arg_typed.len();
-            if original_len != 2 && original_len != 3 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "ensure expects (StateMap<K,V>, K[, V])".into(),
-                });
-            }
-            let mut call_args = arg_typed;
-            let map_ty = resolve_struct_type(&call_args[0].ty);
-            let (map_key_ty, map_value_ty) = match map_ty {
-                Type::StateMap(k, v) => (*k, *v),
-                other => {
-                    return Err(SemanticError {
-                        code: "K2003",
-                        message: format!(
-                            "ensure expects StateMap<K,V> as first arg, got {}",
-                            type_name(&other)
-                        ),
-                    });
-                }
-            };
-            let resolved_key_ty = resolve_struct_type(&map_key_ty);
-            let resolved_value_ty = resolve_struct_type(&map_value_ty);
-            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
-            ensure_in_memory_map_word_types(context, &call_args[0])?;
-            if original_len == 2 {
-                match resolve_struct_type(&resolved_value_ty) {
-                    Type::Int => {
-                        call_args.push(TypedExpr {
-                            expr: ExprKind::IntLiteral(BigInt::zero()),
-                            ty: Type::Int,
-                        });
-                    }
-                    other => {
-                        if is_pointer_type(&other) {
-                            return Err(SemanticError {
-                                code: "K2003",
-                                message: format!(
-                                    "ensure requires an explicit default for pointer-valued maps (value type {})",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
-                        return Err(SemanticError {
-                            code: "K2003",
-                            message: format!(
-                                "ensure auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
-                                type_name(&other)
-                            ),
-                        });
-                    }
-                }
-            } else {
-                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: call_args,
-                },
-                ty: resolved_value_ty,
-            })
+            analyze_map_get_or(context, builtin, arg_typed)
         }
         Builtin::StateMapRemove => {
             if arg_typed.len() != 2 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "StateMap.remove expects exactly one key argument".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "StateMap.remove expects exactly one key argument".into(),
+                ));
             }
             if !typed_map_expr_is_state(context, &arg_typed[0]) {
                 return Err(SemanticError {
@@ -7505,28 +7759,22 @@ fn analyze_surface_builtin_call(
                 });
             }
             let Type::StateMap(key, value) = resolve_struct_type(&arg_typed[0].ty) else {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "StateMap.remove receiver must be StateMap<K, V>".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "StateMap.remove receiver must be StateMap<K, V>".into(),
+                ));
             };
             debug_assert!(is_supported_durable_value_type(&value));
             ensure_assignable_and_coerce(&key, &mut arg_typed[1])?;
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Option(value),
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Option(value)))
         }
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let name = builtin.name();
             if arg_typed.len() != 3 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (StateMap<int,int>, int start, int which)"),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{name} expects (StateMap<int,int>, int start, int which)"),
+                ));
             }
             match &arg_typed[0].ty {
                 Type::StateMap(k, v)
@@ -7545,25 +7793,19 @@ fn analyze_surface_builtin_call(
             if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
                 || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (StateMap<int,int>, int, int)"),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{name} expects (StateMap<int,int>, int, int)"),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(name, arg_typed, Type::Int))
         }
         Builtin::KeysValuesTake2 => {
             if arg_typed.len() != 3 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
+                ));
             }
             match &arg_typed[0].ty {
                 Type::StateMap(k, v)
@@ -7582,129 +7824,16 @@ fn analyze_surface_builtin_call(
             if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
                 || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Tuple(vec![Type::Int, Type::Int]),
-            })
-        }
-        Builtin::StateGet => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_get expects (bytes StatePath)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::StateSet => {
-            if arg_typed.len() != 2
-                || !(is_blob_like(&arg_typed[0].ty) && is_blob_like(&arg_typed[1].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_set expects (bytes StatePath, bytes value)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::StateDel => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_del expects (bytes StatePath)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::StateKeys => {
-            if arg_typed.len() != 3
-                || !is_blob_like(&arg_typed[0].ty)
-                || !is_int_like(&arg_typed[1].ty)
-                || !is_int_like(&arg_typed[2].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_keys expects (bytes StatePath, int offset, int limit)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::StateHas => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_has expects (bytes StatePath)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
-        }
-        Builtin::StateLen => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_len expects (bytes StatePath)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::StateCount => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "state_count expects (bytes StatePath)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(
+                builtin.name(),
+                arg_typed,
+                Type::Tuple(vec![Type::Int, Type::Int]),
+            ))
         }
         Builtin::QueryGetAccount
         | Builtin::QueryGetAsset
@@ -7792,217 +7921,9 @@ fn analyze_surface_builtin_call(
                 ty: core_query_page_type(builtin),
             })
         }
-        Builtin::QueryExecuteNorito
-        | Builtin::QueryGetParameter
-        | Builtin::QueryGetContractManifest
-        | Builtin::QueryGetContractInstance
-        | Builtin::ZkRootsGet
-        | Builtin::ZkVoteGetTally
-        | Builtin::VrfEpochSeed => {
-            if arg_typed.len() != 1 || !query_helper_accepts_arg(builtin, &arg_typed[0].ty) {
-                let expected = match builtin {
-                    Builtin::QueryExecuteNorito => {
-                        "query_execute_norito expects (bytes) pointer to NoritoBytes QueryRequest"
-                    }
-                    Builtin::QueryGetParameter => "query_get_parameter expects (Name|bytes)",
-                    Builtin::QueryGetContractManifest => {
-                        "query_get_contract_manifest expects (bytes) Norito Hash"
-                    }
-                    Builtin::QueryGetContractInstance => {
-                        "query_get_contract_instance expects (Name|bytes)"
-                    }
-                    Builtin::ZkRootsGet => {
-                        "zk_roots_get expects (bytes) pointer to NoritoBytes RootsGetRequest"
-                    }
-                    Builtin::ZkVoteGetTally => {
-                        "zk_vote_get_tally expects (bytes) pointer to NoritoBytes VoteGetTallyRequest"
-                    }
-                    Builtin::VrfEpochSeed => {
-                        "vrf_epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest"
-                    }
-                    _ => unreachable!(),
-                };
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: expected.into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::BuildSubmitBallotInline => {
-            if arg_typed.len() != 6
-                || !(arg_typed[0].ty == Type::String
-                    && is_blob_like(&arg_typed[1].ty)
-                    && is_blob_like(&arg_typed[2].ty)
-                    && arg_typed[3].ty == Type::String
-                    && is_blob_like(&arg_typed[4].ty)
-                    && is_blob_like(&arg_typed[5].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::RecordSccpMessage | Builtin::ScExecuteSubmitBallot => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::ExecuteQuery => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::ResolveAccountAlias => {
-            if arg_typed.len() != 1
-                || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "resolve_account_alias expects (string|bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::AccountId,
-            })
-        }
-        Builtin::SubscriptionBill | Builtin::SubscriptionRecordUsage => {
-            let name = builtin.name();
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects no arguments"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::ZkVerifyBatch | Builtin::ZkVoteVerifyBallot | Builtin::ZkVoteVerifyTally => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::VrfVerify => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "vrf_verify expects one bytes-encoded VrfVerifyRequest".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::VrfVerifyBatch => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "vrf_verify_batch expects (bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::Sm3Hash
-        | Builtin::Sha256Hash
-        | Builtin::Sha3Hash
-        | Builtin::Blake2b256Hash
-        | Builtin::Keccak256Hash
-        | Builtin::IrohaHash => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{} expects (bytes) argument pointing to INPUT TLV",
-                        builtin.name()
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
         Builtin::Sm2Verify => {
             if arg_typed.len() != 3 && arg_typed.len() != 4 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "sm2_verify expects (bytes, bytes, bytes) or (bytes, bytes, bytes, bytes) where arguments reference INPUT TLVs".into(),
-                });
+                return Err(sem_err("K2003", "sm2_verify expects (bytes, bytes, bytes) or (bytes, bytes, bytes, bytes) where arguments reference INPUT TLVs".into()));
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
                 return Err(SemanticError {
@@ -8013,25 +7934,19 @@ fn analyze_surface_builtin_call(
                 });
             }
             if arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "sm2_verify optional distid must be provided as bytes pointer".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "sm2_verify optional distid must be provided as bytes pointer".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
         }
         Builtin::VerifySignature => {
             if arg_typed.len() != 4 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "verify_signature expects (bytes, bytes, bytes, int) arguments".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "verify_signature expects (bytes, bytes, bytes, int) arguments".into(),
+                ));
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
                 return Err(SemanticError {
@@ -8041,33 +7956,12 @@ fn analyze_surface_builtin_call(
                 });
             }
             if !is_int_like(&arg_typed[3].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "verify_signature expects scheme code as int".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "verify_signature expects scheme code as int".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
-        }
-        Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen => {
-            if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (bytes, bytes, bytes, bytes)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
         }
         Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
             if arg_typed.len() != 4 && arg_typed.len() != 5 {
@@ -8094,83 +7988,12 @@ fn analyze_surface_builtin_call(
                 });
             }
             if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} optional tag length must be int", builtin.name()),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{} optional tag length must be int", builtin.name()),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::GetAccountBalance => {
-            if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AssetDefinitionId)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "get_account_balance expects (AccountId, AssetDefinitionId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Quantity,
-            })
-        }
-        Builtin::GetPublicInput => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "get_public_input expects (Name)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::DebugPrint => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "debug_print expects (int value)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::DebugLog => {
-            if arg_typed.len() != 1
-                || !(arg_typed[0].ty == Type::Json || is_blob_like(&arg_typed[0].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "debug_log expects (Json|bytes payload)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Bytes))
         }
         Builtin::Assert => {
             let ok = match arg_typed.len() {
@@ -8182,564 +8005,12 @@ fn analyze_surface_builtin_call(
                 _ => false,
             };
             if !ok {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "assert expects (bool) or (bool, string|int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "assert expects (bool) or (bool, string|int)".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::Require => {
-            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Bool || arg_typed[1].ty != Type::Int
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "require expects (bool, ErrorEnum::Variant)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::Info => {
-            if arg_typed.len() != 1
-                || !(arg_typed[0].ty == Type::String || is_int_like(&arg_typed[0].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "info expects (string|int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AssertEq => {
-            if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "assert_eq expects two int args".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetAccountDetail => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::Name
-                    && arg_typed[2].ty == Type::Json)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "set_account_detail expects (AccountId, Name, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::MintAsset | Builtin::BurnAsset => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AssetDefinitionId
-                    && arg_typed[2].ty == Type::Quantity)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{} expects (AccountId, AssetDefinitionId, quantity)",
-                        builtin.name()
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::TransferAsset => {
-            if arg_typed.len() != 5
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AccountId
-                    && arg_typed[2].ty == Type::AssetDefinitionId
-                    && arg_typed[3].ty == Type::Quantity
-                    && arg_typed[4].ty == Type::DataSpaceId)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetAssetTransferAvailability => {
-            if arg_typed.len() != 6
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AssetDefinitionId
-                    && arg_typed[2].ty == Type::Int
-                    && arg_typed[3].ty == Type::Bool
-                    && arg_typed[4].ty == Type::Bool
-                    && resolve_struct_type(&arg_typed[5].ty)
-                        == Type::Option(Box::new(Type::String)))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetAssetTransferDailyLimit => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AssetDefinitionId
-                    && resolve_struct_type(&arg_typed[2].ty)
-                        == Type::Option(Box::new(Type::Quantity)))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetAssetHoldingLimit => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::AssetDefinitionId
-                    && resolve_struct_type(&arg_typed[2].ty)
-                        == Type::Option(Box::new(Type::Quantity)))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AccountRecoveryPropose => {
-            if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::String && arg_typed[1].ty == Type::AccountId)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "ledger::account::recovery::propose expects (string, AccountId)"
-                        .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AccountRecoveryApprove
-        | Builtin::AccountRecoveryCancel
-        | Builtin::AccountRecoveryFinalize => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (string)", builtin.source_name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::NftMintAsset => {
-            if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "nft_mint_asset expects (NftId, AccountId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::NftSetMetadata => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::NftId
-                    && arg_typed[1].ty == Type::Name
-                    && arg_typed[2].ty == Type::Json)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "nft_set_metadata expects (NftId, Name, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::NftBurnAsset => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::NftId {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "nft_burn_asset expects (NftId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::NftTransferAsset => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::AccountId
-                    && arg_typed[1].ty == Type::NftId
-                    && arg_typed[2].ty == Type::AccountId)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "nft_transfer_asset expects (AccountId, NftId, AccountId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::RegisterDomain | Builtin::UnregisterDomain => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::DomainId {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (DomainId)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::TransferDomain => {
-            if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::AccountId
-                || !matches!(arg_typed[1].ty, Type::DomainId | Type::Name)
-                || arg_typed[2].ty != Type::AccountId
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "transfer_domain expects (AccountId, DomainId, AccountId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::RegisterAccount | Builtin::UnregisterAccount => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AccountId {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (AccountId)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::RegisterAsset => {
-            if arg_typed.len() != 4
-                || arg_typed[0].ty != Type::AssetDefinitionId
-                || arg_typed[1].ty != Type::String
-                || !is_int_like(&arg_typed[2].ty)
-                || !is_int_like(&arg_typed[3].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "register_asset expects (AssetDefinitionId, string, int, int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::CreateNewAsset => {
-            if arg_typed.len() != 5
-                || arg_typed[0].ty != Type::AssetDefinitionId
-                || arg_typed[1].ty != Type::String
-                || !is_int_like(&arg_typed[2].ty)
-                || arg_typed[3].ty != Type::AccountId
-                || !is_int_like(&arg_typed[4].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::UnregisterAsset => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AssetDefinitionId {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "unregister_asset expects (AssetDefinitionId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::RegisterPeer | Builtin::UnregisterPeer => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Json)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::RegisterTrigger => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Json)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::UnregisterTrigger => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Name)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetTriggerEnabled => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || !is_int_like(&arg_typed[1].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "set_trigger_enabled expects (Name, int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::CreateRole => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || arg_typed[1].ty != Type::Json
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "create_role expects (Name, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::DeleteRole => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "delete_role expects (Name)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::GrantRole | Builtin::RevokeRole => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::AccountId
-                || arg_typed[1].ty != Type::Name
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (AccountId, Name)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::GrantPermission | Builtin::RevokePermission => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::AccountId
-                || !(arg_typed[1].ty == Type::Name || arg_typed[1].ty == Type::Json)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (AccountId, Name|Json)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::AccountId
-                || arg_typed[1].ty != Type::String
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (AccountId, string)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::EscrowOpenOffer => {
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
@@ -8755,50 +8026,19 @@ fn analyze_surface_builtin_call(
                             .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::EscrowAccept
-        | Builtin::EscrowMarkPaymentSent
-        | Builtin::EscrowRelease
-        | Builtin::EscrowCancel => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Name)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::EscrowOpenDispute => {
             if !(arg_typed.len() == 1 || arg_typed.len() == 2)
                 || arg_typed[0].ty != Type::Name
                 || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "escrow_open_dispute expects (Name[, bytes evidence_hashes])".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "escrow_open_dispute expects (Name[, bytes evidence_hashes])".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::EscrowResolveDispute => {
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
@@ -8813,75 +8053,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::Alloc => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "alloc expects (int bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::ProveExecution => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "prove_execution expects no arguments".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::GrowHeap => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "grow_heap expects (int bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::VerifyProof => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "verify_proof expects (bytes) pointer to NoritoBytes OpenVerifyEnvelope"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::GetMerklePath => {
             let valid_arity = (2..=3).contains(&arg_typed.len());
@@ -8893,13 +8065,7 @@ fn analyze_surface_builtin_call(
                             .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
         }
         Builtin::GetMerkleCompact | Builtin::GetRegisterMerkleCompact => {
             let valid_arity = (2..=4).contains(&arg_typed.len());
@@ -8912,20 +8078,14 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
         }
         Builtin::GetPrivateInput => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (int index)", builtin.source_name()),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{} expects (int index)", builtin.source_name()),
+                ));
             }
             if !context.zk_enabled {
                 return Err(SemanticError {
@@ -8963,114 +8123,15 @@ fn analyze_surface_builtin_call(
                     });
                 }
             };
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Secret(Box::new(payload)),
-            })
-        }
-        Builtin::CommitOutput => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "commit_output expects no arguments".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::CreateNftsForAllUsers => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "create_nfts_for_all_users expects no arguments".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SetExecutionDepth => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "set_execution_depth expects one int arg".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::TransferV1BatchBegin | Builtin::TransferV1BatchEnd => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects ()", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::TransferV1BatchApply => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "transfer_v1_batch_apply expects (bytes) Norito TransferAssetBatch"
-                        .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(
+                builtin.name(),
+                arg_typed,
+                Type::Secret(Box::new(payload)),
+            ))
         }
         Builtin::TransferBatch => {
             ensure_transfer_batch_args(&mut arg_typed)?;
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AxtBegin => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AxtDescriptor {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "axt_begin expects (AxtDescriptor)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::AxtTouch => {
             if arg_typed.is_empty()
@@ -9078,18 +8139,12 @@ fn analyze_surface_builtin_call(
                 || arg_typed[0].ty != Type::DataSpaceId
                 || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "axt_touch expects (DataSpaceId[, bytes manifest])".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "axt_touch expects (DataSpaceId[, bytes manifest])".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::VerifyDsProof => {
             if arg_typed.is_empty()
@@ -9097,18 +8152,12 @@ fn analyze_surface_builtin_call(
                 || arg_typed[0].ty != Type::DataSpaceId
                 || (arg_typed.len() == 2 && arg_typed[1].ty != Type::ProofBlob)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::UseAssetHandle => {
             if arg_typed.len() != 2 && arg_typed.len() != 3 {
@@ -9132,224 +8181,48 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AxtCommit => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "axt_commit expects no arguments".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::DeactivateContractInstance
-        | Builtin::RemoveSmartContractBytes
-        | Builtin::RegisterSmartContractCode
-        | Builtin::RegisterSmartContractBytes
-        | Builtin::ActivateContractInstance => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{} expects (bytes) pointer to NoritoBytes lifecycle request",
-                        builtin.name()
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::SoracloudReadCommittedState
-        | Builtin::SoracloudEmitStateMutation
-        | Builtin::SoracloudEmitMailboxMessage
-        | Builtin::SoracloudAppendJournal
-        | Builtin::SoracloudPublishCheckpoint
-        | Builtin::SoracloudReadSecret
-        | Builtin::SoracloudReadCredential
-        | Builtin::SoracloudEgressFetch
-        | Builtin::SoracloudReadConfig
-        | Builtin::SoracloudReadSecretEnvelope => {
-            if arg_typed.len() != 1
-                || resolve_struct_type(&arg_typed[0].ty) != Type::SoracloudRequest
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (SoracloudRequest)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::SoracloudResponse,
-            })
-        }
-        Builtin::AddSignatory | Builtin::RemoveSignatory => {
-            if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Json)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (AccountId, Json)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::SetAccountQuorum => {
             if arg_typed.len() != 2
                 || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Int)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "set_account_quorum expects (AccountId, int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "set_account_quorum expects (AccountId, int)".into(),
+                ));
             }
             if literal_int(&arg_typed[1]).is_some_and(|quorum| {
                 quorum
                     .try_to_u64()
                     .is_none_or(|quorum| !(1..=u64::from(u16::MAX)).contains(&quorum))
             }) {
-                return Err(SemanticError {
-                    code: "E_QUORUM_RANGE",
-                    message: "account quorum must be in the protocol range 1..=65535".into(),
-                });
+                return Err(sem_err(
+                    "E_QUORUM_RANGE",
+                    "account quorum must be in the protocol range 1..=65535".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::Path => {
-            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "path expects (Name, int|bytes)".into(),
-                });
-            }
-            if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "path expects (Name, int|bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::NameDecode => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "name_decode expects (bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Name,
-            })
-        }
-        Builtin::TlvEq => {
-            if arg_typed.len() != 2 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
-                });
-            }
-            for arg in &arg_typed {
-                let ty = resolve_struct_type(&arg.ty);
-                if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
-                    return Err(SemanticError {
-                        code: "K2003",
-                        message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
-                    });
-                }
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::TlvLen => {
             if arg_typed.len() != 1 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "tlv_len expects one argument".into(),
-                });
+                return Err(sem_err("K2003", "tlv_len expects one argument".into()));
             }
             let ty = resolve_struct_type(&arg_typed[0].ty);
             if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "tlv_len expects a pointer-ABI type, Json, or bytes argument".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "tlv_len expects a pointer-ABI type, Json, or bytes argument".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::BytesLen => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "bytes::len expects exactly one bytes argument".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
         }
         Builtin::PointerToNorito => {
             if arg_typed.len() != 1 {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "pointer_to_norito expects one argument".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "pointer_to_norito expects one argument".into(),
+                ));
             }
             let ty = resolve_struct_type(&arg_typed[0].ty);
             if !(is_pointer_type(&ty) || is_blob_like(&ty)) {
@@ -9359,233 +8232,31 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::JsonObject => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "json_object expects no arguments".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::JsonSetInt => {
-            if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-                || !is_int_like(&arg_typed[2].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "json_set_int expects (Json, Name, int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::JsonSetAccountId => {
-            if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-                || arg_typed[2].ty != Type::AccountId
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "json_set_account_id expects (Json, Name, AccountId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::EncodeInt => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "encode_int expects (int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::DecodeInt => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "decode_int expects (bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::EncodeJson => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "encode_json expects (Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::DecodeJson => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "decode_json expects (bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::SchemaEncode => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || arg_typed[1].ty != Type::Json
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "encode_schema expects (Name, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::SchemaDecode => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || !is_blob_like(&arg_typed[1].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "decode_schema expects (Name, bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::SchemaInfo => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "schema_info expects (Name)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::NumericToInt => {
-            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "numeric_to_int expects (quantity|int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Bytes))
         }
         Builtin::NumericNeg => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "numeric_neg expects (quantity|int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "numeric_neg expects (quantity|int)".into(),
+                ));
             }
-            Err(SemanticError {
-                code: "E_QUANTITY_NEGATION",
-                message: "numeric::neg is not defined for int or quantity values".into(),
-            })
-        }
-        Builtin::NumericToIntDirect => {
-            if arg_typed.len() != 1 || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "numeric_to_int_direct expects (int); quantity uses its nominal V1 syscall"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
+            Err(sem_err(
+                "E_QUANTITY_NEGATION",
+                "numeric::neg is not defined for int or quantity values".into(),
+            ))
         }
         Builtin::NumericNegDirect => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "numeric_neg_direct expects (quantity|int)".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "numeric_neg_direct expects (quantity|int)".into(),
+                ));
             }
-            Err(SemanticError {
-                code: "E_QUANTITY_NEGATION",
-                message: "numeric negation is not defined for int or quantity values".into(),
-            })
+            Err(sem_err(
+                "E_QUANTITY_NEGATION",
+                "numeric negation is not defined for int or quantity values".into(),
+            ))
         }
         Builtin::NumericAdd
         | Builtin::NumericSub
@@ -9601,10 +8272,10 @@ fn analyze_surface_builtin_call(
                 || !is_wide_numeric_type(&arg_typed[0].ty)
                 || !is_wide_numeric_type(&arg_typed[1].ty)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (quantity|int, quantity|int)", builtin.name()),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{} expects (quantity|int, quantity|int)", builtin.name()),
+                ));
             }
             let Some(result_ty) = numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty) else {
                 return Err(SemanticError {
@@ -9616,10 +8287,10 @@ fn analyze_surface_builtin_call(
                 });
             };
             if !is_wide_numeric_type(&result_ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects wide numeric operands", builtin.name()),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    format!("{} expects wide numeric operands", builtin.name()),
+                ));
             }
             if matches!(resolve_struct_type(&result_ty), Type::Quantity)
                 && matches!(builtin, Builtin::NumericRem | Builtin::NumericRemDirect)
@@ -9646,13 +8317,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: result_ty,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, result_ty))
         }
         Builtin::NumericEq
         | Builtin::NumericNe
@@ -9696,264 +8361,17 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bool,
-            })
-        }
-        Builtin::WrappingNeg => {
-            if arg_typed.len() != 1 || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "wrapping_neg expects (int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::WrappingAdd | Builtin::WrappingSub | Builtin::WrappingMul => {
-            if arg_typed.len() != 2
-                || arg_typed
-                    .iter()
-                    .any(|argument| !matches!(resolve_struct_type(&argument.ty), Type::Int))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (int, int)", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Isqrt | Builtin::Abs => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (int)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Min | Builtin::Max | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => {
-            let name = builtin.name();
-            if arg_typed.len() != 2
-                || !is_int_like(&arg_typed[0].ty)
-                || !is_int_like(&arg_typed[1].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (int, int)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Poseidon2 => {
-            if arg_typed.len() != 2 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects two int arguments", builtin.source_name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Valcom => {
-            if arg_typed.len() != 2
-                || !arg_typed
-                    .iter()
-                    .all(|arg| crate::secret::is_secret_numeric(&arg.ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!(
-                        "{} expects two typed Secret<int|decimal|quantity> arguments",
-                        builtin.source_name()
-                    ),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Poseidon6 => {
-            if arg_typed.len() != 6 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects six int args", builtin.source_name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::Pubkgen => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects one int arg", builtin.source_name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::SetVl => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "setvl expects one int arg".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::GetInt
-        | Builtin::GetDecimal
-        | Builtin::GetQuantity
-        | Builtin::GetJson
-        | Builtin::GetName
-        | Builtin::GetAccountId
-        | Builtin::GetAssetDefinitionId
-        | Builtin::GetNftId
-        | Builtin::GetBlobHex => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (Json, Name)", builtin.name()),
-                });
-            }
-            let payload = match builtin {
-                Builtin::GetInt => Type::Int,
-                Builtin::GetDecimal => Type::Decimal,
-                Builtin::GetQuantity => Type::Quantity,
-                Builtin::GetJson => Type::Json,
-                Builtin::GetName => Type::Name,
-                Builtin::GetAccountId => Type::AccountId,
-                Builtin::GetAssetDefinitionId => Type::AssetDefinitionId,
-                Builtin::GetNftId => Type::NftId,
-                Builtin::GetBlobHex => Type::Bytes,
-                _ => unreachable!(),
-            };
-            let ty = Type::Option(Box::new(payload));
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
         }
         Builtin::TriggerEvent => {
             reject_public_trigger_event(context, builtin.name())?;
             if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "trigger_event expects no arguments".into(),
-                });
+                return Err(sem_err(
+                    "K2003",
+                    "trigger_event expects no arguments".into(),
+                ));
             }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::Authority | Builtin::SysvarAuthority | Builtin::ContractSubject => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects no arguments", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::AccountId,
-            })
-        }
-        Builtin::CurrentTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects no arguments", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Int,
-            })
-        }
-        Builtin::ChainId | Builtin::ContractAddress | Builtin::Entrypoint => {
-            if !arg_typed.is_empty() {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects no arguments", builtin.name()),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
+            Ok(typed_call(builtin.name(), arg_typed, Type::Json))
         }
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
@@ -9963,8 +8381,10 @@ fn analyze_surface_builtin_call(
         | Builtin::TestActorSign => {
             unreachable!("test helpers are validated before generic builtin analysis")
         }
+        _ => analyze_fixed_builtin_call(builtin, arg_typed),
     }
 }
+
 fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {
     context
         .current_function_name
@@ -13564,36 +11984,208 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
             .as_ref()
             .is_some_and(|tail| expr_mutates_map(tail, map_name))
 }
-fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
-    block
-        .statements
-        .iter()
-        .any(statement_contains_host_side_effects)
-        || block
-            .tail
-            .as_ref()
-            .is_some_and(|tail| expr_contains_host_side_effects(tail))
+fn block_effects(context: &SemanticContext, block: &TypedBlock) -> FunctionEffects {
+    let mut effects = FunctionEffects::default();
+    for statement in &block.statements {
+        effects.merge_from(statement_effects(context, statement));
+    }
+    if let Some(tail) = &block.tail {
+        effects.merge_from(expr_effects(context, tail));
+    }
+    effects
 }
-fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
-    block
-        .statements
-        .iter()
-        .any(statement_contains_instruction_emission)
-        || block
-            .tail
-            .as_ref()
-            .is_some_and(|tail| expr_contains_instruction_emission(tail))
+
+fn statement_effects(context: &SemanticContext, statement: &TypedStatement) -> FunctionEffects {
+    match statement.kind() {
+        TypedStatement::Let { name, value } => {
+            let mut effects = expr_effects(context, value);
+            effects.mutates_durable_state |= is_state_binding(context, name);
+            effects
+        }
+        TypedStatement::Expr(expr) | TypedStatement::Return(Some(expr)) => {
+            expr_effects(context, expr)
+        }
+        TypedStatement::MapSet { map, key, value } => {
+            let mut effects = expr_effects(context, map);
+            effects.merge_from(expr_effects(context, key));
+            effects.merge_from(expr_effects(context, value));
+            effects.mutates_durable_state |= typed_map_expr_is_state(context, map);
+            effects
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            let mut effects = expr_effects(context, cond);
+            effects.merge_from(block_effects(context, then_branch));
+            if let Some(branch) = else_branch {
+                effects.merge_from(block_effects(context, branch));
+            }
+            effects
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let mut effects = expr_effects(context, value);
+            effects.merge_from(block_effects(context, then_branch));
+            if let Some(branch) = else_branch {
+                effects.merge_from(block_effects(context, branch));
+            }
+            effects
+        }
+        TypedStatement::While { cond, body } => {
+            let mut effects = expr_effects(context, cond);
+            effects.merge_from(block_effects(context, body));
+            effects
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            let mut effects = FunctionEffects::default();
+            if let Some(init) = init.as_deref() {
+                effects.merge_from(statement_effects(context, init));
+            }
+            if let Some(cond) = cond {
+                effects.merge_from(expr_effects(context, cond));
+            }
+            if let Some(step) = step.as_deref() {
+                effects.merge_from(statement_effects(context, step));
+            }
+            effects.merge_from(block_effects(context, body));
+            effects
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            let mut effects = expr_effects(context, map);
+            effects.merge_from(block_effects(context, body));
+            effects
+        }
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => {
+            FunctionEffects::default()
+        }
+    }
 }
-fn block_mutates_durable_state(context: &SemanticContext, block: &TypedBlock) -> bool {
-    block
-        .statements
-        .iter()
-        .any(|statement| statement_mutates_durable_state(context, statement))
-        || block
-            .tail
-            .as_ref()
-            .is_some_and(|tail| expr_mutates_durable_state(context, tail))
+
+fn expr_effects(context: &SemanticContext, expression: &TypedExpr) -> FunctionEffects {
+    match expression.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
+            let mut effects = FunctionEffects::default();
+            if let Some(builtin) = Builtin::from_name(name) {
+                let builtin_effects = builtin.spec().effects;
+                effects.host_side_effects = builtin_effects.host_side_effects;
+                effects.emits_instructions = builtin_effects.emits_instructions;
+                effects.mutates_durable_state = builtin_effects.mutates_durable_state;
+                if builtin == Builtin::Ensure {
+                    effects.mutates_durable_state |= args
+                        .first()
+                        .is_some_and(|arg| typed_map_expr_is_state(context, arg));
+                }
+            }
+            for argument in evaluated_call_args(name, args) {
+                effects.merge_from(expr_effects(context, argument));
+            }
+            effects
+        }
+        ExprKind::Binary { left, right, .. } => {
+            let mut effects = expr_effects(context, left);
+            effects.merge_from(expr_effects(context, right));
+            effects
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr }
+        | ExprKind::Member { object: expr, .. } => expr_effects(context, expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let mut effects = expr_effects(context, cond);
+            effects.merge_from(expr_effects(context, then_expr));
+            effects.merge_from(expr_effects(context, else_expr));
+            effects
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let mut effects = expr_effects(context, condition);
+            effects.merge_from(block_effects(context, then_branch));
+            effects.merge_from(block_effects(context, else_branch));
+            effects
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let mut effects = expr_effects(context, value);
+            effects.merge_from(block_effects(context, then_branch));
+            effects.merge_from(block_effects(context, else_branch));
+            effects
+        }
+        ExprKind::Match { value, arms } => {
+            let mut effects = expr_effects(context, value);
+            for arm in arms {
+                effects.merge_from(block_effects(context, &arm.body));
+            }
+            effects
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::JsonArray(items) => {
+            let mut effects = FunctionEffects::default();
+            for item in items {
+                effects.merge_from(expr_effects(context, item));
+            }
+            effects
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            let mut effects = expr_effects(context, source);
+            effects.merge_from(expr_effects(context, expression));
+            if let Some(condition) = condition {
+                effects.merge_from(expr_effects(context, condition));
+            }
+            effects
+        }
+        ExprKind::StructLiteral { fields, .. } | ExprKind::JsonObject(fields) => {
+            let mut effects = FunctionEffects::default();
+            for (_, value) in fields {
+                effects.merge_from(expr_effects(context, value));
+            }
+            effects
+        }
+        ExprKind::Index { target, index } => {
+            let mut effects = expr_effects(context, target);
+            effects.merge_from(expr_effects(context, index));
+            effects
+        }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
+        | ExprKind::OptionNone
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => FunctionEffects::default(),
+    }
 }
+
 fn is_state_identifier(context: &SemanticContext, name: &str) -> bool {
     context.states.borrow().contains_key(name)
 }
@@ -14731,465 +13323,7 @@ fn enforce_permission_requirements(
     }
     Ok(())
 }
-fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
-    match stmt.kind() {
-        TypedStatement::Expr(expr)
-        | TypedStatement::Return(Some(expr))
-        | TypedStatement::Let { value: expr, .. } => expr_contains_host_side_effects(expr),
-        TypedStatement::MapSet { map, key, value } => {
-            expr_contains_host_side_effects(map)
-                || expr_contains_host_side_effects(key)
-                || expr_contains_host_side_effects(value)
-        }
-        TypedStatement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            expr_contains_host_side_effects(cond)
-                || block_contains_host_side_effects(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(block_contains_host_side_effects)
-                    .unwrap_or(false)
-        }
-        TypedStatement::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_contains_host_side_effects(value)
-                || block_contains_host_side_effects(then_branch)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(block_contains_host_side_effects)
-        }
-        TypedStatement::While { cond, body } => {
-            expr_contains_host_side_effects(cond) || block_contains_host_side_effects(body)
-        }
-        TypedStatement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            init.as_deref()
-                .map(statement_contains_host_side_effects)
-                .unwrap_or(false)
-                || cond
-                    .as_ref()
-                    .map(expr_contains_host_side_effects)
-                    .unwrap_or(false)
-                || step
-                    .as_deref()
-                    .map(statement_contains_host_side_effects)
-                    .unwrap_or(false)
-                || block_contains_host_side_effects(body)
-        }
-        TypedStatement::ForEachMap { map, body, .. } => {
-            expr_contains_host_side_effects(map) || block_contains_host_side_effects(body)
-        }
-        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
-    }
-}
-fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
-    match stmt.kind() {
-        TypedStatement::Expr(expr)
-        | TypedStatement::Return(Some(expr))
-        | TypedStatement::Let { value: expr, .. } => expr_contains_instruction_emission(expr),
-        TypedStatement::MapSet { map, key, value } => {
-            expr_contains_instruction_emission(map)
-                || expr_contains_instruction_emission(key)
-                || expr_contains_instruction_emission(value)
-        }
-        TypedStatement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            expr_contains_instruction_emission(cond)
-                || block_contains_instruction_emission(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(block_contains_instruction_emission)
-                    .unwrap_or(false)
-        }
-        TypedStatement::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_contains_instruction_emission(value)
-                || block_contains_instruction_emission(then_branch)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(block_contains_instruction_emission)
-        }
-        TypedStatement::While { cond, body } => {
-            expr_contains_instruction_emission(cond) || block_contains_instruction_emission(body)
-        }
-        TypedStatement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            init.as_deref()
-                .map(statement_contains_instruction_emission)
-                .unwrap_or(false)
-                || cond
-                    .as_ref()
-                    .map(expr_contains_instruction_emission)
-                    .unwrap_or(false)
-                || step
-                    .as_deref()
-                    .map(statement_contains_instruction_emission)
-                    .unwrap_or(false)
-                || block_contains_instruction_emission(body)
-        }
-        TypedStatement::ForEachMap { map, body, .. } => {
-            expr_contains_instruction_emission(map) || block_contains_instruction_emission(body)
-        }
-        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
-    }
-}
-fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatement) -> bool {
-    match stmt.kind() {
-        TypedStatement::Let { name, value } => {
-            is_state_binding(context, name) || expr_mutates_durable_state(context, value)
-        }
-        TypedStatement::Expr(expr) | TypedStatement::Return(Some(expr)) => {
-            expr_mutates_durable_state(context, expr)
-        }
-        TypedStatement::MapSet { map, key, value } => {
-            typed_map_expr_is_state(context, map)
-                || expr_mutates_durable_state(context, map)
-                || expr_mutates_durable_state(context, key)
-                || expr_mutates_durable_state(context, value)
-        }
-        TypedStatement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            expr_mutates_durable_state(context, cond)
-                || block_mutates_durable_state(context, then_branch)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| block_mutates_durable_state(context, branch))
-        }
-        TypedStatement::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_mutates_durable_state(context, value)
-                || block_mutates_durable_state(context, then_branch)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| block_mutates_durable_state(context, branch))
-        }
-        TypedStatement::While { cond, body } => {
-            expr_mutates_durable_state(context, cond) || block_mutates_durable_state(context, body)
-        }
-        TypedStatement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            init.as_deref()
-                .is_some_and(|statement| statement_mutates_durable_state(context, statement))
-                || cond
-                    .as_ref()
-                    .is_some_and(|expr| expr_mutates_durable_state(context, expr))
-                || step
-                    .as_deref()
-                    .is_some_and(|statement| statement_mutates_durable_state(context, statement))
-                || block_mutates_durable_state(context, body)
-        }
-        TypedStatement::ForEachMap { map, body, .. } => {
-            expr_mutates_durable_state(context, map) || block_mutates_durable_state(context, body)
-        }
-        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
-    }
-}
-fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
-    match expr.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            Builtin::from_name(name).is_some_and(|builtin| builtin.spec().effects.host_side_effects)
-                || evaluated_call_args(name, args)
-                    .iter()
-                    .any(expr_contains_host_side_effects)
-        }
-        ExprKind::Binary { left, right, .. } => {
-            expr_contains_host_side_effects(left) || expr_contains_host_side_effects(right)
-        }
-        ExprKind::Unary { expr, .. }
-        | ExprKind::NumericCast { expr }
-        | ExprKind::NumericTryCast { expr }
-        | ExprKind::OptionSome { value: expr }
-        | ExprKind::ResultOk { value: expr }
-        | ExprKind::ResultErr { error: expr }
-        | ExprKind::Propagate { value: expr } => expr_contains_host_side_effects(expr),
-        ExprKind::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_host_side_effects(cond)
-                || expr_contains_host_side_effects(then_expr)
-                || expr_contains_host_side_effects(else_expr)
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_contains_host_side_effects(condition)
-                || block_contains_host_side_effects(then_branch)
-                || block_contains_host_side_effects(else_branch)
-        }
-        ExprKind::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_contains_host_side_effects(value)
-                || block_contains_host_side_effects(then_branch)
-                || block_contains_host_side_effects(else_branch)
-        }
-        ExprKind::Match { value, arms } => {
-            expr_contains_host_side_effects(value)
-                || arms
-                    .iter()
-                    .any(|arm| block_contains_host_side_effects(&arm.body))
-        }
-        ExprKind::Tuple(items) | ExprKind::List(items) => {
-            items.iter().any(expr_contains_host_side_effects)
-        }
-        ExprKind::ListComprehension {
-            expression,
-            source,
-            condition,
-            ..
-        } => {
-            expr_contains_host_side_effects(source)
-                || expr_contains_host_side_effects(expression)
-                || condition
-                    .as_deref()
-                    .is_some_and(expr_contains_host_side_effects)
-        }
-        ExprKind::StructLiteral { fields, .. } => fields
-            .iter()
-            .any(|(_, value)| expr_contains_host_side_effects(value)),
-        ExprKind::JsonObject(entries) => entries
-            .iter()
-            .any(|(_, value)| expr_contains_host_side_effects(value)),
-        ExprKind::JsonArray(items) => items.iter().any(expr_contains_host_side_effects),
-        ExprKind::Member { object, .. } => expr_contains_host_side_effects(object),
-        ExprKind::Index { target, index } => {
-            expr_contains_host_side_effects(target) || expr_contains_host_side_effects(index)
-        }
-        ExprKind::IntLiteral(_)
-        | ExprKind::DecimalLiteral { .. }
-        | ExprKind::OptionNone
-        | ExprKind::Bool(_)
-        | ExprKind::String(_)
-        | ExprKind::Bytes(_)
-        | ExprKind::Ident(_) => false,
-    }
-}
-fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
-    match expr.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            Builtin::from_name(name)
-                .is_some_and(|builtin| builtin.spec().effects.emits_instructions)
-                || evaluated_call_args(name, args)
-                    .iter()
-                    .any(expr_contains_instruction_emission)
-        }
-        ExprKind::Binary { left, right, .. } => {
-            expr_contains_instruction_emission(left) || expr_contains_instruction_emission(right)
-        }
-        ExprKind::Unary { expr, .. }
-        | ExprKind::NumericCast { expr }
-        | ExprKind::NumericTryCast { expr }
-        | ExprKind::OptionSome { value: expr }
-        | ExprKind::ResultOk { value: expr }
-        | ExprKind::ResultErr { error: expr }
-        | ExprKind::Propagate { value: expr } => expr_contains_instruction_emission(expr),
-        ExprKind::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_instruction_emission(cond)
-                || expr_contains_instruction_emission(then_expr)
-                || expr_contains_instruction_emission(else_expr)
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_contains_instruction_emission(condition)
-                || block_contains_instruction_emission(then_branch)
-                || block_contains_instruction_emission(else_branch)
-        }
-        ExprKind::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_contains_instruction_emission(value)
-                || block_contains_instruction_emission(then_branch)
-                || block_contains_instruction_emission(else_branch)
-        }
-        ExprKind::Match { value, arms } => {
-            expr_contains_instruction_emission(value)
-                || arms
-                    .iter()
-                    .any(|arm| block_contains_instruction_emission(&arm.body))
-        }
-        ExprKind::Tuple(items) | ExprKind::List(items) => {
-            items.iter().any(expr_contains_instruction_emission)
-        }
-        ExprKind::ListComprehension {
-            expression,
-            source,
-            condition,
-            ..
-        } => {
-            expr_contains_instruction_emission(source)
-                || expr_contains_instruction_emission(expression)
-                || condition
-                    .as_deref()
-                    .is_some_and(expr_contains_instruction_emission)
-        }
-        ExprKind::StructLiteral { fields, .. } => fields
-            .iter()
-            .any(|(_, value)| expr_contains_instruction_emission(value)),
-        ExprKind::JsonObject(entries) => entries
-            .iter()
-            .any(|(_, value)| expr_contains_instruction_emission(value)),
-        ExprKind::JsonArray(items) => items.iter().any(expr_contains_instruction_emission),
-        ExprKind::Member { object, .. } => expr_contains_instruction_emission(object),
-        ExprKind::Index { target, index } => {
-            expr_contains_instruction_emission(target) || expr_contains_instruction_emission(index)
-        }
-        ExprKind::IntLiteral(_)
-        | ExprKind::DecimalLiteral { .. }
-        | ExprKind::OptionNone
-        | ExprKind::Bool(_)
-        | ExprKind::String(_)
-        | ExprKind::Bytes(_)
-        | ExprKind::Ident(_) => false,
-    }
-}
-fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bool {
-    match expr.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            Builtin::from_name(name)
-                .is_some_and(|builtin| builtin.spec().effects.mutates_durable_state)
-                || (matches!(Builtin::from_name(name), Some(Builtin::Ensure))
-                    && args
-                        .first()
-                        .is_some_and(|arg| typed_map_expr_is_state(context, arg)))
-                || evaluated_call_args(name, args)
-                    .iter()
-                    .any(|arg| expr_mutates_durable_state(context, arg))
-        }
-        ExprKind::Binary { left, right, .. } => {
-            expr_mutates_durable_state(context, left) || expr_mutates_durable_state(context, right)
-        }
-        ExprKind::Unary { expr, .. }
-        | ExprKind::NumericCast { expr }
-        | ExprKind::NumericTryCast { expr }
-        | ExprKind::OptionSome { value: expr }
-        | ExprKind::ResultOk { value: expr }
-        | ExprKind::ResultErr { error: expr }
-        | ExprKind::Propagate { value: expr } => expr_mutates_durable_state(context, expr),
-        ExprKind::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_mutates_durable_state(context, cond)
-                || expr_mutates_durable_state(context, then_expr)
-                || expr_mutates_durable_state(context, else_expr)
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_mutates_durable_state(context, condition)
-                || block_mutates_durable_state(context, then_branch)
-                || block_mutates_durable_state(context, else_branch)
-        }
-        ExprKind::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_mutates_durable_state(context, value)
-                || block_mutates_durable_state(context, then_branch)
-                || block_mutates_durable_state(context, else_branch)
-        }
-        ExprKind::Match { value, arms } => {
-            expr_mutates_durable_state(context, value)
-                || arms
-                    .iter()
-                    .any(|arm| block_mutates_durable_state(context, &arm.body))
-        }
-        ExprKind::Tuple(items) | ExprKind::List(items) => items
-            .iter()
-            .any(|item| expr_mutates_durable_state(context, item)),
-        ExprKind::ListComprehension {
-            expression,
-            source,
-            condition,
-            ..
-        } => {
-            expr_mutates_durable_state(context, source)
-                || expr_mutates_durable_state(context, expression)
-                || condition
-                    .as_deref()
-                    .is_some_and(|condition| expr_mutates_durable_state(context, condition))
-        }
-        ExprKind::StructLiteral { fields, .. } => fields
-            .iter()
-            .any(|(_, value)| expr_mutates_durable_state(context, value)),
-        ExprKind::JsonObject(entries) => entries
-            .iter()
-            .any(|(_, value)| expr_mutates_durable_state(context, value)),
-        ExprKind::JsonArray(items) => items
-            .iter()
-            .any(|item| expr_mutates_durable_state(context, item)),
-        ExprKind::Member { object, .. } => expr_mutates_durable_state(context, object),
-        ExprKind::Index { target, index } => {
-            expr_mutates_durable_state(context, target)
-                || expr_mutates_durable_state(context, index)
-        }
-        ExprKind::IntLiteral(_)
-        | ExprKind::DecimalLiteral { .. }
-        | ExprKind::OptionNone
-        | ExprKind::Bool(_)
-        | ExprKind::String(_)
-        | ExprKind::Bytes(_)
-        | ExprKind::Ident(_) => false,
-    }
-}
+
 #[cfg(test)]
 mod tests {
     use super::*;

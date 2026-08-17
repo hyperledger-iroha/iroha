@@ -2,7 +2,7 @@
 use hex::encode;
 use iroha_data_model::nexus::{
     AxtDescriptor, AxtHandleFragment, AxtProofFragment, TouchManifest, compute_descriptor_binding,
-    proof_matches_manifest, validate_descriptor,
+    proof_envelope_shape_matches_manifest, validate_descriptor,
 };
 use norito::{json, to_bytes};
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
@@ -50,7 +50,7 @@ fn envelope_fixtures_align_with_descriptor_binding() {
         let manifest_root = iroha_crypto::Hash::new(to_bytes(&manifest).expect("manifest encodes"));
         let manifest_root_bytes: [u8; 32] = *manifest_root.as_ref();
         assert!(
-            proof_matches_manifest(&proof.proof, proof.dsid, manifest_root_bytes),
+            proof_envelope_shape_matches_manifest(&proof.proof, proof.dsid, manifest_root_bytes),
             "proof should bind to manifest root for dsid {}",
             proof.dsid.as_u64()
         );

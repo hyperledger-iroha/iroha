@@ -10699,377 +10699,196 @@ seiyaku RangeOffsetBits {{
             "expected GetTriggerEvent instruction in lowered IR"
         );
     }
-    #[test]
-    fn lower_resolve_account_alias_builtin() {
-        let src =
-            "fn main() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }";
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_resolve_account_alias = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                if let Instr::ResolveAccountAlias { .. } = instr {
-                    saw_resolve_account_alias = true;
-                }
-            }
-        }
-        assert!(
-            saw_resolve_account_alias,
-            "expected ResolveAccountAlias instruction in lowered IR"
-        );
+    #[derive(Clone, Copy)]
+    enum AliasSource {
+        Exact(&'static str),
+        CanonicalAccount,
     }
-    #[test]
-    fn lower_resolve_account_alias_builtin_uses_string_literal() {
-        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@paynet"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_string = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@paynet" => {
-                        saw_alias_string = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_alias_string,
-            "expected builtin alias literal string constant"
-        );
-        assert!(
-            saw_resolve_account_alias,
-            "expected ResolveAccountAlias for builtin alias resolution"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "resolve_account_alias builtin must not lower to a static AccountId dataref"
-        );
+
+    #[derive(Clone, Copy)]
+    enum AliasLiteral {
+        Ignore,
+        String(&'static str),
+        DataRef(DataRefKind, &'static str),
+        CanonicalAccount,
     }
-    #[test]
-    fn lower_resolve_account_alias_invalid_literal_uses_string_literal() {
-        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_string = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@" => {
-                        saw_alias_string = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_alias_string,
-            "expected malformed builtin alias literal string constant"
-        );
-        assert!(
-            saw_resolve_account_alias,
-            "malformed builtin aliases should still lower to ResolveAccountAlias"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "malformed builtin aliases must not lower to a static AccountId dataref"
-        );
-    }
-    #[test]
-    fn lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal() {
-        let src =
-            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank.paynet"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_string = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@bank.paynet" => {
-                        saw_alias_string = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_alias_string,
-            "expected domain-qualified builtin alias literal string constant"
-        );
-        assert!(
-            saw_resolve_account_alias,
-            "expected ResolveAccountAlias for domain-qualified builtin"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "resolve_account_alias builtin must not lower to a static AccountId dataref"
-        );
-    }
-    #[test]
-    fn lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal() {
-        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank."); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_string = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@bank." => {
-                        saw_alias_string = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_alias_string,
-            "expected malformed domain-qualified builtin alias literal string constant"
-        );
-        assert!(
-            saw_resolve_account_alias,
-            "malformed domain-qualified builtin aliases should still lower to ResolveAccountAlias"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "malformed domain-qualified builtin aliases must not lower to a static AccountId dataref"
-        );
-    }
-    #[test]
-    fn lower_account_id_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = AccountId::parse("merchant@paynet"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_blob = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Blob && value == "merchant@paynet" =>
-                    {
-                        saw_alias_blob = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(saw_alias_blob, "expected alias literal blob dataref");
-        assert!(
-            saw_resolve_account_alias,
-            "expected ResolveAccountAlias for alias shorthand"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "alias shorthand must not lower to a static AccountId dataref"
-        );
-    }
-    #[test]
-    fn lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank.paynet"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_alias_blob = false;
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Blob && value == "merchant@bank.paynet" =>
-                    {
-                        saw_alias_blob = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_alias_blob,
-            "expected domain-qualified alias literal blob dataref"
-        );
-        assert!(
-            saw_resolve_account_alias,
-            "expected ResolveAccountAlias for domain-qualified alias shorthand"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "domain-qualified alias shorthand must not lower to a static AccountId dataref"
-        );
-    }
-    #[test]
-    fn lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref() {
-        let src = r#"fn main() { let _acct = AccountId::parse("merchant"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_static_account_ref = false;
-        let mut saw_resolve_account_alias = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Account && value == "merchant" =>
-                    {
-                        saw_static_account_ref = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_static_account_ref,
-            "non-alias account_id literals should stay on the static AccountId path"
-        );
-        assert!(
-            !saw_resolve_account_alias,
-            "non-alias account_id literals must not lower to runtime alias resolution"
-        );
-    }
-    #[test]
-    fn lower_account_id_canonical_literal_to_static_account_dataref() {
+
+    fn assert_alias_lowering(
+        id: &str,
+        source: AliasSource,
+        literal: AliasLiteral,
+        expected_resolve: Option<bool>,
+        expected_static_account: Option<bool>,
+    ) {
         let canonical = iroha_data_model::account::AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
         .to_string();
-        let src = format!(r#"fn main() {{ let _acct = AccountId::parse("{canonical}"); }}"#);
-        let prog = parse(&src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_static_account_ref = false;
-        let mut saw_resolve_account_alias = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Account && value == &canonical =>
-                    {
-                        saw_static_account_ref = true;
-                    }
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    _ => {}
-                }
+        let source = match source {
+            AliasSource::Exact(source) => source.to_owned(),
+            AliasSource::CanonicalAccount => {
+                format!(r#"fn main() {{ let _acct = AccountId::parse("{canonical}"); }}"#)
             }
-        }
-        assert!(
-            saw_static_account_ref,
-            "canonical account literals should stay as static AccountId datarefs"
-        );
-        assert!(
-            !saw_resolve_account_alias,
-            "canonical account literals must not call alias resolution"
-        );
-    }
-    #[test]
-    fn lower_account_id_invalid_alias_shaped_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = AccountId::parse("merchant@"); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
+        };
+        let program = lower(&analyze(&parse(&source).unwrap()).unwrap()).expect("lower");
+        let instructions = program.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let resolves = instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instr::ResolveAccountAlias { .. }));
+        let static_account = instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::DataRef {
+                    kind: DataRefKind::Account,
+                    ..
                 }
-            }
+            )
+        });
+        if let Some(expected) = expected_resolve {
+            assert_eq!(
+                resolves, expected,
+                "{id}: resolve-account-alias instruction"
+            );
         }
-        assert!(
-            saw_resolve_account_alias,
-            "alias-shaped account_id literals should defer validation to the host"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "invalid alias-shaped literals must not be encoded as static AccountIds"
-        );
-    }
-    #[test]
-    fn lower_account_id_invalid_domain_qualified_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank."); }"#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_resolve_account_alias = false;
-        let mut saw_static_account_ref = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
-                    Instr::DataRef { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_static_account_ref = true;
-                    }
-                    _ => {}
-                }
-            }
+        if let Some(expected) = expected_static_account {
+            assert_eq!(
+                static_account, expected,
+                "{id}: static account data reference"
+            );
         }
-        assert!(
-            saw_resolve_account_alias,
-            "invalid domain-qualified alias-shaped literals should defer validation to the host"
-        );
-        assert!(
-            !saw_static_account_ref,
-            "invalid domain-qualified alias-shaped literals must not be encoded as static AccountIds"
-        );
+        match literal {
+            AliasLiteral::Ignore => {}
+            AliasLiteral::String(expected) => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::StringConst { value, .. } if value == expected),
+                ),
+                "{id}: missing string literal {expected:?}",
+            ),
+            AliasLiteral::DataRef(kind, expected) => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::DataRef { kind: actual_kind, value, .. } if *actual_kind == kind && value == expected),
+                ),
+                "{id}: missing {kind:?} literal {expected:?}",
+            ),
+            AliasLiteral::CanonicalAccount => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::DataRef { kind: DataRefKind::Account, value, .. } if value == &canonical),
+                ),
+                "{id}: missing canonical account literal",
+            ),
+        }
     }
+
+    macro_rules! alias_lowering_case {
+        ($name:ident, $source:expr, $literal:expr, $resolve:expr, $static_account:expr) => {
+            #[test]
+            fn $name() {
+                assert_alias_lowering(
+                    stringify!($name),
+                    $source,
+                    $literal,
+                    $resolve,
+                    $static_account,
+                );
+            }
+        };
+    }
+
+    alias_lowering_case!(
+        lower_resolve_account_alias_builtin,
+        AliasSource::Exact(
+            "fn main() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }",
+        ),
+        AliasLiteral::Ignore,
+        Some(true),
+        None
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_builtin_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@paynet"); }"#,
+        ),
+        AliasLiteral::String("merchant@paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_invalid_literal_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@"); }"#,
+        ),
+        AliasLiteral::String("merchant@"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank.paynet"); }"#,
+        ),
+        AliasLiteral::String("merchant@bank.paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank."); }"#,
+        ),
+        AliasLiteral::String("merchant@bank."),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@paynet"); }"#),
+        AliasLiteral::DataRef(DataRefKind::Blob, "merchant@paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = AccountId::parse("merchant@bank.paynet"); }"#,
+        ),
+        AliasLiteral::DataRef(DataRefKind::Blob, "merchant@bank.paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant"); }"#),
+        AliasLiteral::DataRef(DataRefKind::Account, "merchant"),
+        Some(false),
+        Some(true)
+    );
+    alias_lowering_case!(
+        lower_account_id_canonical_literal_to_static_account_dataref,
+        AliasSource::CanonicalAccount,
+        AliasLiteral::CanonicalAccount,
+        Some(false),
+        Some(true)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_alias_shaped_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@"); }"#),
+        AliasLiteral::Ignore,
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_domain_qualified_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@bank."); }"#),
+        AliasLiteral::Ignore,
+        Some(true),
+        Some(false)
+    );
     #[test]
     fn lower_get_quantity_builtin() {
         let src = "fn main() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"value\")); }";

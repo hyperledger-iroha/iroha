@@ -1,7 +1,7 @@
 //! Admission-time deterministic batching tests for signature schemes.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
-//! These exercise grouping + bisection in `ValidBlock::validate_static` using
+//! These exercise grouping + bisection through the explicit replay-fixture validator using
 //! one intentionally bad signature per batch.
 use core::time::Duration;
 use iroha_core::{
@@ -288,7 +288,7 @@ fn bls_same_message_group_duplicate_rejected() {
     let block = SignedBlock::presigned(sig, header, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -330,7 +330,7 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
         presigned_block_with_creation_after_txs(&leader, vec![tx_same1, tx_same2, tx_s1, tx_s2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -365,7 +365,7 @@ fn bls_same_message_group_bisect_bad() {
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_good, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -416,7 +416,7 @@ fn bls_multi_message_verification_ok() {
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -443,7 +443,7 @@ fn bls_multi_message_verification_ok() {
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-        let result = ValidBlock::validate(
+        let result = ValidBlock::validate_replay_fixture(
             block,
             &topology,
             &authority,
@@ -464,7 +464,7 @@ fn bls_multi_message_verification_ok() {
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-        let result = ValidBlock::validate(
+        let result = ValidBlock::validate_replay_fixture(
             block,
             &topology,
             &authority,
@@ -540,7 +540,7 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -568,7 +568,7 @@ fn bls_multi_message_verification_fails_and_counts() {
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -610,7 +610,7 @@ fn bls_batch_bisection_finds_bad_sig() {
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
     // Validate statically; expect rejection due to bad signature
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -632,7 +632,7 @@ fn mldsa_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -653,7 +653,7 @@ fn ed25519_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,
@@ -674,7 +674,7 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-    let result = ValidBlock::validate(
+    let result = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &authority,

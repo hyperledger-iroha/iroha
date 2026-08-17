@@ -733,8 +733,10 @@ runtime-only key access internally; it must never accept a private-key path or
 key bytes through argv, environment, or the rendered tree. Source-built Kagami
 is not a genesis signer in this release path. The
 external signer binds the staged Nexus/AMX and execution-policy context,
-recomputes the consensus fingerprint, atomically replaces only the rendered
-`genesis.json`, and writes `genesis.signed.nrt`. Never copy the genesis signer,
+recomputes the consensus fingerprint, and writes only the three exact staged
+outputs. In reset composition it must not use rename/unlink scratch; the
+composer owns atomic publication after validating those outputs. Never copy
+the genesis signer,
 genesis key, or validator private keys into the checkout, template, rendered
 genesis JSON, or Actions storage.
 
@@ -782,6 +784,8 @@ EXPECTED_CONTROLLER_VERSION="${EXPECTED_CONTROLLER_VERSION:?set the installed co
 EXPECTED_HOST_ID="${EXPECTED_HOST_ID:?set the attested qualification host ID}"
 EXPECTED_INSTALLATION_ID="${EXPECTED_INSTALLATION_ID:?set the attested installation ID}"
 SOURCE_COMMIT="${SOURCE_COMMIT:?set the exact release source commit}"
+AUTHENTICATED_TOOL_CONTROLLER=/usr/local/libexec/iroha-authenticated-tool-controller-v1
+AUTHENTICATED_TOOL_CONTROLLER_SHA256="${AUTHENTICATED_TOOL_CONTROLLER_SHA256:?set the independently reviewed isolation-controller digest}"
 
 test "$(shasum -a 256 "${TAIRA_CONTROLLER_COMMAND}" | awk '{print $1}')" = \
   "${EXPECTED_LAUNCHER_SHA256}"
@@ -811,6 +815,9 @@ sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
   --privacy-release-dir /absolute/private/path/authenticated-privacy-release \
   --genesis-external-signer /absolute/reviewed/path/genesis-external-signer \
   --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
+  --authenticated-tool-controller "${AUTHENTICATED_TOOL_CONTROLLER}" \
+  --trusted-authenticated-tool-controller-sha256 \
+    "${AUTHENTICATED_TOOL_CONTROLLER_SHA256}" \
   --onboarding-token-hash-tool /absolute/reviewed/path/onboarding-token-hash-tool \
   --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1 \
   --kagemusha-activation-authority "${ACTIVATION_AUTHORITY}" \
@@ -828,6 +835,38 @@ GENESIS_EXPECTED_HASH="$(jq -er '.genesis_expected_hash' \
   "${RESET_BUNDLE}/reset-manifest.json")"
 test -n "${GENESIS_EXPECTED_HASH}"
 ```
+
+The composer never invokes the external genesis signer directly. It snapshots
+both the signer and a distinct independently digest-pinned controller, then
+submits the signer command under
+`iroha.authenticated-tool-os-isolation.v1`. The installed native controller
+must use its attested non-controller runtime identity, close inherited
+descriptors, set no-new-privileges, and use the platform OS boundary to deny
+network access, tool child creation and all writes except the three exact
+output files; deny link, rename, unlink, symlink, and special-file creation;
+charge open-unlinked bytes to the declared cumulative-write and
+maximum-live-root quotas; enforce pipe and
+deadline limits; and return
+the exact tool exit status and bounded byte streams only after its job has no
+residual processes. Those properties are mandatory:
+`RLIMIT_FSIZE`, staging-directory scans, and process-group cleanup alone do not
+account for open-unlinked files, writes outside the staging directory, or a
+`setsid` descendant. The outer sealed release controller must pre-authorize the
+two controller CLI options and their exact installed path before this command
+is usable; until that native controller is provisioned and reviewed, reset
+composition intentionally fails closed.
+
+The signer receives private snapshots and candidate output names, never the
+authenticated bundle paths or final publication path. Local defense in depth
+still applies a 600-second deadline, bounded diagnostics, per-file limits,
+continuous visible-inventory checks, and a final process-group sweep. The
+complete reset is assembled in an owner-private, ACL-free sibling tree. After
+final modes are applied, the composer `fsync`s every file and then every
+directory from the leaves through the staging root before an atomic no-replace
+rename and publication-parent `fsync`. A failed signer or composer therefore
+cannot expose a partial `${RESET_BUNDLE}`, and a raced existing bundle is never
+overwritten. Treat a post-rename verification or `fsync` failure as
+commit-uncertain: inspect the visible bundle before any retry.
 
 The first private renderer pass contains the policy and artifact paths but no
 seal path, and uses only a canonical marker-bearing staging hash while the
@@ -1270,12 +1309,17 @@ pinned empty revocation file when the reviewed policy has no revoked keys.
 Promotion does not consult the invoking account's Git configuration. The gate
 inherits the exported read-only `KAGEMUSHA_V4_KAGAMI_BIN` and
 `KAGEMUSHA_V4_KAGAMI_SHA256` verified above, so it authenticates the same
-executable used to construct the roster, circuit parameters, and activation:
+executable used to construct the roster, circuit parameters, and activation.
+It additionally requires a distinct root-custodied controller implementing the
+same `iroha.authenticated-tool-os-isolation.v1` contract described for genesis
+signing; the gate refuses to execute Kagami directly:
 
 ```bash
 KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION="${SOURCE_PROJECTION}" \
@@ -1290,8 +1334,17 @@ KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/absolute/root-custodied/ios-device-evidence 
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID='<reviewed-key-id>' \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/absolute/root-custodied/ios-evidence-ed25519.pub.pem \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/absolute/root-custodied/production-ios-policy-v1.json \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID='<reviewed-independent-freshness-authority-key-id>' \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY=/absolute/root-custodied/ios-freshness-authority-ed25519.pub.pem \
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
+
+For each manifest directory, install the authority's canonical owner-private
+`online-freshness-consumption-receipt-v1.json` beside `raw/`. The receipt and
+both authority inputs are mandatory with the other physical-iOS inputs; they
+must bind that exact evidence, manifest, counter transition, one-time
+consumption, and current Apple-status check. A candidate-lab receipt or a
+synthetic App Attest object is not production evidence.
 
 `generate-candidate` is the only command accepted by the guarded runner; do not
 wrap Cargo, a shell, or `env`. It publishes an immutable pre-evidence candidate
@@ -1497,6 +1550,10 @@ extracting `instructions_hash`:
 ACTIVATION_JSON=/absolute/private/path/kagemusha-activation-v4.json
 PREPARE_REPORT=/absolute/private/path/kagemusha-activation-v4.prepare.jsonl
 REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256='<reviewed-device-policy-state-64-lowercase-hex>'
+POLICY_EVALUATION_TIME_MS='<reviewed-nonzero-unix-time-in-milliseconds>'
+case "${POLICY_EVALUATION_TIME_MS}" in
+  ''|0*|*[!0-9]*) echo "POLICY_EVALUATION_TIME_MS must be canonical nonzero decimal" >&2; exit 1 ;;
+esac
 set -o pipefail
 
 assert_kagemusha_v4_kagami_custody || exit 1
@@ -1508,6 +1565,7 @@ if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
   --manifest-sha256 "${MANIFEST_SHA256}" \
   --verifier-version "${NEXT_VERIFIER_VERSION}" \
   --device-attestation-policy /absolute/private/path/device-attestation-policy.json \
+  --policy-evaluation-time-ms "${POLICY_EVALUATION_TIME_MS}" \
   --output "${ACTIVATION_JSON}" \
   | /usr/bin/tee "${PREPARE_REPORT}"
 then
@@ -1522,6 +1580,7 @@ PREPARED_REPORT_LINE="$(/usr/bin/tail -n 1 "${PREPARE_REPORT}")"
 if ! /usr/bin/jq -e \
   --arg manifest_sha256 "${MANIFEST_SHA256}" \
   --argjson verifier_version "${NEXT_VERIFIER_VERSION}" \
+  --argjson policy_evaluation_time_ms "${POLICY_EVALUATION_TIME_MS}" \
   --arg device_policy_state_sha256 \
     "${REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256}" \
   '
@@ -1532,6 +1591,7 @@ if ! /usr/bin/jq -e \
     .status == "prepared" and
     .manifest_sha256 == $manifest_sha256 and
     .verifier_version == $verifier_version and
+    .policy_evaluation_time_ms == $policy_evaluation_time_ms and
     .instruction_count == 1 and
     .device_attestation_policy_state_sha256 == $device_policy_state_sha256 and
     (.instructions_hash |
@@ -2199,7 +2259,10 @@ key, pinned `sorafs-validate`, the four-file secret-free
 `TAIRA_PRIVACY_RELEASE_INPUT_DIR`, macOS reset bundle, operator identity, and
 the independently built external genesis signer. Pin the latter with
 `TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256`; its path is
-`TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH`. No genesis private-key path or
+`TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH`. It must also provision a distinct
+native `iroha.authenticated-tool-os-isolation.v1` controller and independently
+pin its installed path and SHA-256; a pass-through shell, process-group wrapper,
+or per-file `RLIMIT_FSIZE` launcher does not satisfy that contract. No genesis private-key path or
 bytes may be configured in Actions. The protected privacy path is visible only
 to the inline snapshot step; native build steps see only its copied public
 bytes. The environment also supplies the public genesis key and command

@@ -6207,11 +6207,11 @@ mod tests {
             op: SpendOp {
                 kind: "transfer".to_owned(),
                 from: authority.to_string(),
-                to: "destination".to_owned(),
+                to: authority.to_string(),
                 amount: Some("5".parse().expect("canonical spend quantity")),
             },
         };
-        let replay_key = AxtHandleReplayKey::from_parts(binding, 1, 1, lane);
+        let replay_key = AxtHandleReplayKey::from_parts(dsid, binding, 1, 1, lane);
         let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
         completed
             .record_touch(

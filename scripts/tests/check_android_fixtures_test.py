@@ -68,7 +68,7 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
                 "executable": {"Instructions": []},
                 "fee_payment": {
                     "payer": "authority",
-                    "value": {"charge_limits": []},
+                    "value": {"charge_limits": [], "gas_limit": None},
                 },
                 "metadata": {},
                 "nonce": entry.get("nonce"),
@@ -78,6 +78,21 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
         enriched.append(entry)
     path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
     return path
+
+
+def test_fee_payment_requires_explicit_nullable_gas_limit() -> None:
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.validate_fee_payment(
+            {"payer": "authority", "value": {"charge_limits": []}},
+            "fee payment",
+        )
+    MODULE.validate_fee_payment(
+        {
+            "payer": "authority",
+            "value": {"charge_limits": [], "gas_limit": None},
+        },
+        "fee payment",
+    )
 
 
 def _write_manifest(path: Path, fixtures: list[dict]) -> Path:

@@ -1945,7 +1945,7 @@ fn committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restar
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
-    let (transaction_hash, reservation, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x61);
+    let (entrypoint_hash, reservation, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x61);
     let assert_exact_reservation = |kura: &Kura| {
         let entry = kura
             .get_merge_entry_by_carrier_height(nonzero!(2_usize))
@@ -1954,7 +1954,7 @@ fn committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restar
         assert_eq!(
             crate::state::certified_merge_queue_reservations(&entry)
                 .expect("decode exact committed reservation"),
-            vec![(transaction_hash, reservation)]
+            vec![(entrypoint_hash, reservation)]
         );
     };
     assert_exact_reservation(kura.as_ref());
@@ -2095,10 +2095,10 @@ fn canonical_transaction_index_exposes_completeness_and_all_carrier_heights() {
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
-    let (transaction_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
+    let (entrypoint_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
     kura.transaction_entrypoint_index.lock().complete = false;
     assert_eq!(
-        kura.get_block_heights_by_transaction_hash(transaction_hash),
+        kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
         None,
         "an incomplete canonical transaction index must fail closed"
     );
@@ -2106,13 +2106,13 @@ fn canonical_transaction_index_exposes_completeness_and_all_carrier_heights() {
         let mut index = kura.transaction_entrypoint_index.lock();
         index.complete = true;
         index
-            .heights_by_transaction
-            .get_mut(&transaction_hash)
+            .heights_by_entrypoint
+            .get_mut(&entrypoint_hash)
             .expect("fixture transaction is indexed")
             .insert(nonzero!(3_usize));
     }
     assert_eq!(
-        kura.get_block_heights_by_transaction_hash(transaction_hash),
+        kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
         Some(BTreeSet::from([nonzero!(2_usize), nonzero!(3_usize)])),
         "the planner must receive every conflicting canonical carrier height"
     );
@@ -2520,14 +2520,12 @@ fn finality_authenticated_carrier_survives_body_removal_and_restart() {
     );
 }
 #[test]
-fn bodyless_finalized_execution_carrier_rebuilds_merge_transaction_index() {
+fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(1_usize));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
     let entrypoint_hash = entrypoint.hash();
-    let transaction_hash =
-        AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone())).hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
@@ -2596,10 +2594,6 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_transaction_index() {
     );
     assert_eq!(
         reopened.get_block_heights_by_entrypoint_hash(entrypoint_hash),
-        Some(BTreeSet::from([nonzero!(2_usize)]))
-    );
-    assert_eq!(
-        reopened.get_block_heights_by_transaction_hash(transaction_hash),
         Some(BTreeSet::from([nonzero!(2_usize)]))
     );
     assert_eq!(

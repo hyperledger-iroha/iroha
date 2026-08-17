@@ -136,6 +136,7 @@ public final class HttpClientTransportTests {
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feePaymentJsonRequiresExplicitNullableGasLimit();
     feeQuoteRejectsLegacyFlatTransactionIdentityKeys();
     feeQuoteRejectsPayerRevisionAndGasSubstitution();
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
@@ -2334,6 +2335,22 @@ public final class HttpClientTransportTests {
                 unsignedPayload, canonicalAuth("bob@universal", keyPair, null, null)),
         "fee quote must reject an auth payer mismatch");
     assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
+  }
+
+  private static void feePaymentJsonRequiresExplicitNullableGasLimit() {
+    final Object missingGas =
+        JsonParser.parse("{\"payer\":\"authority\",\"value\":{\"charge_limits\":[]}}");
+    expectIllegalArgument(
+        () -> FeePaymentJson.parse(missingGas, "fee payment"),
+        "fee payment JSON must require gas_limit even when it is null");
+
+    final Object explicitNull =
+        JsonParser.parse(
+            "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":null}}");
+    final FeePaymentIntent parsed = FeePaymentJson.parse(explicitNull, "fee payment");
+    assert parsed instanceof FeePaymentIntent.Authority
+        : "explicitly null fee gas must preserve the authority payer";
+    assert parsed.gasLimit() == null : "explicitly null fee gas must remain absent";
   }
 
   private static void feeQuoteRejectsLegacyFlatTransactionIdentityKeys() throws Exception {

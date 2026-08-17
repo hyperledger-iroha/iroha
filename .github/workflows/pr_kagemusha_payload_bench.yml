@@ -10,6 +10,16 @@ on:
       - "ci/check_kagemusha_*.sh"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
+      - "scripts/deploy_taira_v21_reset.py"
+      - "scripts/prepare_taira_empty_reset_bundle.py"
+      - "scripts/*taira*.py"
+      - "scripts/build_privacy_v1_boi_handoff.py"
+      - "scripts/operator_http_headers.py"
+      - "scripts/release_artifact_contract.py"
+      - "scripts/tests/deploy_taira_v21_reset_test.py"
+      - "scripts/tests/deploy_taira_v21_reset_authority_test.py"
+      - "scripts/tests/prepare_taira_empty_reset_bundle_test.py"
+      - "scripts/tests/*taira*_test.py"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha/src/client.rs"
       - "crates/iroha_cli/**"
@@ -832,6 +842,13 @@ jobs:
           scripts/tests/stage_kagemusha_candidate_android_lab_test.py
           pytests/scripts/run_kagemusha_v4_generation_test.py
           pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py
+      - name: Run Kagemusha Taira reset and deploy regressions
+        run: >-
+          python -m pytest -q
+          scripts/tests/deploy_taira_v21_reset_test.py
+          scripts/tests/deploy_taira_v21_reset_authority_test.py
+          scripts/tests/prepare_taira_empty_reset_bundle_test.py
+          scripts/tests/seal_taira_release_controllers_test.py
       - run: python -m pytest -q python/iroha_torii_client/tests/test_client.py
 
   rust:
@@ -842,9 +859,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
       - run: cargo test -p iroha_core offline_device_attestation_policy --lib
       - run: cargo test -p iroha_core device_registration_ --lib
+      - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
+      - run: cargo test -p iroha_core active_receiver_snapshot_ --lib
       - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt
       - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
       - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
@@ -858,8 +878,8 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami harden_private_tree
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
-      - run: cargo test -p iroha_kagami --bin kagami atomic_activation_policy_
-      - run: cargo test -p iroha_kagami --bin kagami atomic_activation_rejects_noncanonical_app_policy_text
+      - run: cargo test -p iroha_kagami --bin kagami atomic_activation_
+      - run: cargo test -p iroha_kagami --bin kagami backing_
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline

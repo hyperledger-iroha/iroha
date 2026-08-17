@@ -9,8 +9,6 @@ fn invalid(message: impl Into<String>) -> napi::Error {
 /// Exact identities derived from one authenticated orderbook transaction.
 #[napi(object)]
 pub struct JsSorafsOrderbookSubmissionIdentityV1 {
-    /// Legacy transaction identity.
-    pub tx_hash: String,
     /// Canonical entrypoint identity.
     pub entrypoint_hash: String,
     /// Canonical signed-transaction identity.
@@ -34,7 +32,6 @@ pub fn inspect_sorafs_orderbook_submission_v1(
     let validated = inspect_submission(signed_transaction_versioned.as_ref(), route, &expected_network_id, expected_chain_discriminant).map_err(|error| invalid(error.to_string()))?;
     let identity = validated.identity;
     Ok(JsSorafsOrderbookSubmissionIdentityV1 {
-        tx_hash: identity.tx_hash.to_string(),
         entrypoint_hash: identity.entrypoint_hash.to_string(),
         signed_transaction_hash: identity.signed_transaction_hash.to_string(),
     })
@@ -45,12 +42,11 @@ pub fn inspect_sorafs_orderbook_submission_v1(
 #[rustfmt::skip]
 pub fn verify_sorafs_orderbook_submission_receipt_v1(
     receipt_norito: Uint8Array,
-    tx_hash: String,
     entrypoint_hash: String,
     signed_transaction_hash: String,
     expected_receipt_signer: String,
 ) -> napi::Result<String> {
-    let identity = parse_sorafs_orderbook_submission_identity_v1(&tx_hash, &entrypoint_hash, &signed_transaction_hash).ok_or_else(|| invalid("receipt identities must be exact canonical text"))?;
+    let identity = parse_sorafs_orderbook_submission_identity_v1(&entrypoint_hash, &signed_transaction_hash).ok_or_else(|| invalid("receipt identities must be exact canonical text"))?;
     let signer = parse_sorafs_orderbook_receipt_signer_v1(&expected_receipt_signer).ok_or_else(|| invalid("expected_receipt_signer must be exact canonical text"))?;
     let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(receipt_norito.as_ref(), &identity, &signer).map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
@@ -79,7 +75,6 @@ mod tests {
         assert_eq!(inspect_error.status, napi::Status::InvalidArg);
         let receipt_error = Result::err(verify_sorafs_orderbook_submission_receipt_v1(
             Uint8Array::from(vec![0]),
-            "not-a-hash".to_owned(),
             "not-an-entrypoint-hash".to_owned(),
             "not-a-signed-transaction-hash".to_owned(),
             "not-a-signer".to_owned(),

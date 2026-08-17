@@ -1910,13 +1910,8 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::VrfReveal(_) => IngressPolicy::critical(),
                     }
                 }
-                // All other block messages are decode-only v1 artifacts. The relay
-                // rejects them before ingress accounting; keeping this fallback
-                // separate prevents archival types from shaping live v2 limits.
-                _ => IngressPolicy::limited(),
             },
-            iroha_core::NetworkMessage::SumeragiControlFlow(_)
-            | iroha_core::NetworkMessage::LaneDrainVote(_)
+            iroha_core::NetworkMessage::LaneDrainVote(_)
             | iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_) => IngressPolicy::bulk(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
@@ -1932,7 +1927,6 @@ impl ConsensusIngressLimiter {
                     IngressPolicy::bulk()
                 }
             },
-            iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
         }
     }
@@ -2480,7 +2474,6 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             | BlockMessage::LaneBlockCertificate(_)
             | BlockMessage::LaneHistoricalRecoveryRequest(_)
             | BlockMessage::LaneHistoricalRecoveryResponse(_) => Some(SumeragiRelayClass::Lane),
-            _ => None,
         },
         LaneRelay(_)
         | MergeCommitteeSignature(_)
@@ -2490,17 +2483,6 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         | QueuePlanAdmissionCertificate(_) => Some(SumeragiRelayClass::Lane),
         _ => None,
     }
-}
-fn obsolete_sumeragi_relay_terminal_meta(
-    message: &iroha_core::NetworkMessage,
-) -> Option<(
-    &'static str,
-    Option<u64>,
-    Option<u64>,
-    SumeragiRelayTerminalOutcome,
-)> {
-    NetworkRelayShared::retired_sumeragi_message_meta(message)
-        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Failed))
 }
 fn certified_merge_sidecar_ingress_reply_route(
     _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
@@ -2759,21 +2741,6 @@ impl NetworkRelayShared {
             }
             Some(reply_route) => reply_route,
         };
-        if let Some((kind, height, view, outcome)) = obsolete_sumeragi_relay_terminal_meta(&message)
-        {
-            iroha_logger::debug!(
-                %peer,
-                ?height,
-                ?view,
-                kind,
-                "rejecting retired Sumeragi message before retained ingress"
-            );
-            return Err(Box::new(PrepareSumeragiRelayResult::Terminal {
-                outcome,
-                retention_guard,
-                completion,
-            }));
-        }
         if !self.consensus_ingress_allows(&authenticated_via, &message, size_bytes) {
             return Err(Box::new(PrepareSumeragiRelayResult::Terminal {
                 outcome: SumeragiRelayTerminalOutcome::Failed,
@@ -3692,18 +3659,6 @@ async fn forward_relay_lane(
     fail_stop_on_close: bool,
 ) -> RelayIngressLoopExit {
     while let Some(msg) = receiver.recv().await {
-        if let Some((message_kind, height, view)) =
-            NetworkRelayShared::retired_sumeragi_message_meta(&msg.payload)
-        {
-            iroha_logger::debug!(
-                peer = %msg.peer,
-                ?height,
-                ?view,
-                message_kind,
-                "rejecting retired Sumeragi v1 message before relay preprocessing"
-            );
-            continue;
-        }
         if let Some(class) = sumeragi_relay_class(&msg.payload)
             && let Some(sumeragi_ingress) = sumeragi_ingress
         {
@@ -4135,7 +4090,6 @@ impl NetworkRelayShared {
         if !matches!(
             msg,
             SumeragiBlock(_)
-                | SumeragiControlFlow(_)
                 | LaneDrainVote(_)
                 | CertifiedMergeSidecar(_)
                 | QueuePlanAdmissionCertificate(_)
@@ -4163,7 +4117,6 @@ impl NetworkRelayShared {
         }
         let (kind, height, view) = match msg {
             SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
-            SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
             LaneDrainVote(vote) => (
                 "LaneDrainVote",
                 Some(vote.body.intent.close_global_height),
@@ -4247,16 +4200,6 @@ impl NetworkRelayShared {
         size_bytes: usize,
     ) -> bool {
         use iroha_core::NetworkMessage::*;
-        if let Some((kind, height, view)) = Self::retired_sumeragi_message_meta(&msg) {
-            iroha_logger::debug!(
-                %peer,
-                ?height,
-                ?view,
-                kind,
-                "rejecting retired Sumeragi v1 message before ingress accounting"
-            );
-            return false;
-        }
         if !self.consensus_ingress_allows(&authenticated_via, &msg, size_bytes) {
             return false;
         }
@@ -4281,7 +4224,6 @@ impl NetworkRelayShared {
         }
         match msg {
             SumeragiBlock(_)
-            | SumeragiControlFlow(_)
             | LaneRelay(_)
             | MergeCommitteeSignature(_)
             | LaneDrainVote(_)
@@ -4299,14 +4241,6 @@ impl NetworkRelayShared {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
                     iroha_logger::warn!(%peer, ?err, "Failed to process streaming control frame");
                 }
-            }
-            BlockSync(_) => {
-                iroha_logger::debug!(
-                    %peer,
-                    via = %authenticated_via,
-                    "retired v1 block sync bypassed preprocessing; rejecting"
-                );
-                return false;
             }
             TransactionGossiper(data) => {
                 iroha_logger::debug!(
@@ -4368,22 +4302,6 @@ impl NetworkRelayShared {
                 | Topic::Other
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
-    fn retired_sumeragi_message_meta(
-        msg: &iroha_core::NetworkMessage,
-    ) -> Option<(&'static str, Option<u64>, Option<u64>)> {
-        match msg {
-            iroha_core::NetworkMessage::SumeragiBlock(block)
-                if !block.as_ref().as_ref().is_authoritative_v2_ingress() =>
-            {
-                Some(Self::block_message_meta(block.as_ref().as_ref()))
-            }
-            iroha_core::NetworkMessage::SumeragiControlFlow(message) => {
-                Some(Self::control_flow_meta(message.as_ref()))
-            }
-            iroha_core::NetworkMessage::BlockSync(_) => Some(("BlockSyncV1", None, None)),
-            _ => None,
-        }
-    }
     #[cfg(feature = "telemetry")]
     fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
         use iroha_p2p::network::message::Topic;
@@ -4401,26 +4319,6 @@ impl NetworkRelayShared {
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
         match msg {
-            BlockCreated(_)
-            | BlockSyncUpdate(_)
-            | QcVote(_)
-            | Qc(_)
-            | VrfCommit(_)
-            | VrfReveal(_)
-            | ExecWitness(_)
-            | RbcInit(_)
-            | RbcInitRequest(_)
-            | RbcChunk(_)
-            | RbcChunkCompact(_)
-            | RbcChunkRequest(_)
-            | RbcReady(_)
-            | RbcDeliver(_)
-            | FetchBlockBody(_)
-            | BlockBodyResponse(_)
-            | CertifiedBlockFetch(_)
-            | FetchPendingBlock(_)
-            | ProposalHint(_)
-            | Proposal(_) => Self::legacy_block_message_meta(msg),
             LaneBlockProposal(_)
             | LaneExecutablePayload(_)
             | LaneBlockNewViewVote(_)
@@ -4432,97 +4330,6 @@ impl NetworkRelayShared {
             | LaneHistoricalRecoveryResponse(_) => Self::lane_block_message_meta(msg),
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => Self::v2_block_message_meta(&message.payload),
-        }
-    }
-    fn legacy_block_message_meta(
-        msg: &iroha_core::sumeragi::message::BlockMessage,
-    ) -> (&'static str, Option<u64>, Option<u64>) {
-        use iroha_core::sumeragi::message::BlockMessage::*;
-        match msg {
-            BlockCreated(block) => {
-                let header = block.block.header();
-                (
-                    "BlockCreated",
-                    Some(header.height().get()),
-                    Some(header.view_change_index()),
-                )
-            }
-            BlockSyncUpdate(block) => {
-                let header = block.block.header();
-                (
-                    "BlockSyncUpdate",
-                    Some(header.height().get()),
-                    Some(header.view_change_index()),
-                )
-            }
-            QcVote(vote) => {
-                let label = match vote.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareVote",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "QcVote",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewVote",
-                };
-                (label, Some(vote.height), Some(vote.view))
-            }
-            Qc(cert) => {
-                let label = match cert.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareCert",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "CommitCert",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewCert",
-                };
-                (label, Some(cert.height), Some(cert.view))
-            }
-            VrfCommit(_) => ("VrfCommit", None, None),
-            VrfReveal(_) => ("VrfReveal", None, None),
-            ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
-            RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
-            RbcInitRequest(request) => ("RbcInitRequest", Some(request.height), Some(request.view)),
-            RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
-            RbcChunkCompact(chunk) => (
-                "RbcChunk",
-                Some(u64::from(chunk.height)),
-                Some(u64::from(chunk.view)),
-            ),
-            RbcChunkRequest(request) => {
-                ("RbcChunkRequest", Some(request.height), Some(request.view))
-            }
-            RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
-            RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
-            FetchBlockBody(request) => ("FetchBlockBody", Some(request.height), Some(request.view)),
-            BlockBodyResponse(response) => (
-                "BlockBodyResponse",
-                Some(response.height),
-                Some(response.view),
-            ),
-            CertifiedBlockFetch(fetch) => match fetch {
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Request(request) => (
-                    "CertifiedBlockFetchRequest",
-                    Some(request.height),
-                    Some(request.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Response(response) => (
-                    "CertifiedBlockFetchResponse",
-                    Some(response.height),
-                    Some(response.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Proof(proof) => (
-                    "CertifiedBlockFetchProof",
-                    Some(proof.height),
-                    Some(proof.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Body(body) => (
-                    "CertifiedBlockFetchBody",
-                    Some(body.height),
-                    Some(body.view),
-                ),
-            },
-            FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
-            ProposalHint(hint) => ("ProposalHint", Some(hint.height), Some(hint.view)),
-            Proposal(proposal) => (
-                "Proposal",
-                Some(proposal.header.height),
-                Some(proposal.header.view),
-            ),
-            _ => unreachable!("legacy metadata helper received a non-legacy block message"),
         }
     }
     fn lane_block_message_meta(
@@ -4693,14 +4500,6 @@ impl NetworkRelayShared {
             ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
         }
     }
-    fn control_flow_meta(
-        msg: &iroha_core::sumeragi::message::ControlFlow,
-    ) -> (&'static str, Option<u64>, Option<u64>) {
-        use iroha_core::sumeragi::message::ControlFlow::*;
-        match msg {
-            Evidence(_) => ("Evidence", None, None),
-        }
-    }
 }
 #[cfg(test)]
 mod network_relay_tests {
@@ -4708,8 +4507,8 @@ mod network_relay_tests {
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, InboundBlockMessage,
         IngressRateClass, LaneRelayMessage, LowPriorityIngressDropReason,
         LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig, SumeragiIngressDisposition,
-        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
-        sumeragi_ingress_terminal_outcome, sumeragi_relay_class,
+        SumeragiRelayClass, SumeragiRelayTerminalOutcome, sumeragi_ingress_terminal_outcome,
+        sumeragi_relay_class,
     };
     use iroha_core::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
@@ -5371,15 +5170,6 @@ mod network_relay_tests {
         );
     }
     #[test]
-    fn obsolete_sumeragi_relay_message_fails_closed() {
-        assert_eq!(
-            obsolete_sumeragi_relay_terminal_meta(&retired_vrf_commit_msg())
-                .map(|(_, _, _, outcome)| outcome),
-            Some(SumeragiRelayTerminalOutcome::Failed)
-        );
-        assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
-    }
-    #[test]
     fn obsolete_block_ingress_disposition_fails_closed() {
         let disposition = SumeragiIngressDisposition::<InboundBlockMessage>::Obsolete;
         assert_eq!(
@@ -5650,16 +5440,6 @@ mod network_relay_tests {
     }
     pub fn v2_vote_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(v2_vote_block_message())
-    }
-    fn retired_vrf_commit_msg() -> iroha_core::NetworkMessage {
-        sumeragi_msg(BlockMessage::VrfCommit(
-            iroha_data_model::block::consensus::VrfCommit {
-                epoch: 9,
-                commitment: [0x91; 32],
-                signer: 1,
-                bls_sig: vec![0x92],
-            },
-        ))
     }
     fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
         let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
@@ -6971,7 +6751,7 @@ mod snapshot_read_error_tests {
         );
     }
     #[test]
-    fn startup_nexus_merge_uses_config_for_legacy_snapshot() {
+    fn startup_nexus_merge_uses_config_for_fresh_state() {
         let mut configured = iroha_config::parameters::actual::Nexus {
             enabled: true,
             ..Default::default()
@@ -18587,14 +18367,14 @@ mod tests {
             )]);
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 block,
                 &topology,
                 &genesis_account_id,
                 &time_source,
                 &state,
                 &mut voting_block,
-                false,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
             if let Err((block, error)) = result {

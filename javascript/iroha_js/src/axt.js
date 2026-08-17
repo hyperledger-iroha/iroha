@@ -193,10 +193,11 @@ function resolveAxtNative() {
  * }}
  */
 export function normalizeAxtRejectContext(input, context = "axt reject context") {
-  const record = ensureObject(input ?? {}, context);
+  const record = ensureObject(input, context);
   const retiredOrNoncanonicalKeys = [
     "dataspaceId",
     "targetLane",
+    "target_lane",
     "snapshotVersion",
     "activeHandleEra",
     "nextHandleCounter",
@@ -206,30 +207,51 @@ export function normalizeAxtRejectContext(input, context = "axt reject context")
   for (const key of retiredOrNoncanonicalKeys) {
     if (record[key] !== undefined) {
       throw new TypeError(
-        `${context} must use snake_case fields (dataspace, target_lane, snapshot_version, active_handle_era, next_handle_counter)`,
+        `${context} must use the canonical AXT fields (dataspace, lane, snapshot_version, active_handle_era, next_handle_counter)`,
       );
     }
   }
-  const reasonValue = record.reason ?? "unknown";
-  const reason = typeof reasonValue === "string" ? reasonValue : String(reasonValue);
-  const dataspaceRaw = record.dataspace ?? null;
-  const laneRaw = record.target_lane ?? null;
-  const snapshotRaw = record.snapshot_version ?? null;
-  const activeEraRaw = record.active_handle_era ?? null;
-  const nextCounterRaw = record.next_handle_counter ?? null;
-  const detailRaw = record.detail ?? "";
+  const fields = [
+    "reason",
+    "dataspace",
+    "lane",
+    "snapshot_version",
+    "detail",
+    "active_handle_era",
+    "next_handle_counter",
+  ];
+  const knownFields = new Set(fields);
+  for (const key of Object.keys(record)) {
+    if (!knownFields.has(key)) {
+      throw new TypeError(`${context}.${key} is not a canonical AXT field`);
+    }
+  }
+  for (const field of fields) {
+    if (!Object.hasOwn(record, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+  if (typeof record.reason !== "string") {
+    throw new TypeError(`${context}.reason must be a string`);
+  }
+  if (typeof record.detail !== "string") {
+    throw new TypeError(`${context}.detail must be a string`);
+  }
   return {
-    reason,
-    dataspace: assertOptionalUnsigned(dataspaceRaw, `${context}.dataspace`),
-    lane: assertOptionalUnsigned(laneRaw, `${context}.lane`),
-    snapshot_version: assertOptionalUnsigned(snapshotRaw, `${context}.snapshot_version`),
-    detail: detailRaw === null ? "" : String(detailRaw),
+    reason: record.reason,
+    dataspace: assertOptionalUnsigned(record.dataspace, `${context}.dataspace`),
+    lane: assertOptionalUnsigned(record.lane, `${context}.lane`),
+    snapshot_version: assertOptionalUnsigned(
+      record.snapshot_version,
+      `${context}.snapshot_version`,
+    ),
+    detail: record.detail,
     active_handle_era: assertOptionalUnsigned(
-      activeEraRaw,
+      record.active_handle_era,
       `${context}.active_handle_era`,
     ),
     next_handle_counter: assertOptionalUnsigned(
-      nextCounterRaw,
+      record.next_handle_counter,
       `${context}.next_handle_counter`,
     ),
   };

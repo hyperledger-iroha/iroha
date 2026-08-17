@@ -62,20 +62,12 @@ impl Kura {
             self.update_disk_usage_delta(before_recovery, before);
             recovery_accounting.finish();
             // Rewrites publish one data/index temp pair at a time. The temp
-            // payload cannot exceed the current pair; allow one additional
-            // based-index header for a legacy-to-based retained prefix. This
+            // pair cannot exceed the current canonical V1 pair. This
             // maintenance is optional and must never consume Queue terminal
             // authority or spin the startup caller when configured headroom is
             // unavailable.
             if self.max_disk_usage_bytes != 0 {
-                let temp_peak = before
-                    .checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            data_path.clone(),
-                            "lane history compaction temporary accounting overflowed",
-                        )
-                    })?;
+                let temp_peak = before;
                 let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
                 let certified_bundle_reservations =
                     self.certified_bundle_capacity_reserved_bytes()?;

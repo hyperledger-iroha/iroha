@@ -4,7 +4,7 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
         fixture
             .time_handle
             .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
-        let hash = fixture.transaction.hash();
+        let hash = fixture.transaction.hash_as_entrypoint();
         let mut claim = fixture
             .queue
             .durable_plan_claims
@@ -17,12 +17,11 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
             .version = 0;
     };
     let assert_faulted_owner_retained = |fixture: &GloballyBoundGuardFixture| {
-        let hash = fixture.transaction.hash();
+        let hash = fixture.transaction.hash_as_entrypoint();
         assert!(fixture.queue.accepted_work_validation_faulted());
         assert_eq!(fixture.queue.active_len(), 1);
         assert_eq!(fixture.queue.queued_len(), 1);
         assert!(fixture.queue.txs.contains_key(&hash));
-        assert!(fixture.queue.routing_decisions.contains_key(&hash));
         assert!(fixture.queue.routing_plans.contains_key(&hash));
         assert!(
             fixture
@@ -90,7 +89,7 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
     assert_faulted_owner_retained(&bounded_snapshot_fixture);
     let revalidation_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&revalidation_fixture);
-    let revalidation_hash = revalidation_fixture.transaction.hash();
+    let revalidation_hash = revalidation_fixture.transaction.hash_as_entrypoint();
     let checked_transaction = revalidation_fixture
         .queue
         .txs
@@ -138,7 +137,7 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
     );
     assert_faulted_owner_retained(&revalidation_fixture);
     let fixture = globally_bound_guard_fixture();
-    let hash = fixture.transaction.hash();
+    let hash = fixture.transaction.hash_as_entrypoint();
     let guard = fixture.pop_guard();
     drop(guard);
     fixture.assert_restored_fifo_owner();

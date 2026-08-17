@@ -38,7 +38,7 @@ use iroha_data_model::{
     content::ContentAuthMode,
     da::{
         commitment::DaProofScheme,
-        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
+        confidential_compute::ConfidentialComputePolicy,
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, RetentionPolicy},
     },
@@ -49,8 +49,8 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility, ShardId,
-        UniversalAccountId,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
+        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
@@ -85,7 +85,11 @@ use crate::{
     kura::{FsyncMode, InitMode},
     parameters::{defaults, user, user::ParseError},
 };
-use norito::{codec::Encode, streaming::EntropyMode};
+pub use iroha_data_model::nexus::DaManifestPolicy;
+use norito::{
+    codec::{Decode, Encode},
+    streaming::EntropyMode,
+};
 pub use sorafs_reputation::{
     SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
     SorafsReserveTransparencyRuntime,
@@ -556,8 +560,8 @@ impl Root {
             || self.torii.sorafs_discovery.discovery_enabled
             || self.torii.sorafs_repair.enabled
             || self.torii.sorafs_gc.enabled;
-        let multilane = self.uses_multilane_catalogs();
-        sorafs || multilane
+        let nexus = self.uses_multilane_catalogs() || self.nexus.has_lane_overrides();
+        sorafs || nexus
     }
     /// Detect whether the configuration declares multiple lanes/dataspaces or non-default routing.
     #[must_use]
@@ -578,19 +582,11 @@ impl Root {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
         }
-        let catalog = &self.nexus.lane_catalog;
-        let is_default_catalog = catalog.lane_count().get() == 1
-            && matches!(catalog.lanes(), [lane] if lane.id == LaneId::SINGLE && lane.alias == "default");
-        let dataspace = &self.nexus.dataspace_catalog;
-        let is_default_dataspace = matches!(dataspace.entries(), [entry]
-            if entry.id == DataSpaceId::UNIVERSAL
-                && entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS
-        );
-        let policy = &self.nexus.routing_policy;
-        let is_default_policy = policy.default_lane == LaneId::SINGLE
-            && policy.default_dataspace == DataSpaceId::UNIVERSAL
-            && policy.rules.is_empty();
-        if is_default_catalog && is_default_dataspace && is_default_policy {
+        // Apply bundled geometry only to the exact untouched default. A lane
+        // can remain SINGLE/"default" while carrying security- or
+        // storage-relevant overrides (for example a pinned shard); treating
+        // that as pristine would silently discard explicit operator policy.
+        if !self.nexus.has_lane_overrides() {
             let lane_catalog = sora_lane_catalog();
             self.nexus.configured_lane_catalog = lane_catalog.clone();
             self.nexus.lane_catalog = lane_catalog;
@@ -930,6 +926,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
         LaneConfigMetadata {
@@ -944,6 +944,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
         LaneConfigMetadata {
@@ -958,6 +962,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
     ];
@@ -1057,402 +1065,7 @@ signature_threshold = 1
             .expect("load config with valid SoraFS admission")
     }
     include!("actual/sora_profile_discovery_disabled_test.rs");
-    #[test]
-    fn apply_sora_profile_enables_discovery_with_parsed_admission() {
-        let mut root = minimal_root_with_sorafs_admission();
-        let trusted_council_keys = root
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_ref()
-            .expect("parsed admission policy")
-            .trusted_council_keys
-            .clone();
-        assert!(!root.torii.sorafs_discovery.discovery_enabled);
-        root.apply_sora_profile();
-        let admission = root
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_ref()
-            .expect("profile must preserve parsed admission policy");
-        assert!(root.torii.sorafs_discovery.discovery_enabled);
-        assert_eq!(admission.trusted_council_keys, trusted_council_keys);
-        assert_eq!(admission.signature_threshold.get(), 1);
-        assert_eq!(admission.envelopes_dir, PathBuf::from("admission"));
-    }
-    #[test]
-    fn apply_sora_profile_enables_nexus_and_sets_catalogs_on_defaults() {
-        let mut root = minimal_root();
-        root.apply_sora_profile();
-        assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
-        assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
-        assert_eq!(
-            root.nexus.configured_lane_catalog, root.nexus.lane_catalog,
-            "the profile catalog must become the immutable consensus-policy baseline"
-        );
-        assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
-        assert_eq!(root.nexus.routing_policy, sora_routing_policy());
-        assert_eq!(
-            root.nexus.lane_config.entries().len(),
-            root.nexus.lane_catalog.lanes().len()
-        );
-        assert_eq!(
-            root.tiered_state
-                .da_store_root
-                .as_ref()
-                .expect("DA store root should be defaulted"),
-            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
-        );
-    }
-    #[test]
-    fn has_lane_overrides_detects_single_lane_changes() {
-        let mut root = minimal_root();
-        root.nexus.enabled = false;
-        root.nexus.lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(1).expect("nonzero lane count"),
-            vec![LaneConfigMetadata {
-                alias: "custom".to_string(),
-                ..LaneConfigMetadata::default()
-            }],
-        )
-        .expect("lane catalog");
-        assert!(root.nexus.has_lane_overrides());
-        assert!(
-            !root.nexus.uses_multilane_catalogs(),
-            "single-lane overrides should not be treated as multi-lane"
-        );
-    }
-    #[test]
-    fn apply_sora_profile_preserves_custom_catalogs_but_enables_flag() {
-        let mut root = minimal_root();
-        let custom_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero lane count"),
-            vec![
-                LaneConfigMetadata {
-                    id: LaneId::new(0),
-                    alias: "alpha".to_string(),
-                    description: None,
-                    ..LaneConfigMetadata::default()
-                },
-                LaneConfigMetadata {
-                    id: LaneId::new(1),
-                    alias: "beta".to_string(),
-                    description: None,
-                    ..LaneConfigMetadata::default()
-                },
-            ],
-        )
-        .expect("valid custom catalog");
-        root.nexus.lane_config = LaneConfig::from_catalog(&custom_catalog);
-        root.nexus.configured_lane_catalog = custom_catalog.clone();
-        root.nexus.lane_catalog = custom_catalog.clone();
-        root.apply_sora_profile();
-        assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
-        assert_eq!(
-            root.tiered_state
-                .da_store_root
-                .as_ref()
-                .expect("DA store root should be defaulted"),
-            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
-        );
-        assert_eq!(root.nexus.lane_catalog, custom_catalog);
-        assert_eq!(root.nexus.configured_lane_catalog, custom_catalog);
-        assert_eq!(
-            root.nexus
-                .lane_config
-                .entry(LaneId::new(1))
-                .expect("lane config should be preserved")
-                .alias,
-            "beta"
-        );
-    }
-    #[test]
-    fn apply_storage_budget_clamps_component_caps() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        root.nexus.storage.local_budget_bytes = Some(Bytes(1_000));
-        root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
-        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
-            kura_blocks_bps: 5_000,
-            wsv_snapshots_bps: 2_000,
-            sorafs_bps: 2_000,
-            soranet_spool_bps: 500,
-            soravpn_spool_bps: 500,
-        };
-        root.tiered_state.enabled = false;
-        root.tiered_state.cold_store_root = None;
-        root.tiered_state.da_store_root = None;
-        root.kura.max_disk_usage_bytes = Bytes(0);
-        root.tiered_state.max_cold_bytes = Bytes(0);
-        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
-        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
-        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
-        root.apply_storage_budget();
-        assert_eq!(
-            root.nexus
-                .storage
-                .effective_local_budget_bytes
-                .map(Bytes::get),
-            Some(1_000)
-        );
-        assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
-        assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
-        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
-        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 50);
-        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 50);
-        assert!(root.tiered_state.enabled, "tiered state should be enabled");
-        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
-        assert!(root.tiered_state.da_store_root.is_none());
-        assert_eq!(
-            root.tiered_state
-                .cold_store_root
-                .as_ref()
-                .expect("cold store root defaulted")
-                .as_os_str(),
-            defaults::tiered_state::DEFAULT_COLD_STORE_ROOT
-        );
-    }
-    #[test]
-    fn apply_derived_storage_budget_uses_filesystem_group_caps() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        let filesystem_budgets = vec![
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
-                components: vec![
-                    NexusStorageBudgetComponent::Kura,
-                    NexusStorageBudgetComponent::Sorafs,
-                ],
-            },
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(1_200).expect("non-zero budget"),
-                components: vec![
-                    NexusStorageBudgetComponent::WsvCold,
-                    NexusStorageBudgetComponent::SoranetSpool,
-                    NexusStorageBudgetComponent::SoravpnSpool,
-                ],
-            },
-        ];
-        root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
-        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
-            kura_blocks_bps: 5_000,
-            wsv_snapshots_bps: 2_000,
-            sorafs_bps: 2_000,
-            soranet_spool_bps: 500,
-            soravpn_spool_bps: 500,
-        };
-        root.tiered_state.enabled = false;
-        root.tiered_state.cold_store_root = None;
-        root.tiered_state.da_store_root = None;
-        root.kura.max_disk_usage_bytes = Bytes(0);
-        root.tiered_state.max_cold_bytes = Bytes(0);
-        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
-        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
-        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
-        let aggregate = root
-            .apply_derived_storage_budget(&filesystem_budgets)
-            .expect("valid filesystem budgets");
-        assert_eq!(aggregate.get(), 2_000);
-        assert!(root.nexus.storage.local_budget_bytes.is_none());
-        assert_eq!(
-            root.nexus
-                .storage
-                .effective_local_budget_bytes
-                .map(Bytes::get),
-            Some(2_000)
-        );
-        assert_eq!(root.kura.max_disk_usage_bytes.get(), 572);
-        assert_eq!(root.tiered_state.max_cold_bytes.get(), 800);
-        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 228);
-        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 200);
-        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 200);
-        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
-    }
-    #[test]
-    fn runtime_storage_budget_reconciliation_is_not_ratchet_bound() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        root.nexus.storage.local_budget_bytes = None;
-        root.nexus.storage.disk_budget_weights = NexusStorageWeights::default();
-        root.kura.max_disk_usage_bytes = Bytes(1_000);
-        let budget = |bytes| NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
-            components: vec![NexusStorageBudgetComponent::Kura],
-        };
-        root.apply_derived_storage_budget(&[budget(200)])
-            .expect("valid filesystem budget");
-        assert_eq!(root.kura.max_disk_usage_bytes.get(), 200);
-        root.apply_storage_budget();
-        assert_eq!(
-            root.nexus
-                .storage
-                .effective_local_budget_bytes
-                .map(Bytes::get),
-            Some(200),
-            "an absent operator budget must not erase the runtime-derived effective budget"
-        );
-        root.apply_derived_storage_budget(&[budget(800)])
-            .expect("valid filesystem budget");
-        assert_eq!(
-            root.kura.max_disk_usage_bytes.get(),
-            800,
-            "a later filesystem probe may raise the cap back toward its configured ceiling"
-        );
-        assert!(root.nexus.storage.local_budget_bytes.is_none());
-        assert_eq!(
-            root.nexus
-                .storage
-                .effective_local_budget_bytes
-                .map(Bytes::get),
-            Some(800)
-        );
-    }
-    #[test]
-    fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        let filesystem_budgets = [
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(u64::MAX).expect("non-zero budget"),
-                components: vec![NexusStorageBudgetComponent::Kura],
-            },
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
-                components: vec![NexusStorageBudgetComponent::WsvCold],
-            },
-        ];
-        let error = root
-            .apply_derived_storage_budget(&filesystem_budgets)
-            .expect_err("the aggregate must use checked arithmetic");
-        assert_eq!(error, NexusStorageBudgetApplicationError::AggregateOverflow);
-        assert!(
-            root.nexus.storage.effective_local_budget_bytes.is_none(),
-            "an invalid aggregate must be rejected before mutating effective configuration"
-        );
-    }
-    #[test]
-    fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutation() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        let empty = NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
-            components: Vec::new(),
-        };
-        assert_eq!(
-            root.apply_derived_storage_budget(&[empty])
-                .expect_err("empty component sets must be rejected"),
-            NexusStorageBudgetApplicationError::EmptyComponentSet { group_index: 0 }
-        );
-        let noncanonical = NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
-            components: vec![
-                NexusStorageBudgetComponent::Sorafs,
-                NexusStorageBudgetComponent::Kura,
-            ],
-        };
-        assert!(matches!(
-            root.apply_derived_storage_budget(&[noncanonical]),
-            Err(
-                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
-                    group_index: 0,
-                    ..
-                }
-            )
-        ));
-        let duplicate_within_group = NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
-            components: vec![
-                NexusStorageBudgetComponent::Kura,
-                NexusStorageBudgetComponent::Kura,
-            ],
-        };
-        assert_eq!(
-            root.apply_derived_storage_budget(&[duplicate_within_group])
-                .expect_err("within-group duplicates must be rejected"),
-            NexusStorageBudgetApplicationError::DuplicateComponent {
-                component: NexusStorageBudgetComponent::Kura,
-            }
-        );
-        let duplicate = [
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
-                components: vec![NexusStorageBudgetComponent::Kura],
-            },
-            NexusStorageFilesystemBudget {
-                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
-                components: vec![NexusStorageBudgetComponent::Kura],
-            },
-        ];
-        assert_eq!(
-            root.apply_derived_storage_budget(&duplicate)
-                .expect_err("cross-group duplicates must be rejected"),
-            NexusStorageBudgetApplicationError::DuplicateComponent {
-                component: NexusStorageBudgetComponent::Kura,
-            }
-        );
-        assert!(
-            root.nexus.storage.effective_local_budget_bytes.is_none(),
-            "invalid filesystem metadata must not mutate effective configuration"
-        );
-    }
-    #[test]
-    fn derived_storage_budget_rejects_zero_component_caps() {
-        let mut root = minimal_root();
-        root.nexus.enabled = true;
-        let budget = NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
-            components: vec![
-                NexusStorageBudgetComponent::Kura,
-                NexusStorageBudgetComponent::Sorafs,
-            ],
-        };
-        assert_eq!(
-            root.apply_derived_storage_budget(&[budget])
-                .expect_err("zero means unlimited to component cap consumers"),
-            NexusStorageBudgetApplicationError::ZeroComponentAllocation {
-                group_index: 0,
-                component: NexusStorageBudgetComponent::Sorafs,
-            }
-        );
-        assert!(root.nexus.storage.effective_local_budget_bytes.is_none());
-    }
-    #[test]
-    fn storage_budget_splitting_is_exact_at_u64_max() {
-        let weights = NexusStorageWeights::default();
-        let global = derive_global_nexus_storage_component_caps(u64::MAX, weights);
-        assert_eq!(global.total(), u64::MAX);
-        let filesystem = split_filesystem_budget_across_components(
-            u64::MAX,
-            &NexusStorageBudgetComponent::ORDER,
-            weights,
-        );
-        assert_eq!(filesystem.total(), u64::MAX);
-        for component in NexusStorageBudgetComponent::ORDER {
-            assert!(filesystem.budget_for(component) > 0);
-        }
-    }
-    #[test]
-    fn streaming_soravpn_defaults_match_constants() {
-        let config = StreamingSoravpn::from_defaults();
-        assert_eq!(
-            config.provision_spool_dir,
-            PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)
-        );
-        assert_eq!(
-            config.provision_spool_max_bytes.get(),
-            defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES.get()
-        );
-    }
-    #[test]
-    fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
-        let config = SoranetVpn::default();
-        assert!(!config.enabled);
-        assert_eq!(
-            config.operator_account_id,
-            defaults::governance::bond_escrow_account_id()
-        );
-    }
+    include!("actual/sora_profile_runtime_tests.rs");
 }
 /// Common options shared between multiple components.
 #[derive(Debug, Clone)]
@@ -2903,8 +2516,9 @@ pub struct NexusFees {
     pub sponsor_vault_custody_account_id: AccountId,
     /// How fees are settled after they are computed.
     pub settlement_mode: NexusFeeSettlementMode,
-    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
-    pub successful_claim_fee_exempt_authorities: Vec<String>,
+    /// Canonical authorities allowed to submit fee-free successful SORA v2 XOR claim mint
+    /// transactions.
+    pub successful_claim_fee_exempt_authorities: BTreeSet<AccountId>,
 }
 /// Settlement mode for Nexus fee debits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2926,7 +2540,7 @@ impl Default for NexusFees {
             sponsor_vault_custody_account_id:
                 defaults::nexus::fees::sponsor_vault_custody_account_id(),
             settlement_mode: NexusFeeSettlementMode::Direct,
-            successful_claim_fee_exempt_authorities: Vec::new(),
+            successful_claim_fee_exempt_authorities: BTreeSet::new(),
         }
     }
 }
@@ -3021,16 +2635,30 @@ impl Default for NexusUploadedModels {
 /// Committee and quorum settings for protected-domain endorsements.
 #[derive(Debug, Clone)]
 pub struct NexusEndorsement {
-    /// Committee member public keys allowed to sign endorsements (string form).
-    pub committee_keys: Vec<String>,
+    /// Canonical committee public keys allowed to sign endorsements.
+    pub committee_keys: BTreeSet<PublicKey>,
     /// Quorum required to accept an endorsement (0 disables enforcement).
     pub quorum: u16,
 }
 impl Default for NexusEndorsement {
     fn default() -> Self {
+        let committee_keys: BTreeSet<PublicKey> = defaults::nexus::endorsement::committee_keys()
+            .into_iter()
+            .enumerate()
+            .map(|(index, raw_key)| {
+                PublicKey::from_str(raw_key.trim()).unwrap_or_else(|error| {
+                    panic!("invalid default nexus.endorsement.committee_keys[{index}]: {error}")
+                })
+            })
+            .collect();
+        let quorum = defaults::nexus::endorsement::QUORUM;
+        assert!(
+            quorum == 0 || usize::from(quorum) <= committee_keys.len(),
+            "default nexus.endorsement.quorum exceeds the unique default committee size"
+        );
         Self {
-            committee_keys: defaults::nexus::endorsement::committee_keys(),
-            quorum: defaults::nexus::endorsement::QUORUM,
+            committee_keys,
+            quorum,
         }
     }
 }
@@ -3378,6 +3006,7 @@ impl Nexus {
     #[must_use]
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
+            || self.configured_lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
             || !self.dataspace_fee_sponsor_program_ids.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
@@ -3699,10 +3328,22 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         .iter()
         .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
-    let mut successful_claim_fee_exempt_authorities =
-        nexus.fees.successful_claim_fee_exempt_authorities.clone();
-    successful_claim_fee_exempt_authorities.sort_unstable();
-    successful_claim_fee_exempt_authorities.dedup();
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect();
+    let endorsement_committee_keys = nexus
+        .endorsement
+        .committee_keys
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     let governance_modules = nexus
         .governance
         .modules
@@ -3718,10 +3359,9 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect();
     let autoscale = &nexus.autoscale;
-    let configured_lane_catalog = (
-        nexus.configured_lane_catalog.lane_count().get(),
-        nexus.configured_lane_catalog.lanes().to_vec(),
-    )
+    let configured_lane_catalog = nexus
+        .configured_lane_catalog
+        .consensus_projection()
         .encode();
     let preimage = NexusConsensusPolicyPreimageV1 {
         version: VERSION,
@@ -3786,7 +3426,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             max_session_image_budget: nexus.uploaded_models.max_session_image_budget,
         },
         endorsement: NexusConsensusEndorsementV1 {
-            committee_keys: nexus.endorsement.committee_keys.clone(),
+            committee_keys: endorsement_committee_keys,
             quorum: nexus.endorsement.quorum,
         },
         axt: NexusConsensusAxtV1 {
@@ -4833,20 +4473,31 @@ impl LaneConfig {
     #[must_use]
     pub fn is_confidential_compute(&self, id: LaneId) -> bool {
         self.entry(id)
-            .is_some_and(|entry| entry.confidential_compute)
+            .is_some_and(|entry| entry.confidential_compute.is_some())
     }
     /// Resolve the confidential compute policy for a lane if configured.
     #[must_use]
     pub fn confidential_compute_policy(&self, id: LaneId) -> Option<&ConfidentialComputePolicy> {
         self.entry(id)
-            .and_then(|entry| entry.confidential_policy.as_ref())
+            .and_then(|entry| entry.confidential_compute.as_ref())
     }
-    /// Declared access audience labels for a confidential compute lane.
+    /// Canonically ordered access audience labels for a confidential-compute lane.
     #[must_use]
-    pub fn confidential_access(&self, id: LaneId) -> &[String] {
+    pub fn confidential_access(&self, id: LaneId) -> Option<&BTreeSet<String>> {
         self.entry(id)
-            .map(|entry| entry.confidential_access.as_slice())
-            .unwrap_or_default()
+            .and_then(|entry| entry.confidential_compute.as_ref())
+            .map(|policy| &policy.allowed_audiences)
+    }
+    /// Resolve typed scheduler overrides for a lane if configured.
+    #[must_use]
+    pub fn scheduler_policy(&self, id: LaneId) -> Option<&LaneSchedulerPolicy> {
+        self.entry(id).and_then(|entry| entry.scheduler.as_ref())
+    }
+    /// Resolve the typed settlement reserve policy for a lane if configured.
+    #[must_use]
+    pub fn settlement_buffer_policy(&self, id: LaneId) -> Option<&LaneSettlementBufferPolicy> {
+        self.entry(id)
+            .and_then(|entry| entry.settlement_buffer.as_ref())
     }
 }
 /// Derived configuration for a single lane.
@@ -4876,64 +4527,22 @@ pub struct LaneConfigEntry {
     pub key_prefix: [u8; 4],
     /// Manifest availability enforcement policy for this lane.
     pub manifest_policy: DaManifestPolicy,
-    /// Whether the lane is marked for confidential compute handling.
-    pub confidential_compute: bool,
-    /// Confidential compute policy derived from lane metadata (if enabled).
-    pub confidential_policy: Option<ConfidentialComputePolicy>,
-    /// Declared audiences allowed to fetch confidential compute payloads.
-    pub confidential_access: Vec<String>,
+    /// Typed confidential-compute policy, absent for ordinary lanes.
+    pub confidential_compute: Option<ConfidentialComputePolicy>,
+    /// Positive scheduler overrides, absent when global fallbacks apply.
+    pub scheduler: Option<LaneSchedulerPolicy>,
+    /// Typed settlement reserve policy, absent when the lane has no reserve.
+    pub settlement_buffer: Option<LaneSettlementBufferPolicy>,
 }
 impl LaneConfigEntry {
-    const MANIFEST_POLICY_METADATA_KEY: &'static str = "da_manifest_policy";
-    const CONFIDENTIAL_FLAG_KEY: &'static str = "confidential_compute";
-    const CONFIDENTIAL_MECHANISM_KEY: &'static str = "confidential_mechanism";
-    const CONFIDENTIAL_KEY_VERSION_KEY: &'static str = "confidential_key_version";
-    const CONFIDENTIAL_ACCESS_KEY: &'static str = "confidential_access";
     fn from_metadata(meta: &LaneConfigMetadata) -> Self {
         let slug = Self::slugify(&meta.alias, meta.id);
         let lane_numeric = meta.id.as_u32();
         let key_prefix = lane_numeric.to_be_bytes();
         let kura_segment = format!("lane_{lane_numeric:03}_{slug}");
         let merge_segment = format!("lane_{lane_numeric:03}_{slug}_merge");
-        let manifest_policy = meta
-            .metadata
-            .get(Self::MANIFEST_POLICY_METADATA_KEY)
-            .and_then(|raw| DaManifestPolicy::from_metadata_value(raw))
-            .unwrap_or_default();
+        let manifest_policy = meta.manifest_policy;
         let shard_id = meta.effective_shard_id().as_u32();
-        let confidential_compute = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_FLAG_KEY)
-            .and_then(|raw| Self::parse_bool(raw.as_str()))
-            .unwrap_or(false);
-        let confidential_access = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_ACCESS_KEY)
-            .map(|raw| {
-                raw.split(',')
-                    .filter_map(|entry| {
-                        let trimmed = entry.trim();
-                        (!trimmed.is_empty()).then(|| trimmed.to_string())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mechanism = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_MECHANISM_KEY)
-            .and_then(|raw| ConfidentialComputeMechanism::from_metadata_value(raw.as_str()))
-            .unwrap_or(ConfidentialComputeMechanism::Encryption);
-        let key_version = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_KEY_VERSION_KEY)
-            .and_then(|raw| raw.parse::<u32>().ok());
-        let confidential_policy = if confidential_compute {
-            key_version.map(|key_version| {
-                ConfidentialComputePolicy::new(mechanism, key_version, confidential_access.clone())
-            })
-        } else {
-            None
-        };
         Self {
             lane_id: meta.id,
             shard_id,
@@ -4947,16 +4556,9 @@ impl LaneConfigEntry {
             merge_segment,
             key_prefix,
             manifest_policy,
-            confidential_compute,
-            confidential_policy,
-            confidential_access,
-        }
-    }
-    fn parse_bool(raw: &str) -> Option<bool> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "no" | "n" | "off" => Some(false),
-            _ => None,
+            confidential_compute: meta.confidential_compute.clone(),
+            scheduler: meta.scheduler.clone(),
+            settlement_buffer: meta.settlement_buffer.clone(),
         }
     }
     fn slugify(alias: &str, lane_id: LaneId) -> String {
@@ -4998,24 +4600,6 @@ impl LaneConfigEntry {
         root.as_ref()
             .join("merge_ledger")
             .join(format!("{}.log", self.merge_segment))
-    }
-}
-/// Per-lane manifest availability enforcement policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DaManifestPolicy {
-    /// Missing manifests block commitment and proposal sealing.
-    #[default]
-    Strict,
-    /// Missing manifests produce warnings but do not block commitment.
-    AuditOnly,
-}
-impl DaManifestPolicy {
-    fn from_metadata_value(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "strict" => Some(Self::Strict),
-            "audit" | "audit_only" | "warn" | "warn_only" => Some(Self::AuditOnly),
-            _ => None,
-        }
     }
 }
 /// Lane-fusion tuning parameters.
@@ -5434,12 +5018,18 @@ impl Default for Pipeline {
         }
     }
 }
-/// One active lane lifecycle binding committed into a Sumeragi v2 height context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+/// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
+///
+/// The complete projection contains every active or retired lane identifier ever
+/// observed by the state. Retired entries remain consensus-relevant because a
+/// later recreation derives its next incarnation from this retained generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SumeragiV2LaneLifecycleEntry {
     /// Canonical lane identifier.
     pub lane_id: LaneId,
-    /// Non-zero incarnation commitment for the active lane generation.
+    /// Monotonic incarnation generation retained for this lane identifier.
+    pub generation: u64,
+    /// Non-zero commitment for the latest active or retired incarnation.
     pub incarnation: Hash,
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
@@ -5451,16 +5041,17 @@ pub struct SumeragiV2LaneLifecycleEntry {
 /// sizing, caches, and telemetry. It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
-/// It also commits the active lane incarnation and activation-height map so
-/// peers with divergent lifecycle histories cannot enter the same height.
-/// Active records are sorted by their storage key before encoding so callers
-/// cannot accidentally make the commitment depend on iteration order.
+/// It also commits the complete retained lane-incarnation lineage, including
+/// retired lane identifiers, generations, commitments, and activation heights,
+/// so peers with divergent lifecycle histories cannot enter the same height or
+/// later derive the same recreated lane differently. Active validator records
+/// and retained lineage entries are sorted canonically before encoding.
 #[must_use]
 pub fn sumeragi_v2_nexus_amx_context_hash(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    lane_lifecycle: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
@@ -5479,23 +5070,32 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.lane_catalog.lane_count",
         &nexus.lane_catalog.lane_count().get(),
     );
-    append(
-        &mut preimage,
-        "nexus.lane_catalog.lanes",
-        &nexus.lane_catalog.lanes().to_vec(),
-    );
-    let mut lane_lifecycle = lane_lifecycle.to_vec();
-    lane_lifecycle.sort_by_key(|entry| entry.lane_id);
+    let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
+    append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
+    let mut retained_lane_lineage = retained_lane_lineage.to_vec();
+    retained_lane_lineage.sort_unstable_by(|left, right| {
+        left.lane_id
+            .cmp(&right.lane_id)
+            .then_with(|| left.generation.cmp(&right.generation))
+            .then_with(|| left.incarnation.cmp(&right.incarnation))
+            .then_with(|| left.activation_height.cmp(&right.activation_height))
+    });
     append(
         &mut preimage,
         "nexus.lane_lifecycle.count",
-        &u64::try_from(lane_lifecycle.len()).expect("lane lifecycle length fits in u64"),
+        &u64::try_from(retained_lane_lineage.len())
+            .expect("retained lane lineage length fits in u64"),
     );
-    for entry in lane_lifecycle {
+    for entry in retained_lane_lineage {
         append(
             &mut preimage,
             "nexus.lane_lifecycle.lane_id",
             &entry.lane_id,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.generation",
+            &entry.generation,
         );
         append(
             &mut preimage,
@@ -5515,11 +5115,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     for entry in dataspaces {
         append(&mut preimage, "nexus.dataspace.id", &entry.id);
         append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
-        append(
-            &mut preimage,
-            "nexus.dataspace.description",
-            &entry.description,
-        );
         append(
             &mut preimage,
             "nexus.dataspace.fault_tolerance",
@@ -5557,11 +5152,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
             &mut preimage,
             "nexus.routing.rule.instruction",
             &rule.matcher.instruction,
-        );
-        append(
-            &mut preimage,
-            "nexus.routing.rule.description",
-            &rule.matcher.description,
         );
     }
     let public_validator_mode = match nexus.staking.public_validator_mode {
@@ -5663,10 +5253,16 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.fees.settlement_mode",
         &settlement_mode,
     );
-    let mut successful_claim_fee_exempt_authorities =
-        nexus.fees.successful_claim_fee_exempt_authorities.clone();
-    successful_claim_fee_exempt_authorities.sort_unstable();
-    successful_claim_fee_exempt_authorities.dedup();
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect::<Vec<_>>();
     append(
         &mut preimage,
         "nexus.fees.successful_claim_exempt_authorities",
@@ -5792,29 +5388,53 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         ("nexus.da.q_in_slot_total", da.q_in_slot_total.get()),
         (
             "nexus.da.q_in_slot_per_ds_min",
-            da.q_in_slot_per_ds_min.get(),
-        ),
-        ("nexus.da.sample_size_base", da.sample_size_base.get()),
-        ("nexus.da.sample_size_max", da.sample_size_max.get()),
-        ("nexus.da.threshold_base", da.threshold_base.get()),
-        ("nexus.da.per_attester_shards", da.per_attester_shards.get()),
-        (
-            "nexus.da.ingest_quota_window_blocks",
-            da.ingest_quota_window_blocks.get(),
+            u32::from(da.q_in_slot_per_ds_min.get()),
         ),
         (
-            "nexus.da.ingest_quota_max_count_per_account",
-            da.ingest_quota_max_count_per_account.get(),
+            "nexus.da.sample_size_base",
+            u32::from(da.sample_size_base.get()),
         ),
         (
-            "nexus.da.ingest_quota_max_bytes_per_account",
-            da.ingest_quota_max_bytes_per_account.get(),
+            "nexus.da.sample_size_max",
+            u32::from(da.sample_size_max.get()),
         ),
-        ("nexus.da.audit.sample_size", da.audit.sample_size.get()),
-        ("nexus.da.audit.window_count", da.audit.window_count.get()),
+        (
+            "nexus.da.threshold_base",
+            u32::from(da.threshold_base.get()),
+        ),
     ] {
         append(&mut preimage, tag, &value);
     }
+    append(
+        &mut preimage,
+        "nexus.da.per_attester_shards",
+        &da.per_attester_shards.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_window_blocks",
+        &da.ingest_quota_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_max_count_per_account",
+        &da.ingest_quota_max_count_per_account.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_max_bytes_per_account",
+        &da.ingest_quota_max_bytes_per_account.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.audit.sample_size",
+        &da.audit.sample_size.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.audit.window_count",
+        &da.audit.window_count.get(),
+    );
     append(
         &mut preimage,
         "nexus.da.audit.interval_ns",

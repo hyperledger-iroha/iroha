@@ -5897,8 +5897,7 @@ fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &
     };
     let mut handshakes = block
         .0
-        .transactions_vec()
-        .iter()
+        .external_transactions()
         .filter_map(|tx| match tx.instructions() {
             Executable::Instructions(instructions) => Some(instructions),
             _ => None,
@@ -5919,8 +5918,7 @@ fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &
 fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
     block
         .0
-        .transactions_vec()
-        .iter()
+        .external_transactions()
         .any(|tx| match tx.instructions() {
             Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
                 instruction
@@ -5982,10 +5980,13 @@ fn normalize_genesis_consensus_handshake(
     .with_instructions(param_instructions)
     .try_sign(genesis_key_pair.private_key())
     .expect("sign normalized genesis consensus metadata transaction");
-    let mut transactions = transactions_without_consensus_handshake_metadata(
-        source.0.transactions_vec(),
-        genesis_key_pair,
-    );
+    let source_transactions = source
+        .0
+        .external_transactions()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut transactions =
+        transactions_without_consensus_handshake_metadata(&source_transactions, genesis_key_pair);
     transactions.push(param_tx);
     let external_merkle: iroha_crypto::MerkleTree<
         iroha_data_model::transaction::TransactionEntrypoint,
@@ -11827,8 +11828,7 @@ exit 0
     fn collect_set_parameters(block: &GenesisBlock) -> Vec<Parameter> {
         block
             .0
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .flat_map(|tx| match tx.instructions() {
                 Executable::Instructions(instructions) => instructions
                     .iter()
@@ -11891,8 +11891,7 @@ exit 0
     fn collect_non_handshake_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
         block
             .0
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .flat_map(|transaction| match transaction.instructions() {
                 Executable::Instructions(instructions) => instructions
                     .iter()
@@ -13331,7 +13330,7 @@ exit 0
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if instruction
@@ -13368,7 +13367,7 @@ exit 0
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if instruction
@@ -13406,7 +13405,7 @@ exit 0
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if instruction
@@ -13445,7 +13444,7 @@ exit 0
         );
         let genesis = network.genesis();
         let mut has_domain = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if instruction
@@ -13486,7 +13485,7 @@ exit 0
         );
         let genesis = network.genesis();
         let mut seen = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if let Some(register) = instruction
@@ -13538,7 +13537,7 @@ exit 0
         let expected_validator_count = network.peers().len();
         let genesis = network.genesis();
         let mut validator_count = 0;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if let Some(register) = instruction
@@ -13607,7 +13606,7 @@ exit 0
         let mut saw_definition = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     if let Some(register) = instruction
@@ -13663,7 +13662,7 @@ exit 0
             .map(NetworkPeer::account_id)
             .collect::<BTreeSet<_>>();
         let mut granted = BTreeSet::new();
-        for tx in genesis.0.transactions_vec() {
+        for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
                     let Some(grant) = instruction
@@ -14399,8 +14398,7 @@ exit 0
         assert!(
             baseline_genesis
                 .0
-                .transactions_vec()
-                .iter()
+                .external_transactions()
                 .filter_map(|transaction| match transaction.instructions() {
                     Executable::Instructions(instructions) => Some(instructions),
                     _ => None,
@@ -14495,8 +14493,7 @@ exit 0
         assert!(
             genesis
                 .0
-                .transactions_vec()
-                .iter()
+                .external_transactions()
                 .filter_map(|transaction| match transaction.instructions() {
                     Executable::Instructions(instructions) => Some(instructions),
                     _ => None,

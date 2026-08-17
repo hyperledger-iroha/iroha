@@ -209,7 +209,7 @@ use iroha_data_model::{
             SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
             SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
         },
-        consensus_v2::QuorumCertificateRef,
+        consensus_v2::SumeragiV2QcResponse,
     },
     domain::DomainId,
     events::{
@@ -304,44 +304,6 @@ struct SumeragiPacemakerResponse {
     view_timeout_remaining_ms: u64,
 }
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-#[allow(clippy::struct_field_names)]
-struct SumeragiPhasesEma {
-    propose_ms: u64,
-    collect_da_ms: u64,
-    collect_prevote_ms: u64,
-    collect_precommit_ms: u64,
-    collect_aggregator_ms: u64,
-    commit_ms: u64,
-    pipeline_total_ms: u64,
-}
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-#[allow(clippy::struct_field_names)]
-struct SumeragiPhasesMax {
-    propose_ms: u64,
-    collect_da_ms: u64,
-    collect_prevote_ms: u64,
-    collect_precommit_ms: u64,
-    collect_aggregator_ms: u64,
-    commit_ms: u64,
-    pipeline_total_ms: u64,
-}
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-struct SumeragiPhasesResponse {
-    propose_ms: u64,
-    collect_da_ms: u64,
-    collect_prevote_ms: u64,
-    collect_precommit_ms: u64,
-    collect_aggregator_ms: u64,
-    commit_ms: u64,
-    pipeline_total_ms: u64,
-    collect_aggregator_gossip_total: u64,
-    block_created_dropped_by_lock_total: u64,
-    block_created_hint_mismatch_total: u64,
-    block_created_proposal_mismatch_total: u64,
-    max_ms: SumeragiPhasesMax,
-    ema_ms: SumeragiPhasesEma,
-}
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct PrfContext {
     height: u64,
     view: u64,
@@ -352,27 +314,6 @@ struct PrfContext {
 struct SumeragiLeaderResponse {
     leader_index: u64,
     prf: PrfContext,
-}
-/// Authoritative PrepareQC references exposed by `/v1/sumeragi/qc`.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-pub struct SumeragiV2QcResponse {
-    /// Highest verified PrepareQC known to the reducer.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub highest_prepare_qc: Option<QuorumCertificateRef>,
-    /// PrepareQC lock persisted by the reducer.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub locked_prepare_qc: Option<QuorumCertificateRef>,
 }
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiParamsResponse {
@@ -3104,6 +3045,71 @@ fn norito_internal_error(err: json::Error) -> Error {
         err.to_string(),
     ))
 }
+fn application_json_response(body: impl Into<Body>) -> Response {
+    let mut response = Response::new(body.into());
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    response
+}
+fn pretty_json_response<T: json::JsonSerialize + ?Sized>(value: &T) -> Result<Response> {
+    json::to_json_pretty(value)
+        .map(application_json_response)
+        .map_err(norito_internal_error)
+}
+fn infallible_pretty_json_response<T: json::JsonSerialize + ?Sized>(
+    value: &T,
+    fallback: &'static str,
+) -> Response {
+    application_json_response(json::to_json_pretty(value).unwrap_or_else(|_| fallback.into()))
+}
+#[cfg(feature = "app_api")]
+fn filter_expr_depth(expr: &FilterExpr) -> usize {
+    match expr {
+        FilterExpr::And(list) | FilterExpr::Or(list) => {
+            1 + list.iter().map(filter_expr_depth).max().unwrap_or(0)
+        }
+        FilterExpr::Not(inner) => 1 + filter_expr_depth(inner),
+        _ => 1,
+    }
+}
+#[cfg(feature = "app_api")]
+fn paginated_json_response<T>(
+    page: &PageResult<T>,
+    count_mode: AppCountMode,
+    item_json: impl FnMut(&T) -> Result<Value>,
+) -> Result<Response> {
+    let items = page
+        .items
+        .iter()
+        .map(item_json)
+        .collect::<Result<Vec<_>>>()?;
+    let mut top = Map::new();
+    top.insert("items".into(), Value::Array(items));
+    insert_page_metadata(&mut top, page, count_mode);
+    pretty_json_response(&top)
+}
+#[cfg(feature = "app_api")]
+fn paginated_json_map_response<T>(
+    page: &PageResult<T>,
+    count_mode: AppCountMode,
+    mut item_json: impl FnMut(&T) -> Map,
+) -> Result<Response> {
+    paginated_json_response(page, count_mode, |item| Ok(Value::Object(item_json(item))))
+}
+#[cfg(feature = "app_api")]
+fn id_paginated_json_response<T>(
+    page: &PageResult<T>,
+    count_mode: AppCountMode,
+    mut id: impl FnMut(&T) -> String,
+) -> Result<Response> {
+    paginated_json_map_response(page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("id".into(), Value::from(id(item)));
+        row
+    })
+}
 #[cfg(feature = "app_api")]
 fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -3750,17 +3756,7 @@ pub async fn handle_get_proof_tags(
             out.push(norito::json::Value::from(hex::encode(t)));
         }
     }
-    let body = norito::json::to_json_pretty(&out).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&out)
 }
 static APP_QUERY_LIMITS: LazyLock<RwLock<AppQueryLimits>> =
     LazyLock::new(|| RwLock::new(AppQueryLimits::default()));
@@ -4266,11 +4262,7 @@ pub async fn handle_list_proofs(
         })?
     };
     let bytes = body.len() as u64;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs", "ok", bytes, start.elapsed())
     });
@@ -4375,11 +4367,7 @@ pub async fn handle_count_proofs(
         norito_internal_error(e)
     })?;
     let bytes = body.len() as u64;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs/count", "ok", bytes, start.elapsed())
     });
@@ -4522,12 +4510,7 @@ pub async fn handle_list_vk(
             .collect();
         norito::json::to_json_pretty(&arr).unwrap_or_else(|_| "[]".into())
     };
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 include!("routing/signed_query_execution.rs");
 // ---------------------- Iroha Connect (feature-gated) ----------------------
@@ -5127,11 +5110,7 @@ pub async fn handle_get_proof(
         ))
     })?;
     let bytes = body.len() as u64;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = application_json_response(body);
     if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
         resp.headers_mut()
             .insert(axum::http::header::CACHE_CONTROL, cache_header);
@@ -5275,13 +5254,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(checkpoints).into_response());
     }
-    let body = json::to_json_pretty(&checkpoints).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&checkpoints)
 }
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
@@ -5315,13 +5288,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(records).into_response());
     }
-    let body = json::to_json_pretty(&records).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&records)
 }
 #[cfg(test)]
 mod consensus_key_response_bounds_tests {
@@ -5381,13 +5348,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(certificates).into_response());
     }
-    let body = json::to_json_pretty(&certificates).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&certificates)
 }
 fn query_internal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -5441,13 +5402,7 @@ pub(crate) async fn handle_v1_bridge_finality(
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(proof).into_response());
             }
-            let body = json::to_json_pretty(&proof).map_err(norito_internal_error)?;
-            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_static("application/json"),
-            );
-            Ok(resp)
+            pretty_json_response(&proof)
         },
     )
     .await
@@ -5476,13 +5431,7 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(attestation).into_response());
             }
-            let body = json::to_json_pretty(&attestation).map_err(norito_internal_error)?;
-            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_static("application/json"),
-            );
-            Ok(resp)
+            pretty_json_response(&attestation)
         },
     )
     .await
@@ -5504,13 +5453,7 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(bundle).into_response());
             }
-            let body = json::to_json_pretty(&bundle).map_err(norito_internal_error)?;
-            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_static("application/json"),
-            );
-            Ok(resp)
+            pretty_json_response(&bundle)
         },
     )
     .await
@@ -5594,12 +5537,7 @@ where
             .insert(header::VARY, axum::http::HeaderValue::from_static("Accept"));
         return Ok(response);
     }
-    let body = json::to_json_pretty(value).map_err(norito_internal_error)?;
-    let mut response = Response::new(Body::from(body));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut response = pretty_json_response(value)?;
     response
         .headers_mut()
         .insert(header::VARY, axum::http::HeaderValue::from_static("Accept"));
@@ -8372,13 +8310,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(windowed).into_response());
     }
-    let body = json::to_json_pretty(&windowed).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&windowed)
 }
 /// GET /v1/sumeragi/validator-sets/{height} — Validator-set snapshot for a specific block height
 #[iroha_futures::telemetry_future]
@@ -8400,13 +8332,7 @@ pub async fn handle_v1_sumeragi_validator_set_by_height(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(snapshot).into_response());
     }
-    let body = json::to_json_pretty(&snapshot).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&snapshot)
 }
 fn collect_validator_snapshots() -> Vec<ValidatorSetSnapshot> {
     let certificates = sumeragi::status::commit_qc_history();
@@ -8434,56 +8360,7 @@ pub async fn handle_v1_sumeragi_key_lifecycle(
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         return Ok(crate::NoritoBody(records).into_response());
     }
-    let body = json::to_json_pretty(&records).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-/// GET /v1/sumeragi/phases — Compact JSON with latest per-phase latencies (ms)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_phases(
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let snap = status::phase_latencies_snapshot();
-    let payload = SumeragiPhasesResponse {
-        propose_ms: snap.propose_ms,
-        collect_da_ms: snap.collect_da_ms,
-        collect_prevote_ms: snap.collect_prevote_ms,
-        collect_precommit_ms: snap.collect_precommit_ms,
-        collect_aggregator_ms: snap.collect_aggregator_ms,
-        commit_ms: snap.commit_ms,
-        pipeline_total_ms: snap.pipeline_total_ms,
-        collect_aggregator_gossip_total: snap.gossip_fallback_total,
-        block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
-        block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
-        block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
-        max_ms: SumeragiPhasesMax {
-            propose_ms: snap.propose_max_ms,
-            collect_da_ms: snap.collect_da_max_ms,
-            collect_prevote_ms: snap.collect_prevote_max_ms,
-            collect_precommit_ms: snap.collect_precommit_max_ms,
-            collect_aggregator_ms: snap.collect_aggregator_max_ms,
-            commit_ms: snap.commit_max_ms,
-            pipeline_total_ms: snap.pipeline_total_max_ms,
-        },
-        ema_ms: SumeragiPhasesEma {
-            propose_ms: snap.propose_ema_ms,
-            collect_da_ms: snap.collect_da_ema_ms,
-            collect_prevote_ms: snap.collect_prevote_ema_ms,
-            collect_precommit_ms: snap.collect_precommit_ema_ms,
-            collect_aggregator_ms: snap.collect_aggregator_ema_ms,
-            commit_ms: snap.commit_ema_ms,
-            pipeline_total_ms: snap.pipeline_total_ema_ms,
-        },
-    };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    Ok(crate::utils::respond_with_format(payload, format))
+    pretty_json_response(&records)
 }
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize =
@@ -8662,7 +8539,14 @@ pub(crate) fn build_pipeline_preflight_response(
             .to_owned(),
             successful_claim_fee_exempt_authorities: nexus
                 .fees
-                .successful_claim_fee_exempt_authorities,
+                .successful_claim_fee_exempt_authorities
+                .into_iter()
+                .map(|authority| {
+                    authority.canonical_i105().expect(
+                        "validated Nexus fee-exempt authority must encode as canonical I105",
+                    )
+                })
+                .collect(),
         },
     }
 }
@@ -8708,13 +8592,7 @@ fn verify_batch_limit_rejected(
         json_entry("max", max as u64),
         json_entry("actual", actual as u64),
     ]);
-    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 #[cfg(feature = "zk-verify-batch")]
 fn envelope_diagnostic_error(
@@ -8784,13 +8662,7 @@ fn render_zk_verify_batch_response(ok: bool, statuses_json: Value) -> Result<Res
         json_entry("ok", ok),
         json_entry("statuses", statuses_json),
     ]);
-    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 #[cfg(feature = "zk-verify-batch")]
 fn max_standard_base64_len(max_decoded_len: usize) -> usize {
@@ -9515,7 +9387,7 @@ mod zk_vote_tally_response_tests {
         }
     }
 }
-/// GET /v1/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
+/// GET /v1/sumeragi/evidence/count — returns the number of unique admitted v2 proofs.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -9545,8 +9417,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list (0..=10000). Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc,
-    /// InvalidProposal, Censorship, SumeragiV2Equivocation
+    /// Optional filter by the sole first-release kind: `SumeragiV2Equivocation`.
     pub kind: Option<String>,
 }
 #[derive(
@@ -9586,28 +9457,19 @@ fn parse_evidence_list_usize(value: &str, field: &'static str) -> Result<usize, 
         invalid_evidence_list_pagination(field, value, "an integer representable by this server")
     })
 }
-fn parse_evidence_list_kind(
-    value: &str,
-) -> Result<iroha_core::sumeragi::consensus::EvidenceKind, Error> {
-    use iroha_core::sumeragi::consensus::EvidenceKind;
-    match value {
-        "DoublePrepare" => Ok(EvidenceKind::DoublePrepare),
-        "DoubleCommit" => Ok(EvidenceKind::DoubleCommit),
-        "InvalidQc" => Ok(EvidenceKind::InvalidQc),
-        "InvalidProposal" => Ok(EvidenceKind::InvalidProposal),
-        "Censorship" => Ok(EvidenceKind::Censorship),
-        "SumeragiV2Equivocation" => Ok(EvidenceKind::SumeragiV2Equivocation),
-        _ => Err(Error::AppQueryValidation {
+fn validate_evidence_list_kind(value: &str) -> Result<(), Error> {
+    if value == "SumeragiV2Equivocation" {
+        Ok(())
+    } else {
+        Err(Error::AppQueryValidation {
             code: "sumeragi_evidence_kind_invalid",
             message: format!(
-                "unsupported evidence kind `{value}`; expected one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal, Censorship, SumeragiV2Equivocation"
+                "unsupported evidence kind `{value}`; expected SumeragiV2Equivocation"
             ),
-        }),
+        })
     }
 }
-fn validate_evidence_list_query(
-    query: &EvidenceListQuery,
-) -> Result<Option<iroha_core::sumeragi::consensus::EvidenceKind>, Error> {
+fn validate_evidence_list_query(query: &EvidenceListQuery) -> Result<(), Error> {
     if let Some(limit) = query.limit
         && !(1..=EVIDENCE_LIST_LIMIT_CAP).contains(&limit)
     {
@@ -9629,8 +9491,9 @@ fn validate_evidence_list_query(
     query
         .kind
         .as_deref()
-        .map(parse_evidence_list_kind)
+        .map(validate_evidence_list_kind)
         .transpose()
+        .map(|_| ())
 }
 fn evidence_page_capacity(offset: usize, limit: usize) -> Result<usize, Error> {
     offset.checked_add(limit).ok_or_else(|| {
@@ -9676,18 +9539,18 @@ mod evidence_list_query_contract_tests {
         }
     }
     routing_test! { sync exact_evidence_query_contract_rejects_legacy_and_normalized_spellings
+        EvidenceListQuery::try_from(raw_query(
+            Some("1"),
+            Some("0"),
+            Some("SumeragiV2Equivocation"),
+        ))
+        .expect("the sole current evidence kind must be accepted");
         for kind in [
             "DoublePrepare",
             "DoubleCommit",
             "InvalidQc",
             "InvalidProposal",
             "Censorship",
-            "SumeragiV2Equivocation",
-        ] {
-            EvidenceListQuery::try_from(raw_query(Some("1"), Some("0"), Some(kind)))
-                .unwrap_or_else(|error| panic!("canonical evidence kind `{kind}` failed: {error}"));
-        }
-        for kind in [
             "DoublePrevote",
             "DoublePrecommit",
             "InvalidQC",
@@ -9747,30 +9610,27 @@ mod evidence_list_query_contract_tests {
         assert!(evidence_page_capacity(usize::MAX, 1).is_err());
     }
 }
-/// GET /v1/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
+/// GET /v1/sumeragi/evidence — list recent committed WSV evidence entries.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_list(
     State(state): State<std::sync::Arc<CoreState>>,
     crate::NoritoQuery(q): crate::NoritoQuery<EvidenceListQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let kind_filter = validate_evidence_list_query(&q)?;
+    validate_evidence_list_query(&q)?;
     let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(50);
     let capacity = evidence_page_capacity(offset, limit)?;
     let world = state.world_view();
-    let iter = world.consensus_evidence().iter().filter_map(|(_, record)| {
-        if kind_filter.is_some_and(|kind| record.evidence.kind != kind) {
-            return None;
-        }
-        Some((
+    let iter = world.consensus_evidence().iter().map(|(_, record)| {
+        (
             (
                 Reverse(record.recorded_at_height),
                 Reverse(record.recorded_at_view),
                 Reverse(record.recorded_at_ms),
             ),
             record,
-        ))
+        )
     });
     let (records, total) = collect_bounded_ranked_page(iter, offset, limit, capacity);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -9793,13 +9653,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         json_entry("total", u64::try_from(total).unwrap_or(u64::MAX)),
         json_entry("items", items),
     ]);
-    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 #[cfg(test)]
 fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
@@ -11023,160 +10877,55 @@ where
     hex::encode(hash.as_ref())
 }
 fn evidence_to_json(rec: &EvidenceRecord) -> Value {
-    use iroha_core::sumeragi::consensus::{EvidenceKind, EvidencePayload, Phase};
-    let ev = &rec.evidence;
-    let mut map = match (&ev.kind, &ev.payload) {
-        (
-            EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
-            EvidencePayload::DoubleVote { v1, v2 },
-        ) => {
-            let phase = match v1.phase {
-                Phase::Prepare => "Prepare",
-                Phase::Commit => "Commit",
-                Phase::NewView => "NewView",
-            };
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from(format!("{:?}", ev.kind)));
-            map.insert("phase".into(), Value::from(phase));
-            map.insert("height".into(), Value::from(v1.height));
-            map.insert("view".into(), Value::from(v1.view));
-            map.insert("epoch".into(), Value::from(v1.epoch));
-            map.insert("signer".into(), Value::from(v1.signer.clone()));
-            map.insert(
-                "block_hash_1".into(),
-                Value::from(hash_to_hex(v1.block_hash)),
-            );
-            map.insert(
-                "block_hash_2".into(),
-                Value::from(hash_to_hex(v2.block_hash)),
-            );
-            map
-        }
-        (
-            EvidenceKind::InvalidQc,
-            EvidencePayload::InvalidQc {
-                certificate,
-                reason,
-            },
-        ) => {
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("InvalidQc"));
-            map.insert("height".into(), Value::from(certificate.height));
-            map.insert("view".into(), Value::from(certificate.view));
-            map.insert("epoch".into(), Value::from(certificate.epoch));
-            map.insert(
-                "subject_block_hash".into(),
-                Value::from(hash_to_hex(certificate.subject_block_hash)),
-            );
-            map.insert(
-                "phase".into(),
-                Value::from(format!("{:?}", certificate.phase)),
-            );
-            map.insert("reason".into(), Value::from(reason.clone()));
-            map
-        }
-        (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, reason }) => {
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("InvalidProposal"));
-            map.insert("height".into(), Value::from(proposal.header.height));
-            map.insert("view".into(), Value::from(proposal.header.view));
-            map.insert("epoch".into(), Value::from(proposal.header.epoch));
-            map.insert(
-                "subject_block_hash".into(),
-                Value::from(hash_to_hex(proposal.header.highest_qc.subject_block_hash)),
-            );
-            map.insert(
-                "payload_hash".into(),
-                Value::from(hash_to_hex(proposal.payload_hash)),
-            );
-            map.insert("reason".into(), Value::from(reason.clone()));
-            map
-        }
-        (EvidenceKind::Censorship, EvidencePayload::Censorship { tx_hash, receipts }) => {
-            let mut map = json::Map::new();
-            let receipt_count = u64::try_from(receipts.len()).unwrap_or(u64::MAX);
-            let mut signers = Vec::with_capacity(receipts.len());
-            let mut min_height: Option<u64> = None;
-            let mut max_height: Option<u64> = None;
-            for receipt in receipts {
-                signers.push(Value::from(receipt.payload.signer.to_string()));
-                let height = receipt.payload.submitted_at_height;
-                min_height = Some(min_height.map_or(height, |min| min.min(height)));
-                max_height = Some(max_height.map_or(height, |max| max.max(height)));
-            }
-            map.insert("kind".into(), Value::from("Censorship"));
-            map.insert("tx_hash".into(), Value::from(hash_to_hex(tx_hash)));
-            map.insert("receipt_count".into(), Value::from(receipt_count));
-            map.insert("signers".into(), Value::from(signers));
-            if let Some(height) = min_height {
-                map.insert("submitted_at_height_min".into(), Value::from(height));
-            }
-            if let Some(height) = max_height {
-                map.insert("submitted_at_height_max".into(), Value::from(height));
-            }
-            map
-        }
-        (
-            EvidenceKind::SumeragiV2Equivocation,
-            EvidencePayload::SumeragiV2Equivocation(evidence),
-        ) => {
-            use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
-            use norito::codec::Encode as _;
-            let (class, round, signer, first, second) = match &evidence.conflict {
-                SumeragiV2Equivocation::Proposal { first, second } => (
-                    "proposal",
-                    first.round,
-                    first.proposer,
-                    first.encode(),
-                    second.encode(),
-                ),
-                SumeragiV2Equivocation::PhaseVote { first, second } => (
-                    "phase_vote",
-                    first.round,
-                    first.signer,
-                    first.encode(),
-                    second.encode(),
-                ),
-                SumeragiV2Equivocation::TimeoutVote { first, second } => (
-                    "timeout_vote",
-                    first.round,
-                    first.signer,
-                    first.encode(),
-                    second.encode(),
-                ),
-            };
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
-            map.insert("class".into(), Value::from(class));
-            map.insert("height".into(), Value::from(round.height));
-            map.insert("view".into(), Value::from(round.view));
-            map.insert("epoch".into(), Value::from(evidence.context.epoch));
-            map.insert("signer".into(), Value::from(signer));
-            map.insert(
-                "context_id".into(),
-                Value::from(hash_to_hex(round.context_id.0)),
-            );
-            map.insert(
-                "artifact_hash_1".into(),
-                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-                    iroha_crypto::Hash::new(first),
-                ))),
-            );
-            map.insert(
-                "artifact_hash_2".into(),
-                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-                    iroha_crypto::Hash::new(second),
-                ))),
-            );
-            map
-        }
-        _ => {
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from(format!("{:?}", ev.kind)));
-            map.insert("detail".into(), Value::from("Unsupported payload variant"));
-            map
-        }
+    use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
+    use norito::codec::Encode as _;
+    let evidence = &rec.evidence.equivocation;
+    let (class, round, signer, first, second) = match &evidence.conflict {
+        SumeragiV2Equivocation::Proposal { first, second } => (
+            "proposal",
+            first.round,
+            first.proposer,
+            first.encode(),
+            second.encode(),
+        ),
+        SumeragiV2Equivocation::PhaseVote { first, second } => (
+            "phase_vote",
+            first.round,
+            first.signer,
+            first.encode(),
+            second.encode(),
+        ),
+        SumeragiV2Equivocation::TimeoutVote { first, second } => (
+            "timeout_vote",
+            first.round,
+            first.signer,
+            first.encode(),
+            second.encode(),
+        ),
     };
+    let mut map = json::Map::new();
+    map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
+    map.insert("class".into(), Value::from(class));
+    map.insert("height".into(), Value::from(round.height));
+    map.insert("view".into(), Value::from(round.view));
+    map.insert("epoch".into(), Value::from(evidence.context.epoch));
+    map.insert("signer".into(), Value::from(signer));
+    map.insert(
+        "context_id".into(),
+        Value::from(hash_to_hex(round.context_id.0)),
+    );
+    map.insert(
+        "artifact_hash_1".into(),
+        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+            iroha_crypto::Hash::new(first),
+        ))),
+    );
+    map.insert(
+        "artifact_hash_2".into(),
+        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+            iroha_crypto::Hash::new(second),
+        ))),
+    );
     map.insert(
         "recorded_height".into(),
         Value::from(rec.recorded_at_height),
@@ -12201,13 +11950,7 @@ pub async fn handle_time_now() -> impl IntoResponse {
         norito::json::Value::from(s.health.confidence_ok),
     );
     obj.insert("health".into(), norito::json::Value::Object(health));
-    let body = norito::json::to_json_pretty(&obj).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    resp
+    infallible_pretty_json_response(&obj, "{}")
 }
 /// Network Time Service diagnostics.
 pub async fn handle_time_status() -> impl IntoResponse {
@@ -12295,13 +12038,7 @@ pub async fn handle_time_status() -> impl IntoResponse {
     );
     obj.insert("rtt".into(), norito::json::Value::Object(rtt));
     obj.insert("note".into(), norito::json::Value::from("NTS running"));
-    let body = norito::json::to_json_pretty(&obj).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    resp
+    infallible_pretty_json_response(&obj, "{}")
 }
 #[cfg(test)]
 mod nts_tests {
@@ -12418,11 +12155,7 @@ pub async fn handle_get_contract_code(
             "failed to serialize the complete contract manifest: {error}"
         )))
     })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = application_json_response(body);
     Ok(resp)
 }
 #[cfg(test)]
@@ -15478,11 +15211,7 @@ pub async fn handle_get_contract_code_bytes(
     );
     let body = norito::json::to_vec(&obj)
         .map_err(|error| conversion_error(format!("failed to serialize code bytes: {error}")))?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = application_json_response(body);
     Ok(resp)
 }
 #[cfg(feature = "app_api")]
@@ -15981,10 +15710,10 @@ impl AssetTransferSubmissionDisposition {
 #[cfg(feature = "app_api")]
 fn committed_asset_transfer_height(
     state: &CoreState,
-    transaction_hash: &HashOf<SignedTransaction>,
+    entrypoint_hash: &HashOf<TransactionEntrypoint>,
 ) -> Option<u64> {
     state
-        .committed_transaction_height(transaction_hash)
+        .committed_entrypoint_height(entrypoint_hash)
         .and_then(|height| u64::try_from(height.get()).ok())
 }
 #[cfg(feature = "app_api")]
@@ -15993,13 +15722,15 @@ fn known_asset_transfer_submission(
     state: &CoreState,
     transaction_hash: HashOf<SignedTransaction>,
 ) -> Option<AssetTransferSubmissionDisposition> {
-    if state.has_committed_transaction(transaction_hash) {
+    let entrypoint_hash =
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
+    if state.has_committed_entrypoint(entrypoint_hash) {
         return Some(AssetTransferSubmissionDisposition::Applied {
-            block_height: committed_asset_transfer_height(state, &transaction_hash),
+            block_height: committed_asset_transfer_height(state, &entrypoint_hash),
         });
     }
     queue
-        .contains_pending_hash(transaction_hash, state)
+        .contains_pending_hash(entrypoint_hash, state)
         .then_some(AssetTransferSubmissionDisposition::Queued)
 }
 #[cfg(feature = "app_api")]
@@ -17564,13 +17295,7 @@ pub async fn handle_post_asset_transfer(
         "/v1/assets/transfer",
     )
     .await?;
-    let body = norito::json::to_json_pretty(&response).map_err(norito_internal_error)?;
-    let mut response = axum::response::Response::new(axum::body::Body::from(body));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(response)
+    pretty_json_response(&response)
 }
 #[cfg(feature = "app_api")]
 /// POST /v1/contracts/call — submit a public contract call transaction and
@@ -17584,13 +17309,7 @@ pub async fn handle_post_contract_call(
     let response =
         submit_contract_call_request(queue, state, telemetry, req, "/v1/contracts/call", None)
             .await?;
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 /// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
 #[cfg(feature = "app_api")]
@@ -17599,13 +17318,7 @@ pub fn handle_post_contract_call_batch_prepare(
     NoritoJson(request): NoritoJson<ContractCallBatchPrepareDto>,
 ) -> Result<impl IntoResponse> {
     let response = prepare_contract_call_batch(state.as_ref(), request)?;
-    let body = norito::json::to_json_pretty(&response).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&response)
 }
 /// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
 #[cfg(feature = "app_api")]
@@ -17900,11 +17613,7 @@ pub(crate) async fn handle_post_bridge_proof_submit(
                 true,
             ),
         };
-        let mut response = axum::response::Response::new(axum::body::Body::from(body));
-        response.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
+        let mut response = application_json_response(body);
         Ok((response, charge_prepare_egress))
     })
     .await
@@ -18149,11 +17858,7 @@ pub(crate) async fn handle_post_bridge_message_submit(
                 true,
             ),
         };
-        let mut response = axum::response::Response::new(axum::body::Body::from(body));
-        response.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
+        let mut response = application_json_response(body);
         Ok((response, charge_prepare_egress))
     })
     .await
@@ -23944,7 +23649,7 @@ mod multisig_selector_tests {
             "contract-call propose must reject the retired fee_sponsor field",
         );
         let approve = format!(
-            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","fee_payment":{{"payer":"authority","value":{{"charge_limits":[]}}}},"gas_asset_id":"xor#sora"}}"#,
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","fee_payment":{{"payer":"authority","value":{{"charge_limits":[],"gas_limit":null}}}},"gas_asset_id":"xor#sora"}}"#,
         );
         assert!(
             norito::json::from_str::<MultisigContractCallApproveDto>(&approve).is_err(),
@@ -29166,13 +28871,7 @@ pub async fn handle_get_vk(
         ))
     })?;
     let detail = vk_detail_to_json(&id, &rec)?;
-    let body = norito::json::to_json_pretty(&detail).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&detail, "{}"))
 }
 /// DTO used by Torii for POST/GET registry endpoints.
 #[derive(
@@ -31597,12 +31296,7 @@ pub async fn handle_post_sorafs_register_manifest(
         tx_hash_hex,
         manifest_digest_hex: hex::encode(manifest_digest_bytes),
     };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
+    let mut resp = infallible_pretty_json_response(&response, "{}");
     *resp.status_mut() = axum::http::StatusCode::ACCEPTED;
     Ok(resp)
 }
@@ -31793,13 +31487,7 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
         "/v1/sorafs/capacity/declare",
     )
     .await?;
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -31832,13 +31520,7 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
         "/v1/sorafs/capacity/telemetry",
     )
     .await?;
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[cfg(feature = "app_api")]
 fn sorafs_transaction_quota_subject(transaction: &SignedTransaction) -> [u8; 32] {
@@ -31921,13 +31603,7 @@ pub(crate) async fn handle_post_sorafs_record_por_proof(
     let response = RecordPorSubmissionResponseDto {
         status: "accepted".to_owned(),
     };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -32007,13 +31683,7 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     let response = RecordPorVerdictResponseDto {
         status: "accepted".to_owned(),
     };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[cfg(feature = "app_api")]
 pub fn handle_get_sorafs_por_status(
@@ -32097,22 +31767,6 @@ fn parse_hash_hex(value: &str, field: &str) -> Result<Hash, Error> {
 }
 fn missing_field_error(field: &str) -> Error {
     conversion_error(format!("`{field}` is required"))
-}
-fn json_response<T>(value: &T) -> Result<Response, Error>
-where
-    T: norito::json::JsonSerialize,
-{
-    let body = norito::json::to_json_pretty(value).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 #[cfg(feature = "app_api")]
 fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node::NodeHandle) {
@@ -38644,22 +38298,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
-    let filter_depth = envelope
-        .filter
-        .as_ref()
-        .map(|expr| {
-            // Compute depth of FilterExpr tree
-            fn depth(e: &FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            depth(expr)
-        })
-        .unwrap_or(0);
+    let filter_depth = envelope.filter.as_ref().map(filter_expr_depth).unwrap_or(0);
     let (account_id, _canonical_literal) = parse_account_path_segment_with_state(
         state.as_ref(),
         &account_id,
@@ -38674,15 +38313,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         .map(TxHistoryAssetSelector::DefinitionId);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
         if let Some(ref expr) = envelope.filter {
-            fn depth(e: &crate::filter::FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            if depth(expr) > 10 {
+            if filter_expr_depth(expr) > 10 {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             validate_tx_filter_adapter(expr, &telemetry)?;
@@ -38730,15 +38361,7 @@ pub async fn handle_v1_account_transactions_with_policy(
             let expr = expr_wrap;
             // Extra guard: reject overly deep filters early with 422
             {
-                fn depth(e: &crate::filter::FilterExpr) -> usize {
-                    use crate::filter::FilterExpr as F;
-                    match e {
-                        F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                        F::Not(inner) => 1 + depth(inner),
-                        _ => 1,
-                    }
-                }
-                if depth(expr) > 10 {
+                if filter_expr_depth(expr) > 10 {
                     return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
                 }
             }
@@ -38979,17 +38602,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// POST /v1/transactions/query
 ///
@@ -39062,21 +38675,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
-    let filter_depth = envelope
-        .filter
-        .as_ref()
-        .map(|expr| {
-            fn depth(e: &FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            depth(expr)
-        })
-        .unwrap_or(0);
+    let filter_depth = envelope.filter.as_ref().map(filter_expr_depth).unwrap_or(0);
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
     let allowed_asset_selector = allowed_asset_definition_id
@@ -39084,15 +38683,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         .map(TxHistoryAssetSelector::DefinitionId);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
         if let Some(ref expr) = envelope.filter {
-            fn depth(e: &crate::filter::FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            if depth(expr) > 10 {
+            if filter_expr_depth(expr) > 10 {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             validate_tx_filter_adapter_for_endpoint(expr, &telemetry, endpoint)?;
@@ -39138,15 +38729,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         let predicate = if let Some(ref expr_wrap) = envelope.filter {
             let expr = expr_wrap;
             {
-                fn depth(e: &crate::filter::FilterExpr) -> usize {
-                    use crate::filter::FilterExpr as F;
-                    match e {
-                        F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                        F::Not(inner) => 1 + depth(inner),
-                        _ => 1,
-                    }
-                }
-                if depth(expr) > 10 {
+                if filter_expr_depth(expr) > 10 {
                     return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
                 }
             }
@@ -39308,17 +38891,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
 #[iroha_futures::telemetry_future]
@@ -39435,17 +39008,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 #[cfg(feature = "app_api")]
 fn account_history_projection_matches_asset_selector(
@@ -39583,17 +39146,7 @@ pub async fn handle_v1_account_history_get_with_policy(
         "query_source".into(),
         norito::json::Value::from("account_history_index"),
     );
-    let body = norito::json::to_json_pretty(&top).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            error.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
 #[iroha_futures::telemetry_future]
@@ -39682,17 +39235,7 @@ pub async fn handle_v1_transactions_history_get(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
@@ -39758,17 +39301,7 @@ pub async fn handle_v1_contracts_activity_get(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// GET `/v1/contracts/events` — generic contract event feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
@@ -39830,17 +39363,7 @@ pub async fn handle_v1_contracts_events_get(
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&top)
 }
 /// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
@@ -44886,174 +44409,6 @@ pub fn handle_v1_sumeragi_status_sse(
     );
     Sse::new(stream)
 }
-fn vrf_summary_json(record: &iroha_data_model::consensus::VrfEpochRecord) -> norito::json::Value {
-    let participants_total = u64::try_from(record.participants.len()).unwrap_or(0);
-    let commitments_total = u64::try_from(
-        record
-            .participants
-            .iter()
-            .filter(|p| p.commitment.is_some())
-            .count(),
-    )
-    .unwrap_or(0);
-    let reveals_total = u64::try_from(
-        record
-            .participants
-            .iter()
-            .filter(|p| p.reveal.is_some())
-            .count(),
-    )
-    .unwrap_or(0);
-    let late_reveals_total = u64::try_from(record.late_reveals.len()).unwrap_or(0);
-    let late_reveals: Vec<norito::json::Value> = record
-        .late_reveals
-        .iter()
-        .map(|entry| {
-            json_object(vec![
-                json_entry("signer", entry.signer),
-                json_entry("noted_at_height", entry.noted_at_height),
-            ])
-        })
-        .collect();
-    json_object(vec![
-        json_entry("found", true),
-        json_entry("epoch", record.epoch),
-        json_entry("finalized", record.finalized),
-        json_entry("seed_hex", hex::encode(record.seed)),
-        json_entry("epoch_length", record.epoch_length),
-        json_entry("commit_deadline_offset", record.commit_deadline_offset),
-        json_entry("reveal_deadline_offset", record.reveal_deadline_offset),
-        json_entry("roster_len", record.roster_len),
-        json_entry("updated_at_height", record.updated_at_height),
-        json_entry("participants_total", participants_total),
-        json_entry("commitments_total", commitments_total),
-        json_entry("reveals_total", reveals_total),
-        json_entry("late_reveals_total", late_reveals_total),
-        json_entry(
-            "committed_no_reveal",
-            json_array::<u32, _>(record.committed_no_reveal.clone()),
-        ),
-        json_entry(
-            "no_participation",
-            json_array::<u32, _>(record.no_participation.clone()),
-        ),
-        json_entry("late_reveals", Value::Array(late_reveals)),
-    ])
-}
-fn vrf_summary_not_found_json(epoch: u64) -> norito::json::Value {
-    json_object(vec![
-        json_entry("found", false),
-        json_entry("epoch", epoch),
-        json_entry("finalized", false),
-        json_entry("seed_hex", Option::<String>::None),
-        json_entry("epoch_length", 0u64),
-        json_entry("commit_deadline_offset", 0u64),
-        json_entry("reveal_deadline_offset", 0u64),
-        json_entry("roster_len", 0u32),
-        json_entry("updated_at_height", 0u64),
-        json_entry("participants_total", 0u64),
-        json_entry("commitments_total", 0u64),
-        json_entry("reveals_total", 0u64),
-        json_entry("late_reveals_total", 0u64),
-        json_entry(
-            "committed_no_reveal",
-            json_array::<u32, _>(Vec::<u32>::new()),
-        ),
-        json_entry("no_participation", json_array::<u32, _>(Vec::<u32>::new())),
-        json_entry("late_reveals", Value::Array(Vec::new())),
-    ])
-}
-/// GET /v1/sumeragi/telemetry — aggregated collector/QC/RBC metrics snapshot.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl IntoResponse> {
-    let availability = status::availability_snapshot();
-    let collectors: Vec<norito::json::Value> = availability
-        .collectors
-        .into_iter()
-        .map(|entry| {
-            crate::json_object(vec![
-                json_entry("collector_idx", entry.collector_idx),
-                json_entry("peer_id", entry.peer.to_string()),
-                json_entry("votes_ingested", entry.votes_ingested),
-            ])
-        })
-        .collect();
-    let qc_latency = status::qc_latency_snapshot();
-    let qc_entries: Vec<norito::json::Value> = qc_latency
-        .into_iter()
-        .map(|(kind, ms)| {
-            crate::json_object(vec![json_entry("kind", kind), json_entry("last_ms", ms)])
-        })
-        .collect();
-    let backlog = status::rbc_backlog_snapshot();
-    let pending = status::pending_rbc_snapshot();
-    let world = state.world_view();
-    let vrf_snapshot = {
-        let mut active: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
-        let mut latest_final: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
-        for (epoch, record) in world.vrf_epochs().iter() {
-            if record.finalized {
-                latest_final = Some((*epoch, record.clone()));
-            } else {
-                active = Some((*epoch, record.clone()));
-            }
-        }
-        active.or(latest_final).map(|(_, record)| record)
-    };
-    let vrf_json = vrf_snapshot
-        .as_ref()
-        .map(vrf_summary_json)
-        .unwrap_or_else(|| vrf_summary_not_found_json(0));
-    let payload = crate::json_object(vec![
-        json_entry(
-            "availability",
-            crate::json_object(vec![
-                json_entry("total_votes_ingested", availability.total),
-                json_entry("collectors", collectors),
-            ]),
-        ),
-        json_entry("qc_latency_ms", qc_entries),
-        json_entry(
-            "rbc_backlog",
-            crate::json_object(vec![
-                json_entry("pending_sessions", backlog.pending_sessions),
-                json_entry("total_missing_chunks", backlog.total_missing_chunks),
-                json_entry("max_missing_chunks", backlog.max_missing_chunks),
-            ]),
-        ),
-        json_entry(
-            "rbc_pending",
-            crate::json_object(vec![
-                json_entry("sessions", pending.sessions),
-                json_entry("chunks", pending.chunks),
-                json_entry("bytes", pending.bytes),
-                json_entry("drops_total", pending.drops_total),
-                json_entry("drops_cap_total", pending.drops_cap_total),
-                json_entry("drops_cap_bytes_total", pending.drops_cap_bytes_total),
-                json_entry("drops_ttl_total", pending.drops_ttl_total),
-                json_entry("drops_ttl_bytes_total", pending.drops_ttl_bytes_total),
-                json_entry("drops_bytes_total", pending.drops_bytes_total),
-                json_entry("evicted_total", pending.evicted_total),
-                json_entry("session_cap", pending.session_cap),
-                json_entry("max_chunks_per_session", pending.max_chunks_per_session),
-                json_entry("max_bytes_per_session", pending.max_bytes_per_session),
-                json_entry("ttl_ms", pending.ttl_ms),
-            ]),
-        ),
-        json_entry("vrf", vrf_json),
-    ]);
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
 /// GET /v1/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_vrf_penalties(
@@ -45096,11 +44451,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-        resp.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
+        let mut resp = application_json_response(body);
         Ok(resp)
     } else {
         // 404-like empty JSON (stable shape)
@@ -45119,11 +44470,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-        resp.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
+        let mut resp = application_json_response(body);
         Ok(resp)
     }
 }
@@ -45202,17 +44549,7 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
             json_entry("late_reveals", Value::Array(Vec::new())),
         ])
     };
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 /// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
 #[iroha_futures::telemetry_future]
@@ -45273,17 +44610,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
             json_entry("commit_qc", norito::json::Value::Null),
         ]),
     };
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 /// Map an `EventBox` into a compact JSON object used by SSE/WS tests.
 pub fn event_to_json_value(ev: &iroha_data_model::events::EventBox) -> norito::json::Value {
@@ -51190,18 +50517,10 @@ pub async fn handle_v1_contracts_rollups_swaps_fills_get(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let rollup = load_swap_fill_rollup(state, &params)?;
-    let body = norito::json::to_json_pretty(&swap_fill_rollup_to_json_value(
-        &rollup,
-        params.limit,
-        params.offset,
+    Ok(infallible_pretty_json_response(
+        &swap_fill_rollup_to_json_value(&rollup, params.limit, params.offset),
+        "{}",
     ))
-    .unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_swaps_candles_get(
@@ -51302,13 +50621,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     top.insert("authority".into(), Value::from(fills.authority));
     top.insert("bucketMs".into(), Value::from(bucket_ms));
     top.insert("items".into(), Value::Array(items));
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
@@ -51335,19 +50648,15 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
         ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY,
     );
     let index = contract_event_index_snapshot(state.as_ref());
-    let body = norito::json::to_json_pretty(&uranai_market_history_rollup_to_json_value(
-        index.as_ref(),
-        &params,
-        pagination,
-        count_mode,
+    Ok(infallible_pretty_json_response(
+        &uranai_market_history_rollup_to_json_value(
+            index.as_ref(),
+            &params,
+            pagination,
+            count_mode,
+        ),
+        "{}",
     ))
-    .unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_trader_activity_get(
@@ -51381,13 +50690,7 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         Value::Array(trader_activity_items_to_json(&activity_items)),
     );
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_trader_account_get(
@@ -51460,13 +50763,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
             &activity_items,
         )),
     );
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
 #[cfg(feature = "app_api")]
 async fn handle_v1_contracts_rollups_module_get(
@@ -51506,13 +50803,7 @@ async fn handle_v1_contracts_rollups_module_get(
         Value::Array(trader_activity_items_to_json(&activity_items)),
     );
     insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_intents_get(
@@ -52961,27 +52252,12 @@ pub async fn handle_v1_account_permissions_with_policy(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for item in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("name".into(), norito::json::Value::from(item.name.clone()));
-        m.insert("payload".into(), item.payload.clone());
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_map_response(&page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("name".into(), Value::from(item.name.clone()));
+        row.insert("payload".into(), item.payload.clone());
+        row
+    })
 }
 /// List assets for an account with basic pagination.
 #[iroha_futures::telemetry_future]
@@ -53058,48 +52334,22 @@ pub async fn handle_v1_account_assets_with_policy(
         count_mode,
     );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
-        m.insert(
-            "account_id".into(),
-            norito::json::Value::from(it.account_id.clone()),
-        );
-        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
-        m.insert(
-            "asset_name".into(),
-            norito::json::Value::from(it.asset_name.clone()),
-        );
-        m.insert(
+    paginated_json_map_response(&page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("asset".into(), Value::from(item.asset.clone()));
+        row.insert("account_id".into(), Value::from(item.account_id.clone()));
+        row.insert("scope".into(), Value::from(item.scope.clone()));
+        row.insert("asset_name".into(), Value::from(item.asset_name.clone()));
+        row.insert(
             "asset_alias".into(),
-            it.asset_alias
+            item.asset_alias
                 .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
+                .map_or(Value::Null, |alias| Value::from(alias.clone())),
         );
-        m.insert(
-            "quantity".into(),
-            norito::json::Value::from(format!("{}", it.quantity)),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        row.insert("quantity".into(), Value::from(item.quantity.to_string()));
+        insert_primary_alias_fields(&mut row, &item.primary_alias);
+        row
+    })
 }
 // ---------------------- Repo agreement listing ----------------------
 /// GET /v1/repo/agreements — List active and settled repo agreements with optional filtering.
@@ -53148,21 +52398,9 @@ pub async fn handle_v1_repo_agreements(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for entry in &page.items {
-        let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
-        arr.push(value);
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_response(&page, count_mode, |entry| {
+        norito::json::to_value(&entry.dto).map_err(norito_internal_error)
+    })
 }
 /// POST /v1/repo/agreements/query — Structured query for repo agreements.
 #[iroha_futures::telemetry_future]
@@ -53233,21 +52471,9 @@ pub async fn handle_v1_repo_agreements_query(
         fetch_size,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for entry in &page.items {
-        let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
-        arr.push(value);
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_response(&page, count_mode, |entry| {
+        norito::json::to_value(&entry.dto).map_err(norito_internal_error)
+    })
 }
 #[cfg(all(test, feature = "app_api"))]
 struct RepoTestFixture {
@@ -53903,26 +53129,7 @@ pub async fn handle_v1_domains(
         },
     )?;
     // Norito JSON response
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
@@ -54042,26 +53249,7 @@ pub async fn handle_v1_domains_query(
         |_key, domain| domain_projection_retained_bytes(domain).saturating_mul(2),
     )?;
     // Norito JSON
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 #[cfg(all(test, feature = "app_api"))]
 mod pagination_enforcement_tests {
@@ -54358,18 +53546,18 @@ fn account_sort_key(
     MultiSortKey::new(components)
 }
 #[cfg(feature = "app_api")]
-fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Account) -> bool {
+fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> bool {
     use FilterExpr as F;
     match expr {
-        F::And(list) => list.iter().all(|e| account_filter_object(e, acc)),
-        F::Or(list) => list.iter().any(|e| account_filter_object(e, acc)),
-        F::Not(inner) => !account_filter_object(inner, acc),
+        F::And(list) => list.iter().all(|e| filter_metadata_object(e, id, metadata)),
+        F::Or(list) => list.iter().any(|e| filter_metadata_object(e, id, metadata)),
+        F::Not(inner) => !filter_metadata_object(inner, id, metadata),
         F::Eq(f, v) => {
             if f.0 == "id" {
-                v.as_str().is_some_and(|s| s == acc.id().to_string())
+                v.as_str().is_some_and(|s| s == id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    acc.metadata().get(&name).is_some_and(|j| {
+                    metadata.get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>().ok().as_ref() == Some(v)
                     })
                 } else {
@@ -54381,12 +53569,10 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
         }
         F::Ne(f, v) => {
             if f.0 == "id" {
-                v.as_str()
-                    .map(|s| s != acc.id().to_string())
-                    .unwrap_or(true)
+                v.as_str().map(|s| s != id).unwrap_or(true)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    match acc.metadata().get(&name) {
+                    match metadata.get(&name) {
                         Some(j) => j
                             .try_into_any_norito::<norito::json::Value>()
                             .ok()
@@ -54406,7 +53592,7 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
                 if let (Some(vn), Ok(name)) =
                     (v.as_u64(), k.parse::<iroha_data_model::prelude::Name>())
                 {
-                    if let Some(j) = acc.metadata().get(&name) {
+                    if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             if let Some(mn) = nv.as_u64() {
                                 return match expr {
@@ -54425,11 +53611,10 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
         }
         F::In(f, list) => {
             if f.0 == "id" {
-                let id = acc.id().to_string();
                 list.iter().filter_map(|v| v.as_str()).any(|s| s == id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    if let Some(j) = acc.metadata().get(&name) {
+                    if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().any(|v| v == &nv);
                         }
@@ -54442,11 +53627,10 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
         }
         F::Nin(f, list) => {
             if f.0 == "id" {
-                let id = acc.id().to_string();
                 list.iter().filter_map(|v| v.as_str()).all(|s| s != id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    if let Some(j) = acc.metadata().get(&name) {
+                    if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().all(|v| v != &nv);
                         }
@@ -54464,7 +53648,7 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
                 true
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    acc.metadata().get(&name).is_some()
+                    metadata.get(&name).is_some()
                 } else {
                     false
                 }
@@ -54475,7 +53659,7 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
         F::IsNull(f) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    acc.metadata().get(&name).is_some_and(|j| {
+                    metadata.get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>()
                             .ok()
                             .is_some_and(|v| v.is_null())
@@ -54488,6 +53672,11 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
             }
         }
     }
+}
+#[cfg(feature = "app_api")]
+fn account_filter_object(expr: &FilterExpr, account: &iroha_data_model::account::Account) -> bool {
+    let id = account.id().to_string();
+    filter_metadata_object(expr, &id, account.metadata())
 }
 #[cfg(feature = "app_api")]
 fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool {
@@ -56175,11 +55364,7 @@ pub async fn handle_v1_accounts_onboard_plan(
             context: "account onboarding plan receipt",
             source: Box::new(error),
         })?;
-    let mut response = Response::new(Body::from(body));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
+    let mut response = application_json_response(body);
     Ok(response)
 }
 /// Revalidate and atomically submit a stateless sponsored onboarding receipt.
@@ -56351,12 +55536,7 @@ pub async fn handle_v1_accounts_onboard_apply(
             status: "Unchanged",
             disposition,
         };
-        let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-        let mut response = Response::new(Body::from(body));
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static("application/json"),
-        );
+        let response = infallible_pretty_json_response(&payload, "{}");
         return Ok((StatusCode::OK, response));
     }
     let mut builder = TransactionBuilder::new(
@@ -56393,12 +55573,7 @@ pub async fn handle_v1_accounts_onboard_apply(
         },
         disposition,
     };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut response = Response::new(Body::from(body));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
+    let response = infallible_pretty_json_response(&payload, "{}");
     Ok((StatusCode::ACCEPTED, response))
 }
 #[iroha_futures::telemetry_future]
@@ -56631,13 +55806,7 @@ pub async fn handle_v1_account_aliases(
         total: items.len() as u64,
         items,
     };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_get(
@@ -56734,30 +55903,12 @@ pub async fn handle_v1_accounts(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert(
-            "id".into(),
-            norito::json::Value::from(it.display_id.clone()),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_map_response(&page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("id".into(), Value::from(item.display_id.clone()));
+        insert_primary_alias_fields(&mut row, &item.primary_alias);
+        row
+    })
 }
 /// POST /v1/accounts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
@@ -56768,15 +55919,7 @@ pub async fn handle_v1_accounts_query(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     if let Some(expr) = envelope.filter.as_mut() {
-        fn depth(e: &crate::filter::FilterExpr) -> usize {
-            use crate::filter::FilterExpr as F;
-            match e {
-                F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                F::Not(inner) => 1 + depth(inner),
-                _ => 1,
-            }
-        }
-        if depth(expr) > 10 {
+        if filter_expr_depth(expr) > 10 {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         crate::filter::validate_filter(expr)
@@ -56877,30 +56020,12 @@ pub async fn handle_v1_accounts_query(
             count_mode,
         )
     };
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert(
-            "id".into(),
-            norito::json::Value::from(it.display_id.clone()),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_map_response(&page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("id".into(), Value::from(item.display_id.clone()));
+        insert_primary_alias_fields(&mut row, &item.primary_alias);
+        row
+    })
 }
 /// GET /v1/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
 #[iroha_futures::telemetry_future]
@@ -56919,18 +56044,7 @@ pub async fn handle_v1_accounts_portfolio(
         filter_portfolio_by_asset_id(&mut snapshot, expected);
     }
     drop(world);
-    let body =
-        norito::json::to_json_pretty(&portfolio_snapshot_to_json(&snapshot)).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })?;
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&portfolio_snapshot_to_json(&snapshot))
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn parse_asset_balance_scope_literal(
@@ -57438,17 +56552,7 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     root.insert("uaid".into(), uaid_value);
     root.insert("totals".into(), Value::Object(totals));
     root.insert("dataspaces".into(), Value::Array(dataspaces_json));
-    let body = norito::json::to_json_pretty(&Value::Object(root)).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
-        ))
-    })?;
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&Value::Object(root))
 }
 #[cfg(feature = "app_api")]
 #[derive(
@@ -57634,17 +56738,7 @@ pub async fn handle_v1_space_directory_bindings(
     let mut root = Map::new();
     root.insert("uaid".into(), Value::from(uaid.to_string()));
     root.insert("dataspaces".into(), Value::Array(dataspaces));
-    let body = norito::json::to_json_pretty(&Value::Object(root)).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
-        ))
-    })?;
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&Value::Object(root))
 }
 /// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
 #[iroha_futures::telemetry_future]
@@ -57740,17 +56834,7 @@ pub async fn handle_v1_space_directory_manifests(
     );
     root.insert("count_mode".into(), Value::from(count_mode.label()));
     root.insert("manifests".into(), Value::Array(manifests));
-    let body = norito::json::to_json_pretty(&Value::Object(root)).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
-        ))
-    })?;
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&Value::Object(root))
 }
 /// POST /v1/space-directory/manifests — prepare a canonical unsigned manifest
 /// publication transaction for local signing.
@@ -60152,8 +59236,7 @@ fn indexed_transaction_height(
     start_height: u64,
     target: HashOf<TransactionEntrypoint>,
 ) -> Option<u64> {
-    let target_as_signed = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(target));
-    let height = state.committed_transaction_height(&target_as_signed)?;
+    let height = state.committed_entrypoint_height(&target)?;
     let height_u64 = u64::try_from(height.get()).ok()?;
     (height_u64 <= start_height).then_some(height_u64)
 }
@@ -62513,27 +61596,9 @@ pub async fn handle_v1_assets_definitions(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        arr.push(asset_definition_to_json_value(
-            &it.definition,
-            it.alias_binding.as_ref(),
-        )?);
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_response(&page, count_mode, |item| {
+        asset_definition_to_json_value(&item.definition, item.alias_binding.as_ref())
+    })
 }
 /// GET /v1/assets/definitions/{asset} — Fetch a single asset definition by id or alias.
 #[iroha_futures::telemetry_future]
@@ -62554,21 +61619,10 @@ pub async fn handle_v1_asset_definition(
         .asset_definition_alias_bindings()
         .get(&definition_id)
         .map(|binding| asset_alias_binding_dto(binding, now_ms));
-    let body = norito::json::to_json_pretty(&asset_definition_to_json_value(
+    pretty_json_response(&asset_definition_to_json_value(
         &definition,
         alias_binding.as_ref(),
     )?)
-    .map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
 /// full asset-definition objects in the response.
@@ -62598,15 +61652,7 @@ pub async fn handle_v1_assets_definitions_query(
         ENDPOINT_ASSET_DEFINITIONS_QUERY,
     );
     if let Some(ref expr) = envelope.filter {
-        fn depth(e: &crate::filter::FilterExpr) -> usize {
-            use crate::filter::FilterExpr as F;
-            match e {
-                F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                F::Not(inner) => 1 + depth(inner),
-                _ => 1,
-            }
-        }
-        if depth(expr) > 10 {
+        if filter_expr_depth(expr) > 10 {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         if !generic_mode {
@@ -62660,27 +61706,9 @@ pub async fn handle_v1_assets_definitions_query(
         fetch_size,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        arr.push(asset_definition_to_json_value(
-            &it.definition,
-            it.alias_binding.as_ref(),
-        )?);
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_response(&page, count_mode, |item| {
+        asset_definition_to_json_value(&item.definition, item.alias_binding.as_ref())
+    })
 }
 #[cfg(feature = "app_api")]
 fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
@@ -63073,13 +62101,7 @@ fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
 #[cfg(feature = "app_api")]
 fn lane_items_response(lane_id: LaneId, items: Vec<Value>) -> Result<Response> {
     let payload = build_lane_items_payload(lane_id, items);
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    pretty_json_response(&payload)
 }
 #[cfg(feature = "app_api")]
 fn public_lane_validator_record_matches_key(
@@ -63763,162 +62785,39 @@ fn nft_sort_key(nft: &iroha_data_model::nft::Nft, selectors: &[NftSortSelector])
 }
 #[cfg(feature = "app_api")]
 fn nft_filter_object(expr: &FilterExpr, nft: &iroha_data_model::nft::Nft) -> bool {
-    use FilterExpr as F;
-    match expr {
-        F::And(list) => list.iter().all(|e| nft_filter_object(e, nft)),
-        F::Or(list) => list.iter().any(|e| nft_filter_object(e, nft)),
-        F::Not(inner) => !nft_filter_object(inner, nft),
-        F::Eq(f, v) => {
-            if f.0 == "id" {
-                v.as_str().is_some_and(|s| s == nft.id().to_string())
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    nft.content().get(&name).is_some_and(|j| {
-                        j.try_into_any_norito::<norito::json::Value>().ok().as_ref() == Some(v)
-                    })
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        F::Ne(f, v) => {
-            if f.0 == "id" {
-                v.as_str()
-                    .map(|s| s != nft.id().to_string())
-                    .unwrap_or(true)
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    match nft.content().get(&name) {
-                        Some(j) => j
-                            .try_into_any_norito::<norito::json::Value>()
-                            .ok()
-                            .map(|nv| nv != *v)
-                            .unwrap_or(true),
-                        None => true,
-                    }
-                } else {
-                    true
-                }
-            } else {
-                false
-            }
-        }
-        F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
-            if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let (Some(vn), Ok(name)) =
-                    (v.as_u64(), k.parse::<iroha_data_model::prelude::Name>())
-                {
-                    if let Some(j) = nft.content().get(&name) {
-                        if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
-                            if let Some(mn) = nv.as_u64() {
-                                return match expr {
-                                    F::Lt(_, _) => mn < vn,
-                                    F::Lte(_, _) => mn <= vn,
-                                    F::Gt(_, _) => mn > vn,
-                                    F::Gte(_, _) => mn >= vn,
-                                    _ => false,
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-            false
-        }
-        F::In(f, list) => {
-            if f.0 == "id" {
-                let id = nft.id().to_string();
-                list.iter().filter_map(|v| v.as_str()).any(|s| s == id)
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    if let Some(j) = nft.content().get(&name) {
-                        if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
-                            return list.iter().any(|v| v == &nv);
-                        }
-                    }
-                }
-                false
-            } else {
-                false
-            }
-        }
-        F::Nin(f, list) => {
-            if f.0 == "id" {
-                let id = nft.id().to_string();
-                list.iter().filter_map(|v| v.as_str()).all(|s| s != id)
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    if let Some(j) = nft.content().get(&name) {
-                        if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
-                            return list.iter().all(|v| v != &nv);
-                        }
-                    } else {
-                        return true;
-                    }
-                }
-                true
-            } else {
-                false
-            }
-        }
-        F::Exists(f) => {
-            if f.0 == "id" {
-                true
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    nft.content().get(&name).is_some()
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        F::IsNull(f) => {
-            if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
-                    nft.content().get(&name).is_some_and(|j| {
-                        j.try_into_any_norito::<norito::json::Value>()
-                            .ok()
-                            .is_some_and(|v| v.is_null())
-                    })
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-    }
+    let id = nft.id().to_string();
+    filter_metadata_object(expr, &id, nft.content())
 }
 #[cfg(feature = "app_api")]
-fn nft_filter_projection(expr: &FilterExpr, proj: &NftListItem) -> bool {
+fn filter_id(expr: &FilterExpr, id: &str) -> bool {
     use FilterExpr as F;
     match expr {
-        F::And(list) => list.iter().all(|e| nft_filter_projection(e, proj)),
-        F::Or(list) => list.iter().any(|e| nft_filter_projection(e, proj)),
-        F::Not(inner) => !nft_filter_projection(inner, proj),
+        F::And(list) => list.iter().all(|e| filter_id(e, id)),
+        F::Or(list) => list.iter().any(|e| filter_id(e, id)),
+        F::Not(inner) => !filter_id(inner, id),
         F::Eq(f, v) => match f.0.as_str() {
-            "id" => v.as_str().is_some_and(|s| s == proj.id),
+            "id" => v.as_str().is_some_and(|s| s == id),
             _ => false,
         },
         F::Ne(f, v) => match f.0.as_str() {
-            "id" => v.as_str().is_some_and(|s| s != proj.id),
+            "id" => v.as_str().is_some_and(|s| s != id),
             _ => false,
         },
         F::In(f, list) => match f.0.as_str() {
-            "id" => list.iter().filter_map(|v| v.as_str()).any(|s| s == proj.id),
+            "id" => list.iter().filter_map(|v| v.as_str()).any(|s| s == id),
             _ => false,
         },
         F::Nin(f, list) => match f.0.as_str() {
-            "id" => list.iter().filter_map(|v| v.as_str()).all(|s| s != proj.id),
+            "id" => list.iter().filter_map(|v| v.as_str()).all(|s| s != id),
             _ => false,
         },
         F::Exists(f) => matches!(f.0.as_str(), "id"),
         F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
     }
+}
+#[cfg(feature = "app_api")]
+fn nft_filter_projection(expr: &FilterExpr, item: &NftListItem) -> bool {
+    filter_id(expr, &item.id)
 }
 #[cfg(feature = "app_api")]
 fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
@@ -64009,26 +62908,7 @@ pub async fn handle_v1_nfts(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 /// POST /v1/nfts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
@@ -64053,15 +62933,7 @@ pub async fn handle_v1_nfts_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_NFTS_QUERY);
     if let Some(ref expr) = envelope.filter {
-        fn depth(e: &crate::filter::FilterExpr) -> usize {
-            use crate::filter::FilterExpr as F;
-            match e {
-                F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                F::Not(inner) => 1 + depth(inner),
-                _ => 1,
-            }
-        }
-        if depth(expr) > 10 {
+        if filter_expr_depth(expr) > 10 {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         crate::filter::validate_filter(expr)
@@ -64109,66 +62981,27 @@ pub async fn handle_v1_nfts_query(
         fetch_size,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
+}
+#[cfg(feature = "app_api")]
+fn validate_id_filter_adapter(expr: &FilterExpr) -> Result<()> {
+    use FilterExpr as F;
+    match expr {
+        F::And(list) | F::Or(list) => list.iter().try_for_each(validate_id_filter_adapter),
+        F::Not(inner) => validate_id_filter_adapter(inner),
+        F::Eq(field, value) | F::Ne(field, value) if field.0 == "id" && value.is_string() => Ok(()),
+        F::In(field, values) | F::Nin(field, values)
+            if field.0 == "id" && values.iter().all(Value::is_string) =>
+        {
+            Ok(())
+        }
+        F::Exists(field) if field.0 == "id" => Ok(()),
+        _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
     }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 #[cfg(feature = "app_api")]
 fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
-    use FilterExpr as F;
-    match expr {
-        F::And(list) | F::Or(list) => {
-            for e in list {
-                validate_nfts_filter_adapter(e)?;
-            }
-            Ok(())
-        }
-        F::Not(inner) => validate_nfts_filter_adapter(inner),
-        F::Eq(f, v) | F::Ne(f, v) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            if !v.is_string() {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::In(f, list) | F::Nin(f, list) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            if !list.iter().all(norito::json::Value::is_string) {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::Exists(f) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
-            Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
-        }
-    }
+    validate_id_filter_adapter(expr)
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync nft_filter_candidate_ids_extracts_safe_exact_constraints
@@ -64244,24 +63077,7 @@ fn rwa_sort_key(item: &RwaListItem, selectors: &[RwaSortSelector]) -> MultiSortK
 }
 #[cfg(feature = "app_api")]
 fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
-    use FilterExpr as F;
-    match expr {
-        F::And(list) => list.iter().all(|e| rwa_filter_object(e, item)),
-        F::Or(list) => list.iter().any(|e| rwa_filter_object(e, item)),
-        F::Not(inner) => !rwa_filter_object(inner, item),
-        F::Eq(f, v) => matches!(f.0.as_str(), "id") && v.as_str().is_some_and(|s| s == item.id),
-        F::Ne(f, v) => matches!(f.0.as_str(), "id") && v.as_str().is_some_and(|s| s != item.id),
-        F::In(f, list) => {
-            matches!(f.0.as_str(), "id")
-                && list.iter().filter_map(|v| v.as_str()).any(|s| s == item.id)
-        }
-        F::Nin(f, list) => {
-            matches!(f.0.as_str(), "id")
-                && list.iter().filter_map(|v| v.as_str()).all(|s| s != item.id)
-        }
-        F::Exists(f) => matches!(f.0.as_str(), "id"),
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
-    }
+    filter_id(expr, &item.id)
 }
 #[cfg(feature = "app_api")]
 fn rwa_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<RwaId>> {
@@ -64332,26 +63148,7 @@ pub async fn handle_v1_rwas(
         None,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 #[cfg(feature = "app_api")]
 /// POST /v1/rwas/query — JSON envelope with optional pagination/sort.
@@ -64376,15 +63173,7 @@ pub async fn handle_v1_rwas_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_RWAS_QUERY);
     if let Some(ref expr) = envelope.filter {
-        fn depth(e: &crate::filter::FilterExpr) -> usize {
-            use crate::filter::FilterExpr as F;
-            match e {
-                F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                F::Not(inner) => 1 + depth(inner),
-                _ => 1,
-            }
-        }
-        if depth(expr) > 10 {
+        if filter_expr_depth(expr) > 10 {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         crate::filter::validate_filter(expr)
@@ -64425,60 +63214,11 @@ pub async fn handle_v1_rwas_query(
         fetch_size,
         count_mode,
     );
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 #[cfg(feature = "app_api")]
 fn validate_rwas_filter_adapter(expr: &FilterExpr) -> Result<()> {
-    use FilterExpr as F;
-    match expr {
-        F::And(list) | F::Or(list) => {
-            for e in list {
-                validate_rwas_filter_adapter(e)?;
-            }
-            Ok(())
-        }
-        F::Not(inner) => validate_rwas_filter_adapter(inner),
-        F::Eq(f, v) | F::Ne(f, v) => {
-            if f.0.as_str() != "id" || !v.is_string() {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::In(f, list) | F::Nin(f, list) => {
-            if f.0.as_str() != "id" || !list.iter().all(norito::json::Value::is_string) {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::Exists(f) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
-            Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
-        }
-    }
+    validate_id_filter_adapter(expr)
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync rwa_filter_candidate_ids_extracts_safe_exact_constraints
@@ -64973,13 +63713,7 @@ pub async fn handle_v1_subscription_plans(
         has_more: page.has_more,
         count_mode: count_mode.label().to_owned(),
     };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -65217,13 +63951,7 @@ pub async fn handle_v1_subscriptions(
         has_more: page.has_more,
         count_mode: count_mode.label().to_owned(),
     };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -65249,13 +63977,7 @@ pub async fn handle_v1_subscription_get(
         invoice,
         plan,
     };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -65797,15 +64519,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     if let Some(ref expr) = filter {
         // Extra guard: reject overly deep filters early with 422
         {
-            fn depth(e: &crate::filter::FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            if depth(expr) > 10 {
+            if filter_expr_depth(expr) > 10 {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
         }
@@ -65852,48 +64566,22 @@ pub async fn handle_v1_account_assets_query_with_policy(
         count_mode,
     );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
-        m.insert(
-            "account_id".into(),
-            norito::json::Value::from(it.account_id.clone()),
-        );
-        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
-        m.insert(
-            "asset_name".into(),
-            norito::json::Value::from(it.asset_name.clone()),
-        );
-        m.insert(
+    paginated_json_map_response(&page, count_mode, |item| {
+        let mut row = Map::new();
+        row.insert("asset".into(), Value::from(item.asset.clone()));
+        row.insert("account_id".into(), Value::from(item.account_id.clone()));
+        row.insert("scope".into(), Value::from(item.scope.clone()));
+        row.insert("asset_name".into(), Value::from(item.asset_name.clone()));
+        row.insert(
             "asset_alias".into(),
-            it.asset_alias
+            item.asset_alias
                 .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
+                .map_or(Value::Null, |alias| Value::from(alias.clone())),
         );
-        m.insert(
-            "quantity".into(),
-            norito::json::Value::from(format!("{}", it.quantity)),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        row.insert("quantity".into(), Value::from(item.quantity.to_string()));
+        insert_primary_alias_fields(&mut row, &item.primary_alias);
+        row
+    })
 }
 #[cfg(feature = "app_api")]
 fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
@@ -66355,42 +65043,7 @@ pub async fn handle_v1_asset_holders(
     )?;
     drop(world);
     // Norito JSON response
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let mut m = norito::json::Map::new();
-        let display = crate::account_literal::display_literal(&it.account_id);
-        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
-        m.insert(
-            "asset_alias".into(),
-            it.asset_alias
-                .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
-        );
-        m.insert("account_id".into(), norito::json::Value::from(display));
-        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
-        m.insert(
-            "quantity".into(),
-            norito::json::Value::from(format!("{}", it.quantity)),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_map_response(&page, count_mode, asset_holder_item_to_json_row)
 }
 /// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
 /// Supports filter fields: `account_id`, `asset`, `asset_alias`, `scope`, and `quantity`.
@@ -66459,15 +65112,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     if let Some(ref mut expr) = filter {
         // Extra guard: reject overly deep filters early with 422
         {
-            fn depth(e: &crate::filter::FilterExpr) -> usize {
-                use crate::filter::FilterExpr as F;
-                match e {
-                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
-                    F::Not(inner) => 1 + depth(inner),
-                    _ => 1,
-                }
-            }
-            if depth(expr) > 10 {
+            if filter_expr_depth(expr) > 10 {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
         }
@@ -66604,42 +65249,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     )?;
     drop(world);
     // Norito JSON response
-    let mut arr = Vec::with_capacity(page.items.len());
-    for it in &page.items {
-        let display = crate::account_literal::display_literal(&it.account_id);
-        let mut m = norito::json::Map::new();
-        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
-        m.insert(
-            "asset_alias".into(),
-            it.asset_alias
-                .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
-        );
-        m.insert("account_id".into(), norito::json::Value::from(display));
-        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
-        m.insert(
-            "quantity".into(),
-            norito::json::Value::from(format!("{}", it.quantity)),
-        );
-        insert_primary_alias_fields(&mut m, &it.primary_alias);
-        arr.push(norito::json::Value::Object(m));
-    }
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(arr));
-    insert_page_metadata(&mut top, &page, count_mode);
-    let body = norito::json::to_json_pretty(&top).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    paginated_json_map_response(&page, count_mode, asset_holder_item_to_json_row)
 }
 #[cfg(feature = "app_api")]
 fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
@@ -67204,8 +65814,27 @@ fn account_asset_item_to_query_row(item: &AccountAssetListItem) -> norito::json:
     row
 }
 #[cfg(feature = "app_api")]
-fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> norito::json::Map {
+fn asset_holder_item_to_json_row(item: &AssetHolderListItem) -> Map {
     let mut row = norito::json::Map::new();
+    row.insert("asset".into(), Value::from(item.asset.clone()));
+    row.insert(
+        "asset_alias".into(),
+        item.asset_alias
+            .as_ref()
+            .map_or(Value::Null, |value| Value::from(value.clone())),
+    );
+    row.insert(
+        "account_id".into(),
+        Value::from(crate::account_literal::display_literal(&item.account_id)),
+    );
+    row.insert("scope".into(), Value::from(item.scope.clone()));
+    row.insert("quantity".into(), Value::from(item.quantity.to_string()));
+    insert_primary_alias_fields(&mut row, &item.primary_alias);
+    row
+}
+#[cfg(feature = "app_api")]
+fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> Map {
+    let mut row = Map::new();
     row.insert("account_id".into(), Value::from(item.canonical_id.clone()));
     row.insert("asset".into(), Value::from(item.asset.clone()));
     row.insert(
@@ -67257,17 +65886,7 @@ fn build_aggregate_response(
         indexed_block_hash.map_or(Value::Null, Value::from),
     );
     top.insert("query_source".into(), Value::from(query_source));
-    let body = norito::json::to_json_pretty(&top).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
-        ))
-    })?;
-    let mut response = axum::response::Response::new(axum::body::Body::from(body));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(response)
+    pretty_json_response(&top)
 }
 #[cfg(feature = "app_api")]
 fn validate_accounts_aggregate_request(
@@ -68036,26 +66655,14 @@ pub async fn handle_schema() -> impl IntoResponse {
         .map(norito::json::Value::from)
         .collect::<Vec<_>>();
     m.insert("type_names_sample".into(), norito::json::Value::Array(tn));
-    let body = norito::json::to_json_pretty(&m).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    resp
+    infallible_pretty_json_response(&m, "{}")
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<impl IntoResponse> {
     let dto = kiso.get_dto().await?;
     // Serialize the DTO directly so new fields (e.g., SoraNet handshake/Puzzle config)
     // are exposed without hand-maintaining this JSON shape.
-    let body = norito::json::to_json_pretty(&dto).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(infallible_pretty_json_response(&dto, "{}"))
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_configuration(

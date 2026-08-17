@@ -1716,16 +1716,11 @@ export class ToriiBrowserClient {
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
       responseObserver: (response) => {
-        for (const name of [
+        requireMatchingReceiptHashHeader(
+          response,
           "x-iroha-entrypoint-hash",
-          "x-iroha-transaction-hash",
-        ]) {
-          requireMatchingReceiptHashHeader(
-            response,
-            name,
-            expectedEntrypointHash,
-          );
-        }
+          expectedEntrypointHash,
+        );
         requireMatchingReceiptHashHeader(
           response,
           "x-iroha-signed-transaction-hash",
@@ -2685,17 +2680,6 @@ export class ToriiBrowserClient {
           text,
           "Sumeragi typed diagnostics",
         ),
-      ),
-    });
-  }
-
-  getSumeragiTelemetry(options = {}) {
-    const opts = requireObject(options, "getSumeragiTelemetry options");
-    return this._json("GET", "/v1/sumeragi/telemetry", {
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiTelemetry",
       ),
     });
   }

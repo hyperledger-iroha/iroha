@@ -8,12 +8,10 @@ Endpoints
 - `/v1/sumeragi/status` (Norito by default): authoritative protocol-v2 reducer status. JSON flattens the reducer fields (protocol and fingerprints, height context, height/view/phase/leader, QC and timeout references, body/persistence state, and the latest durable commit) and appends `safety_halt`, bounded lane settlement/relay/ownership/committed/session arrays, `local_peer_removed`, and `operator { view_change_install_total, busy_deferral_total, adapter_queues, tx_queue }`. Norito carries the same information as typed `SumeragiV2StatusResponse`, with reducer state under `authoritative`.
 - `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - When `nexus.enabled = false` (Iroha 2 mode), lane/dataspace sections in `/status` and `/v1/sumeragi/status` are emptied and Prometheus output omits lane/dataspace labels so single-lane deployments stay lane-free.
-- `/v1/sumeragi/telemetry` (JSON): legacy-labeled aggregate transport observations. Collector/RBC-named fields are not authoritative revision-4 state and may remain zero; use authenticated `/v1/sumeragi/status` plus consensus logs for live protocol evidence.
 - `/v1/sumeragi/pacemaker` (JSON): non-authoritative legacy-labeled gauge snapshot. Its backoff/RTT/jitter fields are not revision-4 timer configuration; revision 4 derives deadlines from the signed cadence as described in `specs/sumeragi_pacemaker.md`.
-- `/v1/sumeragi/qc` (Norito by default): highest/locked QC snapshot; includes `subject_block_hash` for the highest QC when known. Set `Accept: application/json` to receive the JSON view.
+- `/v1/sumeragi/qc` (Norito by default): canonical `SumeragiV2QcResponse` with required nullable `highest_prepare_qc` and `locked_prepare_qc` slots. Each non-null value is a full context-bound `QuorumCertificateRef`; JSON uses the identical schema and encodes unavailable references as explicit `null`.
 - `/v1/sumeragi/commit-qcs/{block_hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
 - `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
-- `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
 - `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
 - `/v1/sumeragi/params` (JSON): read-only snapshot of governed NPoS parameter records. It does not replace the signed revision-4 height context or the shared configuration fingerprint exposed by `/v1/sumeragi/status`.
 
@@ -532,46 +530,6 @@ Example PromQL
   - rate(sumeragi_dropped_control_messages_total[5m])
   - rate(dropped_messages[5m])
 
-Sumeragi phases latencies (operator dashboards)
-- Endpoint: `GET /v1/sumeragi/phases` (JSON)
-- Shape: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms }` where `ema_ms` mirrors the phase keys (`propose_ms`, …, `collect_aggregator_ms`, `commit_ms`, `pipeline_total_ms`).
-- Purpose: quick, compact snapshot of the latest observed durations (milliseconds) for each consensus phase to power lightweight dashboards.
-- `collect_aggregator_ms` tracks redundant collector fan-out latency (validator →
-  secondary collectors). Pair it with `sumeragi_redundant_sends_*` counters when
-  tuning K/r parameters or alert thresholds. Gossip fallback frequency surfaces
-  via `sumeragi_gossip_fallback_total`, and proposal drops caused by the locked
-  QC gate are exported as `block_created_dropped_by_lock_total`. Header rejections
-  are split between `block_created_hint_mismatch_total` (height/view/parent
-  mismatches) and `block_created_proposal_mismatch_total` (proposal header/payload
-  mismatches that emit InvalidProposal evidence).
-- `pipeline_total_ms` sums the pacemaker-controlled phases (propose, collect_da, collect_prevote, collect_precommit, commit) to provide a single end-to-end latency figure; `collect_aggregator_ms` remains a separate fan-out signal and is not included.
-
-Example response
-```json
-{
-  "propose_ms": 11,
-  "collect_da_ms": 22,
-  "collect_prevote_ms": 33,
-  "collect_precommit_ms": 44,
-  "collect_aggregator_ms": 50,
-  "commit_ms": 77,
-  "pipeline_total_ms": 187,
-  "collect_aggregator_gossip_total": 3,
-  "block_created_dropped_by_lock_total": 1,
-  "block_created_hint_mismatch_total": 2,
-  "block_created_proposal_mismatch_total": 4,
-  "ema_ms": {
-    "propose_ms": 15,
-    "collect_da_ms": 26,
-    "collect_prevote_ms": 37,
-    "collect_precommit_ms": 48,
-    "collect_aggregator_ms": 57,
-    "commit_ms": 81,
-    "pipeline_total_ms": 207
-  }
-}
-```
-
 Alert snippets
 - Hint mismatch burst: `increase(block_created_hint_mismatch_total[5m]) > 0`
 - Proposal mismatch burst: `increase(block_created_proposal_mismatch_total[5m]) > 0`
@@ -599,19 +557,16 @@ Example response
 }
 ```
 
-Sumeragi QC snapshot (example)
+Sumeragi v2 PrepareQC response
 - Endpoint: `GET /v1/sumeragi/qc`
-- Shape: `{ highest_qc: { height, view, subject_block_hash }, locked_qc: { height, view } }` (QC snapshot)
+- Shape: `{ highest_prepare_qc, locked_prepare_qc }`, where both slots are required and nullable. Each non-null value is the exact `QuorumCertificateRef` projection: `{ round, proposal_round, phase, subject, execution_commitment }`.
+- The endpoint does not project or accept the pre-release `{ highest_qc, locked_qc }` summary shape.
 
-Example response
+Example response before either PrepareQC is installed
 ```json
 {
-  "highest_qc": {
-    "height": 1234,
-    "view": 7,
-    "subject_block_hash": "9f1b0c7b59f1e2a3d4c5b6a79800112233445566778899aabbccddeeff001122"
-  },
-  "locked_qc": { "height": 1229, "view": 6 }
+  "highest_prepare_qc": null,
+  "locked_prepare_qc": null
 }
 ```
 
@@ -655,64 +610,6 @@ Example response
 }
 ```
 
-Sumeragi telemetry snapshot
-- Endpoint: `GET /v1/sumeragi/telemetry`
-- Shape: `{ availability: { total_votes_ingested, collectors: [{ collector_idx, peer_id, votes_ingested }] }, qc_latency_ms: [{ kind, last_ms }], rbc_backlog: { pending_sessions, total_missing_chunks, max_missing_chunks }, rbc_pending: { sessions, chunks, bytes, drops_total, drops_cap_total, drops_cap_bytes_total, drops_ttl_total, drops_ttl_bytes_total, drops_bytes_total, evicted_total, stash_ready_total, stash_ready_init_missing_total, stash_ready_roster_missing_total, stash_ready_roster_hash_mismatch_total, stash_ready_roster_unverified_total, stash_deliver_total, stash_deliver_init_missing_total, stash_deliver_roster_missing_total, stash_deliver_roster_hash_mismatch_total, stash_deliver_roster_unverified_total, stash_chunk_total, session_cap, max_chunks_per_session, max_bytes_per_session, ttl_ms }, vrf: { ... } }`
-
-Example response
-```json
-{
-  "availability": {
-    "total_votes_ingested": 12,
-    "collectors": [
-      {
-        "collector_idx": 4,
-        "peer_id": "ed0120...",
-        "votes_ingested": 5
-      }
-    ]
-  },
-  "qc_latency_ms": [
-    {
-      "kind": "availability",
-      "last_ms": 138
-    }
-  ],
-  "rbc_backlog": {
-    "pending_sessions": 1,
-    "total_missing_chunks": 3,
-    "max_missing_chunks": 2
-  },
-  "rbc_pending": {
-    "sessions": 1,
-    "chunks": 3,
-    "bytes": 196608,
-    "drops_total": 0,
-    "drops_cap_total": 0,
-    "drops_cap_bytes_total": 0,
-    "drops_ttl_total": 0,
-    "drops_ttl_bytes_total": 0,
-    "drops_bytes_total": 0,
-    "evicted_total": 0,
-    "stash_ready_total": 0,
-    "stash_ready_init_missing_total": 0,
-    "stash_ready_roster_missing_total": 0,
-    "stash_ready_roster_hash_mismatch_total": 0,
-    "stash_ready_roster_unverified_total": 0,
-    "stash_deliver_total": 0,
-    "stash_deliver_init_missing_total": 0,
-    "stash_deliver_roster_missing_total": 0,
-    "stash_deliver_roster_hash_mismatch_total": 0,
-    "stash_deliver_roster_unverified_total": 0,
-    "stash_chunk_total": 0,
-    "session_cap": 256,
-    "max_chunks_per_session": 4096,
-    "max_bytes_per_session": 67108864,
-    "ttl_ms": 30000
-  }
-}
-```
-
 Layer widths and utilization
 - Peak width per block: max_over_time(pipeline_peak_layer_width[5m])
 - Average width trend: avg_over_time(pipeline_layer_avg_width[5m])
@@ -748,17 +645,15 @@ Revision-4 Sumeragi context and diagnostics
   `min(v + 1, 10)` deadline multiplier. RTT samples, EMA values, jitter, and
   local wall clock tuning never change these deadlines.
 
-The telemetry catalog still contains legacy-labeled, non-authoritative fields
-whose names include `rbc`, `da`, or `pacemaker`. Treat them as
-transport/backpressure observations, not as evidence of configurable V1
-subprotocols. In particular, the
-`sumeragi_rbc_*` backlog/store series and `sumeragi_da_*` series may remain zero
-on the revision-4 path. Pacemaker-named backpressure counters report producer
-deferral around finite queues; they do not report an adaptive timer policy.
+Prometheus series whose names include `rbc`, `da`, or `pacemaker` report
+node-local transport and backpressure observations. They are not signed
+protocol evidence and do not imply configurable V1 subprotocols. Pacemaker-
+named backpressure counters report producer deferral around finite queues; they
+do not report an adaptive timer policy.
 
 ### Troubleshooting consensus transport and backpressure
 
-1. **Capture authenticated snapshots.** Use `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi status` and `ops sumeragi telemetry`; preserve the shared configuration fingerprint, signed height context, queue depths, and the active `(height, view)`.
+1. **Capture authenticated snapshots.** Use `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi status`; preserve the shared configuration fingerprint, signed height context, queue depths, and the active `(height, view)`. Capture `/metrics` separately for node-local transport observations.
 2. **Check context agreement first.** A mode, cadence, roster, quorum, DA-layout, or shared-limit mismatch must be repaired through the signed genesis/height rollout or consistent validator configuration. Do not add a local bypass.
 3. **Inspect finite queues.** Correlate `sumeragi_pacemaker_backpressure_deferrals_total`, its reason-labelled variants, transaction saturation gauges, body/chunk ingress depth, and P2P queue/drop metrics. If a node-local limit is too small, change the corresponding current `sumeragi.block`, `sumeragi.queues`, or `sumeragi.limits` field consistently across validators.
 4. **Inspect transport health.** Repeated retransmission, incomplete reconstruction, or block-sync recovery should be correlated with authenticated consensus-message logs and `consensus_ingress_drop_total`. Provision bandwidth or reduce admission load before changing finite limits.

@@ -259,28 +259,16 @@ fn commit_replay_validated_block_with_options(
 ) -> SignedBlock {
     let time_source = TimeSource::new_system();
     let mut voting_block = None;
-    let validation = if skip_block_signatures {
-        ValidBlock::validate_keep_voting_block_for_replay(
-            block,
-            topology,
-            genesis_account,
-            &time_source,
-            state,
-            &mut voting_block,
-            false,
-            true,
-        )
-    } else {
-        ValidBlock::validate_keep_voting_block(
-            block,
-            topology,
-            genesis_account,
-            &time_source,
-            state,
-            &mut voting_block,
-            false,
-        )
-    };
+    let validation = ValidBlock::validate_keep_voting_block_for_replay(
+        block,
+        topology,
+        genesis_account,
+        &time_source,
+        state,
+        &mut voting_block,
+        false,
+        skip_block_signatures,
+    );
     let (valid_block, mut state_block) = validation
         .unpack(|_| {})
         .expect("block validates for replay fixture");

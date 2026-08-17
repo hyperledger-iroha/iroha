@@ -35,6 +35,7 @@ use iroha_core::{
         ValidSingularQuery, isi::sorafs::manifest_pin_policy_constraints_from_config,
     },
     state::{StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly},
+    tx::external_entrypoint_hash_from_signed_hash as external_hash,
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, PublicKey, Signature,
@@ -809,10 +810,8 @@ fn sorafs_repair_finalized_cursor_from_view(
         .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
 }
 /// Production PDP/PoR/PoTR handoff that persists native repair transactions.
-///
-/// The adapter retains no signing material. It binds each report to the
-/// runtime signer's authority and a finalized-chain cursor before handing the
-/// validated native instruction to the durable node forwarder.
+/// It retains no signing material, binding each report to the runtime signer and finalized-chain
+/// cursor before handing the validated native instruction to the durable node forwarder.
 pub(crate) struct SoraFsRepairTransactionHandoff<'a> {
     state: &'a SharedAppState,
 }
@@ -14630,30 +14629,33 @@ fn observe_appeal_finance_finalized_state(
     let view = state.state.view();
     let finalized_cursor = appeal_finance_finalized_cursor_from_view(&view)?;
     let record = view.world().asset_escrows().get(escrow_id).cloned();
-    let transaction_outcome =
-        transaction_hash.map(
-            |transaction_hash| match view.transactions().get(transaction_hash) {
-                None => AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
-                Some(block_height) if block_height.get() > view.block_hashes().len() => {
-                    AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable
-                }
-                Some(block_height) => {
-                    let Some(expected_block_hash) = view
-                        .block_hashes()
-                        .get(block_height.get().saturating_sub(1))
-                        .copied()
-                    else {
-                        return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
-                    };
-                    inspect_indexed_appeal_finance_transaction(
-                        view.kura(),
-                        transaction_hash,
-                        block_height,
-                        expected_block_hash,
-                    )
-                }
-            },
-        );
+    let transaction_outcome = transaction_hash.map(|transaction_hash| {
+        match view
+            .transactions()
+            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
+                transaction_hash.clone(),
+            )) {
+            None => AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
+            Some(block_height) if block_height.get() > view.block_hashes().len() => {
+                AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable
+            }
+            Some(block_height) => {
+                let Some(expected_block_hash) = view
+                    .block_hashes()
+                    .get(block_height.get().saturating_sub(1))
+                    .copied()
+                else {
+                    return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
+                };
+                inspect_indexed_appeal_finance_transaction(
+                    view.kura(),
+                    transaction_hash,
+                    block_height,
+                    expected_block_hash,
+                )
+            }
+        }
+    });
     Some((finalized_cursor, record, transaction_outcome))
 }
 #[cfg(test)]
@@ -15210,9 +15212,8 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     continue;
                 };
                 let hash = transaction.hash();
-                let local_pending = state
-                    .queue
-                    .contains_pending_hash(hash.clone(), &state.state);
+                let queue_hash = external_hash(hash.clone());
+                let local_pending = state.queue.contains_pending_hash(queue_hash, &state.state);
                 let cache_kind =
                     crate::pipeline_status_local_entry(state, &hash).map(|(entry, _)| entry.kind);
                 match transaction_outcome {
@@ -16050,9 +16051,10 @@ mod proof_outcome_submission_disposition_tests {
         assert_eq!(
             classify_local_proof_outcome_submission(
                 &iroha_core::queue::Error::PlanJournalDurabilityIndeterminate {
-                    transaction_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                    entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
                         iroha_crypto::Hash::prehashed([0xA5; 32]),
                     ),
+                    signed_transaction_hash: None,
                     reason: "unknown".to_owned(),
                 }
             ),
@@ -16984,31 +16986,36 @@ fn observe_exact_sorafs_repair_transaction(
     let finalized_cursor = sorafs_repair_finalized_cursor_from_view(&view)?;
     let reconciliation =
         reconcile_sorafs_repair_transaction_in_view(&view, request, finalized_cursor)?;
-    let transaction_outcome = match view.transactions().get(transaction_hash) {
-        None => RepairAuthoritativeTransactionOutcomeV1::Absent,
-        Some(block_height) if block_height.get() > view.block_hashes().len() => {
-            RepairAuthoritativeTransactionOutcomeV1::Unavailable
-        }
-        Some(block_height) => {
-            let Some(expected_block_hash) = view
-                .block_hashes()
-                .get(block_height.get().saturating_sub(1))
-                .copied()
-            else {
-                return Some(RepairExactTransactionObservationV1 {
-                    reconciliation,
-                    finalized_cursor,
-                    transaction_outcome: RepairAuthoritativeTransactionOutcomeV1::Unavailable,
-                });
-            };
-            inspect_indexed_repair_transaction(
-                view.kura(),
-                transaction_hash,
-                block_height,
-                expected_block_hash,
-            )
-        }
-    };
+    let transaction_outcome =
+        match view
+            .transactions()
+            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
+                transaction_hash.clone(),
+            )) {
+            None => RepairAuthoritativeTransactionOutcomeV1::Absent,
+            Some(block_height) if block_height.get() > view.block_hashes().len() => {
+                RepairAuthoritativeTransactionOutcomeV1::Unavailable
+            }
+            Some(block_height) => {
+                let Some(expected_block_hash) = view
+                    .block_hashes()
+                    .get(block_height.get().saturating_sub(1))
+                    .copied()
+                else {
+                    return Some(RepairExactTransactionObservationV1 {
+                        reconciliation,
+                        finalized_cursor,
+                        transaction_outcome: RepairAuthoritativeTransactionOutcomeV1::Unavailable,
+                    });
+                };
+                inspect_indexed_repair_transaction(
+                    view.kura(),
+                    transaction_hash,
+                    block_height,
+                    expected_block_hash,
+                )
+            }
+        };
     Some(RepairExactTransactionObservationV1 {
         reconciliation,
         finalized_cursor,
@@ -17255,9 +17262,10 @@ mod repair_transaction_forwarder_tests {
         assert_eq!(
             classify_local_repair_transaction_submission(
                 &iroha_core::queue::Error::PlanJournalDurabilityIndeterminate {
-                    transaction_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                    entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
                         iroha_crypto::Hash::prehashed([0x73; 32]),
                     ),
+                    signed_transaction_hash: None,
                     reason: "unknown".to_owned(),
                 }
             ),
@@ -17883,9 +17891,8 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
             exact_transaction_hash
                 .as_ref()
                 .is_some_and(|transaction_hash| {
-                    let queue_pending = state
-                        .queue
-                        .contains_pending_hash(transaction_hash.clone(), &state.state);
+                    let queue_hash = external_hash(transaction_hash.clone());
+                    let queue_pending = state.queue.contains_pending_hash(queue_hash, &state.state);
                     let cache_kind = state
                         .pipeline_status_cache
                         .lookup(transaction_hash)
@@ -18062,9 +18069,9 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 }
-                let queue_pending_after_observation = state
-                    .queue
-                    .contains_pending_hash(transaction_hash.clone(), &state.state);
+                let queue_hash = external_hash(transaction_hash.clone());
+                let queue_pending_after_observation =
+                    state.queue.contains_pending_hash(queue_hash, &state.state);
                 let cache_kind_after_observation = state
                     .pipeline_status_cache
                     .lookup(transaction_hash)

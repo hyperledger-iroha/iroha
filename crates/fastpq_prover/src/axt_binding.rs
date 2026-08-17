@@ -22,6 +22,20 @@ pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
 /// [`AxtProofEnvelope::committed_amount`]. It is inserted before the batch seal
 /// is derived, so changing the outer envelope amount invalidates verification.
 pub const AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY: &str = "axt_fastpq_committed_amount_v1";
+/// Metadata key binding the required non-zero manifest root into the proof trace.
+pub const AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY: &str = "axt_fastpq_manifest_root_v1";
+/// Metadata key binding the exact optional DA commitment into the proof trace.
+///
+/// The always-present value is exactly 33 bytes: a zero tag followed by a
+/// zeroed 32-byte tail for `None`, or a one tag followed by the commitment.
+pub const AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY: &str = "axt_fastpq_da_commitment_v1";
+/// Metadata key binding the optional proof expiry into the `FastPQ` proof trace.
+///
+/// The value is always present and is exactly one little-endian `u64`: zero
+/// encodes no expiry, while every non-zero value encodes `Some(expiry_slot)`.
+/// Requiring the key even for no-expiry proofs prevents pre-binding proof
+/// payloads from being relabelled as unbounded after the fact.
+pub const AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY: &str = "axt_fastpq_expiry_slot_v1";
 /// Metadata key sealing a concrete FASTPQ batch to its AXT statement.
 ///
 /// The seal is computed over the carried batch after AXT metadata has been
@@ -57,6 +71,8 @@ pub struct AxtVerifiedProof {
     pub new_root: [u8; 32],
     /// Proven transaction/statement-set commitment.
     pub tx_set_hash: [u8; 32],
+    /// Optional expiry authenticated by the proof-bound batch metadata.
+    pub expiry_slot: Option<u64>,
 }
 /// Canonicalize a structured AXT FASTPQ binding before proving or verification.
 ///
@@ -90,6 +106,9 @@ pub fn canonicalize_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBindi
             .as_ref()
             .map(canonicalize_effect_binding)
             .transpose()?,
+        remote_spend_intent_commitments: canonical_remote_spend_intent_commitments(
+            &binding.remote_spend_intent_commitments,
+        )?,
     })
 }
 /// Encode a `FastPQ` batch/proof pair for the `proof` field of an AXT envelope.
@@ -124,8 +143,10 @@ pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding>
 /// generation. This helper does not add or repair AXT binding metadata after the fact.
 ///
 /// # Errors
-/// Returns an error when the embedded binding is missing/malformed, does not
-/// match the batch, or the proof payload cannot be encoded.
+/// Returns an error when the embedded binding or proof metadata is
+/// missing/malformed, the supplied manifest or DA commitment differs from the
+/// proof-bound value, the binding does not match the batch, or the proof payload
+/// cannot be encoded.
 pub fn axt_proof_envelope_from_bound_batch(
     batch: &TransitionBatch,
     proof: Proof,
@@ -134,6 +155,20 @@ pub fn axt_proof_envelope_from_bound_batch(
 ) -> Result<AxtProofEnvelope> {
     let binding = embedded_axt_binding(batch)?;
     let committed_amount = proof_bound_committed_amount(batch)?;
+    let proof_bound_manifest_root = proof_bound_manifest_root(batch)?;
+    if manifest_root != proof_bound_manifest_root {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope manifest_root does not match proof-bound batch metadata"
+                .into(),
+        });
+    }
+    let proof_bound_da_commitment = proof_bound_da_commitment(batch)?;
+    if da_commitment != proof_bound_da_commitment {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope da_commitment does not match proof-bound batch metadata"
+                .into(),
+        });
+    }
     verify(batch, &proof)?;
     Ok(AxtProofEnvelope {
         dsid: DataSpaceId::new(binding.source_dsid),
@@ -148,7 +183,8 @@ pub fn axt_proof_envelope_from_bound_batch(
 /// Build an AXT proof blob from an already AXT-bound batch and proof.
 ///
 /// # Errors
-/// Returns an error when envelope construction or Norito encoding fails.
+/// Returns an error when envelope construction or Norito encoding fails, or
+/// when the supplied expiry differs from the proof-bound value.
 pub fn axt_proof_blob_from_bound_batch(
     batch: &TransitionBatch,
     proof: Proof,
@@ -156,27 +192,42 @@ pub fn axt_proof_blob_from_bound_batch(
     da_commitment: Option<[u8; 32]>,
     expiry_slot: Option<u64>,
 ) -> Result<ProofBlob> {
+    let proof_bound_expiry = proof_bound_expiry_slot(batch)?;
+    if expiry_slot != proof_bound_expiry {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof blob expiry_slot does not match proof-bound batch metadata".into(),
+        });
+    }
     let envelope = axt_proof_envelope_from_bound_batch(batch, proof, manifest_root, da_commitment)?;
     Ok(ProofBlob {
         payload: encode_canonical_norito(&envelope)?,
         expiry_slot,
     })
 }
-/// Bind an already-captured FASTPQ batch to an AXT statement without an amount.
+/// Bind an already-captured FASTPQ batch to an AXT statement without an amount or expiry.
 ///
-/// This compatibility wrapper preserves the original API and delegates to
-/// [`bind_axt_batch_with_committed_amount`] with no committed amount.
+/// This convenience wrapper delegates to [`bind_axt_batch_with_proof_metadata`]
+/// with neither a committed amount nor an expiry. Manifest, DA, and the
+/// authenticated no-expiry sentinel are still mandatory proof metadata. This
+/// is an intentional first-release hard cut: proofs made before these metadata
+/// fields were required must be regenerated.
 ///
 /// # Errors
 /// Returns [`Error::InvalidAxtBinding`] when the binding is malformed or does not match the batch
 /// parameter/public dataspace, and [`Error::Encode`] when Norito serialization fails.
-pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
-    bind_axt_batch_with_committed_amount(batch, binding, None)
+pub fn bind_axt_batch(
+    batch: &mut TransitionBatch,
+    binding: &AxtFastpqBinding,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
+) -> Result<()> {
+    bind_axt_batch_with_proof_metadata(batch, binding, manifest_root, da_commitment, None, None)
 }
 /// Bind an already-captured FASTPQ batch and optional amount to an AXT statement.
 ///
-/// This helper inserts the canonical AXT metadata, the optional fixed-width
-/// committed amount, and the batch seal required by
+/// This helper inserts the canonical AXT binding, required manifest root,
+/// canonical optional DA commitment, optional fixed-width committed amount,
+/// authenticated no-expiry sentinel, and the batch seal required by
 /// [`verify_axt_proof_envelope`]. Call it only after the batch transitions and
 /// public inputs have been finalized and the batch already carries the
 /// execution `entry_hash` metadata matching `source_tx_commitment`; changing
@@ -184,17 +235,59 @@ pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -
 ///
 /// # Errors
 /// Returns [`Error::InvalidAxtBinding`] when the binding is malformed, the
-/// committed amount is zero, or the binding does not match the batch
-/// parameter/public dataspace, and [`Error::Encode`] when Norito serialization
-/// fails.
+/// manifest root or committed amount is zero, or the binding does not match
+/// the batch parameter/public dataspace, and [`Error::Encode`] when Norito
+/// serialization fails.
 pub fn bind_axt_batch_with_committed_amount(
     batch: &mut TransitionBatch,
     binding: &AxtFastpqBinding,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
     committed_amount: Option<u128>,
 ) -> Result<()> {
+    bind_axt_batch_with_proof_metadata(
+        batch,
+        binding,
+        manifest_root,
+        da_commitment,
+        committed_amount,
+        None,
+    )
+}
+/// Bind an already-captured FASTPQ batch and its proof-level metadata to an AXT statement.
+///
+/// This helper inserts the canonical AXT binding, required manifest root,
+/// canonical optional DA commitment, optional fixed-width committed amount,
+/// required expiry encoding, and batch seal before proof generation. `None`
+/// expiry is encoded as an authenticated zero sentinel; `Some(0)` is never
+/// accepted.
+///
+/// # Errors
+/// Returns [`Error::InvalidAxtBinding`] when the binding is malformed, an
+/// amount or explicit expiry is zero, or the binding does not match the batch
+/// parameter/public dataspace. Returns [`Error::Encode`] when Norito
+/// serialization fails.
+pub fn bind_axt_batch_with_proof_metadata(
+    batch: &mut TransitionBatch,
+    binding: &AxtFastpqBinding,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
+    committed_amount: Option<u128>,
+    expiry_slot: Option<u64>,
+) -> Result<()> {
+    if manifest_root.iter().all(|byte| *byte == 0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT manifest_root must be non-zero".into(),
+        });
+    }
     if committed_amount == Some(0) {
         return Err(Error::InvalidAxtBinding {
             details: "AXT committed_amount must be non-zero".into(),
+        });
+    }
+    if expiry_slot == Some(0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT expiry_slot must be non-zero when present".into(),
         });
     }
     let canonical = canonicalize_binding(binding)?;
@@ -214,6 +307,9 @@ pub fn bind_axt_batch_with_committed_amount(
     batch
         .metadata
         .remove(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY);
+    batch.metadata.remove(AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY);
+    batch.metadata.remove(AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY);
+    batch.metadata.remove(AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY);
     insert_binding_metadata(batch, &context)?;
     if let Some(amount) = committed_amount {
         batch.metadata.insert(
@@ -221,6 +317,18 @@ pub fn bind_axt_batch_with_committed_amount(
             amount.to_le_bytes().to_vec(),
         );
     }
+    batch.metadata.insert(
+        AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY.into(),
+        expiry_slot.unwrap_or(0).to_le_bytes().to_vec(),
+    );
+    batch.metadata.insert(
+        AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY.into(),
+        manifest_root.to_vec(),
+    );
+    batch.metadata.insert(
+        AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(),
+        encode_optional_da_commitment(da_commitment),
+    );
     let seal = axt_batch_seal(batch, &canonical)?;
     batch
         .metadata
@@ -228,6 +336,12 @@ pub fn bind_axt_batch_with_committed_amount(
     Ok(())
 }
 /// Verify an AXT envelope that carries a real `FastPQ` batch and proof payload.
+///
+/// This verifies the envelope-level manifest, DA, and amount mirrors and
+/// returns the authenticated expiry. A caller starting from [`ProofBlob`] must
+/// use [`verify_axt_proof_blob`] or
+/// [`verify_axt_proof_envelope_with_outer_metadata`] so the outer expiry mirror
+/// is exact-compared as well.
 ///
 /// # Errors
 /// Returns [`Error::InvalidAxtBinding`] when the envelope is missing the structured
@@ -257,6 +371,19 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     let batch = transition_batch_from_model(&payload.batch);
     verify_batch_matches_binding(&batch, binding)?;
     let proof_bound_amount = proof_bound_committed_amount(&batch)?;
+    let proof_bound_expiry = proof_bound_expiry_slot(&batch)?;
+    if envelope.manifest_root != proof_bound_manifest_root(&batch)? {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope manifest_root does not match proof-bound batch metadata"
+                .into(),
+        });
+    }
+    if envelope.da_commitment != proof_bound_da_commitment(&batch)? {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope da_commitment does not match proof-bound batch metadata"
+                .into(),
+        });
+    }
     if envelope.committed_amount != proof_bound_amount {
         return Err(Error::InvalidAxtBinding {
             details:
@@ -271,7 +398,56 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         old_root: batch.public_inputs.old_root,
         new_root: batch.public_inputs.new_root,
         tx_set_hash: batch.public_inputs.tx_set_hash,
+        expiry_slot: proof_bound_expiry,
     })
+}
+/// Verify an AXT proof blob and require its advertised expiry to match the proof trace.
+///
+/// # Errors
+/// Returns an error when the blob is empty, carries the forbidden explicit
+/// zero expiry, is not a canonical [`AxtProofEnvelope`], fails `FastPQ`
+/// verification, or advertises an expiry different from the proof-bound batch
+/// metadata.
+pub fn verify_axt_proof_blob(proof: &ProofBlob) -> Result<AxtVerifiedProof> {
+    if proof.payload.is_empty() {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof blob payload must not be empty".into(),
+        });
+    }
+    if proof.expiry_slot == Some(0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof blob expiry_slot must be non-zero when present".into(),
+        });
+    }
+    let envelope: AxtProofEnvelope = decode_from_bytes(&proof.payload)
+        .map_err(|source| Error::AxtProofPayloadDecode { source })?;
+    if encode_canonical_norito(&envelope)?.as_slice() != proof.payload {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope must use canonical Norito bytes".into(),
+        });
+    }
+    verify_axt_proof_envelope_with_outer_metadata(&envelope, proof.expiry_slot)
+}
+/// Verify an already-decoded AXT proof envelope and its outer expiry mirror.
+///
+/// This is the one-decode variant for block and host validation paths that
+/// must inspect routing fields before invoking the expensive verifier.
+///
+/// # Errors
+/// Returns any error from [`verify_axt_proof_envelope`] or an
+/// [`Error::InvalidAxtBinding`] when `expiry_slot` differs from the value
+/// authenticated by the proof batch.
+pub fn verify_axt_proof_envelope_with_outer_metadata(
+    envelope: &AxtProofEnvelope,
+    expiry_slot: Option<u64>,
+) -> Result<AxtVerifiedProof> {
+    let verified = verify_axt_proof_envelope(envelope)?;
+    if expiry_slot != verified.expiry_slot {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof blob expiry_slot does not match proof-bound batch metadata".into(),
+        });
+    }
+    Ok(verified)
 }
 /// Convert a prover batch into the shared `FastPQ` data-model representation.
 #[must_use]
@@ -438,6 +614,9 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
         require_metadata_eq(batch, "corridor", canonical.corridor.as_bytes())?;
     }
     let _ = proof_bound_committed_amount(batch)?;
+    let _ = proof_bound_expiry_slot(batch)?;
+    let _ = proof_bound_manifest_root(batch)?;
+    let _ = proof_bound_da_commitment(batch)?;
     let seal = axt_batch_seal(batch, &canonical)?;
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
     require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
@@ -482,6 +661,65 @@ fn proof_bound_committed_amount(batch: &TransitionBatch) -> Result<Option<u128>>
         });
     }
     Ok(Some(amount))
+}
+fn proof_bound_expiry_slot(batch: &TransitionBatch) -> Result<Option<u64>> {
+    let encoded = required_metadata(batch, AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY)?;
+    let bytes: [u8; core::mem::size_of::<u64>()] =
+        encoded.try_into().map_err(|_| Error::MetadataLength {
+            key: AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY.to_owned(),
+            expected: core::mem::size_of::<u64>(),
+            actual: encoded.len(),
+        })?;
+    let expiry_slot = u64::from_le_bytes(bytes);
+    Ok((expiry_slot != 0).then_some(expiry_slot))
+}
+fn proof_bound_manifest_root(batch: &TransitionBatch) -> Result<[u8; 32]> {
+    let encoded = required_metadata(batch, AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY)?;
+    let root: [u8; 32] = encoded.try_into().map_err(|_| Error::MetadataLength {
+        key: AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY.to_owned(),
+        expected: 32,
+        actual: encoded.len(),
+    })?;
+    if root.iter().all(|byte| *byte == 0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "proof-bound AXT manifest_root must be non-zero".into(),
+        });
+    }
+    Ok(root)
+}
+fn proof_bound_da_commitment(batch: &TransitionBatch) -> Result<Option<[u8; 32]>> {
+    let encoded = required_metadata(batch, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY)?;
+    if encoded.len() != 33 {
+        return Err(Error::MetadataLength {
+            key: AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.to_owned(),
+            expected: 33,
+            actual: encoded.len(),
+        });
+    }
+    let commitment: [u8; 32] = encoded[1..]
+        .try_into()
+        .expect("fixed metadata length checked above");
+    match encoded[0] {
+        0 if commitment == [0; 32] => Ok(None),
+        0 => Err(Error::InvalidAxtBinding {
+            details: "proof-bound AXT absent da_commitment must have a zeroed payload".into(),
+        }),
+        1 => Ok(Some(commitment)),
+        _ => Err(Error::InvalidAxtBinding {
+            details: "proof-bound AXT da_commitment has an unsupported option tag".into(),
+        }),
+    }
+}
+fn encode_optional_da_commitment(commitment: Option<[u8; 32]>) -> Vec<u8> {
+    match commitment {
+        None => vec![0; 33],
+        Some(commitment) => {
+            let mut encoded = Vec::with_capacity(33);
+            encoded.push(1);
+            encoded.extend_from_slice(&commitment);
+            encoded
+        }
+    }
 }
 fn require_concrete_execution_batch(
     batch: &TransitionBatch,
@@ -667,6 +905,25 @@ fn required_target_dsids(values: &[u64]) -> Result<Vec<u64>> {
     }
     Ok(values.to_vec())
 }
+fn canonical_remote_spend_intent_commitments(values: &[[u8; 32]]) -> Result<Vec<[u8; 32]>> {
+    if values.len() > iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 {
+        return Err(Error::InvalidAxtBinding {
+            details: format!(
+                "remote_spend_intent_commitments exceeds the V1 limit of {}",
+                iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1
+            ),
+        });
+    }
+    for pair in values.windows(2) {
+        if pair[0] >= pair[1] {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote_spend_intent_commitments must be strictly ordered and unique"
+                    .into(),
+            });
+        }
+    }
+    Ok(values.to_vec())
+}
 fn normalized_claim_type(value: &str) -> Result<String> {
     let claim_type = value.trim().to_ascii_lowercase();
     match claim_type.as_str() {
@@ -810,6 +1067,7 @@ mod tests {
             verifier_version: "v1".to_string(),
             target_dsids: vec![9],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         }
     }
     fn alternate_norito_bytes<T: NoritoSerialize>(value: &T) -> Vec<u8> {
@@ -863,7 +1121,7 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-        bind_axt_batch(&mut batch, binding).expect("bind AXT batch");
+        bind_axt_batch(&mut batch, binding, [0x42; 32], Some([0x24; 32])).expect("bind AXT batch");
         batch
     }
     fn real_transfer_claim_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
@@ -923,7 +1181,8 @@ mod tests {
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         batch.sort();
-        bind_axt_batch(&mut batch, binding).expect("bind transfer AXT batch");
+        bind_axt_batch(&mut batch, binding, [0x42; 32], Some([0x24; 32]))
+            .expect("bind transfer AXT batch");
         batch
     }
     fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
@@ -1037,6 +1296,40 @@ mod tests {
                 .target_dsids,
             vec![9, 11]
         );
+    }
+    #[test]
+    fn canonicalize_binding_bounds_and_canonicalizes_remote_spend_commitments() {
+        let mut binding = sample_binding();
+        binding.remote_spend_intent_commitments = vec![[0x11; 32], [0x22; 32]];
+        assert_eq!(
+            canonicalize_binding(&binding)
+                .expect("strict remote-spend commitment order")
+                .remote_spend_intent_commitments,
+            binding.remote_spend_intent_commitments
+        );
+
+        binding.remote_spend_intent_commitments = vec![[0x11; 32], [0x11; 32]];
+        let err = canonicalize_binding(&binding).expect_err("duplicate commitment must fail");
+        assert!(matches!(
+            err,
+            Error::InvalidAxtBinding { details } if details.contains("strictly ordered")
+        ));
+
+        binding.remote_spend_intent_commitments = vec![[0x22; 32], [0x11; 32]];
+        let err = canonicalize_binding(&binding).expect_err("unordered commitment must fail");
+        assert!(matches!(
+            err,
+            Error::InvalidAxtBinding { details } if details.contains("strictly ordered")
+        ));
+
+        let oversized =
+            vec![[0_u8; 32]; iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 + 1];
+        let err = canonical_remote_spend_intent_commitments(&oversized)
+            .expect_err("oversized commitment set must fail before canonicalization");
+        assert!(matches!(
+            err,
+            Error::InvalidAxtBinding { details } if details.contains("V1 limit")
+        ));
     }
     #[test]
     fn canonicalize_binding_normalizes_labels_and_manifest_hash() {
@@ -1236,7 +1529,8 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-        let err = bind_axt_batch(&mut batch, &binding).expect_err("empty batch must fail");
+        let err = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("empty batch must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("state transitions"))
         );
@@ -1266,7 +1560,8 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-        let err = bind_axt_batch(&mut batch, &binding).expect_err("parameter mismatch must fail");
+        let err = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("parameter mismatch must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("parameter"))
         );
@@ -1291,7 +1586,8 @@ mod tests {
             b"authorized".to_vec(),
             OperationKind::MetaSet,
         ));
-        let err = bind_axt_batch(&mut batch, &binding).expect_err("entry hash is required");
+        let err = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("entry hash is required");
         assert!(matches!(err, Error::MissingMetadata { key } if key == ENTRY_HASH_METADATA_KEY));
     }
     #[test]
@@ -1317,7 +1613,8 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), vec![0xAA; 32]);
-        let err = bind_axt_batch(&mut batch, &binding).expect_err("wrong entry hash fails");
+        let err = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("wrong entry hash fails");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains(ENTRY_HASH_METADATA_KEY))
         );
@@ -1552,7 +1849,8 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-        bind_axt_batch(&mut batch, &binding).expect("bind transfer claim batch");
+        bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect("bind transfer claim batch");
         let proof_batch = real_authorization_batch(&sample_binding());
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
@@ -1631,7 +1929,8 @@ mod tests {
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
             to_bytes(&transcripts).expect("encode unrelated transfer transcripts"),
         );
-        bind_axt_batch(&mut batch, &binding).expect("reseal unrelated transfer batch");
+        bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect("reseal unrelated transfer batch");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
             .prove(&batch)
@@ -1733,8 +2032,14 @@ mod tests {
     fn verify_axt_envelope_binds_committed_amount_to_fastpq_proof() {
         let binding = sample_binding();
         let mut batch = real_authorization_batch(&binding);
-        bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(50))
-            .expect("bind proof amount");
+        bind_axt_batch_with_committed_amount(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            Some(50),
+        )
+        .expect("bind proof amount");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
             .prove(&batch)
@@ -1761,6 +2066,182 @@ mod tests {
         );
     }
     #[test]
+    fn verify_axt_proof_blob_binds_outer_expiry_to_fastpq_proof() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            None,
+            Some(5),
+        )
+        .expect("bind proof expiry");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let blob =
+            axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], Some([0x24; 32]), Some(5))
+                .expect("package expiry-bound proof");
+        let verified = verify_axt_proof_blob(&blob).expect("proof-bound expiry verifies");
+        assert_eq!(verified.expiry_slot, Some(5));
+
+        let mut extended = blob.clone();
+        extended.expiry_slot = Some(500);
+        let err = verify_axt_proof_blob(&extended)
+            .expect_err("outer expiry must not extend a proof lifetime");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("expiry_slot") && details.contains("proof-bound"))
+        );
+
+        let mut unbounded = blob;
+        unbounded.expiry_slot = None;
+        let err = verify_axt_proof_blob(&unbounded)
+            .expect_err("outer expiry must not be removed after proving");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("expiry_slot") && details.contains("proof-bound"))
+        );
+    }
+    #[test]
+    fn verify_axt_proof_blob_authenticates_no_expiry_sentinel() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch(&mut batch, &binding, [0x42; 32], None)
+            .expect("bind authenticated no-expiry context");
+        let none_expiry = 0_u64.to_le_bytes();
+        assert_eq!(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY)
+                .map(Vec::as_slice),
+            Some(none_expiry.as_slice())
+        );
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let blob = axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], None, None)
+            .expect("package authenticated no-expiry proof");
+        assert_eq!(
+            verify_axt_proof_blob(&blob)
+                .expect("authenticated no-expiry proof verifies")
+                .expiry_slot,
+            None
+        );
+    }
+    #[test]
+    fn verify_axt_proof_blob_rejects_missing_or_malformed_expiry_metadata() {
+        let binding = sample_binding();
+        let make_blob = |mut batch: TransitionBatch| {
+            batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+            let seal = axt_batch_seal(&batch, &binding).expect("reseal malformed fixture");
+            batch
+                .metadata
+                .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
+            let proof = Prover::canonical(DEFAULT_PARAMETER)
+                .expect("prover")
+                .prove(&batch)
+                .expect("proof");
+            let envelope = AxtProofEnvelope {
+                dsid: DataSpaceId::new(binding.source_dsid),
+                manifest_root: [0x42; 32],
+                da_commitment: Some([0x24; 32]),
+                proof: encode_axt_fastpq_payload(&batch, proof).expect("encode proof payload"),
+                fastpq_binding: Some(binding.clone()),
+                committed_amount: None,
+                amount_commitment: None,
+            };
+            ProofBlob {
+                payload: encode_canonical_norito(&envelope).expect("encode proof envelope"),
+                expiry_slot: None,
+            }
+        };
+
+        let mut missing = real_authorization_batch(&binding);
+        missing.metadata.remove(AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY);
+        let err = verify_axt_proof_blob(&make_blob(missing))
+            .expect_err("legacy proof without expiry binding must fail");
+        assert!(
+            matches!(err, Error::MissingMetadata { key } if key == AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY)
+        );
+
+        let mut malformed = real_authorization_batch(&binding);
+        malformed
+            .metadata
+            .insert(AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY.into(), vec![0; 7]);
+        let err = verify_axt_proof_blob(&make_blob(malformed))
+            .expect_err("malformed expiry binding must fail");
+        assert!(matches!(
+            err,
+            Error::MetadataLength {
+                key,
+                expected: 8,
+                actual: 7,
+            } if key == AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY
+        ));
+
+        let mut batch = real_authorization_batch(&binding);
+        let err = bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            None,
+            Some(0),
+        )
+        .expect_err("binder must reject explicit zero expiry");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("expiry_slot") && details.contains("non-zero"))
+        );
+    }
+    #[test]
+    fn verify_axt_proof_blob_rejects_resealed_expiry_with_reused_proof() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            None,
+            Some(5),
+        )
+        .expect("bind original expiry");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        batch.metadata.insert(
+            AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY.into(),
+            500_u64.to_le_bytes().to_vec(),
+        );
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let seal = axt_batch_seal(&batch, &binding).expect("reseal mutated batch");
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
+        let envelope = AxtProofEnvelope {
+            dsid: DataSpaceId::new(binding.source_dsid),
+            manifest_root: [0x42; 32],
+            da_commitment: Some([0x24; 32]),
+            proof: encode_axt_fastpq_payload(&batch, proof).expect("encode mutated payload"),
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let blob = ProofBlob {
+            payload: encode_canonical_norito(&envelope).expect("encode mutated envelope"),
+            expiry_slot: Some(500),
+        };
+        assert!(matches!(
+            verify_axt_proof_blob(&blob).expect_err("old proof must not authenticate new expiry"),
+            Error::CommitmentMismatch
+        ));
+    }
+    #[test]
     fn verify_axt_envelope_rejects_outer_amount_without_proof_metadata() {
         let binding = sample_binding();
         let batch = real_authorization_batch(&binding);
@@ -1781,8 +2262,14 @@ mod tests {
     fn verify_axt_envelope_rejects_malformed_or_zero_amount_metadata() {
         let binding = sample_binding();
         let mut batch = real_authorization_batch(&binding);
-        bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(50))
-            .expect("bind proof amount");
+        bind_axt_batch_with_committed_amount(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            Some(50),
+        )
+        .expect("bind proof amount");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
             .prove(&batch)
@@ -1822,15 +2309,21 @@ mod tests {
         );
 
         let mut batch = real_authorization_batch(&binding);
-        let err = bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(0))
-            .expect_err("binder must reject a zero amount");
+        let err = bind_axt_batch_with_committed_amount(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            Some(0),
+        )
+        .expect_err("binder must reject a zero amount");
         assert!(matches!(
             err,
             Error::InvalidAxtBinding { details } if details.contains("non-zero")
         ));
     }
     #[test]
-    fn verify_axt_envelope_statement_digest_binds_optional_da_commitment() {
+    fn verify_axt_envelope_rejects_mutated_manifest_and_da_commitment() {
         let binding = sample_binding();
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
@@ -1838,14 +2331,110 @@ mod tests {
             .prove(&batch)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
-        let with_da =
-            verify_axt_proof_envelope(&envelope_with_payload(binding.clone(), payload.clone()))
-                .expect("with DA commitment");
-        let mut without_da = envelope_with_payload(binding, payload);
+        let envelope = envelope_with_payload(binding, payload);
+        verify_axt_proof_envelope(&envelope).expect("bound envelope verifies");
+
+        let mut rotated_manifest = envelope.clone();
+        rotated_manifest.manifest_root = [0x43; 32];
+        let err = verify_axt_proof_envelope(&rotated_manifest)
+            .expect_err("outer manifest must not be relabelled after proving");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("manifest_root") && details.contains("proof-bound"))
+        );
+
+        let mut without_da = envelope.clone();
         without_da.da_commitment = None;
-        let without_da = verify_axt_proof_envelope(&without_da).expect("without DA commitment");
-        assert_ne!(with_da.statement_digest, without_da.statement_digest);
-        assert_eq!(with_da.proof_digest, without_da.proof_digest);
+        let err = verify_axt_proof_envelope(&without_da)
+            .expect_err("outer DA commitment must not be removed after proving");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("da_commitment") && details.contains("proof-bound"))
+        );
+
+        let mut changed_da = envelope;
+        changed_da.da_commitment = Some([0x25; 32]);
+        let err = verify_axt_proof_envelope(&changed_da)
+            .expect_err("outer DA commitment must not change after proving");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("da_commitment") && details.contains("proof-bound"))
+        );
+    }
+    #[test]
+    fn proof_metadata_rejects_malformed_manifest_and_da_encodings() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+
+        batch.metadata.remove(AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY);
+        assert!(matches!(
+            proof_bound_manifest_root(&batch).expect_err("missing manifest must fail"),
+            Error::MissingMetadata { key } if key == AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY
+        ));
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY.into(), vec![1; 31]);
+        assert!(matches!(
+            proof_bound_manifest_root(&batch).expect_err("short manifest must fail"),
+            Error::MetadataLength {
+                key,
+                expected: 32,
+                actual: 31,
+            } if key == AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY
+        ));
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY.into(), vec![0; 32]);
+        assert!(
+            matches!(proof_bound_manifest_root(&batch), Err(Error::InvalidAxtBinding { details }) if details.contains("manifest_root") && details.contains("non-zero"))
+        );
+
+        batch.metadata.remove(AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY);
+        assert!(matches!(
+            proof_bound_da_commitment(&batch).expect_err("missing DA encoding must fail"),
+            Error::MissingMetadata { key } if key == AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY
+        ));
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(), vec![0; 32]);
+        assert!(matches!(
+            proof_bound_da_commitment(&batch).expect_err("short DA encoding must fail"),
+            Error::MetadataLength {
+                key,
+                expected: 33,
+                actual: 32,
+            } if key == AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY
+        ));
+        let mut unsupported_tag = vec![0; 33];
+        unsupported_tag[0] = 2;
+        batch.metadata.insert(
+            AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(),
+            unsupported_tag,
+        );
+        assert!(
+            matches!(proof_bound_da_commitment(&batch), Err(Error::InvalidAxtBinding { details }) if details.contains("option tag"))
+        );
+        let mut noncanonical_none = vec![0; 33];
+        noncanonical_none[1] = 1;
+        batch.metadata.insert(
+            AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(),
+            noncanonical_none,
+        );
+        assert!(
+            matches!(proof_bound_da_commitment(&batch), Err(Error::InvalidAxtBinding { details }) if details.contains("zeroed payload"))
+        );
+        let mut present_zero_digest = vec![0; 33];
+        present_zero_digest[0] = 1;
+        batch.metadata.insert(
+            AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(),
+            present_zero_digest,
+        );
+        assert_eq!(
+            proof_bound_da_commitment(&batch).expect("tag-one zero digest is a present value"),
+            Some([0; 32])
+        );
+
+        let mut batch = real_authorization_batch(&binding);
+        assert!(
+            matches!(bind_axt_batch(&mut batch, &binding, [0; 32], None), Err(Error::InvalidAxtBinding { details }) if details.contains("manifest_root") && details.contains("non-zero"))
+        );
     }
     #[test]
     fn verify_axt_envelope_rejects_batch_mutated_after_seal() {
@@ -1881,7 +2470,8 @@ mod tests {
             OperationKind::MetaSet,
         ));
         other_batch.sort();
-        bind_axt_batch(&mut other_batch, &binding).expect("rebind mutated batch");
+        bind_axt_batch(&mut other_batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect("rebind mutated batch");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
             .prove(&other_batch)
@@ -1907,7 +2497,16 @@ mod tests {
     #[test]
     fn axt_proof_blob_helper_accepts_already_bound_batch() {
         let binding = sample_binding();
-        let batch = real_authorization_batch(&binding);
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            None,
+            Some(9),
+        )
+        .expect("bind proof expiry");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
             .prove(&batch)
@@ -1922,14 +2521,60 @@ mod tests {
         )
         .expect("AXT proof blob");
         assert_eq!(blob.expiry_slot, Some(9));
-        assert!(iroha_data_model::nexus::proof_matches_manifest(
-            &blob,
-            DataSpaceId::new(binding.source_dsid),
-            manifest_root,
-        ));
+        assert!(
+            iroha_data_model::nexus::proof_envelope_shape_matches_manifest(
+                &blob,
+                DataSpaceId::new(binding.source_dsid),
+                manifest_root,
+            )
+        );
         let envelope: AxtProofEnvelope =
             decode_from_bytes(&blob.payload).expect("decode AXT proof envelope");
         verify_axt_proof_envelope(&envelope).expect("packaged AXT proof verifies");
+    }
+    #[test]
+    fn axt_proof_blob_helper_rejects_outer_metadata_mismatches() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+            None,
+            Some(9),
+        )
+        .expect("bind proof metadata");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        let wrong_manifest = axt_proof_blob_from_bound_batch(
+            &batch,
+            proof.clone(),
+            [0x43; 32],
+            Some([0x24; 32]),
+            Some(9),
+        )
+        .expect_err("builder must reject a divergent manifest root");
+        assert!(
+            matches!(wrong_manifest, Error::InvalidAxtBinding { details } if details.contains("manifest_root") && details.contains("proof-bound"))
+        );
+
+        let wrong_da =
+            axt_proof_blob_from_bound_batch(&batch, proof.clone(), [0x42; 32], None, Some(9))
+                .expect_err("builder must reject a divergent DA commitment");
+        assert!(
+            matches!(wrong_da, Error::InvalidAxtBinding { details } if details.contains("da_commitment") && details.contains("proof-bound"))
+        );
+
+        let wrong_expiry =
+            axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], Some([0x24; 32]), Some(10))
+                .expect_err("builder must reject a divergent expiry");
+        assert!(
+            matches!(wrong_expiry, Error::InvalidAxtBinding { details } if details.contains("expiry_slot") && details.contains("proof-bound"))
+        );
     }
     #[test]
     fn axt_proof_blob_helper_rejects_unbound_batch() {

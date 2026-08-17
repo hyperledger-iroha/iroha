@@ -113,8 +113,7 @@ mod model {
         /// Canonically ordered per-component charge limits.
         pub charge_limits: Vec<FeeChargeLimit>,
         /// Maximum executable gas; required for contract and IVM transactions.
-        #[norito(skip_serializing_if = "Option::is_none")]
-        #[norito(default)]
+        #[norito(required)]
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Signature-bound limits and exact revision for sponsor-program fees.
@@ -132,8 +131,7 @@ mod model {
         /// Canonically ordered per-component charge limits.
         pub charge_limits: Vec<FeeChargeLimit>,
         /// Maximum executable gas; required for contract and IVM transactions.
-        #[norito(skip_serializing_if = "Option::is_none")]
-        #[norito(default)]
+        #[norito(required)]
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Required signature-bound choice of fee funding source and limits.
@@ -207,8 +205,7 @@ mod model {
         /// Attachments are part of the signed intent. Relays cannot add,
         /// remove, or replace them without invalidating every authorization
         /// signature and changing the transaction identifier.
-        #[norito(skip_serializing_if = "Option::is_none")]
-        #[norito(default)]
+        #[norito(required)]
         pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
     /// Signature of transaction

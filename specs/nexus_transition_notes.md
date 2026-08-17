@@ -226,7 +226,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   state view also falls back to the base default lane instead of sharding over
   a stale router snapshot. The integration router harness pins the same disabled
   Nexus/autoscale gates and in-range corruption fallback at the public
-  `ConfigLaneRouter::route_with_view` boundary while preserving the
+  `LaneRouter::try_route_with_view` boundary while preserving the
   enabled-autoscale sharding path.
   Block autoscale application also requires both enabled Nexus and enabled
   autoscale, so corrupted actual state with either gate disabled cannot create
@@ -389,8 +389,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   pending autoscaled default-route traffic onto the surviving elastic/default
   candidates. If a lifecycle update otherwise removes the only route that a
   pending transaction depended on, queue reconfiguration rejects the transaction
-  immediately and clears cached routing decisions, full routing plans, and
-  routing-ledger hints plus TEU backlog accounting so stale retired-lane
+  immediately and clears the queue-owned full routing plan plus TEU backlog
+  accounting so stale retired-lane
   metadata cannot leak into proposal, replay, or scheduler-pressure paths.
 - State-aware Torii, gossip, admission, consensus requeue, and block-requeue
   routing synchronize the queue router, routing policy, and cached catalogs from
@@ -409,8 +409,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   full Native AMX routing plans for pending transactions through both state-
   and view-backed reconfiguration entry points, so participant legs cannot
   remain stale behind an unchanged coordinator route.
-  Block requeue discards a stale process-global routing-ledger plan after a
-  failed ledger-sourced reinsertion, so the next recovery pass recomputes
+  Block requeue discards a stale queue-owned plan after a failed reinsertion,
+  so the next recovery pass recomputes
   Native AMX participant legs from current committed state instead of replaying
   the same stale hint.
   Lane TEU deferral also returns the full routing plan for consensus requeue, so
@@ -425,14 +425,11 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   Outgoing gossip batch assembly also refreshes cached full routing plans from
   current Nexus state before emitting route hints, so Native AMX participant
   drift is corrected before serialization.
-  Commit event production now consumes the full routing plan before any legacy
-  coordinator-only hint, keeping lane/dataspace metadata tied to the
-  digest-checked plan when both ledger shapes are present.
+  Commit event production consumes the authoritative full routing plan, keeping
+  lane/dataspace metadata tied to its digest-checked coordinator route.
   Queue-side expiry and unresolved-route rejection events now use the same
-  full-plan-first cleanup, so terminal pipeline events keep digest-checked
-  lane/dataspace metadata even when a stale coordinator-only shadow remains.
-  Shared routing-ledger plan discard also clears same-hash legacy shadows once
-  the expected full plan is removed.
+  full-plan cleanup, so terminal pipeline events keep digest-checked
+  lane/dataspace metadata. No coordinator-only shadow store exists.
   Torii submit-transaction proxy receivers now apply the same full-plan
   comparison to ingress hints, so Native AMX participant drift is rejected even
   when the coordinator route is unchanged. They also validate redundant routing
@@ -462,8 +459,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   scanned transaction fits the remaining gas and IVM budgets, preventing a
   gas-heavy lane from suppressing fitting cross-lane work during multilane
   lookahead. Pending queue reconfiguration uses the same height-aware autoscale
-  range and keeps queued default-route transactions plus local routing-ledger
-  hints on the active default route until an elastic lane's creation height is
+  range and keeps queued default-route transactions plus their queue-owned
+  plans on the active default route until an elastic lane's creation height is
   committed. The lookahead gate now counts policy-reachable active lanes at the
   candidate block height, so autoscale-owned default anchors, off-default
   autoscale-owned rule targets, unrouted same-dataspace sidecars, and
@@ -478,10 +475,10 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   execution contexts also compare every committed coordinator and participant leg
   with the recomputed full plan, so stale participant routes fail before receipt
   validation. Scheduler committed TEU telemetry is also attributed from the
-  validated block routing vector, so stale process-local routing-ledger hints
-  cannot skew lane load metrics after reroutes or autoscale transitions.
-- Torii global pipeline-status reads now use cached routing-plan hints only as a
-  probe. Hinted `Queued`, `Approved`, `Committed`, or malformed successful
+  validated block routing vector, so queue admission state cannot skew lane
+  load metrics after reroutes or autoscale transitions.
+- Torii global pipeline-status reads use the admitting queue's full-plan hint
+  only as a probe. Hinted `Queued`, `Approved`, `Committed`, or malformed successful
   responses fall through to full fanout, while only terminal hinted statuses can
   short-circuit, preventing stale retired-lane status caches from hiding newer
   terminal results on the active lane.

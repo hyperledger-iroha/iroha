@@ -209,7 +209,7 @@ impl Queue {
                 ));
             }
             for key in &group.ordered_keys {
-                if !seen_hashes.insert(key.signed_transaction_hash)
+                if !seen_hashes.insert(key.entrypoint_hash)
                     || !seen_entrypoints.insert(key.entrypoint_hash.clone())
                 {
                     return Err(LaneQueueReservationError::InvalidIdentity(
@@ -236,7 +236,7 @@ impl Queue {
                     .iter()
                     .flatten()
                     .flat_map(|group| group.ordered_keys.iter())
-                    .map(|key| key.signed_transaction_hash),
+                    .map(|key| key.entrypoint_hash),
             )
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
         drop(store);

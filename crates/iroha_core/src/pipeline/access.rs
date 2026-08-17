@@ -38,7 +38,7 @@ use iroha_data_model::{
         CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
         StateAccessSetAdvisory, TriggerMetadataKey, TxQueueKey,
     },
-    transaction::{SignedTransaction, executable::ContractInvocation},
+    transaction::{SignedTransaction, TransactionEntrypoint, executable::ContractInvocation},
 };
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
@@ -1547,7 +1547,7 @@ fn access_set_from_hint_keys(
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("txqueue:") {
-            let hash: iroha_crypto::HashOf<SignedTransaction> = rest.parse().ok()?;
+            let hash: iroha_crypto::HashOf<TransactionEntrypoint> = rest.parse().ok()?;
             canonical.push(CanonicalStateKey::TxQueue(TxQueueKey { hash }));
             return Some(());
         }

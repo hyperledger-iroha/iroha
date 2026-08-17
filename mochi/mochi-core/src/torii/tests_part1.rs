@@ -1296,8 +1296,8 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
     let expected_reason = format!("{rejection:?}");
     let block = sample_block_with_result(Err(rejection));
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     match smoke_transaction_result_in_block(&block, &tx_hash) {
@@ -1312,8 +1312,8 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
 fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     assert!(smoke_transaction_result_in_block(&block, &tx_hash).is_none());
@@ -1324,18 +1324,14 @@ async fn submit_and_wait_for_commit_reports_block_height() {
         iroha_data_model::transaction::DataTriggerSequence::default(),
     ));
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let expected_height = block.header().height().get();
     let block: SignedBlock = norito::decode_from_bytes::<BlockMessage>(&block_stream_frame(&block))
         .expect("round-trip sample block through the Torii stream envelope")
         .into();
-    assert!(
-        block.transactions_vec().is_empty(),
-        "decoded blocks deliberately omit the legacy transaction cache"
-    );
     assert_eq!(block.external_transactions().len(), 1);
     let (block_tx, block_rx) = broadcast::channel(8);
     let (_event_tx, event_rx) = broadcast::channel(8);
@@ -1366,8 +1362,8 @@ async fn submit_and_wait_for_commit_reports_block_height() {
 async fn submit_and_wait_for_commit_times_out_without_events() {
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let (_block_tx, block_rx) = broadcast::channel(8);
@@ -1391,8 +1387,8 @@ async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives(
     };
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let task_tx_hash = tx_hash;
@@ -1442,8 +1438,8 @@ async fn submit_and_wait_for_commit_reports_rejected_when_pipeline_event_rejects
     };
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let task_tx_hash = tx_hash;

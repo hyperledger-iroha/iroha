@@ -212,15 +212,15 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
     fs::remove_file(&unexpected).expect("remove unexpected reserved-name artifact");
-    let legacy_random_temp = root.join(format!(
-        "{LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX}legacy-prune-residue"
+    let forbidden_random_temp = root.join(format!(
+        "{FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX}unbound-prune-residue"
     ));
-    fs::write(&legacy_random_temp, &bytes).expect("write legacy random prune temp");
+    fs::write(&forbidden_random_temp, &bytes).expect("write unbound random prune temp");
     assert!(matches!(
         Kura::canonical_prune_intent_artifact_inventory(root),
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
-    fs::remove_file(&legacy_random_temp).expect("remove legacy random prune temp");
+    fs::remove_file(&forbidden_random_temp).expect("remove unbound random prune temp");
     let hardlink_source = root.join("prune-hardlink-source");
     fs::write(&hardlink_source, &bytes).expect("write hardlink source");
     fs::hard_link(&hardlink_source, &stable_path).expect("hardlink lone stable artifact");
@@ -690,7 +690,7 @@ fn legacy_hash_only_prune_intent_layout_is_rejected() {
     assert!(path.is_file(), "legacy evidence must remain fail-closed");
 }
 #[test]
-fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
+fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
@@ -701,23 +701,26 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     let index_path = directory.join(PIPELINE_SIDECARS_INDEX_FILE);
     fs::write(&data_path, b"future-only-pipeline-payload")
         .expect("write future-only pipeline payload");
-    fs::write(
-        &index_path,
-        SidecarIndexEntry {
+    let mut index = SidecarIndexLayout::base_header(1).to_vec();
+    index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(b"future-only-pipeline-payload".len())
                 .expect("fixture length fits u64"),
         }
         .to_bytes(),
-    )
-    .expect("write future-only pipeline index");
+    );
+    fs::write(&index_path, index).expect("write future-only pipeline index");
     let projection = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(0)
-            .expect("project zero-byte retained output")
+            .expect("project header-only retained index")
     };
     assert!(projection.has_work());
-    assert_eq!(projection.sequential_peak_bytes, 0);
+    assert_eq!(
+        projection.sequential_peak_bytes,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+    );
     kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
     let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = kura.prune_to_height(0);
@@ -730,7 +733,10 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     assert_eq!(intent.source_height, 0);
     assert_eq!(intent.target_height, 0);
     assert!(intent.sidecar_rewrite.has_work());
-    assert_eq!(intent.sidecar_rewrite.sequential_peak_bytes, 0);
+    assert_eq!(
+        intent.sidecar_rewrite.sequential_peak_bytes,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+    );
     drop(kura);
     let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("recover empty current-tip sidecar cleanup");
@@ -745,7 +751,7 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
         fs::metadata(&index_path)
             .expect("retained empty pipeline index")
             .len(),
-        0,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
     );
     recovered
         .validate_pipeline_sidecars_for_prune(0, true)

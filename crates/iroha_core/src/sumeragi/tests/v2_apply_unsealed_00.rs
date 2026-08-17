@@ -2025,7 +2025,10 @@ fn reserve_autonomous_crash_batch(
     fixture: &ApplyFixture,
     queue: &Arc<Queue>,
     producer: &KeyPair,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (
+    LaneExecutablePayloadV1,
+    Vec<HashOf<TransactionEntrypoint>>,
+) {
     let transactions = (0_u8..4)
         .map(|index| {
             TransactionBuilder::new(
@@ -2042,7 +2045,7 @@ fn reserve_autonomous_crash_batch(
         .collect::<Vec<_>>();
     let expected_fifo = transactions
         .iter()
-        .map(|transaction| transaction.hash())
+        .map(|transaction| transaction.hash_as_entrypoint())
         .collect::<Vec<_>>();
     let entrypoints = transactions
         .iter()
@@ -2135,7 +2138,7 @@ fn reserve_autonomous_crash_batch(
     assert_eq!(
         reserved
             .iter()
-            .map(|reserved| reserved.key().signed_transaction_hash)
+            .map(|reserved| reserved.key().entrypoint_hash)
             .collect::<Vec<_>>(),
         expected_fifo[..3],
         "fixture must reserve the original FIFO prefix"
@@ -2278,7 +2281,10 @@ fn reserve_canonical_successor_autonomous_batch(
     queue: &Arc<Queue>,
     context: &wire::HeightContext,
     count: usize,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (
+    LaneExecutablePayloadV1,
+    Vec<HashOf<TransactionEntrypoint>>,
+) {
     reserve_canonical_successor_autonomous_batch_with_instructions(
         fixture,
         queue,
@@ -2302,7 +2308,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     instructions: impl Fn(usize) -> Vec<InstructionBox>,
     sort_by_signed_transaction_hash: bool,
     native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (
+    LaneExecutablePayloadV1,
+    Vec<HashOf<TransactionEntrypoint>>,
+) {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(context.height, 2);
     assert!((1..=16).contains(&count));
@@ -2331,12 +2340,12 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     if sort_by_signed_transaction_hash {
         transactions.sort_by_key(|transaction| transaction.hash());
     }
-    let expected_fifo = transactions
+    let signed_transaction_hashes = transactions
         .iter()
         .map(|transaction| transaction.hash())
         .collect::<Vec<_>>();
     assert_eq!(
-        expected_fifo
+        signed_transaction_hashes
             .iter()
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
@@ -2348,6 +2357,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
         .iter()
         .cloned()
         .map(TransactionEntrypoint::External)
+        .collect::<Vec<_>>();
+    let expected_fifo = entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
         .collect::<Vec<_>>();
     let mut planned_routing = Vec::with_capacity(count);
     for transaction in &transactions {
@@ -2446,7 +2459,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     assert_eq!(
         reserved
             .iter()
-            .map(|reservation| reservation.key().signed_transaction_hash)
+            .map(|reservation| reservation.key().entrypoint_hash)
             .collect::<Vec<_>>(),
         expected_fifo,
         "canonical autonomous reservation must preserve FIFO selection order"
@@ -2778,10 +2791,10 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
         .expect("persist deferred carrier application receipts");
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_transactions(
+    fixture.state.record_direct_committed_entrypoints(
         [
-            first_key.signed_transaction_hash,
-            second_key.signed_transaction_hash,
+            first_key.entrypoint_hash,
+            second_key.entrypoint_hash,
         ],
         NonZeroUsize::new(2).expect("deferred carrier State height"),
     );

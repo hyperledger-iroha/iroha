@@ -1098,7 +1098,7 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
     absurd_archive_len.extend([0xff; 9]);
     absurd_archive_len.push(1);
     let mut wrong_layout_version = canonical.clone();
-    wrong_layout_version.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
+    wrong_layout_version.format_version = 2;
     let mut zero_wire_len = canonical.clone();
     zero_wire_len.executed_block_wire_len = 0;
     let mut oversized_wire_len = canonical.clone();
@@ -1129,156 +1129,71 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         );
     }
 }
-#[test]
-fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
-    let kura = Kura::blank_kura_for_testing();
-    let mut generator = DummyBlocks::new();
-    let genesis = generator.next();
-    let mut entry = sample_merge_entry(1);
-    let carrier = next_merge_carrier(&mut generator, &mut entry);
-    let expected_reference = CertifiedMergeLedgerReference::new(&entry);
-    kura.store_block(genesis)
-        .expect("store legacy retained-record parent");
-    kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
-        .expect("store legacy retained-record carrier");
-    let blocks_dir = kura.active_blocks_dir.lock().clone();
-    let prepared =
-        Kura::prepare_retained_block_record(&blocks_dir, carrier.hash(), carrier.as_ref())
-            .expect("prepare current retained record");
-    assert_eq!(prepared.merge_reference.as_ref(), Some(&expected_reference));
-    let mut legacy_projection = prepared.clone();
-    legacy_projection.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
-    legacy_projection.merge_reference = None;
-    let legacy = KuraRetainedBlockRecordV2::from_current(&legacy_projection)
-        .expect("construct exact legacy retained layout");
-    let directory = kura.retained_block_record_dir();
-    let path = kura.retained_block_record_path(2);
-    std::fs::create_dir_all(&directory).expect("create retained-record directory");
-    std::fs::write(&path, legacy.encode()).expect("write exact legacy retained record");
-    let legacy_len = std::fs::metadata(&path)
-        .expect("stat legacy retained record")
-        .len();
-    let total_before = kura
-        .refresh_total_disk_usage_bytes()
-        .expect("initialize total usage before legacy promotion");
-    let decoded = kura
-        .decode_retained_block_record_at(&path, &directory)
-        .expect("decode legacy retained record")
-        .expect("legacy retained record exists");
-    assert_eq!(decoded.format_version, RETAINED_BLOCK_RECORD_VERSION_V2);
-    assert!(decoded.merge_reference.is_none());
-    let (_, _, _, _, _, live_reference) = kura
-        .retained_block_record_at(&blocks_dir, 2, carrier.hash())
-        .expect("validate legacy record against its exact live body")
-        .expect("legacy retained record exists");
-    assert_eq!(
-        live_reference,
-        Some(expected_reference.clone()),
-        "an exact live body may supply transient serving authority without changing legacy bytes"
-    );
-    assert_eq!(
-        std::fs::read(&path).expect("reread legacy retained record"),
-        legacy.encode(),
-        "a read must not claim to have durably upgraded the legacy record"
-    );
-    // Body eviction invokes this same persistence path before discarding
-    // canonical bytes. The old record must be atomically upgraded rather
-    // than treated as conflicting immutable evidence.
-    kura.persist_retained_block_record(&blocks_dir, carrier.hash(), carrier.as_ref())
-        .expect("upgrade legacy retained record from exact live body");
-    let upgraded_bytes = std::fs::read(&path).expect("read upgraded retained record");
-    let upgraded_len =
-        u64::try_from(upgraded_bytes.len()).expect("upgraded retained length fits u64");
-    let mut upgraded_input = upgraded_bytes.as_slice();
-    let upgraded = KuraRetainedBlockRecord::decode_all(&mut upgraded_input)
-        .expect("decode upgraded retained record");
-    assert_eq!(upgraded.format_version, RETAINED_BLOCK_RECORD_VERSION);
-    assert_eq!(upgraded.merge_reference, Some(expected_reference));
-    assert_eq!(upgraded, prepared);
-    let expected_total = total_before
-        .saturating_sub(legacy_len)
-        .saturating_add(upgraded_len);
-    assert_eq!(
-        kura.disk_usage_bytes()
-            .expect("read cached total usage after promotion"),
-        expected_total
-    );
-    assert_eq!(
-        kura.refresh_total_disk_usage_bytes()
-            .expect("scan total usage after promotion"),
-        expected_total
-    );
-    kura.persist_retained_block_record(&blocks_dir, carrier.hash(), carrier.as_ref())
-        .expect("repeat exact promoted retained record");
-    assert_eq!(
-        kura.disk_usage_bytes()
-            .expect("read cached total usage after idempotent retry"),
-        expected_total,
-        "idempotent promotion retry must publish zero accounting delta"
-    );
+#[derive(Encode)]
+struct RetiredKuraRetainedBlockRecordV2Fixture {
+    format_version: u16,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    block_header: BlockHeader,
+    proposal_wire_hash: Hash,
+    executed_block_wire_hash: Hash,
+    sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
-#[test]
-fn remote_only_retained_block_v2_remains_startup_readable() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let expected_artifact;
-    {
-        let (kura, _) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("open legacy Kura");
-        let blocks = store_dummy_block_arcs(&kura, 4);
-        expected_artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-        let _commit_receipt = kura
-            .store_v2_finality_artifact(&expected_artifact)
-            .expect("persist exact finality before legacy projection");
-        let height = nonzero!(2_usize);
-        let (_, payload_len) = advertise_required_replicas(&kura, height);
-        assert!(
-            kura.evict_block_bodies(payload_len)
-                .expect("evict legacy fixture body")
-                > 0
-        );
-        kura.remove_evicted_block_sidecar_for_testing(height)
-            .expect("make legacy fixture body remote-only");
-        let path = kura.retained_block_record_path(2);
-        let bytes = std::fs::read(&path).expect("read current retained record");
-        let mut input = bytes.as_slice();
-        let mut current = KuraRetainedBlockRecord::decode_all(&mut input)
-            .expect("decode current retained record");
-        current.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
-        current.merge_reference = None;
-        let legacy = KuraRetainedBlockRecordV2::from_current(&current)
-            .expect("project exact version-two retained layout");
-        std::fs::write(&path, legacy.encode()).expect("install legacy retained bytes");
+fn retired_retained_block_v2_bytes(record: &KuraRetainedBlockRecord) -> Vec<u8> {
+    RetiredKuraRetainedBlockRecordV2Fixture {
+        format_version: 2,
+        height: record.height,
+        block_hash: record.block_hash,
+        block_header: record.block_header,
+        proposal_wire_hash: record.proposal_wire_hash,
+        executed_block_wire_hash: record.executed_block_wire_hash,
+        sccp_archive: record.sccp_archive.clone(),
     }
-    let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen legacy Kura");
+    .encode()
+}
+#[test]
+fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
+    let temp_dir = TempDir::new().expect("create Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    {
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let block = store_dummy_block_arcs(&kura, 1)
+            .pop()
+            .expect("stored canonical block");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        let record = Kura::prepare_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
+            .expect("prepare current retained record");
+        let directory = kura.retained_block_record_dir();
+        let path = kura.retained_block_record_path(1);
+        std::fs::create_dir_all(&directory).expect("create retained-record directory");
+        std::fs::write(&path, retired_retained_block_v2_bytes(&record))
+            .expect("install retired version-two retained bytes");
+        assert!(matches!(
+            kura.decode_retained_block_record_at(&path, &directory),
+            Err(Error::IO(error, error_path))
+                if error.kind() == ErrorKind::InvalidData && error_path == path
+        ));
+    }
+    let startup_error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+        Ok(_) => panic!("startup accepted a retired version-two retained record"),
+        Err(error) => error,
+    };
     assert!(
-        reopened
-            .get_block_without_merge_sidecar(nonzero!(2_usize))
-            .is_none(),
-        "the legacy fixture must remain body-independent"
-    );
-    let (_, artifact, merge_reference) = reopened
-        .v2_finality_artifact_with_merge_reference(2)
-        .expect("read exact finality through a legacy retained record")
-        .expect("legacy retained finality exists");
-    assert_eq!(artifact, expected_artifact);
-    assert!(
-        merge_reference.is_none(),
-        "version two must not synthesize a merge witness it never persisted"
+        matches!(startup_error, Error::IO(ref error, _) if error.kind() == ErrorKind::InvalidData),
+        "unexpected retired-layout startup error: {startup_error:?}"
     );
 }
 #[test]
-fn retained_record_bound_covers_joint_legacy_and_merge_reference_maxima() {
+fn retained_record_bound_covers_joint_base_and_merge_reference_maxima() {
     assert_eq!(
         MAX_RETAINED_BLOCK_RECORD_BYTES,
-        MAX_RETAINED_BLOCK_RECORD_V2_BYTES
+        MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES
             + MAX_RETAINED_MERGE_REFERENCE_BYTES
-            + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES
+            + MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES
     );
     assert!(
         MAX_RETAINED_BLOCK_RECORD_BYTES > 8 * 1024 * 1024,
-        "the version-three envelope must cover the complete legacy archive plus a 4 MiB QC"
+        "the current envelope must cover the complete base archive plus a 4 MiB QC"
     );
 }
 #[test]
@@ -1340,23 +1255,22 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
         .encoded_len();
     assert!(reference_len <= MAX_RETAINED_MERGE_REFERENCE_BYTES);
     let record_len = record.canonical_storage_encoded_len();
-    let mut legacy_projection = record.clone();
-    legacy_projection.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
-    legacy_projection.merge_reference = None;
-    let legacy_len = legacy_projection.canonical_storage_encoded_len();
-    assert!(legacy_len <= MAX_RETAINED_BLOCK_RECORD_V2_BYTES);
-    let measured_framing = record_len.saturating_sub(legacy_len.saturating_add(reference_len));
+    let mut base_projection = record.clone();
+    base_projection.merge_reference = None;
+    let base_len = base_projection.canonical_storage_encoded_len();
+    assert!(base_len <= MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES);
+    let measured_framing = record_len.saturating_sub(base_len.saturating_add(reference_len));
     assert!(
-        measured_framing <= MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES,
-        "measured v3 framing is {measured_framing} bytes"
+        measured_framing <= MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES,
+        "measured current framing is {measured_framing} bytes"
     );
     assert!(
-        record_len > MAX_RETAINED_BLOCK_RECORD_V2_BYTES,
-        "joint v3 fixture must exceed the complete legacy envelope cap"
+        record_len > MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES,
+        "joint current fixture must exceed the complete base-envelope cap"
     );
     assert!(
         record_len <= MAX_RETAINED_BLOCK_RECORD_BYTES,
-        "joint v3 fixture is {record_len} bytes; cap is {MAX_RETAINED_BLOCK_RECORD_BYTES}"
+        "joint current fixture is {record_len} bytes; cap is {MAX_RETAINED_BLOCK_RECORD_BYTES}"
     );
 }
 #[test]

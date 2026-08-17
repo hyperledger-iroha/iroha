@@ -12,6 +12,91 @@ mod futures;
 use manyhow::{Result, ToTokensError, manyhow};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
+/// Define the private diagnostic-emitter convenience trait used by Iroha's
+/// procedural-macro crates.
+///
+/// The generated trait deliberately stays crate-private. This macro exists so
+/// the consumers that already depend on `iroha_derive` share one maintained
+/// definition without adding another workspace dependency edge.
+#[proc_macro]
+pub fn define_emitter_ext(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    if !input.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "define_emitter_ext! accepts no input",
+        )
+        .to_compile_error()
+        .into();
+    }
+    quote! {
+        trait EmitterExt {
+            fn handle<E: manyhow::ToTokensError + 'static, T>(
+                &mut self,
+                result: manyhow::Result<T, E>,
+            ) -> Option<T>;
+
+            #[allow(dead_code)]
+            fn handle_or_default<E: manyhow::ToTokensError + 'static, T: Default>(
+                &mut self,
+                result: manyhow::Result<T, E>,
+            ) -> T;
+
+            fn finish_token_stream(self) -> proc_macro2::TokenStream
+            where
+                Self: Sized;
+
+            fn finish_token_stream_with(
+                self,
+                tokens: proc_macro2::TokenStream,
+            ) -> proc_macro2::TokenStream
+            where
+                Self: Sized;
+        }
+
+        impl EmitterExt for manyhow::Emitter {
+            fn handle<E: manyhow::ToTokensError + 'static, T>(
+                &mut self,
+                result: manyhow::Result<T, E>,
+            ) -> Option<T> {
+                match result {
+                    Ok(value) => Some(value),
+                    Err(err) => {
+                        self.emit(err);
+                        None
+                    }
+                }
+            }
+
+            fn handle_or_default<E: manyhow::ToTokensError + 'static, T: Default>(
+                &mut self,
+                result: manyhow::Result<T, E>,
+            ) -> T {
+                self.handle(result).unwrap_or_default()
+            }
+
+            fn finish_token_stream(self) -> proc_macro2::TokenStream
+            where
+                Self: Sized,
+            {
+                self.finish_token_stream_with(proc_macro2::TokenStream::new())
+            }
+
+            fn finish_token_stream_with(
+                mut self,
+                mut tokens: proc_macro2::TokenStream,
+            ) -> proc_macro2::TokenStream
+            where
+                Self: Sized,
+            {
+                if let Err(err) = self.into_result() {
+                    manyhow::ToTokensError::to_tokens(&err, &mut tokens);
+                }
+                tokens
+            }
+        }
+    }
+    .into()
+}
 /// Helper macro to expand FFI functions
 #[manyhow]
 #[proc_macro_attribute]

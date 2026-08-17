@@ -339,7 +339,8 @@ fn signed_genesis_validator_pops(
 /// Compute the canonical Nexus/AMX commitment from a validated genesis state
 /// block without committing that block. The projection binds every Nexus and
 /// deterministic AMX input used by proposal assembly or validation, plus the
-/// canonically ordered active public-lane validator records.
+/// canonically ordered active public-lane validator records and the complete
+/// retained lane-incarnation lineage, including retired lane identifiers.
 #[must_use]
 pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
     let active_validators = staged
@@ -350,22 +351,15 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
-    let lane_lifecycle = staged
-        .nexus
-        .lane_catalog
-        .lanes()
+    let retained_lane_lineage = staged
+        .lane_incarnation_lineage_for_snapshot()
         .iter()
         .map(
-            |lane| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
-                lane_id: lane.id,
-                incarnation: *staged
-                    .lane_incarnations
-                    .get(&lane.id)
-                    .expect("validated staged genesis has every active lane incarnation"),
-                activation_height: *staged
-                    .lane_incarnation_activation_heights
-                    .get(&lane.id)
-                    .expect("validated staged genesis has every lane activation height"),
+            |(&lane_id, lineage)| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
+                lane_id,
+                generation: lineage.generation,
+                incarnation: lineage.incarnation,
+                activation_height: lineage.activation_height,
             },
         )
         .collect::<Vec<_>>();
@@ -373,7 +367,7 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         &staged.nexus,
         &staged.pipeline,
         &active_validators,
-        &lane_lifecycle,
+        &retained_lane_lineage,
     )
 }
 fn verify_staged_nexus_amx_context_hash(

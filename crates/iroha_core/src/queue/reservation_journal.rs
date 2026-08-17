@@ -29,7 +29,7 @@ use crate::sumeragi::v2_core::{
 };
 use iroha_crypto::{Hash, HashOf, sha256_reader_bounded};
 use iroha_data_model::{
-    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::SignedTransaction,
+    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::TransactionEntrypoint,
 };
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
@@ -388,12 +388,12 @@ fn canonical_reconciliation_record_identity(
 }
 fn canonical_reconciliation_owners_from_state(
     state: &IndexedReservationReplayState,
-) -> io::Result<BTreeMap<HashOf<SignedTransaction>, CanonicalReconciliationOwner>> {
+) -> io::Result<BTreeMap<HashOf<TransactionEntrypoint>, CanonicalReconciliationOwner>> {
     let mut completed_records = BTreeMap::new();
     for completion in state.completed_releases.values() {
         let release_digest = completion.value.barrier.digest();
         for record in &completion.value.ordered_records {
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             if completed_records
                 .insert(hash, (record, release_digest))
                 .is_some()
@@ -489,7 +489,7 @@ fn canonical_reconciliation_owners_from_state(
 }
 fn canonical_reconciliation_owners_from_snapshot(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
-) -> io::Result<BTreeMap<HashOf<SignedTransaction>, CanonicalReconciliationOwner>> {
+) -> io::Result<BTreeMap<HashOf<TransactionEntrypoint>, CanonicalReconciliationOwner>> {
     let mut expected_groups = Vec::new();
     let mut expected_group_indexes = BTreeMap::new();
     let mut owners = BTreeMap::new();
@@ -501,7 +501,7 @@ fn canonical_reconciliation_owners_from_snapshot(
             fifo_order: LaneQueueFifoOrderV5::new(observed.fifo_ordinal).map_err(invalid_data)?,
         };
         record.validate().map_err(invalid_data)?;
-        let hash = record.key.signed_transaction_hash;
+        let hash = record.key.entrypoint_hash;
         if owners
             .insert(
                 hash,
@@ -546,7 +546,7 @@ fn canonical_reconciliation_owners_from_snapshot(
         key.validate().map_err(invalid_data)?;
         if owners
             .insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 CanonicalReconciliationOwner {
                     ownership: DurableReservationOwnership::Committed(*key),
                     record_identity: None,
@@ -564,11 +564,9 @@ fn canonical_reconciliation_owners_from_snapshot(
         barrier.validate().map_err(invalid_data)?;
         let barrier_digest = barrier.digest();
         for key in &barrier.ordered_keys {
-            let owner = owners
-                .get_mut(&key.signed_transaction_hash)
-                .ok_or_else(|| {
-                    invalid_data("reconciliation prepared release is missing its exact live owner")
-                })?;
+            let owner = owners.get_mut(&key.entrypoint_hash).ok_or_else(|| {
+                invalid_data("reconciliation prepared release is missing its exact live owner")
+            })?;
             if owner.ownership != DurableReservationOwnership::Live(*key) {
                 return Err(invalid_data(
                     "reconciliation prepared release overlaps or changes an exact owner",
@@ -584,7 +582,7 @@ fn canonical_reconciliation_owners_from_snapshot(
         completion.validate().map_err(invalid_data)?;
         let barrier_digest = completion.barrier.digest();
         for record in &completion.ordered_records {
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             if owners
                 .insert(
                     hash,
@@ -608,10 +606,7 @@ fn canonical_reconciliation_owners_from_snapshot(
     let mut phases = BTreeMap::new();
     for phase in &snapshot.ordered_owner_phases {
         phase.key.validate().map_err(invalid_data)?;
-        if phases
-            .insert(phase.key.signed_transaction_hash, *phase)
-            .is_some()
-        {
+        if phases.insert(phase.key.entrypoint_hash, *phase).is_some() {
             return Err(invalid_data(
                 "reconciliation snapshot contains duplicate owner-phase coverage",
             ));
@@ -675,7 +670,7 @@ fn canonical_reconciliation_owners_from_snapshot(
     Ok(owners)
 }
 fn canonical_reconciliation_identity(
-    owners: &BTreeMap<HashOf<SignedTransaction>, CanonicalReconciliationOwner>,
+    owners: &BTreeMap<HashOf<TransactionEntrypoint>, CanonicalReconciliationOwner>,
 ) -> io::Result<Hash> {
     let mut rolling = Hash::new(SNAPSHOT_RECONCILIATION_EMPTY_DOMAIN);
     for owner in owners.values() {
@@ -938,15 +933,16 @@ struct PreparedReservationJournalTransition {
 /// making replay scan the retained vectors for every frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IndexedReservationReplayState {
-    live: BTreeMap<HashOf<SignedTransaction>, OrderedReplayValue<LaneQueueReservationRecordV5>>,
-    committed: BTreeMap<HashOf<SignedTransaction>, OrderedReplayValue<LaneQueueReservationKeyV2>>,
+    live: BTreeMap<HashOf<TransactionEntrypoint>, OrderedReplayValue<LaneQueueReservationRecordV5>>,
+    committed:
+        BTreeMap<HashOf<TransactionEntrypoint>, OrderedReplayValue<LaneQueueReservationKeyV2>>,
     plan_tombstoned:
-        BTreeMap<HashOf<SignedTransaction>, OrderedReplayValue<LaneQueueReservationKeyV2>>,
+        BTreeMap<HashOf<TransactionEntrypoint>, OrderedReplayValue<LaneQueueReservationKeyV2>>,
     release_barriers: BTreeMap<Hash, OrderedReplayValue<LaneQueueReservationReleaseBarrierV3>>,
     completed_releases: BTreeMap<Hash, OrderedReplayValue<LaneQueueReservationReleaseCompletionV5>>,
-    ownership: BTreeMap<HashOf<SignedTransaction>, DurableReservationOwnership>,
-    fifo_ordinals: BTreeMap<u64, HashOf<SignedTransaction>>,
-    live_by_lane_incarnation: BTreeMap<(LaneId, Hash), BTreeSet<HashOf<SignedTransaction>>>,
+    ownership: BTreeMap<HashOf<TransactionEntrypoint>, DurableReservationOwnership>,
+    fifo_ordinals: BTreeMap<u64, HashOf<TransactionEntrypoint>>,
+    live_by_lane_incarnation: BTreeMap<(LaneId, Hash), BTreeSet<HashOf<TransactionEntrypoint>>>,
     next_order: u64,
     transition_generation: u64,
     /// O(1) hash-chain root of canonical checked transitions since reconstruction.
@@ -1322,7 +1318,7 @@ impl IndexedReservationReplayState {
                     true,
                 )?;
                 let mut targets = BTreeMap::<
-                    HashOf<SignedTransaction>,
+                    HashOf<TransactionEntrypoint>,
                     (LaneQueueReservationKeyV2, Option<Hash>),
                 >::new();
                 for owner in self
@@ -1333,7 +1329,7 @@ impl IndexedReservationReplayState {
                 {
                     let key = owner.key();
                     let target = (key, owner.release_digest());
-                    if let Some(existing) = targets.insert(key.signed_transaction_hash, target)
+                    if let Some(existing) = targets.insert(key.entrypoint_hash, target)
                         && existing != target
                     {
                         return Err(invalid_data(
@@ -1357,10 +1353,10 @@ impl IndexedReservationReplayState {
                 let mut seen = BTreeSet::new();
                 for record in records {
                     let key = record.key;
-                    if !seen.insert(key.signed_transaction_hash) {
+                    if !seen.insert(key.entrypoint_hash) {
                         continue;
                     }
-                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let before = self.ownership.get(&key.entrypoint_hash).copied();
                     let after = before.or(Some(DurableReservationOwnership::Live(key)));
                     self.retain_in_flight_owner_transition(
                         &mut retained,
@@ -1375,7 +1371,7 @@ impl IndexedReservationReplayState {
             }
             LaneQueueReservationJournalFrameV6::ReleaseBatch(keys) => {
                 for key in keys {
-                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let before = self.ownership.get(&key.entrypoint_hash).copied();
                     let after = if before == Some(DurableReservationOwnership::Live(*key)) {
                         None
                     } else {
@@ -1393,7 +1389,7 @@ impl IndexedReservationReplayState {
                 Ok(())
             }
             LaneQueueReservationJournalFrameV6::Commit(key) => {
-                let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                let before = self.ownership.get(&key.entrypoint_hash).copied();
                 self.retain_in_flight_owner_transition(
                     &mut retained,
                     IN_FLIGHT_RESERVATION_ACTION_COMMIT,
@@ -1405,7 +1401,7 @@ impl IndexedReservationReplayState {
             }
             LaneQueueReservationJournalFrameV6::PlanTombstoned(_) => Ok(()),
             LaneQueueReservationJournalFrameV6::ForgetCommit(key) => {
-                let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                let before = self.ownership.get(&key.entrypoint_hash).copied();
                 let after = if before == Some(DurableReservationOwnership::Committed(*key)) {
                     None
                 } else {
@@ -1423,7 +1419,7 @@ impl IndexedReservationReplayState {
             LaneQueueReservationJournalFrameV6::PrepareRelease(barrier) => {
                 let release_digest = barrier.digest();
                 for key in &barrier.ordered_keys {
-                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let before = self.ownership.get(&key.entrypoint_hash).copied();
                     let after = match before {
                         Some(DurableReservationOwnership::Live(existing)) if existing == *key => {
                             Some(DurableReservationOwnership::Prepared {
@@ -1456,7 +1452,7 @@ impl IndexedReservationReplayState {
                 let release_digest = completion.barrier.digest();
                 for record in &completion.ordered_records {
                     let key = record.key;
-                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let before = self.ownership.get(&key.entrypoint_hash).copied();
                     let after = match before {
                         Some(DurableReservationOwnership::Prepared {
                             key: existing,
@@ -1489,7 +1485,7 @@ impl IndexedReservationReplayState {
                 let release_digest = barrier.digest();
                 let has_completion = self.completed_releases.contains_key(&release_digest);
                 for key in &barrier.ordered_keys {
-                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let before = self.ownership.get(&key.entrypoint_hash).copied();
                     let after = if has_completion
                         && before
                             == Some(DurableReservationOwnership::Completed {
@@ -1529,10 +1525,10 @@ impl IndexedReservationReplayState {
         let mut committed_additional = 0_usize;
         for key in committed {
             key.validate().map_err(invalid_data)?;
-            if let Some(existing) = committed_seen.insert(key.signed_transaction_hash, *key) {
+            if let Some(existing) = committed_seen.insert(key.entrypoint_hash, *key) {
                 if existing != *key {
                     return Err(invalid_data(
-                        "snapshot contains conflicting commit barriers for one signed transaction hash",
+                        "snapshot contains conflicting commit barriers for one entrypoint hash",
                     ));
                 }
             } else {
@@ -1544,18 +1540,15 @@ impl IndexedReservationReplayState {
         candidate.ensure_owner_capacity(committed_additional, maximum)?;
         let (mut order, next_order) = candidate.order_range(committed_additional)?;
         for key in committed {
-            if candidate
-                .committed
-                .contains_key(&key.signed_transaction_hash)
-            {
+            if candidate.committed.contains_key(&key.entrypoint_hash) {
                 continue;
             }
             candidate.committed.insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 OrderedReplayValue { order, value: *key },
             );
             candidate.ownership.insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 DurableReservationOwnership::Committed(*key),
             );
             order = order
@@ -1589,20 +1582,20 @@ impl IndexedReservationReplayState {
         let mut additional = 0_usize;
         for record in records {
             record.validate().map_err(invalid_data)?;
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             match self.ownership.get(&hash) {
                 Some(DurableReservationOwnership::Live(key)) => {
                     if *key != record.key
                         || self.live.get(&hash).map(|entry| &entry.value) != Some(record)
                     {
                         return Err(invalid_data(
-                            "conflicting live reservation for one signed transaction hash",
+                            "conflicting live reservation for one entrypoint hash",
                         ));
                     }
                 }
                 Some(DurableReservationOwnership::Committed(_)) => {
                     return Err(invalid_data(
-                        "reservation put reuses a signed transaction protected by a commit barrier",
+                        "reservation put reuses a entrypoint protected by a commit barrier",
                     ));
                 }
                 Some(DurableReservationOwnership::Prepared { .. }) => {
@@ -1652,7 +1645,7 @@ impl IndexedReservationReplayState {
         }
         let mut inserted = BTreeSet::new();
         for record in records {
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             if self.ownership.contains_key(&hash) || !inserted.insert(hash) {
                 continue;
             }
@@ -1686,13 +1679,13 @@ impl IndexedReservationReplayState {
         let mut removals = Vec::new();
         for key in keys {
             key.validate().map_err(invalid_data)?;
-            if !hashes.insert(key.signed_transaction_hash) {
+            if !hashes.insert(key.entrypoint_hash) {
                 return Err(invalid_data(
-                    "lane reservation release batch contains a duplicate signed transaction",
+                    "lane reservation release batch contains a duplicate entrypoint",
                 ));
             }
             if matches!(
-                self.ownership.get(&key.signed_transaction_hash),
+                self.ownership.get(&key.entrypoint_hash),
                 Some(DurableReservationOwnership::Prepared { .. })
             ) {
                 return Err(invalid_data(
@@ -1701,11 +1694,10 @@ impl IndexedReservationReplayState {
             }
             if self
                 .ownership
-                .get(&key.signed_transaction_hash)
+                .get(&key.entrypoint_hash)
                 .is_some_and(|owner| *owner == DurableReservationOwnership::Live(*key))
             {
-                removals
-                    .push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?);
+                removals.push(self.validate_live_secondary_indexes(key.entrypoint_hash, *key)?);
             }
         }
         if apply {
@@ -1722,7 +1714,7 @@ impl IndexedReservationReplayState {
         apply: bool,
     ) -> io::Result<()> {
         key.validate().map_err(invalid_data)?;
-        let owner = self.ownership.get(&key.signed_transaction_hash).copied();
+        let owner = self.ownership.get(&key.entrypoint_hash).copied();
         match owner {
             Some(DurableReservationOwnership::Live(existing)) if existing != key => {
                 return Err(invalid_data(
@@ -1751,7 +1743,7 @@ impl IndexedReservationReplayState {
         }
         let live_removal = match owner {
             Some(DurableReservationOwnership::Live(existing)) => {
-                Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)
+                Some(self.validate_live_secondary_indexes(key.entrypoint_hash, existing)?)
             }
             _ => None,
         };
@@ -1769,11 +1761,11 @@ impl IndexedReservationReplayState {
         }
         if needs_commit {
             self.committed.insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 OrderedReplayValue { order, value: key },
             );
             self.ownership.insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 DurableReservationOwnership::Committed(key),
             );
             self.next_order = next_order;
@@ -1786,12 +1778,12 @@ impl IndexedReservationReplayState {
         apply: bool,
     ) -> io::Result<()> {
         key.validate().map_err(invalid_data)?;
-        let owner = self.ownership.get(&key.signed_transaction_hash).copied();
+        let owner = self.ownership.get(&key.entrypoint_hash).copied();
         match owner {
             Some(DurableReservationOwnership::Committed(existing)) if existing == key => {
                 if self
                     .plan_tombstoned
-                    .get(&key.signed_transaction_hash)
+                    .get(&key.entrypoint_hash)
                     .is_none_or(|marked| marked.value != key)
                 {
                     return Err(invalid_data(
@@ -1805,10 +1797,7 @@ impl IndexedReservationReplayState {
                 ));
             }
             None => {
-                if self
-                    .plan_tombstoned
-                    .contains_key(&key.signed_transaction_hash)
-                {
+                if self.plan_tombstoned.contains_key(&key.entrypoint_hash) {
                     return Err(invalid_data(
                         "reservation PlanTombstoned marker exists without its exact commit barrier",
                     ));
@@ -1817,9 +1806,9 @@ impl IndexedReservationReplayState {
             }
         }
         if apply {
-            self.plan_tombstoned.remove(&key.signed_transaction_hash);
-            self.committed.remove(&key.signed_transaction_hash);
-            self.ownership.remove(&key.signed_transaction_hash);
+            self.plan_tombstoned.remove(&key.entrypoint_hash);
+            self.committed.remove(&key.entrypoint_hash);
+            self.ownership.remove(&key.entrypoint_hash);
         }
         Ok(())
     }
@@ -1831,14 +1820,14 @@ impl IndexedReservationReplayState {
         key.validate().map_err(invalid_data)?;
         if self
             .ownership
-            .get(&key.signed_transaction_hash)
+            .get(&key.entrypoint_hash)
             .is_none_or(|owner| *owner != DurableReservationOwnership::Committed(key))
         {
             return Err(invalid_data(
                 "reservation PlanTombstoned marker requires its exact commit barrier",
             ));
         }
-        if let Some(existing) = self.plan_tombstoned.get(&key.signed_transaction_hash) {
+        if let Some(existing) = self.plan_tombstoned.get(&key.entrypoint_hash) {
             return if existing.value == key {
                 Ok(())
             } else {
@@ -1850,7 +1839,7 @@ impl IndexedReservationReplayState {
         let (order, next_order) = self.order_range(1)?;
         if apply {
             self.plan_tombstoned.insert(
-                key.signed_transaction_hash,
+                key.entrypoint_hash,
                 OrderedReplayValue { order, value: key },
             );
             self.next_order = next_order;
@@ -1873,7 +1862,7 @@ impl IndexedReservationReplayState {
             for key in &barrier.ordered_keys {
                 if !self
                     .ownership
-                    .get(&key.signed_transaction_hash)
+                    .get(&key.entrypoint_hash)
                     .is_some_and(|owner| {
                         *owner
                             == DurableReservationOwnership::Prepared {
@@ -1883,7 +1872,7 @@ impl IndexedReservationReplayState {
                     })
                     || self
                         .live
-                        .get(&key.signed_transaction_hash)
+                        .get(&key.entrypoint_hash)
                         .is_none_or(|record| record.value.key != *key)
                 {
                     return Err(invalid_data(
@@ -1902,7 +1891,7 @@ impl IndexedReservationReplayState {
             return Ok(());
         }
         for key in &barrier.ordered_keys {
-            match self.ownership.get(&key.signed_transaction_hash) {
+            match self.ownership.get(&key.entrypoint_hash) {
                 Some(DurableReservationOwnership::Live(existing)) if *existing == *key => {}
                 Some(DurableReservationOwnership::Live(_)) => {
                     return Err(invalid_data(
@@ -1916,7 +1905,7 @@ impl IndexedReservationReplayState {
                 }
                 Some(DurableReservationOwnership::Prepared { .. }) => {
                     return Err(invalid_data(
-                        "conflicting ordered release barriers overlap one signed transaction",
+                        "conflicting ordered release barriers overlap one entrypoint",
                     ));
                 }
                 Some(DurableReservationOwnership::Completed { .. }) => {
@@ -1942,7 +1931,7 @@ impl IndexedReservationReplayState {
             );
             for key in &barrier.ordered_keys {
                 self.ownership.insert(
-                    key.signed_transaction_hash,
+                    key.entrypoint_hash,
                     DurableReservationOwnership::Prepared {
                         key: *key,
                         barrier_digest: digest,
@@ -1965,7 +1954,7 @@ impl IndexedReservationReplayState {
                 return Ok(());
             }
             return Err(invalid_data(
-                "conflicting completed releases overlap one signed transaction",
+                "conflicting completed releases overlap one entrypoint",
             ));
         }
         let Some(prepared) = self.release_barriers.get(&digest) else {
@@ -1980,7 +1969,7 @@ impl IndexedReservationReplayState {
         }
         let mut removals = Vec::with_capacity(completion.ordered_records.len());
         for record in &completion.ordered_records {
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             if !self.ownership.get(&hash).is_some_and(|owner| {
                 *owner
                     == DurableReservationOwnership::Prepared {
@@ -2004,7 +1993,7 @@ impl IndexedReservationReplayState {
         if apply {
             self.release_barriers.remove(&digest);
             for record in &removals {
-                let hash = record.key.signed_transaction_hash;
+                let hash = record.key.entrypoint_hash;
                 self.remove_preflighted_live(record);
                 self.fifo_ordinals.insert(record.fifo_order.ordinal, hash);
                 self.ownership.insert(
@@ -2050,7 +2039,7 @@ impl IndexedReservationReplayState {
             }));
         }
         for record in &completion.ordered_records {
-            let hash = record.key.signed_transaction_hash;
+            let hash = record.key.entrypoint_hash;
             if self.ownership.contains_key(&hash) {
                 return Err(invalid_data(
                     "snapshot completed release overlaps live, committed, or prepared ownership",
@@ -2070,7 +2059,7 @@ impl IndexedReservationReplayState {
         let (order, next_order) = self.order_range(1)?;
         if apply {
             for record in &completion.ordered_records {
-                let hash = record.key.signed_transaction_hash;
+                let hash = record.key.entrypoint_hash;
                 self.fifo_ordinals.insert(record.fifo_order.ordinal, hash);
                 self.ownership.insert(
                     hash,
@@ -2123,7 +2112,7 @@ impl IndexedReservationReplayState {
                 .expect("validated completed release")
                 .value;
             for record in completion.ordered_records {
-                let hash = record.key.signed_transaction_hash;
+                let hash = record.key.entrypoint_hash;
                 if self.ownership.get(&hash).is_some_and(|owner| {
                     *owner
                         == DurableReservationOwnership::Completed {
@@ -2167,10 +2156,10 @@ impl IndexedReservationReplayState {
     }
     fn validate_live_secondary_indexes(
         &self,
-        hash: HashOf<SignedTransaction>,
+        hash: HashOf<TransactionEntrypoint>,
         expected_key: LaneQueueReservationKeyV2,
     ) -> io::Result<LaneQueueReservationRecordV5> {
-        if expected_key.signed_transaction_hash != hash {
+        if expected_key.entrypoint_hash != hash {
             return Err(invalid_data(
                 "live reservation index key differs from the exact reservation hash",
             ));
@@ -2202,7 +2191,7 @@ impl IndexedReservationReplayState {
         Ok(record.value.clone())
     }
     fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5) {
-        let hash = record.key.signed_transaction_hash;
+        let hash = record.key.entrypoint_hash;
         let lane = (record.key.lane_id, record.key.lane_incarnation);
         debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));
         debug_assert_eq!(
@@ -3058,18 +3047,19 @@ fn checked_file_content_identity(
 fn durable_ownership_from_replay(
     replay: &LaneQueueReservationReplay,
     maximum: usize,
-) -> io::Result<BTreeMap<HashOf<SignedTransaction>, DurableReservationOwnership>> {
-    let mut ownership = BTreeMap::<HashOf<SignedTransaction>, DurableReservationOwnership>::new();
+) -> io::Result<BTreeMap<HashOf<TransactionEntrypoint>, DurableReservationOwnership>> {
+    let mut ownership =
+        BTreeMap::<HashOf<TransactionEntrypoint>, DurableReservationOwnership>::new();
     let mut insert =
         |key: LaneQueueReservationKeyV2, state: DurableReservationOwnership| -> io::Result<()> {
-            if let Some(existing) = ownership.get(&key.signed_transaction_hash)
+            if let Some(existing) = ownership.get(&key.entrypoint_hash)
                 && existing.key() != key
             {
                 return Err(invalid_data(
                     "lane reservation replay contains conflicting durable ownership",
                 ));
             }
-            ownership.insert(key.signed_transaction_hash, state);
+            ownership.insert(key.entrypoint_hash, state);
             if ownership.len() > maximum {
                 return Err(ownership_bound_error(ownership.len(), maximum));
             }
@@ -3114,7 +3104,7 @@ fn collect_owned_hashes_bounded(
     release_barriers: &[LaneQueueReservationReleaseBarrierV3],
     completed_releases: &[LaneQueueReservationReleaseCompletionV5],
     maximum: usize,
-) -> io::Result<BTreeSet<HashOf<SignedTransaction>>> {
+) -> io::Result<BTreeSet<HashOf<TransactionEntrypoint>>> {
     let mut owned = BTreeSet::new();
     let mut insert = |hash| {
         owned.insert(hash);
@@ -3125,19 +3115,19 @@ fn collect_owned_hashes_bounded(
         }
     };
     for record in records {
-        insert(record.key.signed_transaction_hash)?;
+        insert(record.key.entrypoint_hash)?;
     }
     for key in committed {
-        insert(key.signed_transaction_hash)?;
+        insert(key.entrypoint_hash)?;
     }
     for barrier in release_barriers {
         for key in &barrier.ordered_keys {
-            insert(key.signed_transaction_hash)?;
+            insert(key.entrypoint_hash)?;
         }
     }
     for completion in completed_releases {
         for record in &completion.ordered_records {
-            insert(record.key.signed_transaction_hash)?;
+            insert(record.key.entrypoint_hash)?;
         }
     }
     Ok(owned)
@@ -3279,7 +3269,7 @@ fn preflight_frame_ownership_bound(
                 maximum,
             )?;
             for record in batch {
-                owned.insert(record.key.signed_transaction_hash);
+                owned.insert(record.key.entrypoint_hash);
                 if owned.len() > maximum {
                     return Err(ownership_bound_error(owned.len(), maximum));
                 }
@@ -3358,14 +3348,14 @@ fn apply_frame_with_ownership_limit(
             let mut committed_by_hash = BTreeMap::new();
             for key in snapshot_committed {
                 key.validate().map_err(invalid_data)?;
-                if let Some(existing) = committed_by_hash.get(&key.signed_transaction_hash) {
+                if let Some(existing) = committed_by_hash.get(&key.entrypoint_hash) {
                     if *existing != key {
                         return Err(invalid_data(
-                            "snapshot contains conflicting commit barriers for one signed transaction hash",
+                            "snapshot contains conflicting commit barriers for one entrypoint hash",
                         ));
                     }
                 } else {
-                    committed_by_hash.insert(key.signed_transaction_hash, key);
+                    committed_by_hash.insert(key.entrypoint_hash, key);
                     validated_committed.push(key);
                 }
             }
@@ -3418,17 +3408,17 @@ fn apply_frame_with_ownership_limit(
                     "lane reservation release batch must not be empty",
                 ));
             }
-            let mut signed_hashes = BTreeSet::new();
+            let mut entrypoint_hashes = BTreeSet::new();
             for key in &keys {
                 key.validate().map_err(invalid_data)?;
-                if !signed_hashes.insert(key.signed_transaction_hash) {
+                if !entrypoint_hashes.insert(key.entrypoint_hash) {
                     return Err(invalid_data(
-                        "lane reservation release batch contains a duplicate signed transaction",
+                        "lane reservation release batch contains a duplicate entrypoint",
                     ));
                 }
                 if release_barriers
                     .iter()
-                    .any(|barrier| barrier_contains_signed_hash(barrier, key))
+                    .any(|barrier| barrier_contains_entrypoint_hash(barrier, key))
                 {
                     return Err(invalid_data(
                         "immediate release overlaps a prepared ordered release barrier",
@@ -3436,14 +3426,14 @@ fn apply_frame_with_ownership_limit(
                 }
             }
             // Exact tombstones are deliberately harmless when replayed twice and must never
-            // remove a later reservation with the same signed hash but a different full plan.
+            // remove a later reservation with the same entrypoint hash but a different full plan.
             let exact_keys = keys
                 .into_iter()
-                .map(|key| (key.signed_transaction_hash, key))
+                .map(|key| (key.entrypoint_hash, key))
                 .collect::<BTreeMap<_, _>>();
             records.retain(|record| {
                 exact_keys
-                    .get(&record.key.signed_transaction_hash)
+                    .get(&record.key.entrypoint_hash)
                     .is_none_or(|key| *key != record.key)
             });
         }
@@ -3461,9 +3451,9 @@ fn apply_frame_with_ownership_limit(
         }
         LaneQueueReservationJournalFrameV6::ForgetCommit(key) => {
             key.validate().map_err(invalid_data)?;
-            let committed_owner = committed.iter().find(|committed_key| {
-                committed_key.signed_transaction_hash == key.signed_transaction_hash
-            });
+            let committed_owner = committed
+                .iter()
+                .find(|committed_key| committed_key.entrypoint_hash == key.entrypoint_hash);
             if let Some(existing) = committed_owner {
                 if *existing != key || !plan_tombstoned.contains(&key) {
                     return Err(invalid_data(
@@ -3471,10 +3461,10 @@ fn apply_frame_with_ownership_limit(
                     ));
                 }
             } else {
-                let hash = key.signed_transaction_hash;
+                let hash = key.entrypoint_hash;
                 if plan_tombstoned
                     .iter()
-                    .any(|marked| marked.signed_transaction_hash == hash)
+                    .any(|marked| marked.entrypoint_hash == hash)
                 {
                     return Err(invalid_data(
                         "reservation PlanTombstoned marker exists without its exact commit barrier",
@@ -3482,18 +3472,18 @@ fn apply_frame_with_ownership_limit(
                 }
                 if records
                     .iter()
-                    .any(|record| record.key.signed_transaction_hash == hash)
+                    .any(|record| record.key.entrypoint_hash == hash)
                     || release_barriers.iter().any(|barrier| {
                         barrier
                             .ordered_keys
                             .iter()
-                            .any(|owned| owned.signed_transaction_hash == hash)
+                            .any(|owned| owned.entrypoint_hash == hash)
                     })
                     || completed_releases.iter().any(|completion| {
                         completion
                             .ordered_records
                             .iter()
-                            .any(|record| record.key.signed_transaction_hash == hash)
+                            .any(|record| record.key.entrypoint_hash == hash)
                     })
                 {
                     return Err(invalid_data(
@@ -3538,7 +3528,7 @@ fn apply_plan_tombstoned(
     key.validate().map_err(invalid_data)?;
     let Some(existing) = committed
         .iter()
-        .find(|committed_key| committed_key.signed_transaction_hash == key.signed_transaction_hash)
+        .find(|committed_key| committed_key.entrypoint_hash == key.entrypoint_hash)
     else {
         return Err(invalid_data(
             "reservation PlanTombstoned marker requires its exact commit barrier",
@@ -3566,16 +3556,11 @@ fn apply_put_batch(
     // transition even when it contains multiple lane candidates.
     let committed_hashes = committed
         .iter()
-        .map(|key| key.signed_transaction_hash)
+        .map(|key| key.entrypoint_hash)
         .collect::<BTreeSet<_>>();
     let prepared_hashes = release_barriers
         .iter()
-        .flat_map(|barrier| {
-            barrier
-                .ordered_keys
-                .iter()
-                .map(|key| key.signed_transaction_hash)
-        })
+        .flat_map(|barrier| barrier.ordered_keys.iter().map(|key| key.entrypoint_hash))
         .collect::<BTreeSet<_>>();
     let completed_hashes = completed_releases
         .iter()
@@ -3584,74 +3569,66 @@ fn apply_put_batch(
                 .barrier
                 .ordered_keys
                 .iter()
-                .map(|key| key.signed_transaction_hash)
+                .map(|key| key.entrypoint_hash)
         })
         .collect::<BTreeSet<_>>();
     let existing_by_hash = records
         .iter()
-        .map(|record| (record.key.signed_transaction_hash, record))
+        .map(|record| (record.key.entrypoint_hash, record))
         .collect::<BTreeMap<_, _>>();
     let mut occupied_fifo_ordinals = records
         .iter()
-        .map(|record| {
-            (
-                record.fifo_order.ordinal,
-                record.key.signed_transaction_hash,
-            )
-        })
+        .map(|record| (record.fifo_order.ordinal, record.key.entrypoint_hash))
         .chain(completed_releases.iter().flat_map(|completion| {
-            completion.ordered_records.iter().map(|record| {
-                (
-                    record.fifo_order.ordinal,
-                    record.key.signed_transaction_hash,
-                )
-            })
+            completion
+                .ordered_records
+                .iter()
+                .map(|record| (record.fifo_order.ordinal, record.key.entrypoint_hash))
         }))
         .collect::<BTreeMap<_, _>>();
     let mut batch_by_hash = BTreeMap::new();
     for record in &batch {
         record.validate().map_err(invalid_data)?;
-        if committed_hashes.contains(&record.key.signed_transaction_hash) {
+        if committed_hashes.contains(&record.key.entrypoint_hash) {
             return Err(invalid_data(
-                "reservation put reuses a signed transaction protected by a commit barrier",
+                "reservation put reuses a entrypoint protected by a commit barrier",
             ));
         }
-        if prepared_hashes.contains(&record.key.signed_transaction_hash) {
+        if prepared_hashes.contains(&record.key.entrypoint_hash) {
             return Err(invalid_data(
                 "reservation put overlaps a prepared ordered release barrier",
             ));
         }
-        if completed_hashes.contains(&record.key.signed_transaction_hash) {
+        if completed_hashes.contains(&record.key.entrypoint_hash) {
             return Err(invalid_data(
                 "reservation put overlaps a completed release awaiting durable cleanup",
             ));
         }
-        if let Some(existing) = existing_by_hash.get(&record.key.signed_transaction_hash)
+        if let Some(existing) = existing_by_hash.get(&record.key.entrypoint_hash)
             && **existing != *record
         {
             return Err(invalid_data(
-                "conflicting live reservation for one signed transaction hash",
+                "conflicting live reservation for one entrypoint hash",
             ));
         }
         if occupied_fifo_ordinals
             .get(&record.fifo_order.ordinal)
-            .is_some_and(|hash| *hash != record.key.signed_transaction_hash)
+            .is_some_and(|hash| *hash != record.key.entrypoint_hash)
         {
             return Err(invalid_data(
                 "reservation put reuses a durable FIFO ordinal",
             ));
         }
-        if let Some(existing) = batch_by_hash.insert(record.key.signed_transaction_hash, record)
+        if let Some(existing) = batch_by_hash.insert(record.key.entrypoint_hash, record)
             && existing != record
         {
             return Err(invalid_data(
                 "reservation batch contains conflicting transaction identities",
             ));
         }
-        if let Some(existing_hash) = occupied_fifo_ordinals.insert(
-            record.fifo_order.ordinal,
-            record.key.signed_transaction_hash,
-        ) && existing_hash != record.key.signed_transaction_hash
+        if let Some(existing_hash) =
+            occupied_fifo_ordinals.insert(record.fifo_order.ordinal, record.key.entrypoint_hash)
+            && existing_hash != record.key.entrypoint_hash
         {
             return Err(invalid_data(
                 "reservation batch contains duplicate durable FIFO ordinals",
@@ -3676,10 +3653,10 @@ fn apply_commit(
     key.validate().map_err(invalid_data)?;
     if release_barriers
         .iter()
-        .any(|barrier| barrier_contains_signed_hash(barrier, &key))
+        .any(|barrier| barrier_contains_entrypoint_hash(barrier, &key))
         || completed_releases
             .iter()
-            .any(|completion| barrier_contains_signed_hash(&completion.barrier, &key))
+            .any(|completion| barrier_contains_entrypoint_hash(&completion.barrier, &key))
     {
         return Err(invalid_data(
             "reservation commit overlaps an ordered release claim",
@@ -3687,7 +3664,7 @@ fn apply_commit(
     }
     if let Some(existing) = records
         .iter()
-        .find(|record| record.key.signed_transaction_hash == key.signed_transaction_hash)
+        .find(|record| record.key.entrypoint_hash == key.entrypoint_hash)
         && existing.key != key
     {
         return Err(invalid_data(
@@ -3696,7 +3673,7 @@ fn apply_commit(
     }
     if let Some(existing) = committed
         .iter()
-        .find(|existing| existing.signed_transaction_hash == key.signed_transaction_hash)
+        .find(|existing| existing.entrypoint_hash == key.entrypoint_hash)
     {
         if *existing != key {
             return Err(invalid_data(
@@ -3726,7 +3703,7 @@ fn apply_prepare_release(
     barrier.validate().map_err(invalid_data)?;
     if committed
         .iter()
-        .any(|key| barrier_contains_signed_hash(&barrier, key))
+        .any(|key| barrier_contains_entrypoint_hash(&barrier, key))
     {
         return Err(invalid_data(
             "ordered release barrier overlaps a committed reservation",
@@ -3735,7 +3712,7 @@ fn apply_prepare_release(
     for existing in release_barriers.iter() {
         if release_barriers_overlap(existing, &barrier) && existing != &barrier {
             return Err(invalid_data(
-                "conflicting ordered release barriers overlap one signed transaction",
+                "conflicting ordered release barriers overlap one entrypoint",
             ));
         }
     }
@@ -3758,7 +3735,7 @@ fn apply_prepare_release(
     for key in &barrier.ordered_keys {
         let Some(record) = records
             .iter()
-            .find(|record| record.key.signed_transaction_hash == key.signed_transaction_hash)
+            .find(|record| record.key.entrypoint_hash == key.entrypoint_hash)
         else {
             return Err(invalid_data(
                 "ordered release barrier references a missing live reservation",
@@ -3786,7 +3763,7 @@ fn apply_complete_release(
     completion.validate().map_err(invalid_data)?;
     if committed
         .iter()
-        .any(|key| barrier_contains_signed_hash(&completion.barrier, key))
+        .any(|key| barrier_contains_entrypoint_hash(&completion.barrier, key))
     {
         return Err(invalid_data(
             "ordered release completion overlaps a committed reservation",
@@ -3797,7 +3774,7 @@ fn apply_complete_release(
         if release_barriers_overlap(&existing.barrier, &completion.barrier) {
             if existing != &completion {
                 return Err(invalid_data(
-                    "conflicting completed releases overlap one signed transaction",
+                    "conflicting completed releases overlap one entrypoint",
                 ));
             }
             completed_exact = true;
@@ -3827,9 +3804,10 @@ fn apply_complete_release(
         ));
     }
     for expected in &completion.ordered_records {
-        let Some(live) = records.iter().find(|record| {
-            record.key.signed_transaction_hash == expected.key.signed_transaction_hash
-        }) else {
+        let Some(live) = records
+            .iter()
+            .find(|record| record.key.entrypoint_hash == expected.key.entrypoint_hash)
+        else {
             return Err(invalid_data(
                 "ordered release completion references a missing live reservation",
             ));
@@ -3857,13 +3835,13 @@ fn apply_snapshot_completion(
     for key in &completion.barrier.ordered_keys {
         if records
             .iter()
-            .any(|record| record.key.signed_transaction_hash == key.signed_transaction_hash)
+            .any(|record| record.key.entrypoint_hash == key.entrypoint_hash)
             || committed
                 .iter()
-                .any(|committed| committed.signed_transaction_hash == key.signed_transaction_hash)
+                .any(|committed| committed.entrypoint_hash == key.entrypoint_hash)
             || release_barriers
                 .iter()
-                .any(|barrier| barrier_contains_signed_hash(barrier, key))
+                .any(|barrier| barrier_contains_entrypoint_hash(barrier, key))
         {
             return Err(invalid_data(
                 "snapshot completed release overlaps live, committed, or prepared ownership",
@@ -3886,7 +3864,7 @@ fn apply_snapshot_completion(
     }
     if completion.ordered_records.iter().any(|completed| {
         records.iter().any(|live| {
-            live.key.signed_transaction_hash != completed.key.signed_transaction_hash
+            live.key.entrypoint_hash != completed.key.entrypoint_hash
                 && live.fifo_order.ordinal == completed.fifo_order.ordinal
         })
     }) {
@@ -3906,7 +3884,7 @@ fn completed_fifo_orders_overlap(
 ) -> bool {
     left.ordered_records.iter().any(|left_record| {
         right.ordered_records.iter().any(|right_record| {
-            left_record.key.signed_transaction_hash != right_record.key.signed_transaction_hash
+            left_record.key.entrypoint_hash != right_record.key.entrypoint_hash
                 && left_record.fifo_order.ordinal == right_record.fifo_order.ordinal
         })
     })
@@ -3927,14 +3905,14 @@ fn apply_forget_release(
     Ok(())
 }
 #[cfg(test)]
-fn barrier_contains_signed_hash(
+fn barrier_contains_entrypoint_hash(
     barrier: &LaneQueueReservationReleaseBarrierV3,
     key: &LaneQueueReservationKeyV2,
 ) -> bool {
     barrier
         .ordered_keys
         .iter()
-        .any(|barrier_key| barrier_key.signed_transaction_hash == key.signed_transaction_hash)
+        .any(|barrier_key| barrier_key.entrypoint_hash == key.entrypoint_hash)
 }
 #[cfg(test)]
 fn release_barriers_overlap(
@@ -3943,7 +3921,7 @@ fn release_barriers_overlap(
 ) -> bool {
     left.ordered_keys
         .iter()
-        .any(|key| barrier_contains_signed_hash(right, key))
+        .any(|key| barrier_contains_entrypoint_hash(right, key))
 }
 #[cfg(test)]
 fn encode_frame(frame: &LaneQueueReservationJournalFrameV6) -> io::Result<Vec<u8>> {
@@ -4067,30 +4045,22 @@ fn canonical_snapshot(
         left.fifo_order
             .ordinal
             .cmp(&right.fifo_order.ordinal)
-            .then_with(|| {
-                left.key
-                    .signed_transaction_hash
-                    .cmp(&right.key.signed_transaction_hash)
-            })
+            .then_with(|| left.key.entrypoint_hash.cmp(&right.key.entrypoint_hash))
     });
     let mut committed = committed.to_vec();
-    committed.sort_by_key(|key| key.signed_transaction_hash);
+    committed.sort_by_key(|key| key.entrypoint_hash);
     let mut plan_tombstoned = plan_tombstoned.to_vec();
-    plan_tombstoned.sort_by_key(|key| key.signed_transaction_hash);
+    plan_tombstoned.sort_by_key(|key| key.entrypoint_hash);
     let mut release_barriers = release_barriers.to_vec();
-    release_barriers.sort_by_key(|barrier| {
-        barrier
-            .ordered_keys
-            .first()
-            .map(|key| key.signed_transaction_hash)
-    });
+    release_barriers
+        .sort_by_key(|barrier| barrier.ordered_keys.first().map(|key| key.entrypoint_hash));
     let mut completed_releases = completed_releases.to_vec();
     completed_releases.sort_by_key(|completion| {
         completion
             .barrier
             .ordered_keys
             .first()
-            .map(|key| key.signed_transaction_hash)
+            .map(|key| key.entrypoint_hash)
     });
     Ok(Some(LaneQueueReservationJournalFrameV6::Snapshot {
         live,
@@ -4905,9 +4875,6 @@ mod tests {
             version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
             key: LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
-                    entrypoint_hash,
-                )),
                 entrypoint_hash,
                 queue_plan_admission_binding_hash: Hash::new([seed, 9]),
                 routing_plan_digest: Hash::new([seed, 3]),
@@ -4936,8 +4903,6 @@ mod tests {
             b"indexed-reservation-entrypoint",
             &identity,
         ]));
-        record.key.signed_transaction_hash =
-            HashOf::from_untyped_unchecked(Hash::from(record.key.entrypoint_hash));
         record.key.queue_plan_admission_binding_hash =
             Hash::new_from_chunks(&[b"indexed-reservation-admission", &identity]);
         record.key.routing_plan_digest =

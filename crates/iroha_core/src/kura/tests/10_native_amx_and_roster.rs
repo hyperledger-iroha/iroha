@@ -1727,7 +1727,6 @@ fn roster_sidecar_rejects_height_mismatch() {
             "roster sidecar",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::HeightOne,
         ),
         "append mismatched roster sidecar"
     );
@@ -1794,7 +1793,7 @@ fn roster_sidecar_without_canonical_kura_hash_is_rejected_and_pruned_above_tip()
     let index_path = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
     assert_eq!(
         fs::metadata(&index_path).expect("roster index").len(),
-        2 * PIPELINE_INDEX_ENTRY_SIZE_U64
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 2 * PIPELINE_INDEX_ENTRY_SIZE_U64
     );
     assert!(
         fs::metadata(&data_path).expect("roster data").len() > 0,
@@ -1812,7 +1811,7 @@ fn roster_sidecar_without_canonical_kura_hash_is_rejected_and_pruned_above_tip()
         fs::metadata(&index_path)
             .expect("truncated roster index")
             .len(),
-        PIPELINE_INDEX_ENTRY_SIZE_U64,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64,
         "the index must not retain an address for height 2"
     );
     assert_eq!(

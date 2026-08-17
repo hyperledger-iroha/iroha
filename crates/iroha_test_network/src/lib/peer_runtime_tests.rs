@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod post_genesis_liveness_tests {
-    use tokio::sync::broadcast;
     use super::*;
+    use tokio::sync::broadcast;
     #[tokio::test]
     async fn detects_none_when_timer_expires() {
         let (_tx, rx) = broadcast::channel(4);
@@ -39,8 +39,8 @@ mod post_genesis_liveness_tests {
 }
 #[cfg(test)]
 mod start_event_tests {
-    use tokio::sync::broadcast;
     use super::*;
+    use tokio::sync::broadcast;
     #[tokio::test]
     async fn waits_until_server_started_event() {
         let (tx, rx) = broadcast::channel(4);
@@ -83,8 +83,8 @@ mod start_event_tests {
 }
 #[cfg(test)]
 mod diagnostics_tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     #[test]
     fn snapshot_dir_entries_are_sorted_and_truncated() {
         let dir = tempdir().expect("tempdir");
@@ -148,12 +148,12 @@ mod diagnostics_tests {
 }
 #[cfg(test)]
 mod shutdown_tests {
+    use super::*;
     use std::process::Stdio;
     use tempfile::tempdir;
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, duplex};
     use tokio::process::Command;
-    use super::*;
     #[cfg(target_family = "unix")]
     #[tokio::test]
     async fn shutdown_prefers_sigterm_before_sigquit() {
@@ -394,12 +394,9 @@ mod sora_profile_tests {
         let mut lane = toml::map::Map::new();
         lane.insert("alias".into(), toml::Value::String("lane0".into()));
         lane.insert("index".into(), toml::Value::Integer(0));
-        let mut metadata = toml::map::Map::new();
-        metadata.insert(
-            "scheduler.teu_capacity".into(),
-            toml::Value::String("262144".into()),
-        );
-        lane.insert("metadata".into(), toml::Value::Table(metadata));
+        let mut scheduler = toml::map::Map::new();
+        scheduler.insert("teu_capacity".into(), toml::Value::Integer(262_144));
+        lane.insert("scheduler".into(), toml::Value::Table(scheduler));
         let mut fusion = toml::map::Map::new();
         fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
         fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
@@ -466,8 +463,8 @@ mod sora_profile_tests {
 }
 #[cfg(test)]
 mod retry_backoff_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[tokio::test]
     async fn retry_with_backoff_for_succeeds_before_timeout() {
         let attempts = AtomicUsize::new(0);

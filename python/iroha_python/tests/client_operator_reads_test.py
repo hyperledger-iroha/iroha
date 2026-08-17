@@ -68,10 +68,6 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
         ),
     ),
     ("/v1/sumeragi/params", lambda client: client.get_sumeragi_params()),
-    (
-        "/v1/sumeragi/telemetry",
-        lambda client: client.get_sumeragi_telemetry(),
-    ),
 )
 
 

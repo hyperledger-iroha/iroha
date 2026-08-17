@@ -1,10 +1,10 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
-//! These types cover QC voting (prepare/commit/new-view), evidence, VRF commit/reveal envelopes,
-//! and optional reliable broadcast helpers. They are split out of `iroha_core` so that other crates
-//! (e.g., Torii, genesis tooling, or test harnesses) can construct and inspect consensus payloads
-//! without depending on the core runtime crate.
-use super::{BlockSignature, Header as BlockHeader};
+//! These types cover shared consensus parameters and diagnostics, authenticated v2 evidence,
+//! lane-local certificates, and the retained QC/VRF projections. Global consensus messages and
+//! signed RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 RBC
+//! message family.
+use super::Header as BlockHeader;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -13,7 +13,6 @@ use crate::{
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, FeeDebitSource, LaneId, LaneRelayEnvelope},
     peer::PeerId,
-    transaction::TransactionSubmissionReceipt,
 };
 use core::{fmt, num::NonZeroU64};
 use iroha_crypto::{Algorithm, Hash, HashOf};
@@ -257,6 +256,7 @@ pub struct Proposal {
 /// QC vote over a specific block and phase (BLS-only).
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct QcVote {
     /// Target phase (`Prepare`, `Commit`, `NewView`).
     pub phase: CertPhase,
@@ -277,8 +277,9 @@ pub struct QcVote {
     /// Validator-order update sequence this vote is valid under.
     pub rechain_seq: u64,
     /// Highest known QC for `NewView` votes, bound into the vote signature.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    ///
+    /// The slot is always encoded; `None` is canonical for the other phases.
+    #[norito(required)]
     pub highest_qc: Option<QcRef>,
     /// Signer index within the active validator set.
     pub signer: ValidatorIndex,
@@ -288,6 +289,7 @@ pub struct QcVote {
 /// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct QcAggregate {
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
@@ -297,6 +299,7 @@ pub struct QcAggregate {
 /// QC certifying a phase for a block.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct Qc {
     /// Phase certified by this certificate.
     pub phase: CertPhase,
@@ -319,8 +322,9 @@ pub struct Qc {
     /// Consensus mode tag used to domain-separate signatures.
     pub mode_tag: String,
     /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    ///
+    /// The slot is always encoded; `None` is canonical for the other phases.
+    #[norito(required)]
     pub highest_qc: Option<QcRef>,
     /// Stable hash of the validator set that produced the certificate.
     pub validator_set_hash: HashOf<Vec<PeerId>>,
@@ -331,22 +335,6 @@ pub struct Qc {
     /// Aggregate signature and signer bitmap.
     pub aggregate: QcAggregate,
 }
-/// Evidence kinds for slashing or governance penalties.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub enum EvidenceKind {
-    /// Same (height, view) prepare vote on different blocks
-    DoublePrepare = 0,
-    /// Same (height, view) commit vote on different blocks
-    DoubleCommit = 1,
-    /// Invalid QC
-    InvalidQc = 2,
-    /// Invalid proposal
-    InvalidProposal = 3,
-    /// Transaction censorship proof (submission receipts).
-    Censorship = 4,
-    /// Exact conflicting Sumeragi v2 artifacts authenticated under one frozen height context.
-    SumeragiV2Equivocation = 5,
-}
 /// Self-contained frozen context and exact signed artifacts for one Sumeragi v2 equivocation proof.
 ///
 /// Proofs of possession are retained in roster order so an auditor can verify current-context
@@ -355,6 +343,7 @@ pub enum EvidenceKind {
 /// verified immutable context record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiV2EquivocationEvidence {
     /// Immutable context which governed both conflicting artifacts.
     pub context: super::consensus_v2::HeightContext,
@@ -363,178 +352,16 @@ pub struct SumeragiV2EquivocationEvidence {
     /// Exact pair of conflicting signed artifacts.
     pub conflict: super::consensus_v2::SumeragiV2Equivocation,
 }
-/// Schema projection of the named fields in [`EvidencePayload::DoubleVote`].
-#[derive(IntoSchema)]
-pub struct DoubleVoteEvidencePayloadSchema {
-    /// First observed vote.
-    pub v1: QcVote,
-    /// Second observed vote.
-    pub v2: QcVote,
-}
-/// Schema projection of the named fields in [`EvidencePayload::InvalidQc`].
-#[derive(IntoSchema)]
-pub struct InvalidQcEvidencePayloadSchema {
-    /// Certificate flagged as invalid.
-    pub certificate: Qc,
-    /// Human-readable invalidity reason.
-    pub reason: String,
-}
-/// Schema projection of the named fields in [`EvidencePayload::InvalidProposal`].
-#[derive(IntoSchema)]
-pub struct InvalidProposalEvidencePayloadSchema {
-    /// Proposal flagged as invalid.
-    pub proposal: Proposal,
-    /// Human-readable invalidity reason.
-    pub reason: String,
-}
-/// Schema projection of the named fields in [`EvidencePayload::Censorship`].
-#[derive(IntoSchema)]
-pub struct CensorshipEvidencePayloadSchema {
-    /// Transaction hash referenced by the receipts.
-    pub tx_hash: HashOf<crate::transaction::SignedTransaction>,
-    /// Signed submission receipts from validators.
-    pub receipts: Vec<TransactionSubmissionReceipt>,
-}
-/// Evidence payloads.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "evidence retains complete canonical artifacts inline; boxing a variant would change the Norito V1 wire shape"
-)]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub enum EvidencePayload {
-    /// Two votes by the same signer for the same (phase, height, view, epoch)
-    /// on different block hashes.
-    DoubleVote {
-        /// First observed vote.
-        v1: QcVote,
-        /// Second observed vote.
-        v2: QcVote,
-    },
-    /// A QC considered invalid by local checks.
-    InvalidQc {
-        /// The certificate flagged as invalid.
-        certificate: Qc,
-        /// Human-readable reason describing the invalidity.
-        reason: String,
-    },
-    /// A proposal considered invalid by local checks.
-    InvalidProposal {
-        /// The proposal flagged as invalid.
-        proposal: Proposal,
-        /// Human-readable reason describing the invalidity.
-        reason: String,
-    },
-    /// Evidence that a transaction was submitted but not proposed/committed.
-    Censorship {
-        /// Transaction hash referenced by the receipts.
-        tx_hash: HashOf<crate::transaction::SignedTransaction>,
-        /// Signed submission receipts from validators.
-        receipts: Vec<TransactionSubmissionReceipt>,
-    },
-    /// Exact, independently verifiable Sumeragi v2 equivocation material.
-    SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
-}
-/// Evidence wrapper.
+/// Exact, independently verifiable Sumeragi-v2 equivocation evidence.
+///
+/// The first release has one evidence shape. Retired global-v1 kind/payload
+/// enums are intentionally absent, so old wire and storage layouts fail decode.
+/// This wrapper is a binary persistence/instruction type; typed JSON embeds the
+/// closed [`SumeragiV2EquivocationEvidence`] object directly where required.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct Evidence {
-    /// High-level classification of the evidence.
-    pub kind: EvidenceKind,
-    /// Detailed payload carrying the offending material.
-    pub payload: EvidencePayload,
-}
-impl TypeId for EvidenceKind {
-    fn id() -> Ident {
-        "EvidenceKind".to_owned()
-    }
-}
-impl IntoSchema for EvidenceKind {
-    fn type_name() -> Ident {
-        "EvidenceKind".to_owned()
-    }
-    fn update_schema_map(metamap: &mut MetaMap) {
-        let variants = vec![
-            EnumVariant {
-                tag: "DoublePrepare".to_owned(),
-                discriminant: EvidenceKind::DoublePrepare as u32,
-                ty: None,
-            },
-            EnumVariant {
-                tag: "DoubleCommit".to_owned(),
-                discriminant: EvidenceKind::DoubleCommit as u32,
-                ty: None,
-            },
-            EnumVariant {
-                tag: "InvalidQc".to_owned(),
-                discriminant: EvidenceKind::InvalidQc as u32,
-                ty: None,
-            },
-            EnumVariant {
-                tag: "InvalidProposal".to_owned(),
-                discriminant: EvidenceKind::InvalidProposal as u32,
-                ty: None,
-            },
-            EnumVariant {
-                tag: "Censorship".to_owned(),
-                discriminant: EvidenceKind::Censorship as u32,
-                ty: None,
-            },
-            EnumVariant {
-                tag: "SumeragiV2Equivocation".to_owned(),
-                discriminant: EvidenceKind::SumeragiV2Equivocation as u32,
-                ty: None,
-            },
-        ];
-        metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
-    }
-}
-impl TypeId for EvidencePayload {
-    fn id() -> Ident {
-        "EvidencePayload".to_owned()
-    }
-}
-impl IntoSchema for EvidencePayload {
-    fn type_name() -> Ident {
-        "EvidencePayload".to_owned()
-    }
-    fn update_schema_map(metamap: &mut MetaMap) {
-        if metamap.contains_key::<Self>() {
-            return;
-        }
-        DoubleVoteEvidencePayloadSchema::update_schema_map(metamap);
-        InvalidQcEvidencePayloadSchema::update_schema_map(metamap);
-        InvalidProposalEvidencePayloadSchema::update_schema_map(metamap);
-        CensorshipEvidencePayloadSchema::update_schema_map(metamap);
-        SumeragiV2EquivocationEvidence::update_schema_map(metamap);
-        metamap.insert::<Self>(Metadata::Enum(EnumMeta {
-            variants: vec![
-                EnumVariant {
-                    tag: "DoubleVote".to_owned(),
-                    discriminant: 0,
-                    ty: Some(core::any::TypeId::of::<DoubleVoteEvidencePayloadSchema>()),
-                },
-                EnumVariant {
-                    tag: "InvalidQc".to_owned(),
-                    discriminant: 1,
-                    ty: Some(core::any::TypeId::of::<InvalidQcEvidencePayloadSchema>()),
-                },
-                EnumVariant {
-                    tag: "InvalidProposal".to_owned(),
-                    discriminant: 2,
-                    ty: Some(core::any::TypeId::of::<InvalidProposalEvidencePayloadSchema>()),
-                },
-                EnumVariant {
-                    tag: "Censorship".to_owned(),
-                    discriminant: 3,
-                    ty: Some(core::any::TypeId::of::<CensorshipEvidencePayloadSchema>()),
-                },
-                EnumVariant {
-                    tag: "SumeragiV2Equivocation".to_owned(),
-                    discriminant: 4,
-                    ty: Some(core::any::TypeId::of::<SumeragiV2EquivocationEvidence>()),
-                },
-            ],
-        }));
-    }
+    /// Frozen height context, roster proofs, and exact conflicting signed artifacts.
+    pub equivocation: SumeragiV2EquivocationEvidence,
 }
 impl Ord for Evidence {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -549,6 +376,10 @@ impl PartialOrd for Evidence {
     }
 }
 /// Persisted evidence entry annotated with commit metadata.
+///
+/// Every field belongs to the first-release storage layout; shortened records
+/// are rejected instead of receiving implicit penalty or admission state. The
+/// type is binary-only; endpoint JSON uses a purpose-built audit projection.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct EvidenceRecord {
     /// Slashing material captured for governance processing.
@@ -560,25 +391,17 @@ pub struct EvidenceRecord {
     /// Block creation timestamp in milliseconds since UNIX epoch.
     pub recorded_at_ms: u64,
     /// Whether a penalty was already applied for this evidence record.
-    #[norito(default)]
     pub penalty_applied: bool,
     /// Whether governance cancelled penalty application for this evidence record.
-    #[norito(default)]
     pub penalty_cancelled: bool,
     /// Block height at which the penalty was cancelled, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub penalty_cancelled_at_height: Option<Height>,
     /// Block height at which the penalty was applied, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub penalty_applied_at_height: Option<Height>,
     /// Block height which first admitted this exact evidence into consensus.
     ///
     /// `None` denotes node-local pending diagnostic material. Pending material
     /// is never eligible for deterministic penalty derivation.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub consensus_admitted_at_height: Option<Height>,
 }
 /// Membership snapshot exported through `/v1/sumeragi/status`.
@@ -722,6 +545,7 @@ pub fn committed_lane_block_status_counts_as_progress(
 /// Certified standalone lane-local block summary reported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiCommittedLaneBlock {
     /// Lane whose local block is committed.
     pub lane_id: LaneId,
@@ -761,6 +585,7 @@ pub struct SumeragiCommittedLaneBlock {
 /// Planned lane-local payload ownership exported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiLanePayloadOwnership {
     /// Global proposal height that planned this lane-local payload.
     pub proposal_height: u64,
@@ -790,8 +615,10 @@ pub struct SumeragiLanePayloadOwnership {
     /// Lane-local predecessor height bound by the descriptor.
     pub previous_lane_block_height: u64,
     /// Descriptor hash of the lane-local predecessor, when the predecessor is known.
+    #[norito(required)]
     pub previous_lane_block_descriptor_hash: Option<Hash>,
     /// Stable descriptor hash binding standalone lane block replay context.
+    #[norito(required)]
     pub lane_block_descriptor_hash: Option<Hash>,
     /// Canonical validator set bound by the descriptor.
     pub lane_block_descriptor_validator_set: Vec<PeerId>,
@@ -843,8 +670,7 @@ pub struct LaneBlockDescriptorV1 {
     /// Latest committed lane-local height used as this block's predecessor tip.
     pub previous_lane_block_height: u64,
     /// Descriptor hash of the predecessor tip, when the predecessor is known.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub previous_lane_block_descriptor_hash: Option<Hash>,
     /// Lane-local block height assigned to the descriptor.
     pub lane_block_height: u64,
@@ -938,8 +764,7 @@ pub struct LaneBlockProposalV1 {
     /// Stable proposal digest binding descriptor, work, committee, and quorum.
     pub proposal_hash: Hash,
     /// Optional recovery hint for fetching the global block body with the payload.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub payload_block_hint: Option<LaneBlockProposalPayloadHintV1>,
 }
 impl LaneBlockProposalV1 {
@@ -1014,6 +839,7 @@ impl LaneBlockProposalV1 {
 /// Canonical lane-local block vote payload signed by lane committees.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockVoteBodyV1 {
     /// Lane-local QC phase certified by this vote body.
     pub phase: CertPhase,
@@ -1073,12 +899,13 @@ impl LaneBlockVoteBodyV1 {
 /// lane incarnations, proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LanePayloadAvailabilityBodyV1 {
     /// Artifact schema version. Only version one is accepted.
     pub version: u8,
     /// Exact genesis-derived network identity that owns the payload.
     pub network_id: NetworkId,
-    /// Consensus epoch at the proposal compatibility height.
+    /// Consensus epoch at the global proposal height.
     pub epoch: u64,
     /// Lane whose executable payload is retained.
     pub lane_id: LaneId,
@@ -1086,7 +913,7 @@ pub struct LanePayloadAvailabilityBodyV1 {
     pub dataspace_id: DataSpaceId,
     /// Exact lane lifecycle incarnation.
     pub lane_incarnation: Hash,
-    /// Global compatibility height that selected the lane work.
+    /// Global proposal height that selected the lane work.
     pub proposal_height: u64,
     /// Lane-local block height whose bytes are retained.
     pub lane_block_height: u64,
@@ -1136,6 +963,7 @@ impl LanePayloadAvailabilityBodyV1 {
 /// Quorum proof that the exact autonomous executable payload is durably held.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LanePayloadAvailabilityQcV1 {
     /// READY body certified by the aggregate signature.
     pub body: LanePayloadAvailabilityBodyV1,
@@ -1155,6 +983,7 @@ pub struct LanePayloadAvailabilityQcV1 {
 /// Validator-set proof for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockQcV1 {
     /// Vote body certified by the aggregate signature.
     pub body: LaneBlockVoteBodyV1,
@@ -1170,10 +999,9 @@ pub struct LaneBlockQcV1 {
     pub bls_aggregate_signature: Vec<u8>,
     /// Exact payload-availability proof for autonomous prepare QCs.
     ///
-    /// This is `None` for commit QCs and for compatibility lane proposals
+    /// This is `None` for commit QCs and for globally anchored lane proposals
     /// whose payload availability is inherited from a canonical global block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub payload_availability_qc: Option<LanePayloadAvailabilityQcV1>,
 }
 /// Complete certified lane-block artifact used for authenticated recovery.
@@ -1183,6 +1011,7 @@ pub struct LaneBlockQcV1 {
 /// Commit evidence cannot be split across a volatile transport-capacity boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockCertificateV1 {
     /// Exact canonical proposal certified by both quorum certificates.
     pub proposal: LaneBlockProposalV1,
@@ -1616,6 +1445,7 @@ pub struct LaneSettlementReceipt {
 /// Deterministic Nexus fee schedule inputs captured for asynchronous settlement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct NexusFeeScheduleInputs {
     /// Serialized signed transaction payload length used for fee metering.
     pub tx_bytes_len: u64,
@@ -1635,6 +1465,7 @@ pub struct NexusFeeScheduleInputs {
 /// Versioned Nexus fee receipt committed by a finalized lane block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct NexusFeeReceipt {
     /// Receipt format version.
     pub version: u16,
@@ -1651,12 +1482,10 @@ pub struct NexusFeeReceipt {
     /// Canonical fee asset definition charged by settlement.
     pub fee_asset_id: AssetDefinitionId,
     /// Immutable sponsor-program revision charged by this receipt, when sponsored.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
+    #[norito(required)]
     pub program_revision: Option<u64>,
     /// Proof-bound cross-lane spend lease, when relay settlement is used.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
+    #[norito(required)]
     pub lease_id: Option<Hash>,
     /// Computed fee amount to burn on Nexus.
     pub fee_amount: Quantity,
@@ -1730,6 +1559,7 @@ pub struct NativeAmxAttestationBodyV2 {
     /// Last globally anchored Native AMX participant block for this lane incarnation.
     pub participant_previous_block_height: u64,
     /// Descriptor hash of the last globally anchored participant block, when one exists.
+    #[norito(required)]
     pub participant_previous_block_descriptor_hash: Option<Hash>,
     /// Contiguous Native AMX participant-lane block height certified by this vote.
     pub participant_lane_block_height: u64,
@@ -1767,25 +1597,31 @@ impl NativeAmxAttestationBodyV2 {
     }
     /// Build the exact grouped zero-effect participant settlement certified by this body.
     ///
-    /// The ordered source group is shared by every receipt in one Native AMX control. It must
-    /// contain this body's source exactly once and remain strictly ordered so callers cannot
-    /// accidentally construct the obsolete singleton projection for a grouped control.
+    /// The source group is shared by every receipt in one Native AMX control. Its caller-provided
+    /// order is the canonical candidate/block order, so this constructor preserves it exactly. The
+    /// group must contain this body's source exactly once and must not contain duplicates.
     ///
     /// # Errors
     ///
-    /// Returns a stable reason when the group is empty, oversized, unordered,
-    /// duplicated, or does not contain this body's source exactly once.
+    /// Returns a stable reason when the group is empty, oversized, duplicated, or does not contain
+    /// this body's source exactly once.
     pub fn computed_grouped_participant_settlement(
         &self,
-        ordered_sources: &[[u8; 32]],
+        sources: &[[u8; 32]],
     ) -> Result<LaneBlockCommitment, &'static str> {
-        if ordered_sources.is_empty() || ordered_sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
+        if sources.is_empty() || sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
             return Err("Native AMX participant source group is out of bounds");
         }
-        if ordered_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err("Native AMX participant source group must be strictly ordered");
+        if sources
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != sources.len()
+        {
+            return Err("Native AMX participant source group must be unique");
         }
-        if ordered_sources
+        if sources
             .iter()
             .filter(|source| **source == self.source_id)
             .count()
@@ -1793,7 +1629,7 @@ impl NativeAmxAttestationBodyV2 {
         {
             return Err("Native AMX participant source group must contain the current source once");
         }
-        let tx_count = u64::try_from(ordered_sources.len())
+        let tx_count = u64::try_from(sources.len())
             .map_err(|_| "Native AMX participant source group is out of bounds")?;
         Ok(LaneBlockCommitment {
             block_height: self.participant_lane_block_height,
@@ -1806,7 +1642,7 @@ impl NativeAmxAttestationBodyV2 {
             total_xor_after_haircut: Quantity::zero(),
             total_xor_variance: Quantity::zero(),
             swap_metadata: None,
-            receipts: ordered_sources
+            receipts: sources
                 .iter()
                 .copied()
                 .map(|source_id| LaneSettlementReceipt {
@@ -1830,9 +1666,9 @@ impl NativeAmxAttestationBodyV2 {
     /// [`Self::computed_grouped_participant_settlement`].
     pub fn computed_grouped_participant_settlement_commitment(
         &self,
-        ordered_sources: &[[u8; 32]],
+        sources: &[[u8; 32]],
     ) -> Result<Hash, &'static str> {
-        let settlement = self.computed_grouped_participant_settlement(ordered_sources)?;
+        let settlement = self.computed_grouped_participant_settlement(sources)?;
         Ok(Hash::from(
             crate::nexus::compute_settlement_hash(&settlement)
                 .expect("native AMX participant settlement must hash"),
@@ -2111,6 +1947,7 @@ pub enum LaneVolatilityClass {
 /// Swap metadata describing the deterministic conversion parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneSwapMetadata {
     /// Basis-point safety margin applied on top of the TWAP.
     pub epsilon_bps: u16,
@@ -2121,7 +1958,6 @@ pub struct LaneSwapMetadata {
     /// Canonical exact TWAP value (`local_token / XOR`).
     pub twap_local_per_xor: Numeric,
     /// Volatility bucket recorded when applying the epsilon.
-    #[norito(default)]
     pub volatility_class: LaneVolatilityClass,
 }
 /// Aggregated per-lane settlement commitment captured within a block.
@@ -2148,16 +1984,13 @@ pub struct LaneBlockCommitment {
     /// Exact aggregate difference between XOR due and the post-haircut expectation.
     pub total_xor_variance: Quantity,
     /// Deterministic metadata describing the conversion parameters.
-    #[norito(default)]
+    #[norito(required)]
     pub swap_metadata: Option<LaneSwapMetadata>,
     /// Deterministic receipts contributing to the commitment.
-    #[norito(default)]
     pub receipts: Vec<LaneSettlementReceipt>,
     /// Versioned Nexus fee receipts committed for asynchronous public XOR settlement.
-    #[norito(default)]
     pub nexus_fee_receipts: Vec<NexusFeeReceipt>,
     /// Versioned native AMX receipts committed by coordinator execution.
-    #[norito(default)]
     pub native_amx_receipts: Vec<NativeAmxReceipt>,
 }
 fn native_amx_nonzero(bytes: &[u8]) -> bool {
@@ -2311,7 +2144,7 @@ fn validate_native_amx_qc_shape(
 fn validate_native_amx_leg_shape(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,
-    expected_sources: &[[u8; Hash::LENGTH]],
+    coordinator_sources: &[[u8; Hash::LENGTH]],
     expected_round: super::consensus_v2::ConsensusRound,
     expected_epoch: u64,
     expected_entrypoint_hash: Hash,
@@ -2369,12 +2202,20 @@ fn validate_native_amx_leg_shape(
     let settlement = &leg.participant_settlement;
     let settlement_hash = crate::nexus::compute_settlement_hash(settlement)
         .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
-    let settlement_sources_match = settlement.receipts.len() == expected_sources.len()
-        && settlement
-            .receipts
-            .iter()
-            .map(|entry| entry.source_id)
-            .eq(expected_sources.iter().copied());
+    let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
+    let settlement_sources = settlement
+        .receipts
+        .iter()
+        .map(|entry| entry.source_id)
+        .collect::<Vec<_>>();
+    let settlement_sources_are_unique = settlement_sources
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        == settlement_sources.len();
+    let settlement_sources_match =
+        !same_route || settlement_sources.as_slice() == coordinator_sources;
     if settlement.receipts.is_empty()
         || settlement.receipts.len() > NATIVE_AMX_GROUP_SOURCES_MAX
         || settlement.tx_count != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
@@ -2389,10 +2230,7 @@ fn validate_native_amx_leg_shape(
         || settlement.swap_metadata.is_some()
         || !settlement.nexus_fee_receipts.is_empty()
         || !settlement.native_amx_receipts.is_empty()
-        || settlement
-            .receipts
-            .windows(2)
-            .any(|pair| pair[0].source_id >= pair[1].source_id)
+        || !settlement_sources_are_unique
         || settlement
             .receipts
             .iter()
@@ -2427,7 +2265,6 @@ fn validate_native_amx_leg_shape(
     }) {
         return Err("Native AMX participant proposal and grouped settlement are not aligned");
     }
-    let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
     let proposal_uses_coordinator_authority_context =
         descriptor.proposal_height == receipt.authority_context_height;
     if same_route
@@ -2445,11 +2282,13 @@ fn validate_native_amx_leg_shape(
 impl LaneBlockCommitment {
     /// Validate grouped Native AMX receipt structure without live authority state.
     ///
-    /// This validates clean-break versions, bounds, ordered source membership, participant proposal
+    /// This validates clean-break versions, bounds, unique source membership, participant proposal
     /// hashes, prepare/commit identity, committee geometry, bitmaps/quorum, 96-byte proof/signature
-    /// fields, zero-effect settlements, and exact same-route coordinator identity. It deliberately
-    /// does not claim that an embedded committee, incarnation, predecessor, proof of possession, or
-    /// aggregate signature is authoritative at its historical height.
+    /// fields, zero-effect settlements, and exact same-route coordinator identity and source order.
+    /// Separate participant groups can span more than one coordinator commitment, so their exact
+    /// block-wide membership is validated by the core execution-context boundary instead. This
+    /// deliberately does not claim that an embedded committee, incarnation, predecessor, proof of
+    /// possession, or aggregate signature is authoritative at its historical height.
     ///
     /// # Errors
     ///
@@ -2466,8 +2305,14 @@ impl LaneBlockCommitment {
             .iter()
             .map(|receipt| receipt.source_id)
             .collect::<Vec<_>>();
-        if expected_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err("Native AMX receipt sources must be strictly ordered");
+        if expected_sources
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != expected_sources.len()
+        {
+            return Err("Native AMX receipt sources must be unique");
         }
         for receipt in &self.native_amx_receipts {
             let receipt_belongs_to_commitment_height =
@@ -4456,27 +4301,6 @@ impl SumeragiDiagnosticsStatus {
         Ok(())
     }
 }
-/// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct SumeragiQcEntry {
-    /// Certified block height.
-    pub height: Height,
-    /// View in which the QC was formed.
-    pub view: View,
-    /// Subject block hash if known.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub subject_block_hash: Option<HashOf<BlockHeader>>,
-}
-/// Norito payload returned by Torii for `/v1/sumeragi/qc`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct SumeragiQcSnapshot {
-    /// `HighestQC` snapshot.
-    pub highest_qc: SumeragiQcEntry,
-    /// `LockedQC` snapshot.
-    pub locked_qc: SumeragiQcEntry,
-}
 /// Minimal execution witness KV pair for SBV-AM prototypes.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4537,160 +4361,6 @@ pub struct VrfReveal {
     /// BLS signature over the canonical VRF-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
-/// Reconfiguration payload (permissioned governance path).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct Reconfig {
-    /// New validator roster (ordered deterministically).
-    pub new_roster: Vec<PeerId>,
-    /// First height at which the new set becomes active.
-    pub activation_height: Height,
-}
-/// RBC payload encoding used for chunk distribution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "encoding", content = "state", rename_all = "snake_case")]
-pub enum RbcEncoding {
-    /// Raw payload chunking without parity shards.
-    #[default]
-    Plain,
-    /// RS16 stripe encoding with parity shards.
-    Rs16,
-}
-impl RbcEncoding {
-    /// Stable operator-facing label for the encoding.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Plain => "plain",
-            Self::Rs16 => "rs16",
-        }
-    }
-}
-/// RBC init message for payload distribution scaffolding.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcInit {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-    /// Epoch.
-    pub epoch: u64,
-    /// Commit roster snapshot for this RBC session.
-    pub roster: Vec<PeerId>,
-    /// Hash of the Norito-encoded roster snapshot.
-    pub roster_hash: Hash,
-    /// Total chunk count for the payload.
-    pub total_chunks: u32,
-    /// Payload chunk encoding.
-    pub encoding: RbcEncoding,
-    /// Configured shard/chunk size in bytes.
-    pub chunk_size_bytes: u32,
-    /// Canonical payload size before any RS16 padding.
-    pub payload_size_bytes: u64,
-    /// Data shards per RS16 stripe (`0` for plain chunking).
-    pub data_shards: u16,
-    /// Parity shards per RS16 stripe (`0` for plain chunking).
-    pub parity_shards: u16,
-    /// SHA-256 digests for each chunk (indexed by chunk position).
-    pub chunk_digests: Vec<[u8; 32]>,
-    /// Payload hash commitment (optional, when leader is also proposer).
-    pub payload_hash: Hash,
-    /// Merkle root of chunk digests for integrity proofs.
-    pub chunk_root: Hash,
-    /// Full block header used to recover signed payloads without `BlockCreated`.
-    pub block_header: BlockHeader,
-    /// Leader signature over the block header.
-    pub leader_signature: BlockSignature,
-}
-/// RBC payload chunk.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcChunk {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-    /// Epoch.
-    pub epoch: u64,
-    /// Chunk index (0-based).
-    pub idx: u32,
-    /// Chunk bytes.
-    pub bytes: Vec<u8>,
-}
-/// Request the RBC INIT scaffold for a specific `(block_hash, height, view)` session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcInitRequest {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-}
-/// Request missing RBC payload chunks for a specific `(block_hash, height, view)` session.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcChunkRequest {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-    /// Missing encoded chunk indices requested from the peer.
-    pub missing_indices: Vec<u32>,
-}
-/// RBC READY signal.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcReady {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-    /// Epoch.
-    pub epoch: u64,
-    /// Hash of the roster snapshot used to validate READY signatures.
-    pub roster_hash: Hash,
-    /// Merkle root of chunk digests for integrity proofs.
-    pub chunk_root: Hash,
-    /// Sender index within the active set.
-    pub sender: ValidatorIndex,
-    /// Signature authenticating the sender for this READY.
-    pub signature: Vec<u8>,
-}
-/// READY signature included with RBC DELIVER to seed quorum recovery.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcReadySignature {
-    /// Sender index within the active set.
-    pub sender: ValidatorIndex,
-    /// Signature authenticating the sender for this READY.
-    pub signature: Vec<u8>,
-}
-/// RBC DELIVER notification.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct RbcDeliver {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height.
-    pub height: Height,
-    /// View.
-    pub view: View,
-    /// Epoch.
-    pub epoch: u64,
-    /// Hash of the roster snapshot used to validate DELIVER signatures.
-    pub roster_hash: Hash,
-    /// Merkle root of chunk digests for integrity proofs.
-    pub chunk_root: Hash,
-    /// Sender index within the active set.
-    pub sender: ValidatorIndex,
-    /// Signature authenticating the sender for this DELIVER.
-    pub signature: Vec<u8>,
-    /// READY signatures observed by the sender for this session.
-    pub ready_signatures: Vec<RbcReadySignature>,
-}
 // --- Helpers for Norito slice decoding bridges ---
 fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
@@ -4727,17 +4397,9 @@ impl_decode_from_slice_via_codec!(Qc);
 impl_decode_from_slice_via_codec!(ExecKv);
 impl_decode_from_slice_via_codec!(ExecWitness);
 impl_decode_from_slice_via_codec!(Evidence);
-impl_decode_from_slice_via_codec!(EvidencePayload);
-impl_decode_from_slice_via_codec!(EvidenceKind);
 impl_decode_from_slice_via_codec!(ExecWitnessMsg);
 impl_decode_from_slice_via_codec!(VrfCommit);
 impl_decode_from_slice_via_codec!(VrfReveal);
-impl_decode_from_slice_via_codec!(Reconfig);
-impl_decode_from_slice_via_codec!(RbcInit);
-impl_decode_from_slice_via_codec!(RbcChunk);
-impl_decode_from_slice_via_codec!(RbcReady);
-impl_decode_from_slice_via_codec!(RbcReadySignature);
-impl_decode_from_slice_via_codec!(RbcDeliver);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);

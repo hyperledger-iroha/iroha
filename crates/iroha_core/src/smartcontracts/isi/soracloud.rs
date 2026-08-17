@@ -80,7 +80,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    confidential::ConfidentialStatus,
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         soracloud as isi,
@@ -16707,6 +16706,7 @@ mod tests {
             rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
         },
     };
+    use iroha_data_model::confidential::ConfidentialStatus;
     use iroha_data_model::{
         Encode,
         account::Account,
@@ -20403,6 +20403,47 @@ mod tests {
         ]
     }
     #[cfg(feature = "zk-stark")]
+    struct FullBootstrapAuditedProverCall<'a> {
+        params: &'a BfvParameters,
+        evaluation_keys: &'a BfvEvaluationKeyBundle,
+        transcript: &'a BfvEvaluationKeyRefreshTranscriptV1,
+        artifacts: &'a BfvFullBootstrapCircuitArtifactBundleV1,
+        input: &'a BfvIdentifierCiphertext,
+        output: &'a BfvIdentifierCiphertext,
+        bound_mode: BfvCiphertextBoundModeV1,
+        input_bound: u128,
+        output_bound: u128,
+        verifier_key: &'a iroha_data_model::proof::VerifyingKeyBox,
+        release_audit_package: &'a BfvFullBootstrapReleaseAuditPackageV1,
+        release_audit_package_digest: Hash,
+        reviewer_id: &'a str,
+        reviewer_public_key: &'a PublicKey,
+    }
+    #[cfg(feature = "zk-stark")]
+    impl FullBootstrapAuditedProverCall<'_> {
+        fn prove(
+            &self,
+        ) -> Result<Vec<SoracloudFheFullBootstrapExecutionProofV1>, InstructionExecutionError>
+        {
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                self.params,
+                self.evaluation_keys,
+                self.transcript,
+                self.artifacts,
+                self.input,
+                self.output,
+                self.bound_mode,
+                self.input_bound,
+                self.output_bound,
+                self.verifier_key,
+                self.release_audit_package,
+                self.release_audit_package_digest,
+                self.reviewer_id,
+                self.reviewer_public_key,
+            )
+        }
+    }
+    #[cfg(feature = "zk-stark")]
     fn signed_full_bootstrap_release_audit_package_with_artifact_bytes(
         params: &BfvParameters,
         evaluation_keys: &BfvEvaluationKeyBundle,
@@ -21369,10 +21410,13 @@ mod tests {
             .max(max_proof_len);
     }
     #[cfg(feature = "zk-stark")]
-    fn enable_full_bootstrap_proof_quotas<'a>(
+    fn enable_full_bootstrap_proof_quotas<I, P>(
         state_transaction: &mut StateTransaction<'_, '_>,
-        proofs: impl Iterator<Item = &'a SoracloudFheFullBootstrapExecutionProofV1>,
-    ) {
+        proofs: I,
+    ) where
+        I: Iterator<Item = P>,
+        P: std::ops::Deref<Target = SoracloudFheFullBootstrapExecutionProofV1>,
+    {
         let lengths = proofs
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
@@ -29368,87 +29412,48 @@ mod tests {
                 release_audit_material,
                 &artifacts,
             );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026-untrusted",
-                reviewer_key_pair.public_key(),
-            )
+        macro_rules! audited_prove {
+            ($($field:ident = $value:expr),* $(,)?) => {{
+                let mut call = FullBootstrapAuditedProverCall {
+                    params: &params,
+                    evaluation_keys: &evaluation_keys,
+                    transcript: &transcript,
+                    artifacts: &artifacts,
+                    input: &input,
+                    output: &output,
+                    bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    input_bound,
+                    output_bound,
+                    verifier_key: &vk_box,
+                    release_audit_package: &release_audit_package,
+                    release_audit_package_digest,
+                    reviewer_id: "sora-zk-audit-wg-2026",
+                    reviewer_public_key: reviewer_key_pair.public_key(),
+                };
+                $(call.$field = $value;)*
+                call.prove()
+            }};
+        }
+        let err = audited_prove!(reviewer_id = "sora-zk-audit-wg-2026-untrusted")
             .expect_err("trusted reviewer id drift must fail before proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "reviewer id");
         let other_reviewer_key_pair = checked_keypair();
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                other_reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(reviewer_public_key = other_reviewer_key_pair.public_key())
             .expect_err("trusted reviewer public key drift must fail before proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "reviewer public key");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                Hash::new(b"stale-execution-release-audit-package-digest"),
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err("release audit package digest drift must fail before proof generation");
+        let err = audited_prove!(
+            release_audit_package_digest =
+                Hash::new(b"stale-execution-release-audit-package-digest")
+        )
+        .expect_err("release audit package digest drift must fail before proof generation");
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
         let mut report_tamper_package = release_audit_package.clone();
         report_tamper_package
             .audit_report_bytes
             .extend_from_slice(b"; execution proof report byte tamper after signing");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &report_tamper_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &report_tamper_package)
             .expect_err("tampered audit report bytes must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
@@ -29456,23 +29461,7 @@ mod tests {
         archive_tamper_package
             .audit_evidence_archive_bytes
             .extend_from_slice(b"; execution proof archive byte tamper after signing");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &archive_tamper_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &archive_tamper_package)
             .expect_err("tampered audit archive bytes must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(
@@ -29483,26 +29472,15 @@ mod tests {
         let mut drifted_output = output.clone();
         drifted_output.slots[0].c0[0] =
             (drifted_output.slots[0].c0[0] + 1) % params.ciphertext_modulus;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &drifted_output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &wrong_vk_box,
-                &release_audit_package,
-                Hash::new(b"stale-execution-release-audit-package-digest-retargeted-output"),
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "release audit package digest drift must fail before output or verifier-key preflight",
-            );
+        let err = audited_prove!(
+            output = &drifted_output,
+            verifier_key = &wrong_vk_box,
+            release_audit_package_digest =
+                Hash::new(b"stale-execution-release-audit-package-digest-retargeted-output")
+        )
+        .expect_err(
+            "release audit package digest drift must fail before output or verifier-key preflight",
+        );
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
         for (digest, expected) in [
             (Hash::prehashed([0_u8; Hash::LENGTH]), "zero hash"),
@@ -29511,24 +29489,7 @@ mod tests {
                 "placeholder",
             ),
         ] {
-            let err =
-                prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                    &params,
-                    &evaluation_keys,
-                    &transcript,
-                    &artifacts,
-                    &input,
-                    &output,
-                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                    input_bound,
-                    output_bound,
-                    &vk_box,
-                    &release_audit_package,
-                    digest,
-                    "sora-zk-audit-wg-2026",
-                    reviewer_key_pair.public_key(),
-                )
-                .expect_err("noncanonical release audit package digest must fail before execution proof generation");
+            let err = audited_prove!(release_audit_package_digest = digest).expect_err("noncanonical release audit package digest must fail before execution proof generation");
             assert_invalid_parameter_contains(
                 err.clone(),
                 "release audit package failed validation",
@@ -29536,47 +29497,18 @@ mod tests {
             assert_invalid_parameter_contains(err, expected);
         }
         let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package.record_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "release audit record digest alias must fail before execution proof generation",
-            );
+            audited_prove!(release_audit_package_digest = release_audit_package.record_digest)
+                .expect_err(
+                    "release audit record digest alias must fail before execution proof generation",
+                );
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "distinct from package record digest");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package.manifest_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "release audit manifest digest alias must fail before execution proof generation",
-            );
+        let err = audited_prove!(
+            release_audit_package_digest = release_audit_package.manifest_digest
+        )
+        .expect_err(
+            "release audit manifest digest alias must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "distinct from package manifest digest");
         let mut stale_transcript = transcript.clone();
@@ -29586,48 +29518,15 @@ mod tests {
         )
         .expect("stale execution transcript keygen");
         stale_transcript.public_key = stale_public_key;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &stale_transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(transcript = &stale_transcript)
             .expect_err("stale transcript public key must fail before execution proof generation");
         assert_invalid_parameter_contains(err, "refresh transcript public-key digest");
         let mut rejected_manifest_package = release_audit_package.clone();
         rejected_manifest_package.manifest.verdict =
             iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditVerdictV1::Rejected;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &rejected_manifest_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "rejected release audit manifest must fail before execution proof generation",
-            );
+        let err = audited_prove!(release_audit_package = &rejected_manifest_package).expect_err(
+            "rejected release audit manifest must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "approved for release");
         let zero_report_package = signed_full_bootstrap_release_audit_package_with_artifact_bytes(
@@ -29638,23 +29537,7 @@ mod tests {
             valid_audit_archive_bytes.clone(),
             &reviewer_key_pair,
         );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &zero_report_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &zero_report_package)
             .expect_err("all-zero audit report must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "must not be all zero");
@@ -29666,23 +29549,7 @@ mod tests {
             vec![0_u8; 32],
             &reviewer_key_pair,
         );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &zero_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &zero_archive_package)
             .expect_err("all-zero audit archive must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "must not be all zero");
@@ -29695,23 +29562,7 @@ mod tests {
                 b"soracloud-core-full-bootstrap-audit-archive-without-header".to_vec(),
                 &reviewer_key_pair,
             );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &unheadered_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &unheadered_archive_package)
             .expect_err("unheadered audit archive must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "canonical v1 header");
@@ -29727,23 +29578,7 @@ mod tests {
                 zero_body_archive_bytes,
                 &reviewer_key_pair,
             );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &zero_body_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &zero_body_archive_package)
             .expect_err("zero-body audit archive must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "body must not be all zero");
@@ -29763,23 +29598,7 @@ mod tests {
                 blank_body_archive_bytes,
                 &reviewer_key_pair,
             );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &blank_body_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &blank_body_archive_package)
             .expect_err("blank audit archive must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "body must not be blank");
@@ -29808,24 +29627,7 @@ mod tests {
             format!("{err:?}").contains("placeholder audit artifact"),
             "unexpected delayed placeholder package error: {err:?}"
         );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &delayed_placeholder_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err("delayed placeholder audit archive package must fail before execution proof generation");
+        let err = audited_prove!(release_audit_package = &delayed_placeholder_archive_package).expect_err("delayed placeholder audit archive package must fail before execution proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "placeholder audit artifact");
         for sentinel in [
@@ -29853,24 +29655,7 @@ mod tests {
                     delayed_sentinel_archive_bytes,
                     &reviewer_key_pair,
                 );
-            let err =
-                prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                    &params,
-                    &evaluation_keys,
-                    &transcript,
-                    &artifacts,
-                    &input,
-                    &output,
-                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                    input_bound,
-                    output_bound,
-                    &vk_box,
-                    &delayed_sentinel_archive_package,
-                    release_audit_package_digest,
-                    "sora-zk-audit-wg-2026",
-                    reviewer_key_pair.public_key(),
-                )
-                .expect_err("delayed non-production audit archive package must fail before execution proof generation");
+            let err = audited_prove!(release_audit_package = &delayed_sentinel_archive_package).expect_err("delayed non-production audit archive package must fail before execution proof generation");
             assert_invalid_parameter_contains(
                 err.clone(),
                 "release audit package failed validation",
@@ -29897,23 +29682,7 @@ mod tests {
                 delayed_nested_archive_bytes,
                 &reviewer_key_pair,
             );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &delayed_nested_archive_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &delayed_nested_archive_package)
             .expect_err(
                 "delayed nested archive header must fail before execution proof generation",
             );
@@ -29941,26 +29710,9 @@ mod tests {
             copied_body_archive_bytes,
             &reviewer_key_pair,
         );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &copied_body_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "copied audit report/archive bodies must fail before execution proof generation",
-            );
+        let err = audited_prove!(release_audit_package = &copied_body_package).expect_err(
+            "copied audit report/archive bodies must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "distinct from evidence archive body");
         let (other_secret_key, _other_public_key, _other_relinearization_key) =
@@ -29983,23 +29735,7 @@ mod tests {
             &other_artifacts,
             &reviewer_key_pair,
         );
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &stale_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(release_audit_package = &stale_package)
             .expect_err("stale release audit package must fail before proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(
@@ -30031,25 +29767,31 @@ mod tests {
                 &artifacts,
                 &reviewer_key_pair,
             );
+        macro_rules! audited_prove {
+            ($($field:ident = $value:expr),* $(,)?) => {{
+                let mut call = FullBootstrapAuditedProverCall {
+                    params: &params,
+                    evaluation_keys: &evaluation_keys,
+                    transcript: &transcript,
+                    artifacts: &artifacts,
+                    input: &input,
+                    output: &output,
+                    bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    input_bound,
+                    output_bound,
+                    verifier_key: &vk_box,
+                    release_audit_package: &release_audit_package,
+                    release_audit_package_digest,
+                    reviewer_id: "sora-zk-audit-wg-2026",
+                    reviewer_public_key: reviewer_key_pair.public_key(),
+                };
+                $(call.$field = $value;)*
+                call.prove()
+            }};
+        }
         let mut missing_bootstrap_keys = evaluation_keys.clone();
         missing_bootstrap_keys.bootstrap_key = None;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &missing_bootstrap_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(evaluation_keys = &missing_bootstrap_keys)
             .expect_err("missing bootstrap key must fail before execution proof generation");
         assert_invalid_parameter_contains(err, "requires bootstrap key material");
         let mut refresh_only_keys = evaluation_keys.clone();
@@ -30058,23 +29800,7 @@ mod tests {
             .as_mut()
             .expect("sample carries bootstrap key")
             .mode = BfvBootstrapKeyMode::RefreshOnlyV1;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &refresh_only_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(evaluation_keys = &refresh_only_keys)
             .expect_err("refresh-only bootstrap key must fail before execution proof generation");
         assert_invalid_parameter_contains(err, "requires FullBootstrapV1 bootstrap key material");
         let mut missing_material_keys = evaluation_keys.clone();
@@ -30083,23 +29809,7 @@ mod tests {
             .as_mut()
             .expect("sample carries bootstrap key")
             .full_bootstrap_material = None;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &missing_material_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(evaluation_keys = &missing_material_keys)
             .expect_err("missing governed material must fail before execution proof generation");
         assert_invalid_parameter_contains(err, "requires governed full-bootstrap material");
         let mut missing_public_key_digest_keys = evaluation_keys.clone();
@@ -30108,26 +29818,9 @@ mod tests {
             .as_mut()
             .expect("sample carries bootstrap key")
             .public_key_digest = None;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &missing_public_key_digest_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "missing governed public-key digest must fail before execution proof generation",
-            );
+        let err = audited_prove!(evaluation_keys = &missing_public_key_digest_keys).expect_err(
+            "missing governed public-key digest must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err, "requires governed bootstrap public-key digest");
         let mut stale_public_key_digest_keys = evaluation_keys.clone();
         stale_public_key_digest_keys
@@ -30135,26 +29828,9 @@ mod tests {
             .as_mut()
             .expect("sample carries bootstrap key")
             .public_key_digest = Some(Hash::new(b"stale-execution-governed-bootstrap-public-key"));
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &stale_public_key_digest_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "stale governed public-key digest must fail before execution proof generation",
-            );
+        let err = audited_prove!(evaluation_keys = &stale_public_key_digest_keys).expect_err(
+            "stale governed public-key digest must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err, "refresh transcript public-key digest");
         let mut malformed_bootstrap_key_entries = evaluation_keys.clone();
         malformed_bootstrap_key_entries
@@ -30162,26 +29838,9 @@ mod tests {
             .as_mut()
             .expect("sample carries bootstrap key")
             .max_refresh_rounds = 1;
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &malformed_bootstrap_key_entries,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "malformed governed bootstrap-key entries must fail before execution proof generation",
-            );
+        let err = audited_prove!(evaluation_keys = &malformed_bootstrap_key_entries).expect_err(
+            "malformed governed bootstrap-key entries must fail before execution proof generation",
+        );
         assert_invalid_parameter_contains(err, "max_refresh_rounds");
         let mut malformed_zero_refresh_entries = evaluation_keys.clone();
         malformed_zero_refresh_entries
@@ -30191,26 +29850,7 @@ mod tests {
             .zero_refresh
             .c0
             .push(1);
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &malformed_zero_refresh_entries,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "malformed governed bootstrap-key zero-refresh entries must fail before execution proof generation",
-            );
+        let err = audited_prove!(evaluation_keys = &malformed_zero_refresh_entries).expect_err("malformed governed bootstrap-key zero-refresh entries must fail before execution proof generation");
         assert_invalid_parameter_contains(
             err,
             "must not carry encrypted-zero zero_refresh material",
@@ -30218,23 +29858,7 @@ mod tests {
         let mut all_zero_seed_transcript = transcript.clone();
         all_zero_seed_transcript.rotation_transcripts[0].seed =
             vec![0; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES];
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &all_zero_seed_transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(transcript = &all_zero_seed_transcript)
             .expect_err("all-zero transcript seed must fail before execution proof generation");
         assert_invalid_parameter_contains(
             err.clone(),
@@ -30245,22 +29869,7 @@ mod tests {
         stale_package_with_all_zero_transcript.record_digest =
             Hash::new(b"stale-execution-package-digest-behind-transcript-inventory-error");
         let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &all_zero_seed_transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &stale_package_with_all_zero_transcript,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &stale_package_with_all_zero_transcript)
             .expect_err(
                 "malformed transcript inventory must fail before stale execution release package validation",
             );
@@ -30278,45 +29887,12 @@ mod tests {
         stale_transcript_body.rotation_transcripts[0]
             .seed
             .extend_from_slice(b"-stale-execution-audited-prover");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &stale_transcript_body,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
+        let err = audited_prove!(transcript = &stale_transcript_body)
             .expect_err("stale transcript body must fail before execution proof generation");
         assert_invalid_parameter_contains(err, "refresh transcript failed exact-lift validation");
-        let err =
-            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                BfvCiphertextBoundModeV1::BoundedNoise,
-                input_bound,
-                output_bound,
-                &vk_box,
-                &release_audit_package,
-                release_audit_package_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            )
-            .expect_err(
-                "bounded-noise execution proof generation must reject exact-lift release transcripts",
-            );
+        let err = audited_prove!(bound_mode = BfvCiphertextBoundModeV1::BoundedNoise).expect_err(
+            "bounded-noise execution proof generation must reject exact-lift release transcripts",
+        );
         assert_invalid_parameter_contains(
             err,
             "refresh transcript failed bounded-noise validation",

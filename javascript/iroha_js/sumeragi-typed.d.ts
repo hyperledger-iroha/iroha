@@ -1,6 +1,7 @@
 import type {
   ToriiSumeragiDiagnostics,
   ToriiSumeragiStatus,
+  ToriiSumeragiV2QcResponse,
 } from "./index.js";
 
 /** Maximum bytes accepted from the typed Sumeragi status endpoint. */
@@ -20,6 +21,9 @@ export function parseSumeragiStatusPayload(payload: unknown): ToriiSumeragiStatu
 export function parseSumeragiDiagnosticsPayload(
   payload: unknown,
 ): ToriiSumeragiDiagnostics;
+export function parseSumeragiV2QcResponse(
+  payload: unknown,
+): ToriiSumeragiV2QcResponse;
 
 /** Native-AMX fixture resealing helpers used by the direct typed-parser tests. */
 export const __sumeragiNativeAmxTestHelpers: Readonly<{

@@ -682,6 +682,8 @@ jobs:
           QUALIFICATION_SOURCE_RESET_BUNDLE_SHA256: ${{ vars.TAIRA_QUALIFICATION_SOURCE_RESET_BUNDLE_SHA256 }}
           QUALIFICATION_GENESIS_SIGNER_PATH: ${{ vars.TAIRA_QUALIFICATION_GENESIS_SIGNER_PATH }}
           QUALIFICATION_GENESIS_SIGNER_SHA256: ${{ vars.TAIRA_QUALIFICATION_GENESIS_SIGNER_SHA256 }}
+          TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}
+          TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
           TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
           TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
           TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
@@ -731,6 +733,8 @@ jobs:
             --privacy-release-dir "$privacy" \
             --genesis-external-signer "$QUALIFICATION_GENESIS_SIGNER_PATH" \
             --trusted-genesis-external-signer-sha256 "$QUALIFICATION_GENESIS_SIGNER_SHA256" \
+            --authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" \
+            --trusted-authenticated-tool-controller-sha256 "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" \
             --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" \
             --irohad-sha256 "$binary_sha" --source-commit "$source_commit" \
             --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
@@ -1014,6 +1018,8 @@ jobs:
           TAIRA_MACOS_RESET_STAGING_ROOT: ${{ vars.TAIRA_MACOS_RESET_STAGING_ROOT }}
           TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH }}
           TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256: ${{ vars.TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256 }}
+          TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}
+          TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
           TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
           TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
           TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH: ${{ vars.TAIRA_BOI_QUALIFICATION_SIGNING_PUBLIC_KEY_PATH }}
@@ -1057,7 +1063,7 @@ jobs:
           test "$(cd "$TAIRA_MACOS_RESET_STAGING_ROOT" && pwd -P)" = "$TAIRA_MACOS_RESET_STAGING_ROOT"
           reset="$TAIRA_MACOS_RESET_STAGING_ROOT/taira-${source_commit}-${dpn_commit}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           test ! -e "$reset"; binary_sha="$(shasum -a 256 "$mac_stage/bin/iroha3d" | awk '{print $1}')"
-          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" --source-bundle-sha256 "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256" --privacy-release-dir "$privacy/release" --genesis-external-signer "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH" --trusted-genesis-external-signer-sha256 "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256" --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" --irohad-sha256 "$binary_sha" --source-commit "$source_commit" --dpn-validator-release-commit "$dpn_commit" --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" --output-bundle "$reset"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" --source-bundle-sha256 "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256" --privacy-release-dir "$privacy/release" --genesis-external-signer "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH" --trusted-genesis-external-signer-sha256 "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256" --authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" --trusted-authenticated-tool-controller-sha256 "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" --irohad-sha256 "$binary_sha" --source-commit "$source_commit" --dpn-validator-release-commit "$dpn_commit" --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" --output-bundle "$reset"
           production_manifest_sha="$(shasum -a 256 "$reset/reset-manifest.json" | awk '{print $1}')"
           supervisor="$TAIRA_CONTROLLER_ROOT/scripts/taira_peer_supervisor.py"
           candidate_archive="$(find "$candidate_stage/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"; receipt_id="$(tr -d '\n' <"$candidate_stage/receipt-id")"

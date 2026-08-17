@@ -123,13 +123,22 @@ fn scoped_permission_route_remains_coordinator_with_other_private_targets() {
     assert_eq!(
         router
             .try_route_plan_without_state(&tx)
-            .expect("explicit permission scope should not require world state"),
-        Some(expected.clone()),
+            .expect("state deferral should be deterministic"),
+        None,
+        "textual domain routing must wait for SNS state",
     );
     assert_eq!(
         router
             .try_route_plan(&tx)
             .expect("permission route should coordinate the native AMX plan"),
+        expected,
+    );
+    let state = blank_state();
+    install_router_nexus(&state, &router);
+    assert_eq!(
+        router
+            .try_route_plan_with_state(&tx, &state)
+            .expect("state-backed permission route should resolve"),
         expected,
     );
 
@@ -293,11 +302,8 @@ fn strict_scoped_permission_decision_apis_match_full_plan_rejection() {
 
     assert_eq!(router.try_route(&tx), Err(expected_error()));
     assert_eq!(router.try_route_plan(&tx), Err(expected_error()));
-    assert_eq!(router.try_route_without_state(&tx), Err(expected_error()));
-    assert_eq!(
-        router.try_route_plan_without_state(&tx),
-        Err(expected_error())
-    );
+    assert_eq!(router.try_route_without_state(&tx), Ok(None));
+    assert_eq!(router.try_route_plan_without_state(&tx), Ok(None));
     assert_eq!(
         evaluate_policy_with_catalog(&policy, &lane_catalog, &dataspace_catalog, &tx),
         Err(expected_error())
@@ -647,6 +653,103 @@ fn mixed_native_and_contract_batch_preserves_all_dataspace_targets() {
         )
     );
 }
+
+#[test]
+fn account_permission_and_contract_batch_preserves_all_dataspace_targets() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let (holder_id, _) = gen_account_in("wonderland");
+    let holder_dataspace = DataSpaceId::new(7);
+    let contract_dataspace = DataSpaceId::new(9);
+    let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
+    let permission = Permission::from(CanRegisterTrigger {
+        authority: holder_id.clone(),
+    });
+    let executable = Executable::Batch(
+        vec![
+            ExecutableBatchItem::Instruction(InstructionBox::from(Grant::account_permission(
+                permission,
+                holder_id.clone(),
+            ))),
+            ExecutableBatchItem::ContractCall(sample_contract_invocation(
+                &authority_id,
+                contract_dataspace,
+                78,
+            )),
+        ]
+        .into(),
+    );
+    let mut holder_scope = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+    holder_scope.ensure_dataspace(holder_dataspace);
+    let state = state_with_account_scope_entries(&[(holder_id, holder_scope)], catalog.clone());
+    install_router_nexus(&state, &router);
+    let expected = RoutingPlan::native_amx(
+        RoutingDecision::new(LaneId::new(2), holder_dataspace),
+        vec![
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(2), holder_dataspace),
+                RouteLegRole::Participant,
+            ),
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(4), contract_dataspace),
+                RouteLegRole::Participant,
+            ),
+        ],
+    );
+    let tx = sample_executable_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        executable.clone(),
+    );
+    let state_view = state.view();
+    assert_eq!(
+        router
+            .try_route_plan_with_view(&tx, &state_view)
+            .expect("mixed account-permission and contract batch should build an AMX plan"),
+        expected
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &catalog,
+            &tx,
+            state_view.world(),
+        )
+        .expect("block routing should match queue routing for a mixed permission batch"),
+        expected
+    );
+
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+        iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+    );
+    let strict_tx = sample_executable_transaction_with_metadata(
+        &authority_id,
+        authority_keypair.private_key(),
+        executable,
+        metadata,
+    );
+    let expected_error = RoutingResolveError::ConflictingTransactionDataspaceTargets {
+        first_dataspace_id: holder_dataspace,
+        second_dataspace_id: contract_dataspace,
+    };
+    assert_eq!(
+        router.try_route_plan_with_view(&strict_tx, &state_view),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &catalog,
+            &strict_tx,
+            state_view.world(),
+        ),
+        Err(expected_error)
+    );
+}
+
 #[test]
 fn primary_alias_compare_and_set_across_dataspaces_builds_native_amx_plan() {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -1407,8 +1510,12 @@ fn account_rule_takes_precedence_over_transfer_destination_rule() {
         catalog,
     );
     install_router_nexus(&state, &router);
-    let uae_decision = router.route_with_view(&uae_tx, &state.view());
-    let bank_decision = router.route_with_view(&bank_tx, &state.view());
+    let uae_decision = router
+        .try_route_with_view(&uae_tx, &state.view())
+        .expect("UAE routing should resolve");
+    let bank_decision = router
+        .try_route_with_view(&bank_tx, &state.view())
+        .expect("bank routing should resolve");
     assert_eq!(uae_decision.lane_id, LaneId::new(2));
     assert_eq!(bank_decision.lane_id, LaneId::new(1));
 }
@@ -1466,11 +1573,15 @@ fn matches_dataspace_root_account_alias_scope_rule() {
     );
     install_router_nexus(&state, &router);
     assert_eq!(
-        router.route_with_view(&dataspace_tx, &state.view()),
+        router
+            .try_route_with_view(&dataspace_tx, &state.view())
+            .expect("dataspace alias routing should resolve"),
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
     );
     assert_eq!(
-        router.route_with_view(&domain_tx, &state.view()),
+        router
+            .try_route_with_view(&domain_tx, &state.view())
+            .expect("domain alias routing should resolve"),
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
     );
 }
@@ -1566,7 +1677,9 @@ fn legacy_bare_domain_account_scope_does_not_match() {
         catalog,
     );
     assert_eq!(
-        router.route_with_view(&tx, &state.view()),
+        router
+            .try_route_with_view(&tx, &state.view())
+            .expect("default routing should resolve"),
         RoutingDecision::default()
     );
 }

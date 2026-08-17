@@ -13,8 +13,14 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
     isi::{
-        Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
+        Burn, BurnBox, Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
+        Transfer, TransferBox,
         asset_alias::SetAssetDefinitionAlias,
+        governance::RegisterCitizen,
+        nexus::{
+            ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+            EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
+        },
         offline::ActivateKagemushaRecursiveReleaseV4,
         verifying_keys::{self, RegisterVerifyingKey},
         zk::RegisterZkAsset,
@@ -428,7 +434,7 @@ struct TairaGenesisInventory {
     accounts: BTreeSet<AccountId>,
     asset_scales: BTreeMap<AssetDefinitionId, Option<u32>>,
     asset_names: BTreeMap<AssetDefinitionId, String>,
-    asset_mints: Vec<(AssetId, Quantity)>,
+    online_backing_balances: BTreeMap<AssetId, Quantity>,
     verifier_ids: BTreeSet<VerifyingKeyId>,
     verifier_circuit_versions: BTreeSet<(String, u32)>,
     zk_assets: BTreeSet<AssetDefinitionId>,
@@ -437,7 +443,10 @@ struct TairaGenesisInventory {
     has_recursive_activation: bool,
 }
 impl TairaGenesisInventory {
-    fn from_genesis(genesis: &RawGenesisTransaction) -> Result<Self> {
+    fn from_genesis(
+        genesis: &RawGenesisTransaction,
+        online_backing_definition: &AssetDefinitionId,
+    ) -> Result<Self> {
         let ds_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
             .parse()
             .expect("static Taira offline alias");
@@ -445,7 +454,7 @@ impl TairaGenesisInventory {
             accounts: BTreeSet::new(),
             asset_scales: BTreeMap::new(),
             asset_names: BTreeMap::new(),
-            asset_mints: Vec::new(),
+            online_backing_balances: BTreeMap::new(),
             verifier_ids: BTreeSet::new(),
             verifier_circuit_versions: BTreeSet::new(),
             zk_assets: BTreeSet::new(),
@@ -454,6 +463,11 @@ impl TairaGenesisInventory {
             has_recursive_activation: false,
         };
         for instruction in genesis.instructions() {
+            apply_online_backing_balance_instruction(
+                &mut inventory.online_backing_balances,
+                online_backing_definition,
+                instruction,
+            )?;
             if instruction
                 .as_any()
                 .downcast_ref::<ActivateKagemushaRecursiveReleaseV4>()
@@ -490,12 +504,6 @@ impl TairaGenesisInventory {
                 }
                 continue;
             }
-            if let Some(MintBox::Asset(mint)) = instruction.as_any().downcast_ref::<MintBox>() {
-                inventory
-                    .asset_mints
-                    .push((mint.destination().clone(), mint.object().clone()));
-                continue;
-            }
             let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
                 continue;
             };
@@ -518,6 +526,145 @@ impl TairaGenesisInventory {
         Ok(inventory)
     }
 }
+fn set_online_backing_balance(
+    balances: &mut BTreeMap<AssetId, Quantity>,
+    asset_id: AssetId,
+    quantity: Quantity,
+) {
+    if quantity.is_zero() {
+        balances.remove(&asset_id);
+    } else {
+        balances.insert(asset_id, quantity);
+    }
+}
+fn apply_online_backing_balance_instruction(
+    balances: &mut BTreeMap<AssetId, Quantity>,
+    online_backing_definition: &AssetDefinitionId,
+    instruction: &InstructionBox,
+) -> Result<()> {
+    if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
+        if let MintBox::Asset(mint) = mint
+            && mint.destination().definition() == online_backing_definition
+        {
+            let destination = mint.destination().clone();
+            let next = balances
+                .get(&destination)
+                .cloned()
+                .unwrap_or_else(Quantity::zero)
+                .checked_add(mint.object())
+                .wrap_err("online backing mint overflows the canonical quantity range")?;
+            set_online_backing_balance(balances, destination, next);
+        }
+        return Ok(());
+    }
+    if let Some(burn) = instruction.as_any().downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(burn) = burn
+            && burn.destination().definition() == online_backing_definition
+        {
+            let destination = burn.destination().clone();
+            let next = balances
+                .get(&destination)
+                .cloned()
+                .ok_or_else(|| eyre!("online backing burn references an absent source balance"))?
+                .checked_sub(burn.object())
+                .wrap_err("online backing burn exceeds the derived source balance")?;
+            set_online_backing_balance(balances, destination, next);
+        }
+        return Ok(());
+    }
+    if let Some(transfer) = instruction.as_any().downcast_ref::<TransferBox>() {
+        if let TransferBox::Asset(transfer) = transfer
+            && transfer.source().definition() == online_backing_definition
+        {
+            let source = transfer.source().clone();
+            let destination = AssetId::new(
+                online_backing_definition.clone(),
+                transfer.destination().clone(),
+            );
+            let source_after = balances
+                .get(&source)
+                .cloned()
+                .ok_or_else(|| {
+                    eyre!("online backing transfer references an absent source balance")
+                })?
+                .checked_sub(transfer.object())
+                .wrap_err("online backing transfer exceeds the derived source balance")?;
+            if source == destination {
+                let restored = source_after
+                    .checked_add(transfer.object())
+                    .wrap_err("online backing self-transfer overflows the source quantity")?;
+                set_online_backing_balance(balances, source, restored);
+            } else {
+                let destination_after = balances
+                    .get(&destination)
+                    .cloned()
+                    .unwrap_or_else(Quantity::zero)
+                    .checked_add(transfer.object())
+                    .wrap_err("online backing transfer overflows the destination quantity")?;
+                set_online_backing_balance(balances, source, source_after);
+                set_online_backing_balance(balances, destination, destination_after);
+            }
+        }
+        return Ok(());
+    }
+    if instruction
+        .as_any()
+        .downcast_ref::<RegisterBox>()
+        .is_some_and(|register| matches!(register, RegisterBox::Trigger(_)))
+    {
+        bail!("cannot prove final online backing liquidity across a registered executable trigger");
+    }
+    if let Some(fund) = instruction.as_any().downcast_ref::<FundFeeSponsorProgram>() {
+        if fund.asset_definition_id() == online_backing_definition {
+            bail!(
+                "cannot prove online backing liquidity across a fee-sponsor vault funding instruction for the backing asset"
+            );
+        }
+        return Ok(());
+    }
+    if instruction
+        .as_any()
+        .downcast_ref::<ActivateKagemushaRecursiveReleaseV4>()
+        .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<RegisterVerifyingKey>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<RegisterZkAsset>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+            .is_some()
+        || instruction.as_any().downcast_ref::<GrantBox>().is_some()
+        || instruction.as_any().downcast_ref::<RegisterBox>().is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<RegisterCitizen>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<CreateFeeSponsorProgram>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<StageFeeSponsorProgramRevision>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+            .is_some()
+        || instruction
+            .as_any()
+            .downcast_ref::<EnrollFeeSponsorBeneficiary>()
+            .is_some()
+    {
+        return Ok(());
+    }
+    bail!("cannot prove final online backing liquidity across an unsupported genesis instruction")
+}
 fn register_account_if_missing(
     accounts: &mut BTreeSet<AccountId>,
     instructions: &mut Vec<InstructionBox>,
@@ -530,10 +677,10 @@ fn register_account_if_missing(
     true
 }
 fn has_nonzero_online_backing_source(
-    asset_mints: &[(AssetId, Quantity)],
+    asset_balances: &BTreeMap<AssetId, Quantity>,
     asset_definition_id: &AssetDefinitionId,
 ) -> bool {
-    asset_mints.iter().any(|(asset_id, quantity)| {
+    asset_balances.iter().any(|(asset_id, quantity)| {
         asset_id.definition() == asset_definition_id && !quantity.is_zero()
     })
 }
@@ -628,7 +775,7 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     let asset_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
         .parse()
         .expect("static Taira offline alias");
-    let mut inventory = TairaGenesisInventory::from_genesis(&genesis)?;
+    let mut inventory = TairaGenesisInventory::from_genesis(&genesis, &asset_definition_id)?;
     // `irohad` creates the genesis signer account in the otherwise-empty
     // world before it executes height one. Treat that implicit account as
     // existing so this transaction cannot duplicate its registration.
@@ -676,7 +823,8 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     if inventory.zk_assets.contains(&asset_definition_id) {
         bail!("source genesis already registers the Taira offline asset as a ZK asset");
     }
-    if !has_nonzero_online_backing_source(&inventory.asset_mints, &asset_definition_id) {
+    if !has_nonzero_online_backing_source(&inventory.online_backing_balances, &asset_definition_id)
+    {
         bail!(
             "canonical Taira offline asset has no non-zero online source liquidity; at least one funded account is required before the exact-network escrow is materialized"
         );
@@ -836,7 +984,15 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{ChainId, offline::offline_escrow_account_id};
+    use iroha_data_model::{
+        ChainId,
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        offline::offline_escrow_account_id,
+        trigger::{
+            Trigger, TriggerId,
+            action::{Action, Repeats},
+        },
+    };
     fn test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
@@ -924,10 +1080,10 @@ mod tests {
             .expect("migrate checked-in Taira asset identity");
         let genesis: RawGenesisTransaction = norito::json::value::from_value(manifest)
             .expect("decode migrated checked-in Taira genesis");
-        let inventory =
-            TairaGenesisInventory::from_genesis(&genesis).expect("inventory migrated genesis");
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
+        let inventory = TairaGenesisInventory::from_genesis(&genesis, &definition)
+            .expect("inventory migrated genesis");
         assert_eq!(
             inventory.asset_names.get(&definition).map(String::as_str),
             Some(PUBLIC_TAIRA_OFFLINE_ASSET_NAME)
@@ -938,7 +1094,7 @@ mod tests {
         );
         assert_eq!(inventory.ds_alias_binding.as_ref(), Some(&definition));
         assert!(has_nonzero_online_backing_source(
-            &inventory.asset_mints,
+            &inventory.online_backing_balances,
             &definition,
         ));
     }
@@ -1044,14 +1200,108 @@ mod tests {
         let holder = test_account(0x42);
         let zero_holder = AssetId::new(definition.clone(), holder.clone());
         let funded_holder = AssetId::new(definition.clone(), holder);
+        let zero_balances = BTreeMap::from([(zero_holder, Quantity::zero())]);
+        let funded_balances = BTreeMap::from([(funded_holder, Quantity::from(100_u32))]);
         assert!(!has_nonzero_online_backing_source(
-            &[(zero_holder, Quantity::zero())],
+            &zero_balances,
             &definition,
         ));
         assert!(has_nonzero_online_backing_source(
-            &[(funded_holder, Quantity::from(100_u32))],
+            &funded_balances,
             &definition,
         ));
+    }
+    #[test]
+    fn backing_source_uses_final_ordered_balance_not_historical_mints() {
+        let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
+            .expect("static Taira asset definition");
+        let source = AssetId::new(definition.clone(), test_account(0x43));
+        let destination_account = test_account(0x44);
+        let destination = AssetId::new(definition.clone(), destination_account.clone());
+        let mut balances = BTreeMap::new();
+        for instruction in [
+            InstructionBox::from(Mint::asset_quantity(100_u32, source.clone())),
+            InstructionBox::from(Transfer::asset_quantity(
+                source.clone(),
+                40_u32,
+                destination_account,
+            )),
+            InstructionBox::from(Burn::asset_quantity(60_u32, source.clone())),
+        ] {
+            apply_online_backing_balance_instruction(&mut balances, &definition, &instruction)
+                .expect("ordered transparent balance instruction is supported");
+        }
+        assert_eq!(balances.get(&source), None);
+        assert_eq!(balances.get(&destination), Some(&Quantity::from(40_u32)));
+        assert!(has_nonzero_online_backing_source(&balances, &definition));
+
+        let final_burn = InstructionBox::from(Burn::asset_quantity(40_u32, destination));
+        apply_online_backing_balance_instruction(&mut balances, &definition, &final_burn)
+            .expect("final burn is supported");
+        assert!(
+            !has_nonzero_online_backing_source(&balances, &definition),
+            "a fully burned historical mint must not produce a green backing result"
+        );
+    }
+    #[test]
+    fn backing_balance_underflow_fails_without_mutation() {
+        let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
+            .expect("static Taira asset definition");
+        let holder = AssetId::new(definition.clone(), test_account(0x45));
+        let mut balances = BTreeMap::from([(holder.clone(), Quantity::from(5_u32))]);
+        let before = balances.clone();
+        let burn = InstructionBox::from(Burn::asset_quantity(6_u32, holder));
+        let error = apply_online_backing_balance_instruction(&mut balances, &definition, &burn)
+            .expect_err("derived backing balance underflow must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds the derived source balance")
+        );
+        assert_eq!(balances, before);
+    }
+    #[test]
+    fn backing_self_transfer_checks_source_balance_without_mutation() {
+        let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
+            .expect("static Taira asset definition");
+        let holder = test_account(0x46);
+        let source = AssetId::new(definition.clone(), holder.clone());
+        let mut balances = BTreeMap::from([(source.clone(), Quantity::from(5_u32))]);
+        let before = balances.clone();
+        let transfer = InstructionBox::from(Transfer::asset_quantity(source, 6_u32, holder));
+        let error = apply_online_backing_balance_instruction(&mut balances, &definition, &transfer)
+            .expect_err("an underfunded self-transfer must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds the derived source balance")
+        );
+        assert_eq!(balances, before);
+    }
+    #[test]
+    fn backing_projection_rejects_registered_executable_triggers() {
+        let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
+            .expect("static Taira asset definition");
+        let authority = test_account(0x47);
+        let source = AssetId::new(definition.clone(), authority.clone());
+        let trigger_id: TriggerId = "backing_balance_mutator"
+            .parse()
+            .expect("static trigger identifier");
+        let action = Action::new(
+            vec![InstructionBox::from(Burn::asset_quantity(1_u32, source))],
+            Repeats::Indefinitely,
+            authority.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id.clone())
+                .under_authority(authority),
+        )
+        .expect("trigger action fixture is structurally valid");
+        let register = InstructionBox::from(Register::trigger(Trigger::new(trigger_id, action)));
+        let mut balances = BTreeMap::new();
+        let error = apply_online_backing_balance_instruction(&mut balances, &definition, &register)
+            .expect_err("executable genesis triggers must fail closed");
+        assert!(error.to_string().contains("executable trigger"));
+        assert!(balances.is_empty());
     }
     #[test]
     fn taira_cadence_accepts_legacy_input_but_rejects_unknown_conflicts() {

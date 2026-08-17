@@ -1896,7 +1896,7 @@ fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
 }
 fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
     let mut params = Parameters::default();
-    for tx in genesis.0.transactions_vec() {
+    for tx in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = tx.instructions() else {
             continue;
         };
@@ -2047,7 +2047,7 @@ fn audit_npos_genesis_preflight(
 ) -> Result<NposGenesisPreflightSummary> {
     let min_self_bond = npos_min_self_bond_from_genesis(genesis);
     let mut instructions = Vec::<InstructionBox>::new();
-    for tx in genesis.0.transactions_vec() {
+    for tx in genesis.0.external_transactions() {
         let Executable::Instructions(tx_instructions) = tx.instructions() else {
             continue;
         };
@@ -7939,7 +7939,7 @@ mod tests {
         let mut bootstrap_tx_index = None;
         let mut validator_tx_index = None;
         let mut tx_index = 0usize;
-        for tx in network.genesis().0.transactions_vec() {
+        for tx in network.genesis().0.external_transactions() {
             let Executable::Instructions(instructions) = tx.instructions() else {
                 tx_index = tx_index.saturating_add(1);
                 continue;
@@ -8024,13 +8024,7 @@ mod tests {
         let network = make_network_builder(&config, genesis)?.build();
         let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
         let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
-        for (tx_index, tx) in network
-            .genesis()
-            .0
-            .transactions_vec()
-            .into_iter()
-            .enumerate()
-        {
+        for (tx_index, tx) in network.genesis().0.external_transactions().enumerate() {
             let Executable::Instructions(instructions) = tx.instructions() else {
                 continue;
             };
@@ -12086,7 +12080,7 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-        let tx_count = network.genesis().0.transactions_vec().len();
+        let tx_count = network.genesis().0.external_transactions().len();
         assert!(
             (1..=16).contains(&tx_count),
             "NPoS genesis must fit Iroha's startup validation cap; got {tx_count} transactions"

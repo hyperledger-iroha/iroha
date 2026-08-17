@@ -465,7 +465,6 @@ fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
 fn decode_transaction_receipt_json_roundtrip() {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
-        tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
         entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
         signed_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xB6; 32]))),
         submitted_at_ms: 42,

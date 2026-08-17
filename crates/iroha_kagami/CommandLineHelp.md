@@ -532,7 +532,7 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 Build one release-bound activation instruction from an authenticated V4 catalog
 
-**Usage:** `kagami kagemusha prepare-activation-v4 --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --output <OUTPUT>`
+**Usage:** `kagami kagemusha prepare-activation-v4 --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
 
 ###### **Options:**
 
@@ -541,7 +541,8 @@ Build one release-bound activation instruction from an authenticated V4 catalog
 * `--manifest-sha256 <MANIFEST_SHA256>` — Exact lowercase SHA-256 directory name of the release to activate
 * `--verifier-version <VERIFIER_VERSION>` — Next atomic Eq/Ep verifier version observed from live consensus state
 * `--device-attestation-policy <DEVICE_ATTESTATION_POLICY>` — Exact governed verifier policy derived from authenticated physical-device evidence. The policy and release are embedded in one composite consensus instruction
-* `--output <OUTPUT>` — New private file receiving a JSON array accepted by `iroha multisig propose`
+* `--policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS>` — Explicit Unix timestamp used for the same certificate-validity checks as consensus. The activation is checked again against its actual block timestamp on every validator
+* `--output <OUTPUT>` — New private file receiving a JSON array accepted by `iroha ledger multisig propose`
 
 
 

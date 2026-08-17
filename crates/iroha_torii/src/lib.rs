@@ -147,7 +147,6 @@ pub mod json_utils {
     /// Convert a key and serializable value into a `(String, Value)` pair for [`json_object`].
     #[inline]
     #[must_use]
-    /// Convenience helper that turns a key and serializable value into an entry for [`json_object`].
     pub fn json_entry<K, V>(key: K, value: V) -> (String, Value)
     where
         K: Into<String>,
@@ -249,6 +248,7 @@ use iroha_core::{
         queue_plan_admission_network_id_digest,
         validate_queue_plan_admission_certificate_for_network_digest_v2,
     },
+    tx::external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
         SignatureVerificationFail,
@@ -952,6 +952,8 @@ pub use gov::{
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
+#[cfg(feature = "telemetry")]
+pub use iroha_data_model::block::consensus_v2::SumeragiV2QcResponse;
 pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
@@ -997,15 +999,6 @@ pub use routing::{QueryOptions, SignedQueryAdmission};
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
 };
-#[cfg(feature = "telemetry")]
-pub use routing::{
-    SumeragiV2QcResponse, handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
-    handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_diagnostics,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
-    handle_v1_sumeragi_phases, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
-    handle_v1_sumeragi_status_sse,
-};
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
     ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto, ZkVoteGetTallyResponseDto,
@@ -1015,6 +1008,14 @@ pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
+};
+#[cfg(feature = "telemetry")]
+pub use routing::{
+    handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
+    handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_diagnostics,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
+    handle_v1_sumeragi_qc, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -3121,8 +3122,13 @@ impl PipelineStatusCache {
                 ),
             };
             let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-            let hash =
-                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+            let Some(hash) = signed_transaction_hash_for_entrypoint(&entrypoint) else {
+                iroha_logger::error!(
+                    height = height.get(),
+                    "pipeline status cache found a non-signed entrypoint in the external prefix"
+                );
+                return BlockRecordOutcome::HashMismatch;
+            };
             self.record_entry_inner(hash, incoming);
         }
         if let Some(reference) = block_ref
@@ -3162,7 +3168,7 @@ impl PipelineStatusCache {
                         return BlockRecordOutcome::HashMismatch;
                     }
                 };
-                for (membership_hash, transaction) in transactions {
+                for (_entrypoint_hash, signed_transaction_hash, transaction) in transactions {
                     let (entry_kind, rejection) = match &transaction.result().0 {
                         Ok(_) => (kind, None),
                         Err(reason) => (
@@ -3172,7 +3178,9 @@ impl PipelineStatusCache {
                     };
                     let incoming =
                         PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-                    self.record_entry_inner(membership_hash, incoming);
+                    if let Some(signed_transaction_hash) = signed_transaction_hash {
+                        self.record_entry_inner(signed_transaction_hash, incoming);
+                    }
                 }
             }
         }
@@ -3259,12 +3267,9 @@ impl Drop for PreAuthRequestGuard {
             .with_metrics(|telemetry| telemetry.dec_torii_active_conn(scheme.label()));
     }
 }
-/// Single-owner handoff for extending a pre-authentication permit beyond the
-/// HTTP upgrade response and into the upgraded WebSocket task.
-/// The middleware owns the guard initially. Ordinary responses keep it in the
-/// response body, while a WebSocket handler takes it immediately before
-/// calling `on_upgrade`. Taking the guard more than once returns `None`, so a
-/// permit can never be duplicated across response and upgrade lifetimes.
+/// Single-owner handoff for retaining a pre-authentication permit through WebSocket upgrade.
+/// Middleware owns it; ordinary responses keep it in the body, while a WebSocket task takes it
+/// before `on_upgrade`. A second take returns `None`, preventing duplicate permits.
 #[derive(Clone)]
 pub(crate) struct PreAuthGuardHandoff(Arc<parking_lot::Mutex<Option<PreAuthRequestGuard>>>);
 impl PreAuthGuardHandoff {
@@ -18657,13 +18662,9 @@ fn insert_transaction_submission_identity_headers(
     signed_transaction_hash: Option<&HashOf<SignedTransaction>>,
 ) {
     if let Ok(header) = HeaderValue::from_str(&entrypoint_hash.to_string()) {
-        response.headers_mut().insert(
-            HeaderName::from_static("x-iroha-entrypoint-hash"),
-            header.clone(),
-        );
         response
             .headers_mut()
-            .insert(HeaderName::from_static("x-iroha-transaction-hash"), header);
+            .insert(HeaderName::from_static("x-iroha-entrypoint-hash"), header);
     }
     if let Some(signed_transaction_hash) = signed_transaction_hash
         && let Ok(header) = HeaderValue::from_str(&signed_transaction_hash.to_string())
@@ -18683,8 +18684,6 @@ fn transaction_submission_response(
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Response {
-    let tx_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
     let mut response = if minimal_response {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::ACCEPTED;
@@ -18700,7 +18699,6 @@ fn transaction_submission_response(
             .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
             .unwrap_or(0);
         let payload = TransactionSubmissionReceiptPayload {
-            tx_hash,
             entrypoint_hash,
             signed_transaction_hash: signed_transaction_hash.clone(),
             submitted_at_ms,
@@ -18870,37 +18868,34 @@ fn resolve_signed_query_authority_routing(
         Some(&state_view),
     )
 }
+fn require_signed_query_route(
+    mut routes: Vec<RoutingDecision>,
+    target_dataspace: DataSpaceId,
+) -> Result<RoutingDecision, queue::RoutingResolveError> {
+    debug_assert!(
+        routes.len() <= 1,
+        "single-route signed-query proxy requests must not expand into fanout routes"
+    );
+    routes
+        .pop()
+        .ok_or(queue::RoutingResolveError::NoLaneForDataspace {
+            dataspace_id: target_dataspace,
+        })
+}
 fn resolve_signed_query_routing_for_app(
     app: &AppState,
     query: &SignedQuery,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     match signed_query_scope_for_app(app, query) {
         SignedQueryScope::TargetAccount(account_id) => {
-            resolve_torii_target_account_routes(app, &account_id).map(|mut routes| {
-                debug_assert!(
-                    routes.len() <= 1,
-                    "single-route signed-query proxy requests must not expand into fanout routes"
-                );
-                routes.pop().unwrap_or_else(RoutingDecision::default)
-            })
+            resolve_torii_target_account_routes(app, &account_id)
+                .and_then(|routes| require_signed_query_route(routes, DataSpaceId::UNIVERSAL))
         }
-        SignedQueryScope::TargetAlias(alias) => {
-            resolve_torii_target_alias_routes(app, &alias).map(|mut routes| {
-                debug_assert!(
-                    routes.len() <= 1,
-                    "single-route signed-query proxy requests must not expand into fanout routes"
-                );
-                routes.pop().unwrap_or_else(RoutingDecision::default)
-            })
-        }
+        SignedQueryScope::TargetAlias(alias) => resolve_torii_target_alias_routes(app, &alias)
+            .and_then(|routes| require_signed_query_route(routes, alias.dataspace)),
         SignedQueryScope::TargetDomain(domain_id) => {
-            resolve_torii_target_domain_routes(app, &domain_id).map(|mut routes| {
-                debug_assert!(
-                    routes.len() <= 1,
-                    "single-route signed-query proxy requests must not expand into fanout routes"
-                );
-                routes.pop().unwrap_or_else(RoutingDecision::default)
-            })
+            resolve_torii_target_domain_routes(app, &domain_id)
+                .and_then(|routes| require_signed_query_route(routes, DataSpaceId::UNIVERSAL))
         }
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
@@ -23513,14 +23508,10 @@ fn queue_plan_outcome_unknown_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     reason: impl Into<String>,
 ) -> Response {
-    // The public queue rejection envelope still names this compatibility field `tx_hash`.
-    // Keep the unchecked retyping at this legacy response boundary; all durable claims and
-    // internal reconciliation remain typed as transaction-entrypoint identities.
-    let transaction_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
     Error::PushIntoQueue {
         source: Box::new(queue::Error::PlanJournalDurabilityIndeterminate {
-            transaction_hash,
+            entrypoint_hash,
+            signed_transaction_hash: None,
             reason: reason.into(),
         }),
         backpressure: queue::BackpressureState::default(),
@@ -23631,7 +23622,6 @@ fn validate_queue_plan_synced_snapshot_bounds(
 fn canonical_queue_plan_synced_certificate_headers(
     expected: &QueuePlanSyncedAcceptanceExpectation,
 ) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
-    let entrypoint_hash = expected.entrypoint_hash.to_string().into_bytes();
     let mut headers = vec![
         iroha_core::torii_proxy::ToriiProxyHeaderV1 {
             name: "content-type".to_owned(),
@@ -23639,11 +23629,7 @@ fn canonical_queue_plan_synced_certificate_headers(
         },
         iroha_core::torii_proxy::ToriiProxyHeaderV1 {
             name: "x-iroha-entrypoint-hash".to_owned(),
-            value: entrypoint_hash.clone(),
-        },
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-transaction-hash".to_owned(),
-            value: entrypoint_hash,
+            value: expected.entrypoint_hash.to_string().into_bytes(),
         },
     ];
     if let Some(signed_transaction_hash) = expected.signed_transaction_hash.as_ref() {
@@ -23691,11 +23677,6 @@ fn validate_queue_plan_synced_acceptance(
     validate_queue_plan_synced_response_header(
         snapshot,
         "x-iroha-entrypoint-hash",
-        Some(entrypoint_hash_literal.as_str()),
-    )?;
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-transaction-hash",
         Some(entrypoint_hash_literal.as_str()),
     )?;
     let signed_transaction_hash_literal = expected
@@ -32227,35 +32208,6 @@ async fn handler_sumeragi_status_sse(
     )
     .into_response())
 }
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_telemetry(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/telemetry",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_metrics() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/telemetry",
-            &app.telemetry,
-        ));
-    }
-    routing::handle_v1_sumeragi_telemetry(app.state.clone())
-        .await
-        .map(axum::response::IntoResponse::into_response)
-}
 async fn handler_sumeragi_vrf_penalties(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -32358,34 +32310,6 @@ async fn handler_pacemaker_status(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_pacemaker(&app.telemetry, accept).await
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_phases(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/phases",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/phases",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_phases(accept).await
 }
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_leader(
@@ -35006,7 +34930,7 @@ async fn handler_iso_status(
         // before a dedicated watcher threads `mark_settled` from the pipeline.
         if let Some(hash_str) = status.transaction_hash() {
             if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
-                if app.state.has_committed_transaction(hash) {
+                if app.state.has_committed_entrypoint(entrypoint_hash(hash)) {
                     runtime.mark_settled(&msg_id, SystemTime::now());
                     if let Some(updated) = runtime.message_status(&msg_id) {
                         status = updated;
@@ -35309,7 +35233,7 @@ async fn iso_status_for_outbox(
     if status.derived_status() != Pacs002Status::Acsc {
         if let Some(hash_str) = status.transaction_hash() {
             if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
-                if app.state.has_committed_transaction(hash) {
+                if app.state.has_committed_entrypoint(entrypoint_hash(hash)) {
                     runtime.mark_settled(msg_id, SystemTime::now());
                     if let Some(updated) = runtime.message_status(msg_id) {
                         status = updated;
@@ -44844,10 +44768,6 @@ impl Torii {
             catalog_get(handler_pacemaker_status).authenticated_operator(app_state.clone()),
         );
         builder.route(
-            &route_catalog::telemetry::PHASES,
-            catalog_get(handler_sumeragi_phases).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
             &route_catalog::telemetry::DEBUG_AXT_CACHE,
             catalog_get(handler_debug_axt_cache).authenticated_operator(app_state.clone()),
         );
@@ -45144,7 +45064,6 @@ impl Torii {
             );
             mount_operator_get!(CONSENSUS_KEYS, handler_sumeragi_consensus_keys);
             mount_operator_get!(KEY_LIFECYCLE, handler_sumeragi_key_lifecycle);
-            mount_operator_get!(TELEMETRY, handler_sumeragi_telemetry);
             mount_operator_get!(PARAMETERS, handler_sumeragi_params);
             mount_operator_get!(COMMIT_QC, handler_commit_qc);
         }
@@ -52990,7 +52909,7 @@ impl Error {
             ),
             queue::Error::PlanJournalDurabilityIndeterminate { .. } => (
                 "queue_plan_journal_outcome_unknown",
-                "transaction admission outcome is unknown; reconcile by exact transaction hash before retrying",
+                "transaction admission outcome is unknown; reconcile by exact entrypoint hash before retrying",
             ),
         }
     }
@@ -53019,11 +52938,11 @@ impl Error {
         };
         let (tx_hash, hint) = match err {
             queue::Error::PlanJournalDurabilityIndeterminate {
-                transaction_hash, ..
+                entrypoint_hash, ..
             } => (
-                Some(transaction_hash.to_string()),
+                Some(entrypoint_hash.to_string()),
                 Some(
-                    "Query status by this exact signed transaction hash or resubmit byte-identical signed bytes; do not create a replacement transaction until the outcome is known."
+                    "Query status by this exact entrypoint hash; do not create a replacement transaction until the outcome is known."
                         .to_owned(),
                 ),
             ),

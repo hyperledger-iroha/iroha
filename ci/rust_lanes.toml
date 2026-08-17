@@ -52,7 +52,6 @@ packages = [
   "ivm_artifact_admission",
   "kaigi_zk",
   "kotodama_lang",
-  "vega-prover",
   "zk_ace_prover",
 ]
 

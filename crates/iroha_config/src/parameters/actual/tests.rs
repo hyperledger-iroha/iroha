@@ -107,6 +107,55 @@ mod tests {
         );
     }
     #[test]
+    fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
+        let mut left = Nexus::default();
+        let mut left_lane = LaneConfigMetadata::default();
+        left_lane.description = Some("left operator note".to_owned());
+        left_lane
+            .metadata
+            .insert("operator.owner".to_owned(), "left".to_owned());
+        left.configured_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![left_lane],
+        )
+        .expect("valid configured catalog");
+
+        let mut right = left.clone();
+        let mut right_lane = right.configured_lane_catalog.lanes()[0].clone();
+        right_lane.description = Some("right operator note".to_owned());
+        right_lane
+            .metadata
+            .insert("operator.owner".to_owned(), "right".to_owned());
+        right.configured_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![right_lane],
+        )
+        .expect("valid configured catalog");
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&left).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            "lane descriptions and operator metadata must not partition validators"
+        );
+
+        let mut functional = right;
+        let mut functional_lane = functional.configured_lane_catalog.lanes()[0].clone();
+        functional_lane.scheduler = Some(iroha_data_model::nexus::LaneSchedulerPolicy::new(
+            Some(std::num::NonZeroU64::new(2048).expect("positive capacity")),
+            None,
+        ));
+        functional.configured_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![functional_lane],
+        )
+        .expect("valid configured catalog");
+        assert_ne!(
+            nexus_consensus_policy_digest(&left).expect("valid left policy"),
+            nexus_consensus_policy_digest(&functional).expect("valid functional policy"),
+            "typed scheduler policy must partition validators"
+        );
+    }
+    #[test]
     fn nexus_consensus_policy_digest_changes_for_each_decision_policy_family() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
@@ -230,6 +279,40 @@ mod tests {
             nexus_consensus_policy_digest(&left).expect("valid left policy"),
             nexus_consensus_policy_digest(&right).expect("valid right policy"),
             "catalog iteration order is not a committee policy input"
+        );
+    }
+    #[test]
+    fn nexus_consensus_policy_digest_uses_typed_endorsement_committee_set() {
+        let first = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("derive first committee key")
+            .public_key()
+            .clone();
+        let second = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("derive second committee key")
+            .public_key()
+            .clone();
+        let mut left = Nexus::default();
+        left.endorsement.committee_keys =
+            BTreeSet::from([second.clone(), first.clone(), first.clone()]);
+        left.endorsement.quorum = 2;
+        let mut right = left.clone();
+        right.endorsement.committee_keys = BTreeSet::from([first.clone(), second]);
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&left).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            "the typed endorsement committee set has one canonical policy projection"
+        );
+
+        let replacement = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+            .expect("derive replacement committee key")
+            .public_key()
+            .clone();
+        right.endorsement.committee_keys = BTreeSet::from([first, replacement]);
+        assert_ne!(
+            nexus_consensus_policy_digest(&left).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right).expect("valid changed policy"),
+            "changing the canonical endorsement committee set must change the policy digest"
         );
     }
     #[test]
@@ -1208,16 +1291,86 @@ mod tests {
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+    fn sumeragi_v2_nexus_amx_hash_excludes_operator_descriptions() {
         let mut left = Nexus::default();
-        left.fees.successful_claim_fee_exempt_authorities = vec![
-            "authority-b".to_owned(),
-            "authority-a".to_owned(),
-            "authority-a".to_owned(),
-        ];
+        let mut left_lane = LaneConfigMetadata::default();
+        left_lane.description = Some("left lane note".to_owned());
+        left_lane
+            .metadata
+            .insert("operator.owner".to_owned(), "left".to_owned());
+        left.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![left_lane],
+        )
+        .expect("valid lane catalog");
+        let mut left_dataspace = left
+            .dataspace_catalog
+            .entries()
+            .first()
+            .expect("default dataspace")
+            .clone();
+        left_dataspace.description = Some("left operator note".to_owned());
+        left.dataspace_catalog =
+            DataSpaceCatalog::new(vec![left_dataspace]).expect("valid dataspace catalog");
+        left.routing_policy.rules = vec![LaneRoutingRule {
+            lane: LaneId::SINGLE,
+            dataspace: Some(DataSpaceId::UNIVERSAL),
+            matcher: LaneRoutingMatcher {
+                description: Some("left routing note".to_owned()),
+                ..LaneRoutingMatcher::default()
+            },
+        }];
+
+        let mut right = left.clone();
+        let mut right_lane = right.lane_catalog.lanes()[0].clone();
+        right_lane.description = Some("right lane note".to_owned());
+        right_lane
+            .metadata
+            .insert("operator.owner".to_owned(), "right".to_owned());
+        right.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![right_lane],
+        )
+        .expect("valid lane catalog");
+        let mut right_dataspace = right
+            .dataspace_catalog
+            .entries()
+            .first()
+            .expect("configured dataspace")
+            .clone();
+        right_dataspace.description = Some("right operator note".to_owned());
+        right.dataspace_catalog =
+            DataSpaceCatalog::new(vec![right_dataspace]).expect("valid dataspace catalog");
+        right.routing_policy.rules[0].matcher.description = Some("right routing note".to_owned());
+
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "operator-only lane/dataspace descriptions, lane metadata, and routing descriptions must not affect consensus"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+        let authority = |seed| {
+            AccountId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("deterministic fee-exempt authority key")
+                    .public_key()
+                    .clone(),
+            )
+        };
+        let authority_a = authority(1);
+        let authority_b = authority(2);
+        let authority_c = authority(3);
+        let mut left = Nexus::default();
+        left.fees.successful_claim_fee_exempt_authorities = BTreeSet::from([
+            authority_b.clone(),
+            authority_a.clone(),
+            authority_a.clone(),
+        ]);
         let mut right = left.clone();
         right.fees.successful_claim_fee_exempt_authorities =
-            vec!["authority-a".to_owned(), "authority-b".to_owned()];
+            BTreeSet::from([authority_a, authority_b]);
 
         assert_eq!(
             sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
@@ -1225,7 +1378,7 @@ mod tests {
             "set order and duplicate entries must not affect the signed Nexus/AMX commitment"
         );
 
-        right.fees.successful_claim_fee_exempt_authorities = vec!["authority-c".to_owned()];
+        right.fees.successful_claim_fee_exempt_authorities = BTreeSet::from([authority_c]);
         assert_ne!(
             sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
             sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
@@ -1349,6 +1502,7 @@ mod tests {
         );
         let lifecycle = [SumeragiV2LaneLifecycleEntry {
             lane_id: LaneId::SINGLE,
+            generation: 0,
             incarnation: Hash::new(b"sumeragi-v2-test-incarnation"),
             activation_height: 7,
         }];
@@ -1357,6 +1511,13 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
             "lane lifecycle history must change the signed commitment"
         );
+        let mut changed_generation = lifecycle;
+        changed_generation[0].generation += 1;
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_generation),
+            "retained lane generation must be committed independently of the current catalog"
+        );
         let mut changed_lifecycle = lifecycle;
         changed_lifecycle[0].activation_height += 1;
         assert_ne!(
@@ -1364,9 +1525,23 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
             "activation height must be committed independently of the current catalog"
         );
+        let retained_with_retired_lane = [
+            lifecycle[0],
+            SumeragiV2LaneLifecycleEntry {
+                lane_id: LaneId::new(7),
+                generation: 3,
+                incarnation: Hash::new(b"retired-lane-incarnation"),
+                activation_height: 11,
+            },
+        ];
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &retained_with_retired_lane,),
+            "retired lane lineage must remain committed after catalog removal"
+        );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_active_validator_order() {
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_validator_and_lineage_order() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
         let first = test_active_validator(0xA2, LaneId::new(1));
@@ -1379,11 +1554,13 @@ mod tests {
         );
         let first_lifecycle = SumeragiV2LaneLifecycleEntry {
             lane_id: LaneId::new(1),
+            generation: 2,
             incarnation: Hash::new(b"first-lifecycle"),
             activation_height: 3,
         };
         let second_lifecycle = SumeragiV2LaneLifecycleEntry {
             lane_id: LaneId::SINGLE,
+            generation: 0,
             incarnation: Hash::new(b"second-lifecycle"),
             activation_height: 0,
         };
@@ -1400,7 +1577,7 @@ mod tests {
                 &[],
                 &[second_lifecycle, first_lifecycle],
             ),
-            "lane lifecycle input order must not affect the context commitment"
+            "retained lane-lineage input order must not affect the context commitment"
         );
     }
 }

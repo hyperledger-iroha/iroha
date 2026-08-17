@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Happy-path NPoS coverage for canonical v2 data availability and telemetry.
+//! Happy-path NPoS coverage for canonical v2 data availability and metrics.
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -8,7 +8,6 @@ use iroha::data_model::{
     parameter::{Parameter, TransactionParameter},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use norito::json::{self, Value};
 use std::{num::NonZeroU64, time::Duration};
 use tokio::time::sleep;
 const BLOCK_TARGET: u64 = 6;
@@ -105,11 +104,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     );
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
-    let telemetry_url = torii
-        .join("v1/sumeragi/telemetry")
-        .wrap_err("compose Sumeragi telemetry URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
-    ensure_vrf_collectors(&http, &telemetry_url).await?;
     ensure_metrics_within_bounds(
         &http,
         &metrics_url,
@@ -195,52 +190,6 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
         "quorum peers must agree on the NPoS DA subject: {committed_subjects:?}"
     );
     network.shutdown().await;
-    Ok(())
-}
-async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<()> {
-    let response = http
-        .get(url.clone())
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .wrap_err("fetch Sumeragi telemetry snapshot")?;
-    ensure!(
-        response.status().is_success(),
-        "Sumeragi telemetry endpoint returned status {}",
-        response.status()
-    );
-    let body = response
-        .text()
-        .await
-        .wrap_err("read Sumeragi telemetry body")?;
-    let value: Value = json::from_str(&body).wrap_err("parse Sumeragi telemetry JSON")?;
-    let root = value
-        .as_object()
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload must be an object"))?;
-    let collectors = root
-        .get("availability")
-        .and_then(Value::as_object)
-        .and_then(|availability| availability.get("collectors"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing availability.collectors"))?;
-    ensure!(
-        !collectors.is_empty(),
-        "collectors list should not be empty in NPoS mode"
-    );
-    let vrf = root
-        .get("vrf")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf context"))?;
-    let seed_hex = vrf
-        .get("seed_hex")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf.seed_hex"))?;
-    let seed = hex::decode(seed_hex).wrap_err("decode epoch seed hex")?;
-    ensure!(seed.len() == 32, "epoch seed must be 32 bytes");
-    ensure!(
-        seed.iter().any(|byte| *byte != 0),
-        "epoch seed should be non-zero when NPoS VRF is active"
-    );
     Ok(())
 }
 async fn ensure_metrics_within_bounds(

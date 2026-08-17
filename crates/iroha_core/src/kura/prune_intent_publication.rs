@@ -1,8 +1,7 @@
-// Before prune publication acquired its exact deterministic temporary name,
-// the generic atomic writer could strand this random prefix directly in the
-// Kura root. No current root-level publication owns that namespace: retaining
-// one would silently evade both exact intent recovery and disk accounting.
-const LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX: &str = ".kura-sidecar-";
+// No current root-level publication owns the generic atomic-temporary
+// namespace. Rejecting it here prevents an unbound artifact from evading exact
+// prune-intent recovery and disk accounting.
+const FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX: &str = ".kura-sidecar-";
 /// One authenticated canonical-prune publication name.
 #[derive(Debug)]
 struct CanonicalPruneIntentArtifact {
@@ -304,7 +303,7 @@ impl Kura {
             let name_lossy = name.to_string_lossy();
             if !allowed
                 && (name_lossy.starts_with(PRUNE_INTENT_FILE_NAME)
-                    || name_lossy.starts_with(LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX))
+                    || name_lossy.starts_with(FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX))
             {
                 return Err(Self::invalid_canonical_prune_intent_artifact(
                     &entry.path(),
@@ -779,24 +778,12 @@ impl Kura {
         if !requires_rewrite {
             return Ok(KuraPruneSidecarPairProjectionV2::default());
         }
-        let retained_index_bytes = if retained_entries == 0 && target_height > 0 {
-            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-        } else {
-            retained_entries
-                .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                .and_then(|entries| {
-                    entries.checked_add(if layout.is_based() {
-                        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-                    } else {
-                        0
-                    })
-                })
-                .ok_or_else(|| {
-                    Error::PruneIntentConflict(format!(
-                        "{kind} retained index projection overflowed"
-                    ))
-                })?
-        };
+        let retained_index_bytes = retained_entries
+            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+            .and_then(|entries| entries.checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(format!("{kind} retained index projection overflowed"))
+            })?;
         let index_bytes = std::fs::symlink_metadata(index_path)
             .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
             .len();

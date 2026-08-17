@@ -4022,10 +4022,6 @@ fn sumeragi_summary_commands_against_torii_mock() {
         &["ops", "sumeragi", "leader"],
         "leader=3 prf_h=20 prf_v=2 seed=feedface",
     );
-    assert_summary(
-        &["ops", "sumeragi", "telemetry"],
-        "availability_votes=123 collectors=3 rbc_pending_sessions=4 vrf_epoch=5 vrf_finalized=true reveals=6 late_reveals=7 committed_no_reveal=8 no_participation=9",
-    );
 }
 #[test]
 fn tx_status_command_against_torii_mock() {

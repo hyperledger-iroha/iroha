@@ -1076,14 +1076,14 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     assert_eq!(shape_state, shape_before);
     let mut owner_state = IndexedReservationReplayState::default();
     owner_state.ownership.insert(
-        second.key.signed_transaction_hash,
+        second.key.entrypoint_hash,
         DurableReservationOwnership::Live(second.key),
     );
     let owner_authorization = owner_state
         .prepare_checked_transition(&absent_frame, 8)
         .expect("prepare against one exact owner projection");
     owner_state.ownership.insert(
-        second.key.signed_transaction_hash,
+        second.key.entrypoint_hash,
         DurableReservationOwnership::Committed(second.key),
     );
     let owner_before = owner_state.clone();
@@ -1103,7 +1103,7 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         .expect("prepare before injecting a semantic pre-state failure");
     candidate_state
         .fifo_ordinals
-        .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash);
+        .insert(first.fifo_order.ordinal, second.key.entrypoint_hash);
     let candidate_before = candidate_state.clone();
     assert!(
         candidate_state
@@ -1166,8 +1166,8 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         .live_by_lane_incarnation
         .get_mut(&exact_lane)
         .expect("seeded reservation has an exact lane-incarnation set");
-    assert!(lane_hashes.remove(&first.key.signed_transaction_hash));
-    assert!(lane_hashes.insert(second.key.signed_transaction_hash));
+    assert!(lane_hashes.remove(&first.key.entrypoint_hash));
+    assert!(lane_hashes.insert(second.key.entrypoint_hash));
     let lane_member_before = lane_member_state.clone();
     let error = lane_member_state
         .apply_checked_transition(&removal_frame, 8, lane_member_authorization)
@@ -1193,8 +1193,8 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     assert_eq!(
         fifo_member_state
             .fifo_ordinals
-            .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash),
-        Some(first.key.signed_transaction_hash)
+            .insert(first.fifo_order.ordinal, second.key.entrypoint_hash),
+        Some(first.key.entrypoint_hash)
     );
     let fifo_member_before = fifo_member_state.clone();
     let error = fifo_member_state
@@ -1223,8 +1223,8 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     assert_eq!(
         later_target_state
             .fifo_ordinals
-            .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
-        Some(second.key.signed_transaction_hash)
+            .insert(second.fifo_order.ordinal, first.key.entrypoint_hash),
+        Some(second.key.entrypoint_hash)
     );
     let later_target_before = later_target_state.clone();
     let error = later_target_state
@@ -1252,8 +1252,8 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     assert_eq!(
         commit_state
             .fifo_ordinals
-            .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash),
-        Some(first.key.signed_transaction_hash)
+            .insert(first.fifo_order.ordinal, second.key.entrypoint_hash),
+        Some(first.key.entrypoint_hash)
     );
     let commit_before = commit_state.clone();
     let error = commit_state
@@ -1290,8 +1290,8 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     assert_eq!(
         completion_state
             .fifo_ordinals
-            .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
-        Some(second.key.signed_transaction_hash)
+            .insert(second.fifo_order.ordinal, first.key.entrypoint_hash),
+        Some(second.key.entrypoint_hash)
     );
     let completion_before = completion_state.clone();
     let error = completion_state

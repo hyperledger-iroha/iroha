@@ -74,6 +74,17 @@ fn align_exact_pinned_validator_pops(
 pub(crate) fn proposal_lookahead_enabled(nexus: &Nexus, block_height: u64) -> bool {
     crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
 }
+/// Return whether lane artifacts use the frozen global height-context roster.
+///
+/// Only disabled Nexus state has the canonical shared SINGLE/UNIVERSAL
+/// consensus domain. Once Nexus is enabled, every lane resolves its own
+/// authoritative committee even when only one lane is currently routable.
+/// Routable-lane count controls proposal scanning only; it is not an authority
+/// mode switch.
+#[must_use]
+pub(in crate::sumeragi) fn uses_global_lane_committee(nexus: &Nexus) -> bool {
+    !nexus.enabled
+}
 /// Compute how many queued transactions proposal assembly may inspect next.
 ///
 /// Single-lane slots scan only up to the remaining block capacity. Multi-lane
@@ -2367,7 +2378,7 @@ fn autonomous_lane_reservation_committee(
     lane_id: LaneId,
 ) -> Result<Vec<PeerId>, AutonomousLaneReservationSlotPlanError> {
     let nexus = state.nexus_snapshot();
-    let shared_committee = !nexus.enabled || !proposal_lookahead_enabled(&nexus, context.height);
+    let shared_committee = uses_global_lane_committee(&nexus);
     let validators = if shared_committee {
         context
             .roster
@@ -2582,9 +2593,9 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
 /// Derive deterministic lane-local RBC ownership and proposal artifacts for a
 /// v2 candidate without invoking the legacy global actor.
 ///
-/// The frozen context roster is used only for the single-lane/shared-domain
-/// profile. Enabled multi-lane Nexus routes must have an authoritative lane
-/// committee in committed state. A global leader need not also be the rotating
+/// The frozen context roster is used only for disabled Nexus's canonical
+/// SINGLE/UNIVERSAL domain. Every enabled Nexus route must have an authoritative
+/// lane committee in committed state. A global leader need not also be the rotating
 /// author for every selected lane: it commits the exact ownership and hands
 /// executable bytes to the independently selected lane author. A lane whose
 /// predecessor is not durably applied remains unavailable.
@@ -2760,7 +2771,7 @@ fn prepare_v2_lane_payload_plan_inner(
         ..ProposalBatchSchedule::default()
     };
     let nexus = state.nexus_snapshot();
-    let shared_committee = !nexus.enabled || !proposal_lookahead_enabled(&nexus, context.height);
+    let shared_committee = uses_global_lane_committee(&nexus);
     let frozen_voters = context
         .roster
         .iter()

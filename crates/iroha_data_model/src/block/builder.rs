@@ -24,7 +24,6 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct BlockBuilder {
     header: BlockHeader,
-    transactions: Vec<SignedTransaction>,
     external_entrypoints: Vec<TransactionEntrypoint>,
     time_triggers: Vec<TimeTriggerEntrypoint>,
     results: Vec<TransactionResult>,
@@ -43,7 +42,6 @@ impl BlockBuilder {
     pub fn new(header: BlockHeader) -> Self {
         Self {
             header,
-            transactions: Vec::new(),
             external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             results: Vec::new(),
@@ -63,8 +61,7 @@ impl BlockBuilder {
         let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
         self.entry_merkle.add(h);
         self.external_entrypoints
-            .push(TransactionEntrypoint::External(tx.clone()));
-        self.transactions.push(tx);
+            .push(TransactionEntrypoint::External(tx));
         idx
     }
     /// Push a sealed transaction commitment and update the entrypoint Merkle tree.
@@ -157,8 +154,7 @@ impl BlockBuilder {
             .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         let payload = BlockPayload {
             header: self.header,
-            transactions: self.transactions,
-            external_entrypoints: self.external_entrypoints.clone(),
+            external_entrypoints: self.external_entrypoints,
             execution_context: self.execution_context.clone(),
             da_commitments,
             da_proof_policies,
@@ -167,7 +163,6 @@ impl BlockBuilder {
             npos_consensus_effects,
         };
         let result = BlockResult {
-            external_entrypoints: Vec::new(),
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,
@@ -352,8 +347,8 @@ mod tests {
             manual.header().result_merkle_root()
         );
         assert_eq!(
-            built.payload().transactions.len(),
-            manual.payload().transactions.len()
+            built.external_entrypoint_count(),
+            manual.external_entrypoint_count()
         );
         assert_eq!(
             built.entrypoint_hashes().collect::<Vec<_>>(),

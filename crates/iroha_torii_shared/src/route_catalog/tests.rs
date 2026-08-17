@@ -131,6 +131,7 @@ mod tests {
             "/v1/sumeragi/rbc/sessions",
             "/v1/sumeragi/rbc/sample",
             "/v1/sumeragi/collectors",
+            "/v1/sumeragi/telemetry",
         ] {
             assert!(
                 CATALOGED_ROUTES.iter().all(|route| route.path() != retired),
@@ -1074,6 +1075,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(validate_catalog(&routes), Ok(()));
         for unsupported_path in [
+            "/v1/sumeragi/phases",
+            "/v1/sumeragi/telemetry",
             "/v1/sumeragi/new_view/json",
             "/v1/sumeragi/new_view/sse",
             "/v1/sumeragi/bls_keys",
@@ -1112,7 +1115,6 @@ mod tests {
             sumeragi::VALIDATOR_SET_BY_HEIGHT,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::KEY_LIFECYCLE,
-            sumeragi::TELEMETRY,
             sumeragi::PARAMETERS,
             sumeragi::COMMIT_QC,
             sumeragi::EVIDENCE_COUNT,

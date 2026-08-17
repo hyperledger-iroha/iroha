@@ -30,14 +30,12 @@ pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct TransactionSubmissionReceiptPayload {
-    /// Canonical transaction entrypoint hash exposed under the legacy field name.
-    pub tx_hash: HashOf<SignedTransaction>,
-    /// Hash of the submitted transaction entrypoint.
+    /// Canonical hash of the submitted transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Hash of the inner signed transaction, when the entrypoint carries one.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     /// Unix timestamp (ms) when Torii accepted the submission.
     pub submitted_at_ms: u64,
@@ -66,6 +64,7 @@ impl TransactionSubmissionReceiptPayload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct TransactionSubmissionReceipt {
     /// Canonical receipt payload.
     pub payload: TransactionSubmissionReceiptPayload,
@@ -105,6 +104,25 @@ impl TransactionSubmissionReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Encode)]
+    struct PreReleaseTransactionSubmissionReceiptPayload {
+        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+        submitted_at_ms: u64,
+        submitted_at_height: u64,
+        signer: PublicKey,
+    }
+
+    #[derive(Encode)]
+    struct PreReleaseReceiptPayloadWithoutSignedTransactionHash {
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        submitted_at_ms: u64,
+        submitted_at_height: u64,
+        signer: PublicKey,
+    }
+
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked transaction receipt fixture keypair")
     }
@@ -118,7 +136,6 @@ mod tests {
     }
     fn sample_receipt_payload(key_pair: &KeyPair) -> TransactionSubmissionReceiptPayload {
         TransactionSubmissionReceiptPayload {
-            tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [0xA5; 32],
             )),
@@ -151,6 +168,126 @@ mod tests {
         assert!(receipt.verify().is_ok());
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         assert!(receipt.verify().is_ok());
+    }
+
+    #[test]
+    fn submission_receipt_payload_current_layout_roundtrips_canonically() {
+        let payload = sample_receipt_payload(&checked_random_keypair());
+        let encoded = norito::encode_canonical(&payload).expect("encode current receipt payload");
+        let decoded = norito::decode_canonical::<TransactionSubmissionReceiptPayload>(&encoded)
+            .expect("decode current receipt payload");
+        assert_eq!(decoded, payload);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn submission_receipt_json_requires_nullable_hash_and_closed_signed_objects() {
+        let key_pair = checked_random_keypair();
+        let mut payload = sample_receipt_payload(&key_pair);
+        payload.signed_transaction_hash = None;
+        let payload_json = norito::json::to_json(&payload)
+            .expect("serialize receipt payload with no inner signed transaction");
+        let expected_payload_json = format!(
+            "{{\"entrypoint_hash\":{entrypoint_hash},\"signed_transaction_hash\":null,\"submitted_at_ms\":42,\"submitted_at_height\":7,\"signer\":{signer}}}",
+            entrypoint_hash = norito::json::to_json(&payload.entrypoint_hash)
+                .expect("serialize receipt entrypoint hash"),
+            signer = norito::json::to_json(&payload.signer).expect("serialize receipt signer"),
+        );
+        assert_eq!(payload_json, expected_payload_json);
+        assert_eq!(
+            norito::json::from_str::<TransactionSubmissionReceiptPayload>(&payload_json)
+                .expect("deserialize exact receipt payload JSON"),
+            payload
+        );
+
+        let canonical = norito::json::to_value(&payload).expect("serialize receipt payload");
+        let mut missing_hash = canonical.clone();
+        assert!(
+            missing_hash
+                .as_object_mut()
+                .expect("receipt payload JSON object")
+                .remove("signed_transaction_hash")
+                .is_some()
+        );
+        assert!(
+            norito::json::from_value::<TransactionSubmissionReceiptPayload>(missing_hash).is_err(),
+            "the first-release receipt payload must require signed_transaction_hash even when null"
+        );
+        let mut unknown_payload = canonical;
+        unknown_payload
+            .as_object_mut()
+            .expect("receipt payload JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<TransactionSubmissionReceiptPayload>(unknown_payload)
+                .is_err(),
+            "receipt payload unknown fields must fail closed"
+        );
+
+        let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let receipt_json =
+            norito::json::to_json(&receipt).expect("serialize signed submission receipt");
+        let expected_receipt_json = format!(
+            "{{\"payload\":{payload},\"signature\":{signature}}}",
+            payload =
+                norito::json::to_json(&receipt.payload).expect("serialize signed receipt payload"),
+            signature =
+                norito::json::to_json(&receipt.signature).expect("serialize receipt signature"),
+        );
+        assert_eq!(receipt_json, expected_receipt_json);
+        assert_eq!(
+            norito::json::from_str::<TransactionSubmissionReceipt>(&receipt_json)
+                .expect("deserialize exact signed receipt JSON"),
+            receipt
+        );
+        let mut unknown_receipt =
+            norito::json::to_value(&receipt).expect("serialize signed receipt");
+        unknown_receipt
+            .as_object_mut()
+            .expect("signed receipt JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<TransactionSubmissionReceipt>(unknown_receipt).is_err(),
+            "signed receipt unknown fields must fail closed"
+        );
+    }
+
+    #[test]
+    fn submission_receipt_payload_rejects_pre_release_layout_without_inner_hash_slot() {
+        let key_pair = checked_random_keypair();
+        let current = sample_receipt_payload(&key_pair);
+        let pre_release = PreReleaseReceiptPayloadWithoutSignedTransactionHash {
+            entrypoint_hash: current.entrypoint_hash,
+            submitted_at_ms: current.submitted_at_ms,
+            submitted_at_height: current.submitted_at_height,
+            signer: current.signer,
+        };
+        let encoded = norito::encode_canonical(&pre_release)
+            .expect("encode pre-release receipt payload without the inner hash slot");
+        assert!(
+            norito::decode_canonical::<TransactionSubmissionReceiptPayload>(&encoded).is_err(),
+            "the first-release receipt payload must reject the shortened layout without signed_transaction_hash"
+        );
+    }
+
+    #[test]
+    fn submission_receipt_payload_rejects_pre_release_duplicate_hash_layout() {
+        let key_pair = checked_random_keypair();
+        let current = sample_receipt_payload(&key_pair);
+        let pre_release = PreReleaseTransactionSubmissionReceiptPayload {
+            tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xC7; 32])),
+            entrypoint_hash: current.entrypoint_hash,
+            signed_transaction_hash: current.signed_transaction_hash,
+            submitted_at_ms: current.submitted_at_ms,
+            submitted_at_height: current.submitted_at_height,
+            signer: current.signer,
+        };
+        let encoded =
+            norito::encode_canonical(&pre_release).expect("encode pre-release receipt payload");
+        assert!(
+            norito::decode_canonical::<TransactionSubmissionReceiptPayload>(&encoded).is_err(),
+            "the retired duplicate tx_hash layout must not decode as the first-release payload"
+        );
     }
     #[test]
     fn submission_receipt_rejects_malformed_ed25519_signature() {

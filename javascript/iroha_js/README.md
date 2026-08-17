@@ -1881,11 +1881,11 @@ const status = await browserTorii.getSumeragiStatusTyped();
 const diagnostics = await browserTorii.getSumeragiDiagnosticsTyped();
 ```
 
-## Advanced Sumeragi Telemetry
+## Advanced Sumeragi Observability
 
-Torii exposes additional consensus observability endpoints. The JS SDK now
-mirrors them so operators can inspect pacemaker timers, QC snapshots, aggregate
-telemetry, and on-chain parameters without bespoke fetch plumbing:
+Torii exposes additional consensus observability endpoints. The JS SDK mirrors
+them so operators can inspect pacemaker timers, QC snapshots, and on-chain
+parameters without bespoke fetch plumbing:
 
 ```js
 const pacemaker = await torii.getSumeragiPacemaker();
@@ -1894,10 +1894,9 @@ if (pacemaker) {
 }
 
 const qc = await torii.getSumeragiQc();
-console.log(`highest QC height=${qc.highest_qc.height} subject=${qc.highest_qc.subject_block_hash ?? "n/a"}`);
-
-const phases = await torii.getSumeragiPhases();
-console.log(`pipeline total=${phases.pipeline_total_ms}ms ema=${phases.ema_ms.pipeline_total_ms}ms`);
+if (qc.highest_prepare_qc) {
+  console.log(`highest PrepareQC height=${qc.highest_prepare_qc.round.height} subject=${qc.highest_prepare_qc.subject.block_hash}`);
+}
 
 const blsKeys = await torii.getSumeragiBlsKeys();
 console.log(`BLS-capable peers=${Object.values(blsKeys).filter(Boolean).length}`);
@@ -1907,11 +1906,6 @@ console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_s
 
 const params = await torii.getSumeragiParams();
 console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
-
-const telemetry = await torii.getSumeragiTelemetryTyped();
-console.log(`availability votes=${telemetry.availability.total_votes_ingested}`);
-console.log(`vrf epoch=${telemetry.vrf.epoch} finalized=${telemetry.vrf.finalized}`);
-console.log(`pending RBC sessions=${telemetry.rbc_backlog.pending_sessions}`);
 
 // Commit certificates and key lifecycle history
 const commitCerts = await torii.listSumeragiCommitCertificates();
@@ -1923,7 +1917,7 @@ console.log(`latest key record status=${keyRecords[0]?.status ?? "none"}`);
 
 All advanced helpers validate the Torii payloads and coerce numeric string
 fields into numbers. If Torii returns malformed data (missing fields or invalid
-types) the SDK raises a `TypeError`, ensuring broken telemetry never flows into
+types) the SDK raises a `TypeError`, ensuring broken responses never flow into
 dashboards unnoticed.
 
 `getSumeragiPacemaker` returns `null` when developer telemetry outputs are
@@ -1967,46 +1961,12 @@ if (snapshot.status.governance) {
 }
 ```
 
-### Capturing telemetry replay snapshots
-
-Roadmap JS-04/JS-07 also call for deterministic telemetry replay artefacts. Use
-`captureSumeragiTelemetrySnapshot` when you need an in-memory snapshot with a
-stable timestamp, or `appendSumeragiTelemetrySnapshot` to build an NDJSON file
-that dashboards and incident drills can replay later:
-
-```js
-import {
-  ToriiClient,
-  appendSumeragiTelemetrySnapshot,
-} from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
-  apiToken: process.env.IROHA_TORII_API_TOKEN,
-});
-
-await appendSumeragiTelemetrySnapshot(torii, "artifacts/sumeragi/latest.ndjson");
-```
-
-The repo also includes a CLI helper that wraps the same API and runs on a timer:
-
-```bash
-npm run telemetry:capture -- \
-  --torii-url=https://torii.nexus.dev \
-  --output=artifacts/sumeragi/telemetry.ndjson \
-  --samples=10 \
-  --interval-ms=2000
-```
-
-Every invocation appends a JSON line containing the capture timestamp and typed
-telemetry payload so operators can feed the bundle into replay tooling or share
-it with other SDKs.
-
 ## Sumeragi Evidence
 
 Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
-exposes aggregate RBC backlog and collector observations through
-`getSumeragiTelemetryTyped()`; it does not expose global per-session RBC,
-sampling, collector-plan, or evidence-mutation routes. Consensus evidence is
+does not expose global RBC backlog, per-session sampling, collector-plan, or
+evidence-mutation routes. Use the authenticated Sumeragi status/diagnostics
+reads and Prometheus transport metrics for operations. Consensus evidence is
 available through the supported read-only endpoints:
 
 ```js

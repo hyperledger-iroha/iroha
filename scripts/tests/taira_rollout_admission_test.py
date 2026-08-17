@@ -173,7 +173,11 @@ def _exercise_checks_behind_unprovisioned_authority_barrier(
         "require_controller_origin_authority_provisioned",
         lambda: None,
     )
-    monkeypatch.setattr(client, "preflight", lambda role: {"role": role})
+    monkeypatch.setattr(
+        client,
+        "preflight",
+        lambda role, **_kwargs: {"role": role},
+    )
     monkeypatch.setattr(client, "authorize", authorize)
     monkeypatch.setattr(client, "verify_receipt", verify_receipt)
 

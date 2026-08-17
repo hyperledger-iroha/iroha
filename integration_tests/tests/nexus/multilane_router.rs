@@ -56,6 +56,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -70,6 +74,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -84,6 +92,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
         ],
@@ -339,14 +351,18 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             ),
         ))],
     );
-    let decision = router.route(&governance_tx);
+    let decision = router
+        .try_route(&governance_tx)
+        .expect("governance routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(1));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
-    let decision = router.route(&zk_tx);
+    let decision = router.try_route(&zk_tx).expect("zk routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(2));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-    let decision = router.route(&default_tx);
+    let decision = router
+        .try_route(&default_tx)
+        .expect("default routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(0));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
     drop(kura);
@@ -377,7 +393,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
             DomainId::try_new("governed", "governance")?,
         )))],
     );
-    let governance = router.route_with_view(&governance_tx, &state.view());
+    let governance = router
+        .try_route_with_view(&governance_tx, &state.view())
+        .expect("governance routing should resolve");
     assert_eq!(governance.lane_id, LaneId::new(1));
     assert_eq!(governance.dataspace_id, DataSpaceId::UNIVERSAL);
     let zk_tx = build_tx(
@@ -395,7 +413,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
             ),
         ))],
     );
-    let zk = router.route_with_view(&zk_tx, &state.view());
+    let zk = router
+        .try_route_with_view(&zk_tx, &state.view())
+        .expect("zk routing should resolve");
     assert_eq!(zk.lane_id, LaneId::new(2));
     assert_eq!(zk.dataspace_id, DataSpaceId::UNIVERSAL);
     let mut lanes_seen = std::collections::BTreeSet::new();
@@ -413,7 +433,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         assert!(
             matches!(
@@ -462,6 +484,10 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
         },
@@ -508,7 +534,9 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
                     iroha_data_model::role::Role::new(role_id, authority.clone()),
                 ))],
             );
-            let decision = router.route_with_view(&default_tx, &state.view());
+            let decision = router
+                .try_route_with_view(&default_tx, &state.view())
+                .unwrap_or_else(|err| panic!("{}: default route failed: {err}", case.name));
             assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
             lanes_seen.insert(decision.lane_id);
         }
@@ -554,7 +582,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("disabled-autoscale default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }
@@ -598,7 +628,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("disabled-Nexus default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }

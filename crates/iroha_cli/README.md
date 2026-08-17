@@ -104,14 +104,6 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
-Fetch latest per-phase latencies (ms):
-
-```bash
-iroha --operator-private-key-file /run/secrets/iroha/operator.key \
-  --output-format text ops sumeragi phases
-# Example: propose=11 da=22 prevote=33 precommit=44 exec=55 witness=66 commit=77 ms | ema(propose=15 da=24 prevote=31 precommit=40 commit=70)
-```
-
 Fetch commit QC (if present) for a block hash:
 
 ```bash

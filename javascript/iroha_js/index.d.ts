@@ -2066,78 +2066,6 @@ export interface IdentifierClaimLookupResponse {
   expires_at_ms: number | null;
 }
 
-export interface SumeragiTelemetryAvailabilityCollector {
-  collector_idx: number;
-  peer_id: string;
-  votes_ingested: number;
-}
-
-export interface SumeragiTelemetryAvailabilitySnapshot {
-  total_votes_ingested: number;
-  collectors: ReadonlyArray<SumeragiTelemetryAvailabilityCollector>;
-}
-
-export interface SumeragiTelemetryQcLatencyEntry {
-  kind: string;
-  last_ms: number;
-}
-
-export interface SumeragiTelemetryRbcBacklogSnapshot {
-  pending_sessions: number;
-  total_missing_chunks: number;
-  max_missing_chunks: number;
-}
-
-export interface SumeragiTelemetryVrfLateReveal {
-  signer: string;
-  noted_at_height: number;
-}
-
-export interface SumeragiTelemetryVrfSummary {
-  found: boolean;
-  epoch: number;
-  finalized: boolean;
-  seed_hex: string | null;
-  epoch_length: number;
-  commit_deadline_offset: number;
-  reveal_deadline_offset: number;
-  roster_len: number;
-  updated_at_height: number;
-  participants_total: number;
-  commitments_total: number;
-  reveals_total: number;
-  late_reveals_total: number;
-  committed_no_reveal: ReadonlyArray<number>;
-  no_participation: ReadonlyArray<number>;
-  late_reveals: ReadonlyArray<SumeragiTelemetryVrfLateReveal>;
-}
-
-export interface SumeragiTelemetrySnapshot {
-  availability: SumeragiTelemetryAvailabilitySnapshot;
-  qc_latency_ms: ReadonlyArray<SumeragiTelemetryQcLatencyEntry>;
-  rbc_backlog: SumeragiTelemetryRbcBacklogSnapshot;
-  vrf: SumeragiTelemetryVrfSummary;
-}
-
-export interface CaptureSumeragiTelemetryOptions {
-  signal?: AbortSignal;
-  timestamp?: number;
-}
-
-export interface AppendSumeragiTelemetryOptions
-  extends CaptureSumeragiTelemetryOptions {
-  fs?: {
-    mkdir?: (path: string, options: { recursive: true }) => Promise<string | undefined | void>;
-    appendFile?: (path: string, data: string) => Promise<void>;
-  };
-}
-
-export interface SumeragiTelemetryReplaySnapshot {
-  capturedAtUnixMs: number;
-  capturedAtIso: string;
-  telemetry: SumeragiTelemetrySnapshot;
-}
-
 export interface ToriiAccountListItem {
   id: string;
 }
@@ -3490,17 +3418,6 @@ export function validateGovernanceDagHeadChain(
   blocks: ReadonlyArray<SorafsGovernanceDagBlockInput>,
   options?: SorafsGovernanceDagHeadValidationOptions,
 ): SorafsValidationOutcome;
-
-export function captureSumeragiTelemetrySnapshot(
-  client: ToriiClient,
-  options?: CaptureSumeragiTelemetryOptions,
-): Promise<SumeragiTelemetryReplaySnapshot>;
-
-export function appendSumeragiTelemetrySnapshot(
-  client: ToriiClient,
-  outputPath: string,
-  options?: AppendSumeragiTelemetryOptions,
-): Promise<SumeragiTelemetryReplaySnapshot>;
 
 export interface SorafsGatewayProviderSpec {
   name: string;
@@ -6226,40 +6143,9 @@ export interface ToriiSumeragiPacemakerResponse {
   view_timeout_remaining_ms: number;
 }
 
-export interface ToriiSumeragiQcEntry {
-  height: number;
-  view: number;
-  subject_block_hash?: string | null;
-}
-
-export interface ToriiSumeragiQcSnapshot {
-  highest_qc: ToriiSumeragiQcEntry;
-  locked_qc: ToriiSumeragiQcEntry;
-}
-
-export interface ToriiSumeragiPhasesEmaSnapshot {
-  propose_ms: number;
-  collect_da_ms: number;
-  collect_prevote_ms: number;
-  collect_precommit_ms: number;
-  collect_aggregator_ms: number;
-  commit_ms: number;
-  pipeline_total_ms: number;
-}
-
-export interface ToriiSumeragiPhasesSnapshot {
-  propose_ms: number;
-  collect_da_ms: number;
-  collect_prevote_ms: number;
-  collect_precommit_ms: number;
-  collect_aggregator_ms: number;
-  commit_ms: number;
-  pipeline_total_ms: number;
-  collect_aggregator_gossip_total: number;
-  block_created_dropped_by_lock_total: number;
-  block_created_hint_mismatch_total: number;
-  block_created_proposal_mismatch_total: number;
-  ema_ms: ToriiSumeragiPhasesEmaSnapshot;
+export interface ToriiSumeragiV2QcResponse {
+  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
+  locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
 }
 
 export interface ToriiSumeragiPrfContext {
@@ -8543,7 +8429,7 @@ export interface DaIngestReceipt {
   pdp_commitment_bytes: Buffer | null;
   queued_at_unix: number;
   operator_signature_hex: string;
-  rent_quote: DaRentQuote | null;
+  rent_quote: DaRentQuote;
 }
 
 export interface DaIngestArtifacts {
@@ -10221,7 +10107,6 @@ export declare class ToriiBrowserClient {
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
   getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
-  getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
     relayId: string,
@@ -11213,14 +11098,11 @@ export declare class ToriiClient {
   }): Promise<ToriiSumeragiPacemakerResponse | null>;
   getSumeragiQc(options?: {
     signal?: AbortSignal;
-  }): Promise<ToriiSumeragiQcSnapshot>;
+  }): Promise<ToriiSumeragiV2QcResponse>;
   getSumeragiCommitQc(
     blockHashHex: string,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSumeragiCommitQcRecord>;
-  getSumeragiPhases(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiPhasesSnapshot>;
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;
@@ -11230,12 +11112,6 @@ export declare class ToriiClient {
   getSumeragiParams(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiParamsSnapshot>;
-  getSumeragiTelemetry(options?: {
-    signal?: AbortSignal;
-  }): Promise<Record<string, unknown>>;
-  getSumeragiTelemetryTyped(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiTelemetrySnapshot>;
   listSumeragiEvidence(
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;

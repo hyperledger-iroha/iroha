@@ -529,7 +529,6 @@ fn service_pending_certified_serve_barrier(
 fn run_pending_active_height(
     mut activated: PendingKuraActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
-    mut committed_lane_status_publisher: CommittedLaneStatusPublisher,
     context: &wire::HeightContext,
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
@@ -550,9 +549,6 @@ fn run_pending_active_height(
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
     loop {
-        activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
-            committed_lane_status_publisher.publish_if_changed(lane_work)
-        });
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
             return Err(V2RunnerError::RestartRequired);
@@ -594,9 +590,6 @@ fn run_pending_active_height(
                 block_sync_server,
             )
         })? {
-            activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
-                committed_lane_status_publisher.publish_if_changed(lane_work)
-            });
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -670,9 +663,6 @@ fn run_pending_active_height(
                 Ok(executor.ready_to_finish())
             },
         )?;
-        activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
-            committed_lane_status_publisher.publish_if_changed(lane_work)
-        });
         if !ready {
             drop(certified_serve_producer_episode);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
@@ -1076,7 +1066,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
             .map_err(V2RunnerError::from)
         },
     )?;
-    let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
     prepared.with_runner_setup(
         &mut setup_runner,
         |lane_work, executor, services| -> Result<_, V2RunnerError> {
@@ -1099,7 +1088,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
                 let _ = lane_work.mark_global_body_locked(locked_round, locked)?;
             }
             dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-            committed_lane_status_publisher.publish_if_changed(lane_work);
             Ok(())
         },
     )?;
@@ -1108,7 +1096,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
     let Some((successor, retained_merge_sidecars)) = run_pending_active_height(
         activated,
         active_runner,
-        committed_lane_status_publisher,
         &context,
         &context_store,
         &state,

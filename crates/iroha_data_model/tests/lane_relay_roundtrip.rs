@@ -12,7 +12,10 @@ use iroha_data_model::{
         compute_settlement_hash,
     },
 };
-use norito::core::NoritoDeserialize;
+use norito::{
+    codec::{DecodeAll as _, Encode as _},
+    core::NoritoDeserialize,
+};
 use std::num::NonZeroU64;
 fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) -> BlockHeader {
     let mut header = BlockHeader::new(
@@ -88,6 +91,89 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     let err = LaneRelayEnvelope::new(header, None, settlement.clone(), 0)
         .expect_err("da mismatch should fail");
     assert!(matches!(err, LaneRelayError::DaCommitmentHashMismatch));
+}
+#[test]
+fn lane_relay_envelope_rejects_pre_release_layout_with_implicit_fastpq_field() {
+    #[derive(norito::codec::Encode)]
+    struct PreReleaseLaneRelayEnvelope {
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        dataspace_id: DataSpaceId,
+        block_height: u64,
+        block_header: BlockHeader,
+        finality_authority: Option<LaneFinalityAuthorityV1>,
+        da_commitment_hash: Option<HashOf<commitment::DaCommitmentBundle>>,
+        lane_block_descriptor_hash: Option<Hash>,
+        settlement_commitment: LaneBlockCommitment,
+        settlement_hash: HashOf<LaneBlockCommitment>,
+        rbc_bytes_total: u64,
+        manifest_root: Option<[u8; 32]>,
+    }
+
+    let header = sample_block_header(None);
+    let envelope = LaneRelayEnvelope::new(header, None, sample_settlement(), 0)
+        .expect("construct current relay envelope");
+    let pre_release = PreReleaseLaneRelayEnvelope {
+        lane_id: envelope.lane_id,
+        lane_incarnation: envelope.lane_incarnation,
+        dataspace_id: envelope.dataspace_id,
+        block_height: envelope.block_height,
+        block_header: envelope.block_header,
+        finality_authority: envelope.finality_authority,
+        da_commitment_hash: envelope.da_commitment_hash,
+        lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
+        settlement_commitment: envelope.settlement_commitment,
+        settlement_hash: envelope.settlement_hash,
+        rbc_bytes_total: envelope.rbc_bytes_total,
+        manifest_root: envelope.manifest_root,
+    };
+    let bytes = pre_release.encode();
+    let mut cursor = bytes.as_slice();
+    assert!(
+        LaneRelayEnvelope::decode_all(&mut cursor).is_err(),
+        "the first-release relay decoder must require the explicit optional FastPQ field"
+    );
+}
+#[test]
+fn lane_relay_envelope_json_rejects_unknown_fields() {
+    let header = sample_block_header(None);
+    let envelope = LaneRelayEnvelope::new(header, None, sample_settlement(), 0)
+        .expect("construct current relay envelope");
+
+    for field in [
+        "finality_authority",
+        "da_commitment_hash",
+        "lane_block_descriptor_hash",
+        "manifest_root",
+        "fastpq_proof",
+    ] {
+        let mut value = norito::json::to_value(&envelope).expect("serialize relay envelope");
+        assert!(
+            value
+                .as_object_mut()
+                .expect("relay envelope JSON object")
+                .remove(field)
+                .is_some(),
+            "fixture must contain nullable field {field}"
+        );
+        assert!(
+            norito::json::from_value::<LaneRelayEnvelope>(value).is_err(),
+            "the first-release relay JSON decoder must require {field}"
+        );
+    }
+
+    let mut value = norito::json::to_value(&envelope).expect("serialize relay envelope");
+    value
+        .as_object_mut()
+        .expect("relay envelope JSON object")
+        .insert(
+            "pre_release_extension".to_owned(),
+            norito::json::Value::Bool(true),
+        );
+    assert!(
+        norito::json::from_value::<LaneRelayEnvelope>(value).is_err(),
+        "the first-release relay JSON decoder must reject unknown fields"
+    );
 }
 #[test]
 fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {

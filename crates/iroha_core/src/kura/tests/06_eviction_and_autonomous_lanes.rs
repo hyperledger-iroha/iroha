@@ -1223,20 +1223,21 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         .build_and_sign(&genesis_key_pair)
         .expect("genesis block should be built");
     {
-        let mut state_block = state.block(genesis.0.header());
         let time_source = TimeSource::new_system();
-        let block_genesis = ValidBlock::validate_with_events(
-            genesis.0.clone(),
-            &topology,
-            &genesis_id,
-            &time_source,
-            &mut state_block,
-            |_| {},
-        )
-        .unpack(|_| {})
-        .unwrap()
-        .commit_unchecked()
-        .unpack(|_| {});
+        let mut voting_block = None;
+        let (valid_genesis, mut state_block) =
+            ValidBlock::validate_signed_genesis_keep_voting_block(
+                genesis.0.clone(),
+                &topology,
+                &genesis_id,
+                &time_source,
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {})
+            .unwrap();
+        let block_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
         let _events =
             state_block.apply_without_execution(&block_genesis, topology.as_ref().to_owned());
         state_block.commit().unwrap();
@@ -1920,14 +1921,12 @@ fn autonomous_lane_payload_for_kura(
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let network_id = test_network_id(b"kura-autonomous-genesis");
     let epoch = 7;
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
     let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"kura-autonomous-view-queue-plan-admission-binding",
@@ -2048,11 +2047,9 @@ fn rebind_autonomous_lane_payload_for_kura(
         .zip(&routing_plans)
         .enumerate()
         .map(|(index, (entrypoint, routing_plan))| {
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
             LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: accepted.hash(),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"kura-autonomous-bundle-queue-plan-admission-binding",

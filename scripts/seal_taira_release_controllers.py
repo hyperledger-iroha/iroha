@@ -281,6 +281,8 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     "prepare-reset": {
         "--source-bundle", "--source-bundle-sha256", "--privacy-release-dir",
         "--genesis-external-signer", "--trusted-genesis-external-signer-sha256",
+        "--authenticated-tool-controller",
+        "--trusted-authenticated-tool-controller-sha256",
         "--onboarding-token-hash-tool", "--irohad-sha256", "--source-commit",
         "--dpn-validator-release-commit",
         "--cargo-lock-sha256", "--workspace-source-manifest-sha256",
@@ -398,6 +400,7 @@ INPUT_PATH_FLAGS = {
     "--trusted-boi-qualification-public-key",
     "--release-manifest-verifier", "--authority-dir", "--source-bundle",
     "--privacy-release-dir", "--genesis-external-signer",
+    "--authenticated-tool-controller",
     "--kagemusha-release-root",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
@@ -464,6 +467,7 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
         "--external-signer",
         "--qualification-external-signer",
         "--genesis-external-signer",
+        "--authenticated-tool-controller",
         "--onboarding-token-hash-tool",
         "--oras",
         "--release-manifest-verifier",
@@ -471,6 +475,9 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
     }
 )
 EXECUTABLE_DIGEST_FLAGS = {
+    "--authenticated-tool-controller": (
+        "--trusted-authenticated-tool-controller-sha256"
+    ),
     "--genesis-external-signer": "--trusted-genesis-external-signer-sha256",
     "--qualification-external-signer": (
         "--trusted-qualification-external-signer-sha256"

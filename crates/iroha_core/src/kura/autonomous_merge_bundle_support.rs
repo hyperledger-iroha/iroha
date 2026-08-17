@@ -1133,15 +1133,10 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         input: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<AutonomousLaneExecutionInputPersistenceAuthorization, String> {
-        let network_id = input
-            .autonomous_network_id
-            .ok_or_else(|| "autonomous execution input lacks its network identity".to_owned())?;
-        let epoch = input
-            .autonomous_epoch
-            .ok_or_else(|| "autonomous execution input lacks its epoch".to_owned())?;
-        let payload_hash = input.autonomous_payload_hash.ok_or_else(|| {
-            "autonomous execution input lacks its executable payload hash".to_owned()
-        })?;
+        let (network_id, epoch, payload_hash) = input
+            .source
+            .autonomous_binding()
+            .ok_or_else(|| "autonomous execution input has a global-block source".to_owned())?;
         payload
             .validate(network_id, epoch)
             .map_err(|error| error.to_string())?;
@@ -2537,7 +2532,6 @@ impl Kura {
             &source.source_bundle,
             AutonomousLaneMergeBundleV1::FORMAT_LABEL,
             None,
-            SidecarIndexOrigin::FirstWrite,
             &namespace,
         ) {
             return Err(Error::IO(
@@ -2956,9 +2950,8 @@ impl Kura {
         if durable.proposal != *proposal {
             return Err("READY execution input names another proposal or incarnation");
         }
-        if durable.autonomous_network_id != Some(payload.network_id)
-            || durable.autonomous_epoch != Some(payload.epoch)
-            || durable.autonomous_payload_hash != Some(payload.payload_hash)
+        if durable.source.autonomous_binding()
+            != Some((payload.network_id, payload.epoch, payload.payload_hash))
             || durable.entrypoint_hashes != payload.entrypoint_hashes
             || durable.entrypoints != payload.entrypoints
             || durable.reservation_keys != payload.reservation_keys

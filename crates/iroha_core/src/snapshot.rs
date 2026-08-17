@@ -2171,7 +2171,7 @@ fn reconcile_snapshot_hash_height_with_kura(
             )
         })?;
         let extended = kura
-            .reconcile_exact_audited_snapshot_bootstrap(Some(block_count), payload)
+            .reconcile_exact_audited_snapshot_bootstrap(payload)
             .map_err(TryReadError::Kura)?;
         iroha_logger::warn!(
             snapshot_height,
@@ -4496,7 +4496,7 @@ pub enum TryReadError {
     },
     /// Snapshot at height `{snapshot_height}` is missing the durable Space Directory manifest section
     MissingSpaceDirectoryManifestSection {
-        /// Height recorded by the legacy snapshot.
+        /// Height recorded by the malformed snapshot.
         snapshot_height: usize,
     },
     /// Failed to reconcile snapshot block hashes with Kura

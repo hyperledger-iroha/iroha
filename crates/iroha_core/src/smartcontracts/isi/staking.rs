@@ -1986,9 +1986,13 @@ mod tests {
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
         asset::{AssetDefinition, AssetDefinitionId},
-        block::consensus::{
-            CertPhase, ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload,
-            EvidenceRecord, Proposal, QcRef,
+        block::{
+            consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+                SumeragiV2Equivocation, ValidatorPower, Vote,
+            },
         },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         domain::Domain,
@@ -5997,31 +6001,67 @@ mod tests {
     #[test]
     fn cancel_consensus_evidence_penalty_marks_record() {
         let state = setup_state();
+        let roster = vec![ValidatorPower {
+            validator: checked_peer_id(),
+            power: 1,
+        }];
+        let context = HeightContext {
+            network_id: *state.network_id_ref(),
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 1,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"staking cancellation nexus context"),
+            execution_policy_hash: Hash::new(b"staking cancellation execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 4,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1024,
+                max_chunk_count: 512,
+            },
+            leader_seed: [0xA1; Hash::LENGTH],
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"staking cancellation parent state"),
+            Hash::new(b"staking cancellation post state"),
+            Hash::new(b"staking cancellation ordinary writes"),
+            1,
+            Hash::new(b"staking cancellation block"),
+        );
+        let vote = |seed: u8| Vote {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Prepare,
+            subject: BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
+                payload_hash: Hash::new([seed]),
+            },
+            execution_commitment,
+            signer: 0,
+            signature: vec![seed; 96],
+        };
         let evidence = Evidence {
-            kind: EvidenceKind::InvalidProposal,
-            payload: EvidencePayload::InvalidProposal {
-                proposal: Proposal {
-                    header: ConsensusBlockHeader {
-                        parent_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
-                        tx_root: Hash::prehashed([0xBB; 32]),
-                        state_root: Hash::prehashed([0xCC; 32]),
-                        proposer: 0,
-                        height: 1,
-                        view: 0,
-                        epoch: 0,
-                        highest_qc: QcRef {
-                            height: 0,
-                            view: 0,
-                            epoch: 0,
-                            subject_block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                                [0xDD; 32],
-                            )),
-                            phase: CertPhase::Prepare,
-                        },
-                    },
-                    payload_hash: Hash::prehashed([0xEE; 32]),
+            equivocation: SumeragiV2EquivocationEvidence {
+                context,
+                proofs_of_possession: vec![vec![0xD0; 96]],
+                conflict: SumeragiV2Equivocation::PhaseVote {
+                    first: vote(0xAA),
+                    second: vote(0xBB),
                 },
-                reason: "governance-cancel".to_string(),
             },
         };
         let record = EvidenceRecord {

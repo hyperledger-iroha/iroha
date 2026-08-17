@@ -808,7 +808,6 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
     }
     submission_receipt = {
         "payload": {
-            "tx_hash": _canonical_hash(0x71),
             "entrypoint_hash": _canonical_hash(0x72),
             "signed_transaction_hash": _canonical_hash(0x73),
             "submitted_at_ms": 1_700_000_200_000,
@@ -5538,7 +5537,36 @@ def test_update_configuration_posts_payload() -> None:
     assert json.loads(session.calls[0]["data"]) == {"logger": {"level": "Info", "filter": "net=debug"}}
 
 
-def test_get_sumeragi_qc_parses_snapshot() -> None:
+def test_get_sumeragi_qc_parses_authoritative_v2_references() -> None:
+    highest = copy.deepcopy(_sumeragi_v2_status_payload()["last_commit_qc"]["certificate"])
+    highest["phase"] = {"phase": "prepare", "details": None}
+    locked = copy.deepcopy(highest)
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "highest_prepare_qc": highest,
+                "locked_prepare_qc": locked,
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    snapshot = client.get_sumeragi_qc()
+
+    assert snapshot.highest_prepare_qc is not None
+    assert snapshot.highest_prepare_qc.round.height == 9
+    assert snapshot.highest_prepare_qc.phase == "prepare"
+    assert snapshot.locked_prepare_qc is not None
+    assert snapshot.locked_prepare_qc.subject.block_hash == _canonical_hash(0x32)
+    assert session.calls[0]["url"].endswith("/v1/sumeragi/qc")
+
+
+def test_get_sumeragi_qc_rejects_pre_release_snapshot_shape() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -5554,11 +5582,21 @@ def test_get_sumeragi_qc_parses_snapshot() -> None:
         operator_signing_context=_operator_context(),
     )
 
-    snapshot = client.get_sumeragi_qc()
+    with pytest.raises(RuntimeError, match="unknown field highest_qc"):
+        client.get_sumeragi_qc()
 
-    assert snapshot.highest_qc.height == 10
-    assert snapshot.locked_qc.subject_block_hash is None
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/qc")
+
+def test_get_sumeragi_qc_requires_both_nullable_slots() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"highest_prepare_qc": None}))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(RuntimeError, match=r"locked_prepare_qc is required"):
+        client.get_sumeragi_qc()
 
 
 def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
@@ -5835,43 +5873,6 @@ def test_get_sumeragi_pacemaker_parses_snapshot() -> None:
     assert pacemaker.backoff_ms == 50
     assert pacemaker.view_timeout_remaining_ms == 12
     assert session.calls[0]["url"].endswith("/v1/sumeragi/pacemaker")
-
-
-def test_get_sumeragi_phases_parses_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "propose_ms": 1,
-                "collect_da_ms": 2,
-                "collect_prevote_ms": 3,
-                "collect_precommit_ms": 4,
-                "collect_aggregator_ms": 5,
-                "commit_ms": 8,
-                "pipeline_total_ms": 9,
-                "collect_aggregator_gossip_total": 10,
-                "block_created_dropped_by_lock_total": 11,
-                "block_created_hint_mismatch_total": 12,
-                "block_created_proposal_mismatch_total": 13,
-                "ema_ms": {
-                    "propose_ms": 14,
-                    "collect_da_ms": 15,
-                    "collect_prevote_ms": 16,
-                    "collect_precommit_ms": 17,
-                    "collect_aggregator_ms": 18,
-                    "commit_ms": 21,
-                    "pipeline_total_ms": 22,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    phases = client.get_sumeragi_phases()
-
-    assert phases.collect_aggregator_ms == 5
-    assert phases.ema_ms.commit_ms == 21
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/phases")
 
 
 def test_get_sumeragi_leader_parses_prf() -> None:

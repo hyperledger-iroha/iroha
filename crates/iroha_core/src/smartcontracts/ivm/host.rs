@@ -286,7 +286,7 @@ impl PublicInputRecord {
 pub struct AxtProofCacheSnapshot {
     /// Dataspace identifier associated with the cached proof.
     pub dsid: DataSpaceId,
-    /// Hash of the proof payload.
+    /// Hash of the proof payload and its exact outer expiry mirror.
     pub digest: [u8; 32],
     /// Expiry slot (after applying configured skew).
     pub expiry_slot: Option<u64>,
@@ -5365,13 +5365,39 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         AXT_GAS_BASE.saturating_add(AXT_GAS_PER_BYTE.saturating_mul(bytes))
     }
+    fn axt_use_gas(
+        input_len: usize,
+        attached_proof_present: bool,
+        selected_proof: Option<&ProofBlob>,
+    ) -> u64 {
+        // Attached proof bytes are already part of `input_len`. A proof reused
+        // from the per-dataspace state is not present in the syscall inputs,
+        // but its envelope is still decoded while resolving the effective
+        // amount and checking the proof-bound intent commitment.
+        let fallback_proof_len = if attached_proof_present {
+            0
+        } else {
+            selected_proof.map_or(0, |proof| proof.payload.len())
+        };
+        Self::axt_gas(input_len.saturating_add(fallback_proof_len))
+    }
     fn axt_commit_gas(state: &axt::HostAxtState) -> u64 {
         let entries = state
             .touches()
             .len()
             .saturating_add(state.proofs().len())
             .saturating_add(state.handles().len());
-        Self::axt_gas(entries)
+        // Commit re-resolves every handle against its final selected proof.
+        // Charge a reused proof once per handle because its payload is decoded
+        // once per handle, even when multiple handles share one dataspace proof.
+        let revalidated_proof_bytes = state.handles().iter().fold(0_usize, |bytes, usage| {
+            let selected_proof = usage
+                .proof
+                .as_ref()
+                .or_else(|| state.proofs().get(&usage.intent.asset_dsid));
+            bytes.saturating_add(selected_proof.map_or(0, |proof| proof.payload.len()))
+        });
+        Self::axt_gas(entries.saturating_add(revalidated_proof_bytes))
     }
     fn relative_durable_state_key<'a>(
         key: &'a StatePath,
@@ -5884,6 +5910,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             override_ms,
         )
     }
+    fn axt_proof_cache_digest(proof: &ProofBlob) -> [u8; 32] {
+        let mut identity = Vec::with_capacity(proof.payload.len().saturating_add(41));
+        identity.extend_from_slice(b"iroha:axt:proof-cache:v1");
+        match proof.expiry_slot {
+            None => identity.push(0),
+            Some(expiry_slot) => {
+                identity.push(1);
+                identity.extend_from_slice(&expiry_slot.to_le_bytes());
+            }
+        }
+        identity.extend_from_slice(&proof.payload);
+        Hash::new(identity).into()
+    }
     fn reset_axt_proof_cache_for_slot(&mut self, slot: Option<u64>) {
         let slot = slot.filter(|value| *value > 0);
         if let Some(current_slot) = slot {
@@ -6026,6 +6065,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         dsid: DataSpaceId,
         envelope: &ModelAxtProofEnvelope,
+        expiry_slot: Option<u64>,
         policy: AxtPolicyEntry,
     ) -> Result<(), ivm::VMError> {
         let Some(binding) = envelope.fastpq_binding.as_ref() else {
@@ -6046,15 +6086,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        fastpq_prover::verify_axt_proof_envelope(envelope).map_err(|err| {
-            self.record_axt_reject(
-                AxtRejectReason::Proof,
-                Some(dsid),
-                Some(policy.target_lane),
-                format!("FASTPQ verification failed: {err}"),
-            );
-            ivm::VMError::PermissionDenied
-        })?;
+        fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(envelope, expiry_slot)
+            .map_err(|err| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(dsid),
+                    Some(policy.target_lane),
+                    format!("FASTPQ verification failed: {err}"),
+                );
+                ivm::VMError::PermissionDenied
+            })?;
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
@@ -6098,6 +6139,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let expiry_with_skew = proof
             .expiry_slot
             .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
+        // The cache identity covers both the expensive proof payload and its
+        // exact proof-bound expiry mirror. The early range check cheaply
+        // rejects stale artifacts, while the verifier authenticates equality.
+        if let Some(expiry_slot) = expiry_with_skew
+            && policy.current_slot > 0
+            && policy.current_slot > expiry_slot
+        {
+            self.note_axt_proof_cache_event(AXT_PROOF_CACHE_EXPIRED);
+            self.record_axt_reject(
+                AxtRejectReason::Expiry,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof expired (policy_slot={}, expiry_slot={expiry_slot})",
+                    policy.current_slot
+                ),
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if !self.try_reserve_output(1, proof.payload.len().saturating_add(128)) {
             return Err(ivm::VMError::PermissionDenied);
         }
@@ -6106,7 +6166,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             payload: proof.payload.clone(),
             expiry_slot: proof.expiry_slot,
         };
-        let digest: [u8; 32] = Hash::new(&proof.payload).into();
+        let digest = Self::axt_proof_cache_digest(proof);
         let mut cache_snapshot: Option<CachedProofEntry> = None;
         let mut cache_event: Option<&'static str> = None;
         let mut cache_hit_valid = false;
@@ -6185,25 +6245,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(expiry_slot) = expiry_with_skew {
-            if policy.current_slot > 0 && policy.current_slot > expiry_slot {
-                if let Some(entry) = Arc::make_mut(&mut self.axt_proof_cache).remove(&dsid) {
-                    self.clear_axt_proof_cache_state(dsid, &entry);
-                }
-                self.note_axt_proof_cache_event(AXT_PROOF_CACHE_EXPIRED);
-                self.record_axt_reject(
-                    AxtRejectReason::Expiry,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    format!(
-                        "proof expired (policy_slot={}, expiry_slot={expiry_slot})",
-                        policy.current_slot
-                    ),
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-        }
-        self.verify_fastpq_envelope_binding(dsid, &envelope, policy)?;
+        self.verify_fastpq_envelope_binding(dsid, &envelope, proof.expiry_slot, policy)?;
         let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
         state.record_proof(dsid, Some(proof_for_state), None)?;
         self.cache_proof_entry(
@@ -8995,7 +9037,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn enforce_axt_policy(&mut self, usage: &axt::HandleUsage) -> Result<(), ivm::VMError> {
         let dsid = usage.intent.asset_dsid;
         let model_usage = AxtHandleFragment::try_from(usage)?;
-        let key = AxtHandleReplayKey::from_handle(&model_usage.handle);
+        let key = AxtHandleReplayKey::from_handle(dsid, &model_usage.handle);
         let mut policy_bounds: Option<(u64, u64)> = None;
         let mut policy_lane: Option<LaneId> = None;
         let mut record_slot: u64 = 0;
@@ -9013,13 +9055,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 return Err(ivm::VMError::PermissionDenied);
             };
             let policy = binding.policy;
-            let prior_handle_count = self.axt_state.as_ref().map_or(0_usize, |state| {
-                state
-                    .handles()
-                    .iter()
-                    .filter(|prior| prior.intent.asset_dsid == dsid)
-                    .count()
-            });
+            let completed_handles = self
+                .completed_axt
+                .iter()
+                .flat_map(|state| state.handles().iter());
+            let active_handles = self
+                .axt_state
+                .iter()
+                .flat_map(|state| state.handles().iter());
+            let prior_handle_count = completed_handles
+                .chain(active_handles)
+                .filter(|prior| prior.intent.asset_dsid == dsid)
+                .count();
             let expected_sub_nonce = u64::try_from(prior_handle_count)
                 .ok()
                 .and_then(|count| policy.next_handle_counter.checked_add(count))
@@ -9173,7 +9220,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        let result = self.axt_policy.allow_handle(usage);
+        // The explicit checks above own snapshot-backed sequence validation,
+        // including the per-envelope base+prior-handle offset. Calling the
+        // snapshot policy hook again would recheck every handle against the
+        // unadvanced base counter and reject the second valid same-dataspace
+        // handle. Custom policies remain authoritative when no snapshot was
+        // installed.
+        let result = if self.axt_policy_snapshot.is_some() {
+            Ok(())
+        } else {
+            self.axt_policy.allow_handle(usage)
+        };
         if result.is_err() {
             let (next_handle_era, next_sub_nonce) =
                 policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
@@ -9199,6 +9256,152 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
         }
         result
+    }
+    fn validate_axt_remote_spend_commitment(
+        &mut self,
+        usage: &axt::HandleUsage,
+        proof: &ProofBlob,
+    ) -> Result<(), ivm::VMError> {
+        let descriptor_binding = usage
+            .handle
+            .binding_array()
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        axt::validate_remote_spend_intent_commitment(
+            descriptor_binding,
+            &usage.intent,
+            &usage.amount,
+            proof,
+        )
+        .map_err(|error| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(usage.intent.asset_dsid),
+                Some(usage.handle.target_lane),
+                "FASTPQ proof does not commit to the exact remote spend intent",
+            );
+            error
+        })
+    }
+    fn validate_axt_proof_covers_handle_expiry(
+        &mut self,
+        usage: &axt::HandleUsage,
+        proof: &ProofBlob,
+    ) -> Result<(), ivm::VMError> {
+        if proof
+            .expiry_slot
+            .is_some_and(|expiry_slot| expiry_slot < usage.handle.expiry_slot)
+        {
+            self.record_axt_reject(
+                AxtRejectReason::Expiry,
+                Some(usage.intent.asset_dsid),
+                Some(usage.handle.target_lane),
+                "FASTPQ proof expires before the authenticated handle",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(())
+    }
+    fn resolve_axt_handle_amount(
+        &mut self,
+        intent: &RemoteSpendIntent,
+        target_lane: LaneId,
+        proof: Option<&ProofBlob>,
+    ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
+        axt::resolve_handle_amount(intent, proof).map_err(|err| {
+            let (reason, detail) = match err {
+                axt::HandleAmountResolutionError::MissingAmount => (
+                    AxtRejectReason::Budget,
+                    "intent amount is hidden and proof has no committed amount",
+                ),
+                axt::HandleAmountResolutionError::InvalidProofEnvelope => (
+                    AxtRejectReason::Proof,
+                    "proof payload is not a canonical AXT proof envelope",
+                ),
+                axt::HandleAmountResolutionError::Mismatch => (
+                    AxtRejectReason::Budget,
+                    "intent amount does not match proof committed amount",
+                ),
+                axt::HandleAmountResolutionError::ZeroAmount => {
+                    (AxtRejectReason::Budget, "handle amount must be non-zero")
+                }
+                axt::HandleAmountResolutionError::InvalidProofScalar => (
+                    AxtRejectReason::Proof,
+                    "proof committed amount is not a canonical V1 u128 scalar",
+                ),
+                axt::HandleAmountResolutionError::CommitmentMismatch => (
+                    AxtRejectReason::Proof,
+                    "proof amount commitment does not bind its canonical statement",
+                ),
+            };
+            self.record_axt_reject(reason, Some(intent.asset_dsid), Some(target_lane), detail);
+            err.to_vm_error()
+        })
+    }
+    fn validate_axt_remote_spends_at_commit(
+        &mut self,
+        state: &axt::HostAxtState,
+    ) -> Result<(), ivm::VMError> {
+        for usage in state.handles() {
+            let proof = usage
+                .proof
+                .as_ref()
+                .or_else(|| state.proofs().get(&usage.intent.asset_dsid))
+                .ok_or_else(|| {
+                    self.record_axt_reject(
+                        AxtRejectReason::Proof,
+                        Some(usage.intent.asset_dsid),
+                        Some(usage.handle.target_lane),
+                        "missing FASTPQ proof for remote spend intent commitment",
+                    );
+                    ivm::VMError::PermissionDenied
+                })?;
+            self.validate_axt_proof_covers_handle_expiry(usage, proof)?;
+            // A per-dataspace proof may be installed or replaced after a
+            // handle was recorded. Re-resolve against the exact proof that
+            // will be materialized so host acceptance cannot diverge from
+            // block admission on its committed scalar or amount commitment.
+            let resolved = self.resolve_axt_handle_amount(
+                &usage.intent,
+                usage.handle.target_lane,
+                Some(proof),
+            )?;
+            if resolved.amount != usage.amount {
+                self.record_axt_reject(
+                    AxtRejectReason::Budget,
+                    Some(usage.intent.asset_dsid),
+                    Some(usage.handle.target_lane),
+                    "final FASTPQ proof changes the resolved handle amount",
+                );
+                return Err(ivm::VMError::PermissionDenied);
+            }
+            if resolved.amount_commitment != usage.amount_commitment {
+                self.record_axt_reject(
+                    AxtRejectReason::Budget,
+                    Some(usage.intent.asset_dsid),
+                    Some(usage.handle.target_lane),
+                    "final FASTPQ proof changes the resolved amount commitment",
+                );
+                return Err(ivm::VMError::PermissionDenied);
+            }
+            if resolved.amount > usage.handle.budget.remaining
+                || usage
+                    .handle
+                    .budget
+                    .per_use
+                    .as_ref()
+                    .is_some_and(|per_use| &resolved.amount > per_use)
+            {
+                self.record_axt_reject(
+                    AxtRejectReason::Budget,
+                    Some(usage.intent.asset_dsid),
+                    Some(usage.handle.target_lane),
+                    "final FASTPQ proof exceeds the authenticated handle budget",
+                );
+                return Err(ivm::VMError::PermissionDenied);
+            }
+            self.validate_axt_remote_spend_commitment(usage, proof)?;
+        }
+        Ok(())
     }
     #[allow(clippy::too_many_lines)]
     fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -9353,43 +9556,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt::validate_proof_blob(&blob)?;
             Some(blob)
         };
-        let gas = Self::axt_gas(gas_len);
+        let selected_proof = proof.as_ref().or_else(|| {
+            self.axt_state
+                .as_ref()
+                .and_then(|state| state.proofs().get(&intent.asset_dsid))
+        });
+        let gas = Self::axt_use_gas(gas_len, proof.is_some(), selected_proof);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+        let selected_proof = selected_proof.cloned();
         let resolved_amount =
-            axt::resolve_handle_amount(&intent, proof.as_ref()).map_err(|err| {
-                let (reason, detail) = match err {
-                    axt::HandleAmountResolutionError::MissingAmount => (
-                        AxtRejectReason::Budget,
-                        "intent amount is hidden and proof has no committed amount",
-                    ),
-                    axt::HandleAmountResolutionError::InvalidProofEnvelope => (
-                        AxtRejectReason::Proof,
-                        "proof payload is not a canonical AXT proof envelope",
-                    ),
-                    axt::HandleAmountResolutionError::Mismatch => (
-                        AxtRejectReason::Budget,
-                        "intent amount does not match proof committed amount",
-                    ),
-                    axt::HandleAmountResolutionError::ZeroAmount => {
-                        (AxtRejectReason::Budget, "handle amount must be non-zero")
-                    }
-                    axt::HandleAmountResolutionError::InvalidProofScalar => (
-                        AxtRejectReason::Proof,
-                        "proof committed amount is not a canonical V1 u128 scalar",
-                    ),
-                    axt::HandleAmountResolutionError::CommitmentMismatch => (
-                        AxtRejectReason::Proof,
-                        "proof amount commitment does not bind its canonical statement",
-                    ),
-                };
-                self.record_axt_reject(
-                    reason,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    detail,
-                );
-                err.to_vm_error()
-            })?;
+            self.resolve_axt_handle_amount(&intent, handle.target_lane, selected_proof.as_ref())?;
         let amount = resolved_amount.amount;
         if &amount > &handle.budget.remaining {
             self.record_axt_reject(
@@ -9439,6 +9615,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount,
             amount_commitment: resolved_amount.amount_commitment,
         };
+        if let Some(blob) = selected_proof.as_ref() {
+            self.validate_axt_proof_covers_handle_expiry(&usage, blob)?;
+        }
         // Capability authentication is deliberately cheaper and earlier than
         // the attacker-amplifiable FASTPQ verification below.
         self.authenticate_axt_handle_usage(vm, &usage)?;
@@ -9455,6 +9634,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     ivm::VMError::PermissionDenied
                 })?;
             self.validate_axt_proof(usage.intent.asset_dsid, blob, policy)?;
+        }
+        if let Some(blob) = selected_proof.as_ref() {
+            self.validate_axt_remote_spend_commitment(&usage, blob)?;
         }
         self.enforce_axt_policy(&usage)?;
         let output_count_before = self.instruction_queue_count;
@@ -9561,6 +9743,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     });
                 }
             }
+        }
+        if let Err(error) = self.validate_axt_remote_spends_at_commit(&state) {
+            self.axt_state = Some(state);
+            return Err(error);
         }
         match state.validate_commit() {
             Ok(()) => {
@@ -12828,6 +13014,113 @@ seiyaku PrivilegedBinding {
         assert_eq!(decoded, expected);
     }
     #[test]
+    fn axt_gas_bills_reused_proof_payload_for_each_decode() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(3);
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
+        let mut state = axt::HostAxtState::new(descriptor, binding);
+        state
+            .record_touch(
+                dsid,
+                TouchManifest {
+                    read: Vec::new(),
+                    write: Vec::new(),
+                },
+            )
+            .expect("record empty touch");
+        let proof = ProofBlob {
+            payload: vec![0xA5; 37],
+            expiry_slot: Some(50),
+        };
+        state
+            .record_proof(dsid, Some(proof.clone()), Some(1))
+            .expect("record fallback proof");
+
+        let input_len = 19_usize;
+        assert_eq!(
+            CoreHost::axt_use_gas(input_len, false, Some(&proof)),
+            CoreHost::axt_gas(input_len.saturating_add(proof.payload.len())),
+            "USE must bill a selected per-dataspace fallback proof"
+        );
+        assert_eq!(
+            CoreHost::axt_use_gas(input_len, true, Some(&proof)),
+            CoreHost::axt_gas(input_len),
+            "an attached proof is already included in the syscall input length"
+        );
+        assert_eq!(
+            CoreHost::axt_use_gas(usize::MAX, false, Some(&proof)),
+            CoreHost::axt_gas(usize::MAX),
+            "fallback proof accounting must saturate"
+        );
+
+        let authority = fixture_account_literal("alice");
+        let destination = fixture_account_literal("bob");
+        let base_handle = AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: authority.clone(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xAA; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(1),
+            axt_binding: binding.to_vec(),
+            manifest_view_root: vec![0x44; 32],
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".to_owned(),
+                from: authority,
+                to: destination,
+                amount: Some(Quantity::from(1_u64)),
+            },
+        };
+        for sub_nonce in [1_u64, 2] {
+            let mut handle = base_handle.clone();
+            handle.sub_nonce = sub_nonce;
+            state
+                .record_handle(axt::HandleUsage {
+                    handle,
+                    intent: intent.clone(),
+                    proof: None,
+                    amount: Quantity::from(1_u64),
+                    amount_commitment: None,
+                })
+                .expect("record handle using the dataspace fallback proof");
+        }
+
+        let entry_bytes = state
+            .touches()
+            .len()
+            .saturating_add(state.proofs().len())
+            .saturating_add(state.handles().len());
+        let expected_commit_bytes = entry_bytes
+            .saturating_add(proof.payload.len())
+            .saturating_add(proof.payload.len());
+        assert_eq!(
+            CoreHost::axt_commit_gas(&state),
+            CoreHost::axt_gas(expected_commit_bytes),
+            "COMMIT must bill the shared proof payload once for each handle revalidation"
+        );
+    }
+    #[test]
     fn axt_verify_ds_proof_enforces_manifest_root() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(3);
@@ -12890,9 +13183,96 @@ seiyaku PrivilegedBinding {
             .axt_proof_cache
             .get(&dsid)
             .expect("cache populated on accept");
-        let expected_digest: [u8; 32] = Hash::new(&aligned_proof.payload).into();
+        let expected_digest = CoreHost::axt_proof_cache_digest(&aligned_proof);
         assert_eq!(entry.digest, expected_digest);
         assert_eq!(entry.manifest_root, Some(manifest_root));
+    }
+    #[test]
+    fn axt_verify_ds_proof_rejects_mutated_outer_expiry_on_cache_hit() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(31);
+        let manifest_root = [0x31; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        vm.set_register(10, ds_ptr);
+
+        let live_proof = proof_blob_for(dsid, manifest_root, b"outer-expiry-alias", 20);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&live_proof));
+        vm.set_register(11, proof_ptr);
+        assert!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+                .is_ok(),
+            "live proof must populate the cache"
+        );
+        assert!(host.axt_proof_cache.contains_key(&dsid));
+
+        let expired_alias = ProofBlob {
+            payload: live_proof.payload.clone(),
+            expiry_slot: Some(4),
+        };
+        let expired_ptr = store_tlv(
+            &mut vm,
+            PointerType::ProofBlob,
+            &norito_blob(&expired_alias),
+        );
+        vm.set_register(11, expired_ptr);
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            Err(VMError::PermissionDenied),
+            "an expired outer expiry must not alias a cached live payload"
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Expiry);
+        assert!(
+            host.axt_proof_cache.contains_key(&dsid),
+            "invalid outer metadata must not evict a valid cached payload"
+        );
+
+        let extended_alias = ProofBlob {
+            payload: live_proof.payload.clone(),
+            expiry_slot: Some(200),
+        };
+        let extended_ptr = store_tlv(
+            &mut vm,
+            PointerType::ProofBlob,
+            &norito_blob(&extended_alias),
+        );
+        vm.set_register(11, extended_ptr);
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            Err(VMError::PermissionDenied),
+            "a longer outer expiry must not alias a cached proof payload"
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(
+            host.axt_proof_cache.contains_key(&dsid),
+            "an unauthenticated longer expiry must not evict the valid cache entry"
+        );
+
+        vm.set_register(11, proof_ptr);
+        assert!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+                .is_ok(),
+            "the original live proof must remain reusable after alias rejection"
+        );
+        assert_eq!(
+            host.axt_proof_cache
+                .get(&dsid)
+                .expect("live cache entry retained")
+                .status,
+            AXT_PROOF_CACHE_HIT
+        );
     }
     #[test]
     fn axt_verify_ds_proof_rejects_undeclared_dataspace() {
@@ -13029,7 +13409,7 @@ seiyaku PrivilegedBinding {
             .get(&dsid)
             .expect("cache updated after manifest change");
         assert_eq!(entry.manifest_root, Some(new_manifest_root));
-        let expected_digest: [u8; 32] = Hash::new(&new_proof.payload).into();
+        let expected_digest = CoreHost::axt_proof_cache_digest(&new_proof);
         assert_eq!(entry.digest, expected_digest);
     }
     #[test]
@@ -13928,8 +14308,8 @@ seiyaku PrivilegedBinding {
             .kura()
             .store_block(committed)
             .expect("store AXT slot fixture block");
-        let live_key = AxtHandleReplayKey::from_parts([0x11; 32], 1, 1, lane);
-        let expired_key = AxtHandleReplayKey::from_parts([0x22; 32], 1, 2, lane);
+        let live_key = AxtHandleReplayKey::from_parts(dsid, [0x11; 32], 1, 1, lane);
+        let expired_key = AxtHandleReplayKey::from_parts(dsid, [0x22; 32], 1, 2, lane);
         let live_record = AxtReplayRecord {
             dataspace: dsid,
             used_slot: 1,
@@ -14007,6 +14387,105 @@ seiyaku PrivilegedBinding {
         );
     }
     #[test]
+    fn snapshot_policy_accepts_base_plus_one_across_envelopes_but_rejects_gap() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(20);
+        let lane = LaneId::new(2);
+        let manifest_root = [0x90; 32];
+        let base_counter = 5;
+        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 10);
+        snapshot.entries[0].policy.target_lane = lane;
+        snapshot.entries[0].policy.active_handle_era = 3;
+        snapshot.entries[0].policy.next_handle_counter = base_counter;
+        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+
+        let authority: AccountId = fixture_account("alice");
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let binding = axt::compute_binding(&descriptor).expect("AXT binding");
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(
+            descriptor.clone(),
+            binding,
+        )));
+
+        let base_handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(20_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 3,
+            sub_nonce: base_counter,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding.to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 20,
+            max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+        };
+        let usage_for = |sub_nonce| {
+            let mut handle = base_handle.clone();
+            handle.sub_nonce = sub_nonce;
+            axt::HandleUsage {
+                handle,
+                intent: RemoteSpendIntent {
+                    asset_dsid: dsid,
+                    op: SpendOp {
+                        kind: "transfer".into(),
+                        from: authority.to_string(),
+                        to: fixture_account_literal("bob"),
+                        amount: Some(Quantity::from(5_u64)),
+                    },
+                },
+                proof: None,
+                amount: Quantity::from(5_u64),
+                amount_commitment: None,
+            }
+        };
+
+        let base_usage = usage_for(base_counter);
+        host.enforce_axt_policy(&base_usage)
+            .expect("snapshot base counter must be accepted");
+        Arc::make_mut(host.axt_state.as_mut().expect("active AXT state"))
+            .record_handle(base_usage)
+            .expect("record accepted base handle");
+
+        let gap_usage = usage_for(base_counter + 2);
+        assert_eq!(
+            host.enforce_axt_policy(&gap_usage),
+            Err(VMError::PermissionDenied),
+            "snapshot counter gaps must remain rejected"
+        );
+        assert_eq!(
+            host.take_axt_reject_for_tests()
+                .expect("gap reject context")
+                .reason,
+            AxtRejectReason::SubNonce
+        );
+
+        let completed = host.axt_state.take().expect("completed AXT state");
+        host.completed_axt
+            .push(Arc::try_unwrap(completed).unwrap_or_else(|state| state.as_ref().clone()));
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
+        let next_usage = usage_for(base_counter + 1);
+        host.enforce_axt_policy(&next_usage)
+            .expect("snapshot base+1 counter must include a prior completed envelope");
+    }
+    #[test]
     fn axt_replay_ledger_from_state_rejects_reuse() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(21);
@@ -14022,6 +14501,7 @@ seiyaku PrivilegedBinding {
             current_slot: 10,
         };
         let replay_key = AxtHandleReplayKey {
+            asset_dsid: dsid,
             binding,
             handle_era: 2,
             sub_nonce: 5,
@@ -14099,6 +14579,103 @@ seiyaku PrivilegedBinding {
         assert_eq!(ctx.reason, AxtRejectReason::ReplayCache);
     }
     #[test]
+    fn axt_replay_ledger_scopes_identical_handle_tuple_by_dataspace() {
+        crate::test_alias::ensure();
+        let ds_a = DataSpaceId::new(31);
+        let ds_b = DataSpaceId::new(32);
+        let lane = LaneId::new(1);
+        let manifest_root = [0x91; 32];
+        let policy = AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 10,
+        };
+        let entries = vec![
+            AxtPolicyBinding { dsid: ds_a, policy },
+            AxtPolicyBinding { dsid: ds_b, policy },
+        ];
+        let snapshot = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&entries),
+            entries,
+        };
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical multi-dataspace policy snapshot");
+        let binding = AxtBinding::new([0xA9; 32]);
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(DataSpaceId::UNIVERSAL),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding.as_bytes().to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 20,
+            max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+        };
+        let usage_for = |asset_dsid| axt::HandleUsage {
+            handle: handle.clone(),
+            intent: RemoteSpendIntent {
+                asset_dsid,
+                op: SpendOp {
+                    kind: "transfer".into(),
+                    from: authority.to_string(),
+                    to: fixture_account_literal("bob"),
+                    amount: Some(Quantity::from(5_u64)),
+                },
+            },
+            proof: None,
+            amount: Quantity::from(5_u64),
+            amount_commitment: None,
+        };
+        let usage_a = usage_for(ds_a);
+        let usage_b = usage_for(ds_b);
+        host.enforce_axt_policy(&usage_a)
+            .expect("first dataspace handle should be accepted");
+        host.enforce_axt_policy(&usage_b)
+            .expect("same tuple from another dataspace should be accepted");
+        let key_a = AxtHandleReplayKey::from_handle(
+            ds_a,
+            &AxtHandleFragment::try_from(&usage_a)
+                .expect("model handle")
+                .handle,
+        );
+        let key_b = AxtHandleReplayKey::from_handle(
+            ds_b,
+            &AxtHandleFragment::try_from(&usage_b)
+                .expect("model handle")
+                .handle,
+        );
+        assert_ne!(key_a, key_b);
+        assert_eq!(host.axt_replay_ledger.len(), 2);
+        let error = host
+            .enforce_axt_policy(&usage_a)
+            .expect_err("same-dataspace replay must remain rejected");
+        assert_eq!(error, VMError::PermissionDenied);
+        assert_eq!(
+            host.take_axt_reject_for_tests()
+                .expect("replay reject context")
+                .reason,
+            AxtRejectReason::ReplayCache
+        );
+    }
+    #[test]
     fn axt_replay_ledger_records_retention_floor() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(23);
@@ -14163,6 +14740,7 @@ seiyaku PrivilegedBinding {
         host.enforce_axt_policy(&usage)
             .expect("policy should accept handle");
         let key = AxtHandleReplayKey {
+            asset_dsid: dsid,
             binding,
             handle_era: 1,
             sub_nonce: 1,
@@ -14199,6 +14777,7 @@ seiyaku PrivilegedBinding {
             .expect("canonical policy snapshot");
         let binding_bytes = [0xCD; 32];
         let replay_key = AxtHandleReplayKey {
+            asset_dsid: dsid,
             binding: AxtBinding::new(binding_bytes),
             handle_era: 1,
             sub_nonce: 1,
@@ -14287,6 +14866,7 @@ seiyaku PrivilegedBinding {
             block.axt_policies.insert(dsid, policy);
             block.axt_replay_ledger.insert(
                 AxtHandleReplayKey {
+                    asset_dsid: dsid,
                     binding,
                     handle_era: 1,
                     sub_nonce: 1,
@@ -20025,6 +20605,7 @@ seiyaku OpaqueInstructionSubmission {
             verifier_version: "v1".to_owned(),
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
@@ -20050,7 +20631,15 @@ seiyaku OpaqueInstructionSubmission {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT test batch");
+        fastpq_prover::bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            manifest_root,
+            None,
+            None,
+            Some(expiry_slot),
+        )
+        .expect("bind AXT test batch");
         let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
             .expect("FASTPQ prover")
             .prove(&batch)
@@ -27306,713 +27895,7 @@ seiyaku DurableOwner {
         host.set_verifying_keys(map).expect("set registry");
         envelope
     }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn enforce_zk_envelope_maps_errors_and_ok() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let public_inputs = vec![1u8, 2, 3, 4];
-        let schema_hash = schema_hash(&public_inputs);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes.clone(),
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        let ok_env = dummy_env(
-            circuit_id,
-            commitment,
-            public_inputs.clone(),
-            vec![0xAA; 16],
-        );
-        assert!(host.enforce_zk_envelope(&ok_env, "transfer").is_ok());
-        let bad_circuit_env = dummy_env(
-            "halo2/ipa:wrong-circuit",
-            commitment,
-            public_inputs,
-            vec![0xAA; 16],
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&bad_circuit_env, "transfer"),
-            Err(ivm::host::ERR_VK_MISMATCH)
-        );
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        host.halo2_config.max_envelope_bytes = usize::MAX;
-        host.halo2_config.max_proof_bytes = usize::MAX;
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let public_inputs = vec![1u8, 2, 3, 4];
-        let schema_hash = schema_hash(&public_inputs);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes,
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 10] = [
-            (
-                "empty circuit id",
-                |env| env.circuit_id.clear(),
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "malformed circuit id",
-                |env| env.circuit_id = "halo2/ipa:transfer-check\nforged".to_owned(),
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "oversized circuit id",
-                |env| {
-                    env.circuit_id = "a"
-                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
-                },
-                ivm::host::ERR_ENVELOPE_SIZE,
-            ),
-            (
-                "zero verifier-key hash",
-                |env| env.vk_hash = [0u8; 32],
-                ivm::host::ERR_VK_MISSING,
-            ),
-            (
-                "empty public inputs",
-                |env| env.public_inputs.clear(),
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "all-zero public inputs",
-                |env| env.public_inputs = vec![0u8; 16],
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "oversized public inputs",
-                |env| {
-                    env.public_inputs = vec![
-                        0xA5;
-                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
-                            + 1
-                    ];
-                },
-                ivm::host::ERR_ENVELOPE_SIZE,
-            ),
-            (
-                "empty proof bytes",
-                |env| env.proof_bytes.clear(),
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "all-zero proof bytes",
-                |env| env.proof_bytes = vec![0u8; 16],
-                ivm::host::ERR_DECODE,
-            ),
-            (
-                "auxiliary bytes",
-                |env| env.aux = b"ignored-hint".to_vec(),
-                ivm::host::ERR_VK_MISMATCH,
-            ),
-        ];
-        for (label, mutate, expected_code) in invalid_cases {
-            let payload = mutated_dummy_env(
-                circuit_id,
-                commitment,
-                public_inputs.clone(),
-                vec![0xAA; 16],
-                mutate,
-            );
-            assert_eq!(
-                host.enforce_zk_envelope(&payload, "transfer"),
-                Err(expected_code),
-                "{label} should map to the shared validation error code"
-            );
-        }
-        host.halo2_config.max_proof_bytes = 8;
-        let too_large_proof = dummy_env(
-            circuit_id,
-            commitment,
-            public_inputs,
-            vec![0xAA; host.halo2_config.max_proof_bytes + 1],
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&too_large_proof, "transfer"),
-            Err(ivm::host::ERR_PROOF_LEN)
-        );
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let public_inputs = vec![9u8, 8, 7, 6];
-        let schema_hash = schema_hash(&public_inputs);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "ballot",
-            vk_bytes.clone(),
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        let env = dummy_env(
-            circuit_id,
-            commitment,
-            public_inputs.clone(),
-            vec![0xAA; 16],
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&env, "transfer"),
-            Err(ivm::host::ERR_NAMESPACE)
-        );
-        // Switching the caller manifest also trips the manifest binding.
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes,
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        host.set_current_manifest_id(Some("other".to_string()));
-        assert_eq!(
-            host.enforce_zk_envelope(&env, "transfer"),
-            Err(ivm::host::ERR_NAMESPACE)
-        );
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let public_inputs = vec![1u8, 2, 3, 4];
-        let schema_hash = schema_hash(&public_inputs);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes.clone(),
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        // Schema hash mismatch is rejected.
-        let env = dummy_env(circuit_id, commitment, vec![5u8, 6, 7, 8], vec![0xAA; 16]);
-        assert_eq!(
-            host.enforce_zk_envelope(&env, "transfer"),
-            Err(ivm::host::ERR_VK_MISMATCH)
-        );
-        // Unknown vk hash is rejected explicitly.
-        let env_bad_vk = dummy_env(
-            circuit_id,
-            [0xAA; 32],
-            public_inputs.clone(),
-            vec![0xAA; 16],
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&env_bad_vk, "transfer"),
-            Err(ivm::host::ERR_VK_MISSING)
-        );
-        host.stark_config.enabled = true;
-        let env_bad_backend = mutated_dummy_env(
-            circuit_id,
-            commitment,
-            public_inputs.clone(),
-            vec![0xAA; 16],
-            |env| env.backend = BackendTag::Stark,
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&env_bad_backend, "transfer"),
-            Err(ivm::host::ERR_BACKEND)
-        );
-        // Opaque auxiliary metadata is not admitted by the registered-key guard.
-        let mut env_aux = ivm::host::decode_canonical_zk_envelope(&dummy_env(
-            circuit_id,
-            commitment,
-            public_inputs.clone(),
-            vec![0xAA; 16],
-        ))
-        .expect("decode dummy envelope");
-        env_aux.aux = b"ignored-hint".to_vec();
-        let env_aux = norito::to_bytes(&env_aux).expect("encode aux envelope");
-        assert_eq!(
-            host.enforce_zk_envelope(&env_aux, "transfer"),
-            Err(ivm::host::ERR_VK_MISMATCH)
-        );
-        // Happy-path still succeeds.
-        let env_ok = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
-        assert!(host.enforce_zk_envelope(&env_ok, "transfer").is_ok());
-    }
-    #[test]
-    fn generic_verify_proof_syscall_reports_registry_precheck_errors() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let payload = dummy_env(
-            "halo2/ipa:missing-vk",
-            [1u8; 32],
-            vec![1u8, 2, 3, 4],
-            vec![0xAA; 16],
-        );
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
-            .expect("generic verify proof syscall");
-        assert!(gas > 0, "verification prechecks still charge proof gas");
-        assert_eq!(vm.register(10), 0);
-        assert_eq!(vm.register(11), ivm::host::ERR_VK_MISSING);
-    }
-    #[test]
-    fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        let code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT).expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        let mut vm = IVM::new(20);
-        vm.load_program(&build_program(&code, 0))
-            .expect("load verifier program");
-        let payload_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            b"intentionally malformed proof envelope",
-        );
-        vm.set_register(10, payload_ptr);
-        vm.set_register(11, 0xfeed);
-        let error = vm
-            .run_with_host(&mut host)
-            .expect_err("proof gas exceeds the pre-debited reserve");
-        assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(
-            vm.remaining_gas(),
-            15,
-            "an unaffordable proof reserve must not be partially debited"
-        );
-        assert_eq!(vm.register(10), payload_ptr);
-        assert_eq!(vm.register(11), 0xfeed);
-        assert!(host.zk_verified_ballot.is_empty());
-        assert!(host.zk_last_env_hash_ballot.is_empty());
-    }
-    #[test]
-    fn zk_verify_batch_quote_and_actual_scale_with_every_proof() {
-        crate::test_alias::ensure();
-        let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
-            "halo2/ipa:metering",
-            [1u8; 32],
-            vec![1, 2, 3, 4],
-            vec![0xAA; 16],
-        ))
-        .expect("decode metering envelope");
-        for count in [1_usize, 3] {
-            let payload =
-                norito::to_bytes(&vec![envelope.clone(); count]).expect("encode metered ZK batch");
-            let mut vm = IVM::new(u64::MAX);
-            let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-            vm.set_register(10, pointer);
-            let mut host = CoreHost::new(fixture_account("alice"));
-            let expected_quote = host
-                .zk_gas_schedule
-                .conservative_batch_gas(count, payload.len());
-            let expected_actual = host.zk_gas_schedule.actual_batch_gas(
-                count,
-                payload.len(),
-                u64::try_from(count).expect("bounded count"),
-            );
-            assert_eq!(
-                host.prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm),
-                Ok(expected_quote)
-            );
-            assert_eq!(
-                host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
-                Ok(expected_actual)
-            );
-            assert!(expected_actual < expected_quote);
-            assert_eq!(vm.register(11), ivm::host::ERR_VK_MISSING);
-        }
-    }
-    #[test]
-    fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
-        crate::test_alias::ensure();
-        let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
-            "halo2/ipa:metering",
-            [1u8; 32],
-            vec![1, 2, 3, 4],
-            vec![0xAA; 16],
-        ))
-        .expect("decode metering envelope");
-        let payload = norito::to_bytes(&vec![envelope.clone(), envelope]).expect("encode ZK batch");
-        let code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&build_program(&code, 0))
-            .expect("load batch verifier program");
-        let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, pointer);
-        vm.set_register(11, 0xfeed);
-        vm.set_register(12, 0xbeef);
-        let mut host = CoreHost::new(fixture_account("alice"));
-        let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
-            .expect("quote bounded ZK batch");
-        vm.set_gas_limit(quote);
-        assert_eq!(vm.run_with_host(&mut host), Err(ivm::VMError::OutOfGas));
-        assert_eq!(vm.register(10), pointer);
-        assert_eq!(vm.register(11), 0xfeed);
-        assert_eq!(vm.register(12), 0xbeef);
-    }
-    #[test]
-    fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
-        crate::test_alias::ensure();
-        let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
-            "halo2/ipa:metering",
-            [1u8; 32],
-            vec![1, 2, 3, 4],
-            vec![0xAA; 16],
-        ))
-        .expect("decode metering envelope");
-        let payload = norito::to_bytes(&vec![envelope.clone(), envelope])
-            .expect("encode over-limit ZK batch");
-        let mut vm = IVM::new(u64::MAX);
-        let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, pointer);
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.halo2_config.verifier_max_batch = 1;
-        let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
-            .expect("count rejection must still reserve gas");
-        assert_eq!(
-            quote,
-            host.zk_gas_schedule
-                .conservative_batch_gas(2, payload.len())
-        );
-        assert_eq!(vm.register(10), pointer);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
-            Ok(quote)
-        );
-        assert_eq!(vm.register(10), 0);
-        assert_eq!(vm.register(11), ivm::host::ERR_BATCH);
-        assert_eq!(vm.register(12), u64::MAX);
-    }
-    #[test]
-    fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
-        crate::test_alias::ensure();
-        for backend in [
-            "halo2/mock",
-            "halo2/ipa:production-ready",
-            "halo2/unknown-native-v1",
-        ] {
-            let mut host = CoreHost::new(fixture_account("alice"));
-            host.set_chain_id_bytes(b"chain".to_vec());
-            host.set_current_manifest_id(Some("core".to_string()));
-            let circuit_id = format!("{backend}:rejected-circuit");
-            let public_inputs = vec![1u8, 2, 3, 4];
-            let vk_bytes = vec![4, 3, 2, 1];
-            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-            let rec = active_vk_record(
-                commitment,
-                schema_hash(&public_inputs),
-                backend,
-                &circuit_id,
-                "core",
-                vk_bytes,
-            );
-            let record = Arc::new(rec);
-            host.verifying_keys
-                .insert(VerifyingKeyId::new(backend, "vk"), Arc::clone(&record));
-            host.prepared_verifying_keys.insert(
-                commitment,
-                PreparedVerifyingKey {
-                    record,
-                    backend_label: Arc::from(backend),
-                    material: None,
-                },
-            );
-            let payload = dummy_env(&circuit_id, commitment, public_inputs, vec![0xAA; 16]);
-            let mut vm = IVM::new(1_000_000);
-            let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-            vm.set_register(10, ptr);
-            let gas = host
-                .syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
-                .expect("generic verify proof syscall");
-            assert!(
-                gas > 0,
-                "verification prechecks still charge proof gas for {backend}"
-            );
-            assert_eq!(vm.register(10), 0, "case {backend} must fail");
-            assert_eq!(
-                vm.register(11),
-                ivm::host::ERR_BACKEND,
-                "case {backend} must fail as backend admission"
-            );
-        }
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[test]
-    fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
-        crate::test_alias::ensure();
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let public_inputs = vec![1_u8, 2, 3, 4];
-        let mut vk_bytes = b"ZK1\0H2VK".to_vec();
-        vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let record = Arc::new(active_vk_record(
-            commitment,
-            schema_hash(&public_inputs),
-            backend,
-            circuit_id,
-            "core",
-            vk_bytes,
-        ));
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_owned()));
-        // Simulate a corrupt in-memory snapshot that bypassed installation.
-        // Dispatch must still invoke the shared strict material validator.
-        host.verifying_keys.insert(
-            VerifyingKeyId::new(backend, "forged-inline-key"),
-            Arc::clone(&record),
-        );
-        host.prepared_verifying_keys.insert(
-            commitment,
-            PreparedVerifyingKey {
-                record,
-                backend_label: Arc::from(backend),
-                material: Some(crate::zk::PreparedVerifyingKeyMaterialV1::Halo2IpaPasta {
-                    ipa_k: crate::zk::IVM_EXECUTION_V1_IPA_K,
-                }),
-            },
-        );
-        let payload = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
-        host.syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
-            .expect("malformed key is a reported verification failure");
-        assert_eq!(vm.register(10), 0);
-        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
-    }
-    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let mut stark_cfg = iroha_config::parameters::actual::Stark::default();
-        stark_cfg.enabled = true;
-        host.set_stark_config(&stark_cfg);
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:ivm-syscall";
-        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::encode_canonical(&vk_payload).expect("encode canonical STARK vk");
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
-        let schema_descriptor = b"ivm-syscall-schema-v1";
-        let proof = crate::zk::prove_stark_fri_open_verify_envelope(
-            backend,
-            circuit_id,
-            &vk_box,
-            schema_descriptor,
-            vec![vec![[7u8; 32]]],
-        )
-        .expect("prove STARK envelope");
-        let env = ivm::host::decode_canonical_zk_envelope(&proof.bytes)
-            .expect("decode OpenVerifyEnvelope");
-        let commitment = crate::zk::hash_vk(&vk_box);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash(schema_descriptor),
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes,
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk_stark"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        let payload = norito::to_bytes(&vec![env]).expect("encode batch");
-        let mut vm = IVM::new(50_000_000);
-        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
-        let ptr = vm
-            .alloc_heap(tlv.len() as u64)
-            .expect("allocate STARK batch TLV");
-        vm.store_bytes(ptr, &tlv).expect("store STARK batch TLV");
-        vm.set_register(10, ptr);
-        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
-            .expect("batch verify");
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
-        assert_eq!(statuses, vec![1]);
-        assert_eq!(vm.register(11), 0);
-        assert_eq!(vm.register(12), u64::MAX);
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn zk_verify_batch_returns_statuses_with_registry_binding() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        enable_halo2_batch_verifier(&mut host, 8, 18);
-        let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
-        assert!(
-            !env_ok.public_inputs.is_empty(),
-            "fixture circuit must expose public inputs for schema mismatch coverage"
-        );
-        let mut env_bad = env_ok.clone();
-        env_bad.public_inputs[0] ^= 0x01;
-        let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
-        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
-            .expect("batch verify");
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
-        assert_eq!(statuses, vec![1, 0]);
-        assert_eq!(vm.register(11), ivm::host::ERR_VK_MISMATCH);
-        assert_eq!(vm.register(12), 1);
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        enable_halo2_batch_verifier(&mut host, 8, 18);
-        let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
-        let mut env_bad = env_ok.clone();
-        let last = env_bad
-            .proof_bytes
-            .last_mut()
-            .expect("fixture proof bytes must not be empty");
-        *last ^= 0x01;
-        let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
-        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
-            .expect("batch verify");
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
-        assert_eq!(statuses, vec![1, 0]);
-        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
-        assert_eq!(vm.register(12), 1);
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    #[test]
-    fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
-        crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let public_inputs = vec![3u8, 1, 4, 1, 5, 9];
-        let schema_hash = schema_hash(&public_inputs);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash,
-            backend,
-            circuit_id,
-            "transfer",
-            vk_bytes.clone(),
-        );
-        let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-        host.set_verifying_keys(map).expect("set registry");
-        let env_bytes = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
-        let env = ivm::host::decode_canonical_zk_envelope(&env_bytes).expect("decode envelope");
-        let payload = norito::to_bytes(&vec![env]).expect("encode batch");
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
-        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
-            .expect("batch verify");
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
-        assert_eq!(statuses, vec![0]);
-        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
-        assert_eq!(vm.register(12), 0);
-    }
+    include!("host/zk_verification_tests.rs");
     #[test]
     fn input_publish_tlv_is_forwarded_to_default_host() {
         crate::test_alias::ensure();
@@ -28173,123 +28056,7 @@ seiyaku DurableOwner {
         assert_eq!(quote, vm.remaining_gas());
         assert!(gas <= quote);
     }
-    #[test]
-    #[cfg(debug_assertions)]
-    fn prepared_public_arguments_decode_once_and_reject_pointer_substitution() {
-        crate::test_alias::ensure();
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                mode: ivm::kotodama::compiler::CompilerMode::Production,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let (program, _) = compiler
-            .compile_source_with_manifest(
-                r#"
-seiyaku PreparedArguments {
-  kotoage fn invoke(int count, Name label) authorize("Invoke") {
-  }
-}
-"#,
-            )
-            .expect("compile parameterized contract");
-        let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
-        let schema = metadata
-            .contract_interface
-            .as_ref()
-            .expect("contract interface")
-            .entrypoints
-            .iter()
-            .find(|entrypoint| entrypoint.name == "invoke")
-            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
-            .expect("argument schema");
-        let canonical = ivm::encode_argument_record_from_json(
-            schema,
-            &Json::from(norito::json!({"count": "7", "label": "ready"})),
-        )
-        .expect("encode arguments");
-        ivm::reset_argument_record_decode_count();
-        let prepared =
-            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
-                .expect("prepare arguments");
-        let authority: AccountId = fixture_account("alice");
-        let mut adversarial_host = CoreHost::with_accounts_and_argument_record(
-            authority.clone(),
-            Arc::new(vec![authority.clone()]),
-            Some(prepared.clone()),
-        );
-        let name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY.parse().expect("input name");
-        let mut adversarial_vm = IVM::new(100_000);
-        prepared
-            .precharge_vm(&mut adversarial_vm)
-            .expect("precharge prepared arguments");
-        let name_ptr = store_tlv(&mut adversarial_vm, PointerType::Name, &norito_blob(&name));
-        adversarial_vm.set_register(10, name_ptr);
-        adversarial_host
-            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut adversarial_vm)
-            .expect("get host-bound argument capability");
-        let issued_record_pointer = adversarial_vm.register(10);
-        assert_eq!(
-            adversarial_vm
-                .memory
-                .validate_tlv(issued_record_pointer)
-                .expect("argument binding TLV")
-                .payload,
-            prepared.binding_bytes(),
-            "the signed record stays host-owned instead of consuming the VM input arena"
-        );
-        let substituted_record_pointer = store_tlv(
-            &mut adversarial_vm,
-            PointerType::NoritoBytes,
-            prepared.canonical_bytes(),
-        );
-        let schema_pointer = store_tlv(
-            &mut adversarial_vm,
-            PointerType::NoritoBytes,
-            prepared.schema_bytes(),
-        );
-        adversarial_vm.set_register(10, substituted_record_pointer);
-        adversarial_vm.set_register(11, schema_pointer);
-        assert!(matches!(
-            adversarial_host
-                .prepare_syscall(ivm_sys::SYSCALL_DECODE_ARGUMENT_RECORD, &adversarial_vm),
-            Err(VMError::DecodeError)
-        ));
-        assert_ne!(issued_record_pointer, substituted_record_pointer);
-        let mut host = CoreHost::with_accounts_and_argument_record(
-            authority.clone(),
-            Arc::new(vec![authority]),
-            Some(prepared.clone()),
-        );
-        let mut vm = IVM::new(100_000);
-        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
-        let schema_pointer = store_tlv(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        let code = [
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-            encoding::wide::encode_syscallx(ivm_sys::SYSCALL_DECODE_ARGUMENT_RECORD).to_le_bytes(),
-            encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        vm.load_program(&build_program(&code, 0))
-            .expect("load argument wrapper program");
-        vm.set_register(10, name_ptr);
-        vm.set_register(11, schema_pointer);
-        prepared
-            .precharge_vm(&mut vm)
-            .expect("precharge prepared arguments");
-        vm.run_with_host(&mut host)
-            .expect("guest wrapper must use the prepared decode path");
-        assert_eq!(ivm::argument_record_decode_count(), 1);
-        let table = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("ABI word table");
-        assert_eq!(table.type_id, PointerType::Blob);
-        assert_eq!(table.payload.len(), 1 + 2 * core::mem::size_of::<u64>());
-    }
+    include!("host/prepared_public_arguments_tests.rs");
     #[test]
     #[cfg(debug_assertions)]
     fn compiled_wrapper_accepts_exact_argument_record_cap_and_preflights_heap() {

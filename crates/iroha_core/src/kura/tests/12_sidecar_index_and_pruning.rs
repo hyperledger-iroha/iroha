@@ -25,7 +25,6 @@ fn sidecar_index_rejects_overflowing_based_header() {
         "dummy lane sidecar",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(
         fs::read(&index_path).expect("read rejected index"),
@@ -62,7 +61,6 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
         "dummy lane sidecar",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(fs::read(&index_path).expect("read index"), index_bytes);
 }
@@ -83,13 +81,15 @@ fn roster_sidecars_prune_to_retention() {
                 "dummy sidecar",
                 FsyncMode::Batched,
                 Some(retention),
-                SidecarIndexOrigin::HeightOne,
             ),
             "append at height {height} must succeed"
         );
     }
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+    index
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     let mut entries = Vec::new();
     for _ in 0..4 {
         index.read_exact(&mut buf).expect("read index entry");
@@ -257,20 +257,6 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     assert_eq!(repaired_bytes, pristine_bytes);
 }
 #[test]
-fn hard_fork_init_trusts_only_configured_legacy_prefix() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
-    let mut store = new_block_store(&temp_dir);
-    let first_index = store.read_block_index(0).unwrap();
-    let zeros = vec![0_u8; usize::try_from(first_index.length).unwrap()];
-    store.write_block_data(first_index.start, &zeros).unwrap();
-    let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 3, 1, None).unwrap();
-    assert!(!validation.truncated);
-    assert_eq!(validation.hashes.len(), 3);
-    assert_eq!(validation.hard_fork_hash_only_block_count, 1);
-    assert_eq!(store.read_index_count().unwrap(), 3);
-}
-#[test]
 fn hard_fork_data_backed_count_preserves_hash_only_tail() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
@@ -290,30 +276,6 @@ fn hard_fork_data_backed_count_preserves_hash_only_tail() {
         2,
         "hard-fork snapshot bootstrap keeps hash-only tail metadata durable"
     );
-}
-#[test]
-fn hard_fork_init_preserves_snapshot_hash_only_tail_on_restart() {
-    let temp_dir = TempDir::new().unwrap();
-    let mut store = new_block_store(&temp_dir);
-    store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
-    let first = blocks.next();
-    store.append_block_to_chain(&first).unwrap();
-    let snapshot_tail_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x73; Hash::LENGTH]));
-    store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
-    store.write_block_hash(1, snapshot_tail_hash).unwrap();
-    let snapshot_hashes = [first.hash(), snapshot_tail_hash];
-    store
-        .write_verified_snapshot_tail_marker(1, &snapshot_hashes, None)
-        .unwrap();
-    let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
-    assert!(!validation.truncated);
-    assert_eq!(validation.hashes.len(), 2);
-    assert_eq!(validation.hashes[1], snapshot_tail_hash);
-    assert_eq!(validation.hard_fork_hash_only_block_count, 1);
-    assert_eq!(store.read_index_count().unwrap(), 2);
-    assert_eq!(store.read_hashes_count().unwrap(), 2);
 }
 #[test]
 fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
@@ -341,7 +303,7 @@ fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
     assert!(kura.get_block(nonzero!(2_usize)).is_none());
 }
 #[test]
-fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
+fn hash_only_snapshot_rejects_divergent_existing_prefix() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -363,32 +325,12 @@ fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
         snapshot_hash_3,
         snapshot_hash_4,
     ];
-    kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(&snapshot_hashes, Some(1))
-        .expect("rewrite divergent suffix");
-    assert_eq!(kura.blocks_count(), 4);
-    assert_eq!(
-        kura.block_hash_at_height(nonzero!(1_usize)),
-        Some(first_hash),
-        "configured legacy prefix must be preserved"
-    );
-    assert_eq!(
-        kura.block_hash_at_height(nonzero!(2_usize)),
-        Some(snapshot_hash_2),
-        "post-boundary Kura hash must be replaced by snapshot hash"
-    );
-    assert!(
-        kura.get_block(nonzero!(2_usize)).is_none(),
-        "rewritten suffix is hash-only and has no trusted block body"
-    );
-    assert_eq!(
-        kura.get_durable_block_hash(nonzero!(4_usize)),
-        Some(snapshot_hash_4),
-        "extended snapshot hash must be durable"
-    );
-    let mut store = kura.block_store.lock();
-    let rewritten_index = store.read_block_index(1).expect("read rewritten index");
-    assert_eq!(rewritten_index.start, EVICTED_BLOCK_START);
-    assert_eq!(rewritten_index.length, 0);
+    assert!(matches!(
+        kura.extend_hash_only_prefix_from_snapshot(&snapshot_hashes),
+        Err(Error::BlockHeightConflict { height: 2, .. })
+    ));
+    assert_eq!(kura.blocks_count(), 3);
+    assert_eq!(kura.get_durable_block_hash(nonzero!(4_usize)), None);
 }
 #[test]
 fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
@@ -417,11 +359,8 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
         let mut block_data = kura.block_data.lock();
         block_data[1].1 = None;
     }
-    kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
-        &[first_hash, second_hash],
-        Some(1),
-    )
-    .expect("matching snapshot hash journal should activate hash-only window");
+    kura.extend_hash_only_prefix_from_snapshot(&[first_hash, second_hash])
+        .expect("matching snapshot hash journal should activate hash-only window");
     assert_eq!(
         kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
         2,
@@ -433,7 +372,7 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
     );
     assert!(
         kura.is_hash_only_block_height(nonzero!(1_usize)),
-        "audited legacy bodies remain logically unavailable even when cached"
+        "audited snapshot bodies remain logically unavailable even when cached"
     );
     assert!(
         kura.is_hash_only_block_height(nonzero!(2_usize)),
@@ -483,7 +422,7 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
     }
 }
 #[test]
-fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
+fn hash_only_snapshot_rejects_shorter_existing_prefix() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -496,9 +435,6 @@ fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
     let second_hash = kura
         .block_hash_at_height(nonzero!(2_usize))
         .expect("second hash exists");
-    let third_hash = kura
-        .block_hash_at_height(nonzero!(3_usize))
-        .expect("third hash exists");
     {
         let mut block_data = kura.block_data.lock();
         for (_, block) in block_data.iter_mut() {
@@ -511,40 +447,20 @@ fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
         kura.get_block(nonzero!(3_usize)).is_none(),
         "pre-fix hard-fork window hides the post-snapshot body"
     );
-    kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
-        &[first_hash, second_hash],
-        Some(2),
-    )
-    .expect("matching shorter snapshot should align the hash-only prefix");
+    assert!(matches!(
+        kura.extend_hash_only_prefix_from_snapshot(&[first_hash, second_hash]),
+        Err(Error::HashesFileHeightMismatch)
+    ));
     assert_eq!(
         kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
-        2,
-        "hash-only window must shrink to the loaded snapshot height"
+        3,
+        "a rejected shorter snapshot must not change the existing marker"
     );
     assert!(
         kura.is_hash_only_block_height(nonzero!(2_usize)),
         "snapshot prefix remains hash-only"
     );
-    let third = kura
-        .get_block(nonzero!(3_usize))
-        .expect("post-snapshot block body should be replayable");
-    assert_eq!(third.hash(), third_hash);
-}
-#[test]
-fn hard_fork_init_prunes_corrupt_tail_after_bootstrap_height() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 4);
-    let mut store = new_block_store(&temp_dir);
-    store.create_files_if_they_do_not_exist().unwrap();
-    let tail_index = store.read_block_index(3).unwrap();
-    let zeros = vec![0_u8; usize::try_from(tail_index.length).unwrap()];
-    store.write_block_data(tail_index.start, &zeros).unwrap();
-    let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
-    assert!(validation.truncated);
-    assert_eq!(validation.hashes.len(), 3);
-    assert_eq!(validation.hard_fork_hash_only_block_count, 2);
-    assert_eq!(store.read_index_count().unwrap(), 3);
-    assert_eq!(store.read_hashes_count().unwrap(), 3);
+    assert!(kura.get_block(nonzero!(3_usize)).is_none());
 }
 #[test]
 fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
@@ -991,77 +907,6 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
         b"malformed marker",
         "unauthenticated startup must not repair or delete marker bytes"
     );
-}
-#[test]
-fn hard_fork_prefix_real_suffix_and_verified_tail_survive_reopen() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 4);
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let mut store = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
-    for index in 0..2 {
-        store
-            .write_block_index(index, EVICTED_BLOCK_START, 0)
-            .unwrap();
-    }
-    let mut snapshot_hashes = store.read_block_hashes(0, 4).unwrap();
-    snapshot_hashes.push(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0xa4; 32]),
-    ));
-    store.write_block_index(4, EVICTED_BLOCK_START, 0).unwrap();
-    store.write_block_hash(4, snapshot_hashes[4]).unwrap();
-    store
-        .sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)
-        .unwrap();
-    store
-        .sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)
-        .unwrap();
-    store
-        .write_verified_snapshot_tail_marker(4, &snapshot_hashes, None)
-        .unwrap();
-    store.publish_commit_marker(5).unwrap();
-    drop(store);
-    for _ in 0..2 {
-        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
-        reopened.create_files_if_they_do_not_exist().unwrap();
-        assert_eq!(reopened.read_durable_index_count().unwrap(), 5);
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut reopened, 5, 2, None).unwrap();
-        assert_eq!(validation.hashes, snapshot_hashes);
-        assert_eq!(validation.hard_fork_hash_only_block_count, 2);
-        assert!(!validation.truncated);
-    }
-}
-#[test]
-fn hard_fork_init_repairs_index_tail_beyond_hash_journal() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 4);
-    let mut store = new_block_store(&temp_dir);
-    let retained_data_len = store.data_end_for_index_prefix(3).unwrap();
-    store.truncate_hashes_to_count(3).unwrap();
-    assert_eq!(store.read_index_count().unwrap(), 4);
-    assert_eq!(store.read_hashes_count().unwrap(), 3);
-    assert!(store.data_file_len().unwrap() > retained_data_len);
-    let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
-    assert!(validation.truncated);
-    assert_eq!(validation.hashes.len(), 3);
-    assert_eq!(validation.hard_fork_hash_only_block_count, 2);
-    assert_eq!(store.read_index_count().unwrap(), 3);
-    assert_eq!(store.read_hashes_count().unwrap(), 3);
-    assert_eq!(store.data_file_len().unwrap(), retained_data_len);
-}
-#[test]
-fn hard_fork_init_truncates_hash_tail_beyond_index() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
-    let mut store = new_block_store(&temp_dir);
-    store.write_index_count(2).unwrap();
-    assert_eq!(store.read_index_count().unwrap(), 2);
-    assert_eq!(store.read_hashes_count().unwrap(), 3);
-    let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
-    assert!(validation.truncated);
-    assert_eq!(validation.hashes.len(), 2);
-    assert_eq!(validation.hard_fork_hash_only_block_count, 1);
-    assert_eq!(store.read_index_count().unwrap(), 2);
-    assert_eq!(store.read_hashes_count().unwrap(), 2);
 }
 #[test]
 fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {

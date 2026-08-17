@@ -839,6 +839,35 @@ mod protocol {
         };
     }
 
+    // Canonical request/response containers differ only in ownership and
+    // redaction traits. Keep those choices explicit at each declaration while
+    // generating the identical Norito wire-derive and field boilerplate here.
+    macro_rules! define_broker_wire_struct {
+        (@emit [$derive:meta] $visibility:vis $name:ident {
+            $($field_visibility:vis $field:ident: $field_type:ty),* $(,)?
+        }) => {
+            #[$derive]
+            $visibility struct $name {
+                $($field_visibility $field: $field_type),*
+            }
+        };
+        (copy $($definition:tt)*) => {
+            define_broker_wire_struct!(@emit [derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)] $($definition)*);
+        };
+        (owned $($definition:tt)*) => {
+            define_broker_wire_struct!(@emit [derive(Clone, Debug, PartialEq, Eq, Decode, Encode)] $($definition)*);
+        };
+        (sensitive $($definition:tt)*) => {
+            define_broker_wire_struct!(@emit [derive(Clone, PartialEq, Eq, Decode, Encode)] $($definition)*);
+        };
+        (move_sensitive $($definition:tt)*) => {
+            define_broker_wire_struct!(@emit [derive(PartialEq, Eq, Decode, Encode)] $($definition)*);
+        };
+        (copy_sensitive $($definition:tt)*) => {
+            define_broker_wire_struct!(@emit [derive(Clone, Copy, PartialEq, Eq, Decode, Encode)] $($definition)*);
+        };
+    }
+
     /// Exact operation identifiers and foundational canonical wire containers.
     mod primitives {
         use super::*;
@@ -2046,90 +2075,14 @@ mod protocol {
         }
         Ok(())
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SignerMetadataWireV1 {
-        publisher_peer_id: Vec<u8>,
-        public_key: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderObservationWireV1 {
-        binding: ProviderBindingWireV1,
-        signer_metadata: Option<SignerMetadataWireV1>,
-        governance_request_ingress_qualification:
-            Option<GovernanceRequestIngressQualificationWireV1>,
-        moderation_quarantine_active_key_id: Option<String>,
-        provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
-        provider_ingest_source_provider_ids: Vec<[u8; 32]>,
-        potr_signer_public_key: Vec<u8>,
-        evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>,
-        evidence_viewer_archive_id: Option<[u8; 32]>,
-        evidence_viewer_archive_public_key: Option<[u8; 32]>,
-        moderation_checkpoint_attestation_public_key: Option<[u8; 32]>,
-        moderation_panel_notification_archive_binding:
-            Option<ModerationPanelNotificationArchiveBindingWireV1>,
-        metadata_digest: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct HandshakeTranscriptFieldsV1 {
-        chain_id: String,
-        network_id: NetworkId,
-        requested_catalog: Vec<ProviderBindingWireV1>,
-        client_nonce: [u8; 32],
-        catalog_digest: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct HandshakeRequestV1 {
-        chain_id: String,
-        network_id: NetworkId,
-        requested_catalog: Vec<ProviderBindingWireV1>,
-        client_nonce: [u8; 32],
-        catalog_digest: [u8; 32],
-        client_transcript_digest: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ServerTranscriptFieldsV1 {
-        chain_id: String,
-        network_id: NetworkId,
-        requested_catalog: Vec<ProviderBindingWireV1>,
-        client_nonce: [u8; 32],
-        catalog_digest: [u8; 32],
-        client_transcript_digest: [u8; 32],
-        session_id: [u8; 32],
-        observations: Vec<ProviderObservationWireV1>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct HandshakeResponseV1 {
-        chain_id: String,
-        network_id: NetworkId,
-        requested_catalog: Vec<ProviderBindingWireV1>,
-        client_nonce: [u8; 32],
-        catalog_digest: [u8; 32],
-        client_transcript_digest: [u8; 32],
-        session_id: [u8; 32],
-        observations: Vec<ProviderObservationWireV1>,
-        server_transcript_digest: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct OperationRequestFieldsV1 {
-        session_id: [u8; 32],
-        request_id: u64,
-        binding: ProviderBindingWireV1,
-        provider_metadata_digest: [u8; 32],
-        operation: u16,
-        payload_digest: [u8; 32],
-        payload_len: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct OperationRequestV1 {
-        session_id: [u8; 32],
-        request_id: u64,
-        binding: ProviderBindingWireV1,
-        provider_metadata_digest: [u8; 32],
-        operation: u16,
-        payload_digest: [u8; 32],
-        payload: Vec<u8>,
-        request_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned SignerMetadataWireV1 { publisher_peer_id: Vec<u8>, public_key: [u8; 32], });
+    define_broker_wire_struct!(owned ProviderObservationWireV1 { binding: ProviderBindingWireV1, signer_metadata: Option<SignerMetadataWireV1>, governance_request_ingress_qualification: Option<GovernanceRequestIngressQualificationWireV1>, moderation_quarantine_active_key_id: Option<String>, provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, provider_ingest_source_provider_ids: Vec<[u8; 32]>, potr_signer_public_key: Vec<u8>, evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, evidence_viewer_archive_id: Option<[u8; 32]>, evidence_viewer_archive_public_key: Option<[u8; 32]>, moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, metadata_digest: [u8; 32], });
+    define_broker_wire_struct!(owned HandshakeTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], });
+    define_broker_wire_struct!(owned HandshakeRequestV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], });
+    define_broker_wire_struct!(owned ServerTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, });
+    define_broker_wire_struct!(owned HandshakeResponseV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, server_transcript_digest: [u8; 32], });
+    define_broker_wire_struct!(owned OperationRequestFieldsV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload_len: u64, });
+    define_broker_wire_struct!(sensitive OperationRequestV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload: Vec<u8>, request_digest: [u8; 32], });
     impl_broker_debug_fields!(OperationRequestV1 as value {
         "request_id" => value.request_id,
         "slot" => value.binding.slot,
@@ -2137,33 +2090,8 @@ mod protocol {
         "payload_len" => value.payload.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(OperationRequestV1 { payload });
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct OperationResponseFieldsV1 {
-        session_id: [u8; 32],
-        request_id: u64,
-        request_digest: [u8; 32],
-        observed_binding: ProviderBindingWireV1,
-        provider_metadata_digest: [u8; 32],
-        operation: u16,
-        payload_digest: [u8; 32],
-        status: u8,
-        result_digest: [u8; 32],
-        result_len: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct OperationResponseV1 {
-        session_id: [u8; 32],
-        request_id: u64,
-        request_digest: [u8; 32],
-        observed_binding: ProviderBindingWireV1,
-        provider_metadata_digest: [u8; 32],
-        operation: u16,
-        payload_digest: [u8; 32],
-        status: u8,
-        result_digest: [u8; 32],
-        result: Vec<u8>,
-        response_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned OperationResponseFieldsV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result_len: u64, });
+    define_broker_wire_struct!(sensitive OperationResponseV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result: Vec<u8>, response_digest: [u8; 32], });
     impl_broker_debug_fields!(OperationResponseV1 as value {
         "request_id" => value.request_id,
         "slot" => value.observed_binding.slot,
@@ -2172,64 +2100,23 @@ mod protocol {
         "result_len" => value.result.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(OperationResponseV1 { result });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct QualificationResultWireV1 {
-        revision: u64,
-        policy_digest: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GovernanceRequestIngressQualificationWireV1 {
-        provider: QualificationResultWireV1,
-        binding: GovernanceRequestIngressBindingWireV1,
-        receiver_policy_digest: [u8; 32],
-        replay_namespace_digest: [u8; 32],
-        replica_set_digest: [u8; 32],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternAuthenticateRequestWireV1 {
-        opaque_credential: Vec<u8>,
-        action: u8,
-        request_binding: [u8; 32],
-        committed_height: u64,
-    }
+    define_broker_wire_struct!(copy QualificationResultWireV1 { revision: u64, policy_digest: [u8; 32], });
+    define_broker_wire_struct!(copy GovernanceRequestIngressQualificationWireV1 { provider: QualificationResultWireV1, binding: GovernanceRequestIngressBindingWireV1, receiver_policy_digest: [u8; 32], replay_namespace_digest: [u8; 32], replica_set_digest: [u8; 32], });
+    define_broker_wire_struct!(sensitive BootleLanternAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], committed_height: u64, });
     impl_broker_debug_fields!(BootleLanternAuthenticateRequestWireV1 as value {
         "credential_len" => value.opaque_credential.len(),
         "action" => value.action,
         "committed_height" => value.committed_height,
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(BootleLanternAuthenticateRequestWireV1 { opaque_credential });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternAuthenticatedPrincipalWireV1 {
-        principal_digest: [u8; 32],
-        issued_at_height: u64,
-        expires_at_height: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternPrepareAuthorizationRequestWireV1 {
-        context: iroha_data_model::privacy::PrivacyStatementContextV1,
-        canonical_genesis_hash: [u8; 32],
-        policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        requester_authorization_digest: [u8; 32],
-        issued_at_height: u64,
-        expires_at_height: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternAuthorizationWireV1 {
-        authorization: Vec<u8>,
-    }
+    define_broker_wire_struct!(copy BootleLanternAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
+    define_broker_wire_struct!(owned BootleLanternPrepareAuthorizationRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, requester_authorization_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
+    define_broker_wire_struct!(sensitive BootleLanternAuthorizationWireV1 { authorization: Vec<u8>, });
     impl_broker_debug_fields!(BootleLanternAuthorizationWireV1 as value {
         "authorization_len" => value.authorization.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(BootleLanternAuthorizationWireV1 { authorization });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternIssueRequestWireV1 {
-        context: iroha_data_model::privacy::PrivacyStatementContextV1,
-        canonical_genesis_hash: [u8; 32],
-        policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        authorization: Vec<u8>,
-        request: Vec<u8>,
-        current_height: u64,
-    }
+    define_broker_wire_struct!(sensitive BootleLanternIssueRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, authorization: Vec<u8>, request: Vec<u8>, current_height: u64, });
     impl_broker_debug_fields!(BootleLanternIssueRequestWireV1 as value {
         "authorization_len" => value.authorization.len(),
         "request_len" => value.request.len(),
@@ -2239,10 +2126,7 @@ mod protocol {
         authorization,
         request
     });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BootleLanternIssuanceResponseWireV1 {
-        response: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive BootleLanternIssuanceResponseWireV1 { response: Vec<u8>, });
     impl_broker_debug_fields!(BootleLanternIssuanceResponseWireV1 as value {
         "response_len" => value.response.len(),
     } => finish_non_exhaustive);
@@ -2380,26 +2264,9 @@ mod protocol {
             .map_err(|_| BrokerError::Rejected)?;
         Ok((request, authorization))
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SoracloudSignerQualificationWireV1 {
-        revision: u64,
-        policy_digest: [u8; 32],
-        active: bool,
-        test_only: bool,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SoracloudProvenanceSignRequestWireV1 {
-        purpose: u8,
-        preimage: Vec<u8>,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct SoracloudHfAuthenticatedInferenceRequestWireV1 {
-        url: String,
-        content_type: String,
-        accept: Option<String>,
-        body: Vec<u8>,
-        maximum_response_bytes: u64,
-    }
+    define_broker_wire_struct!(copy SoracloudSignerQualificationWireV1 { revision: u64, policy_digest: [u8; 32], active: bool, test_only: bool, });
+    define_broker_wire_struct!(owned SoracloudProvenanceSignRequestWireV1 { purpose: u8, preimage: Vec<u8>, });
+    define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceRequestWireV1 { url: String, content_type: String, accept: Option<String>, body: Vec<u8>, maximum_response_bytes: u64, });
     impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceRequestWireV1 as value {
         "url_len" => value.url.len(),
         "content_type_len" => value.content_type.len(),
@@ -2408,13 +2275,7 @@ mod protocol {
         "maximum_response_bytes" => value.maximum_response_bytes,
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceRequestWireV1 { body });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct SoracloudHfAuthenticatedInferenceResponseWireV1 {
-        status: u16,
-        content_type: Option<String>,
-        content_encoding: Option<String>,
-        body: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceResponseWireV1 { status: u16, content_type: Option<String>, content_encoding: Option<String>, body: Vec<u8>, });
     impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceResponseWireV1 as value {
         "status" => value.status,
         "has_content_type" => value.content_type.is_some(),
@@ -2422,18 +2283,7 @@ mod protocol {
         "body_len" => value.body.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceResponseWireV1 { body });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyCyclePrfRequestWireV1 {
-        version: u16,
-        query_id: [u8; 32],
-        policy_digest: [u8; 32],
-        population_inventory_digest: [u8; 32],
-        metric_schema_digest: [u8; 32],
-        cycle_id: [u8; 16],
-        cycle_start_unix: u64,
-        cycle_end_unix: u64,
-        binding_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(copy PrivacyCyclePrfRequestWireV1 { version: u16, query_id: [u8; 32], policy_digest: [u8; 32], population_inventory_digest: [u8; 32], metric_schema_digest: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, binding_digest: [u8; 32], });
     impl PrivacyCyclePrfRequestWireV1 {
         fn from_request(request: &sorafs_node::PrivacyCyclePrfRequestV1) -> Self {
             Self {
@@ -2470,20 +2320,12 @@ mod protocol {
             Ok(request)
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyCyclePrfOutputWireV1 {
-        output: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive PrivacyCyclePrfOutputWireV1 { output: [u8; 32], });
     impl_broker_debug_fields!(PrivacyCyclePrfOutputWireV1 as value {
         "output" => "<redacted>",
     } => finish);
     impl_scrub_fields_on_drop!(PrivacyCyclePrfOutputWireV1 { output });
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyRuntimeProviderBindingWireV1 {
-        handle: String,
-        revision: u64,
-        policy_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned TransparencyRuntimeProviderBindingWireV1 { handle: String, revision: u64, policy_digest: [u8; 32], });
     impl TransparencyRuntimeProviderBindingWireV1 {
         fn from_binding(binding: &sorafs_node::TransparencyRuntimeProviderBindingV1) -> Self {
             Self {
@@ -2507,14 +2349,7 @@ mod protocol {
             Ok(binding)
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyReleaseAnchorHeadWireV1 {
-        query_id: [u8; 32],
-        sequence: u64,
-        release_id: [u8; 16],
-        record_digest: [u8; 32],
-        latest_publication_block_hash: Option<[u8; 32]>,
-    }
+    define_broker_wire_struct!(copy PrivacyReleaseAnchorHeadWireV1 { query_id: [u8; 32], sequence: u64, release_id: [u8; 16], record_digest: [u8; 32], latest_publication_block_hash: Option<[u8; 32]>, });
     impl PrivacyReleaseAnchorHeadWireV1 {
         fn from_head(head: sorafs_node::PrivacyReleaseAnchorHeadV1) -> Self {
             Self {
@@ -2540,15 +2375,7 @@ mod protocol {
             Ok(head)
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseScopeWireV1 {
-        query_id: [u8; 32],
-        cycle_id: [u8; 16],
-        cycle_start_unix: u64,
-        cycle_end_unix: u64,
-        due_at_unix: u64,
-        holder_identity: [u8; 32],
-    }
+    define_broker_wire_struct!(copy TransparencyLeaderLeaseScopeWireV1 { query_id: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, due_at_unix: u64, holder_identity: [u8; 32], });
     impl TransparencyLeaderLeaseScopeWireV1 {
         fn from_scope(scope: sorafs_node::TransparencyLeaderLeaseScopeV1) -> Self {
             let window = scope.window();
@@ -2578,16 +2405,7 @@ mod protocol {
             Ok(scope)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseGrantWireV1 {
-        version: u16,
-        lease_id: [u8; 32],
-        scope: TransparencyLeaderLeaseScopeWireV1,
-        fencing_token: u64,
-        issued_at_unix: u64,
-        expires_at_unix: u64,
-        provider_binding: TransparencyRuntimeProviderBindingWireV1,
-    }
+    define_broker_wire_struct!(owned TransparencyLeaderLeaseGrantWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, issued_at_unix: u64, expires_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
     impl TransparencyLeaderLeaseGrantWireV1 {
         fn from_grant(grant: &sorafs_node::TransparencyLeaderLeaseGrantV1) -> Self {
             Self {
@@ -2621,14 +2439,7 @@ mod protocol {
             Ok(grant)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseAcquireRequestWireV1 {
-        scope: TransparencyLeaderLeaseScopeWireV1,
-        acquire_at_unix: u64,
-        expires_at_unix: u64,
-        fencing_floor: u64,
-        provider_binding: TransparencyRuntimeProviderBindingWireV1,
-    }
+    define_broker_wire_struct!(owned TransparencyLeaderLeaseAcquireRequestWireV1 { scope: TransparencyLeaderLeaseScopeWireV1, acquire_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
     impl TransparencyLeaderLeaseAcquireRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1) -> Self {
             Self {
@@ -2658,13 +2469,7 @@ mod protocol {
             Ok(request)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseRenewRequestWireV1 {
-        current_grant: TransparencyLeaderLeaseGrantWireV1,
-        renew_at_unix: u64,
-        expires_at_unix: u64,
-        fencing_floor: u64,
-    }
+    define_broker_wire_struct!(owned TransparencyLeaderLeaseRenewRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, renew_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, });
     impl TransparencyLeaderLeaseRenewRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1) -> Self {
             Self {
@@ -2692,11 +2497,7 @@ mod protocol {
             Ok(request)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseReleaseRequestWireV1 {
-        current_grant: TransparencyLeaderLeaseGrantWireV1,
-        release_at_unix: u64,
-    }
+    define_broker_wire_struct!(owned TransparencyLeaderLeaseReleaseRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, release_at_unix: u64, });
     impl TransparencyLeaderLeaseReleaseRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1) -> Self {
             Self {
@@ -2720,15 +2521,7 @@ mod protocol {
             Ok(request)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct TransparencyLeaderLeaseReleaseReceiptWireV1 {
-        version: u16,
-        lease_id: [u8; 32],
-        scope: TransparencyLeaderLeaseScopeWireV1,
-        fencing_token: u64,
-        released_at_unix: u64,
-        provider_binding: TransparencyRuntimeProviderBindingWireV1,
-    }
+    define_broker_wire_struct!(owned TransparencyLeaderLeaseReleaseReceiptWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, released_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
     impl TransparencyLeaderLeaseReleaseReceiptWireV1 {
         fn from_receipt(receipt: &sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1) -> Self {
             Self {
@@ -2762,13 +2555,7 @@ mod protocol {
             Ok(receipt)
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct FencedTransparencyTargetHeadWireV1 {
-        version: u8,
-        generation: u64,
-        head_digest: [u8; 32],
-        fencing_floor: u64,
-    }
+    define_broker_wire_struct!(copy FencedTransparencyTargetHeadWireV1 { version: u8, generation: u64, head_digest: [u8; 32], fencing_floor: u64, });
     impl FencedTransparencyTargetHeadWireV1 {
         fn from_head(head: sorafs_node::FencedTransparencyTargetHeadV1) -> Self {
             Self {
@@ -2794,14 +2581,7 @@ mod protocol {
             Ok(head)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyPublicationAuthorizationWireV1 {
-        leader_lease: TransparencyLeaderLeaseGrantWireV1,
-        finalized_anchor: PrivacyReleaseAnchorHeadWireV1,
-        release_sequence: u64,
-        release_record_digest: [u8; 32],
-        payload_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned PrivacyPublicationAuthorizationWireV1 { leader_lease: TransparencyLeaderLeaseGrantWireV1, finalized_anchor: PrivacyReleaseAnchorHeadWireV1, release_sequence: u64, release_record_digest: [u8; 32], payload_digest: [u8; 32], });
     impl PrivacyPublicationAuthorizationWireV1 {
         fn from_authorization(
             authorization: &sorafs_node::PrivacyPublicationAuthorizationV1,
@@ -2836,19 +2616,7 @@ mod protocol {
             Ok(authorization)
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct FencedPrivacyPublicationRequestWireV1 {
-        version: u8,
-        authorization: PrivacyPublicationAuthorizationWireV1,
-        authorization_digest: [u8; 32],
-        publication_idempotency_digest: [u8; 32],
-        canonical_payload: Vec<u8>,
-        payload_digest: [u8; 32],
-        expected_authoritative_head: Option<FencedTransparencyTargetHeadWireV1>,
-        fencing_token: u64,
-        fencing_floor: u64,
-        request_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive FencedPrivacyPublicationRequestWireV1 { version: u8, authorization: PrivacyPublicationAuthorizationWireV1, authorization_digest: [u8; 32], publication_idempotency_digest: [u8; 32], canonical_payload: Vec<u8>, payload_digest: [u8; 32], expected_authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, fencing_token: u64, fencing_floor: u64, request_digest: [u8; 32], });
     impl_broker_debug_fields!(FencedPrivacyPublicationRequestWireV1 as value {
         "version" => value.version,
         "authorization" => value.authorization,
@@ -2992,17 +2760,7 @@ mod protocol {
         );
         norito::decode_canonical_with_limits(bytes, limits).map_err(|_| BrokerError::Rejected)
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct FencedPrivacyPublicationReceiptWireV1 {
-        version: u8,
-        request_digest: [u8; 32],
-        publication_idempotency_digest: [u8; 32],
-        payload_digest: [u8; 32],
-        disposition: u8,
-        included_head: FencedTransparencyTargetHeadWireV1,
-        readback_head: FencedTransparencyTargetHeadWireV1,
-        head_inclusion_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(copy FencedPrivacyPublicationReceiptWireV1 { version: u8, request_digest: [u8; 32], publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], disposition: u8, included_head: FencedTransparencyTargetHeadWireV1, readback_head: FencedTransparencyTargetHeadWireV1, head_inclusion_digest: [u8; 32], });
     impl FencedPrivacyPublicationReceiptWireV1 {
         fn from_receipt(receipt: &sorafs_node::FencedPrivacyPublicationReceiptV1) -> Self {
             Self {
@@ -3059,13 +2817,7 @@ mod protocol {
             Ok(receipt)
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct FencedTransparencyPublicationInclusionWireV1 {
-        version: u8,
-        publication_idempotency_digest: [u8; 32],
-        payload_digest: [u8; 32],
-        included_head: FencedTransparencyTargetHeadWireV1,
-    }
+    define_broker_wire_struct!(copy FencedTransparencyPublicationInclusionWireV1 { version: u8, publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], included_head: FencedTransparencyTargetHeadWireV1, });
     impl FencedTransparencyPublicationInclusionWireV1 {
         fn from_inclusion(
             inclusion: sorafs_node::FencedTransparencyPublicationInclusionV1,
@@ -3097,12 +2849,7 @@ mod protocol {
             Ok(inclusion)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct FencedPrivacyHeadReadRequestWireV1 {
-        version: u8,
-        required_ancestors: Vec<FencedTransparencyTargetHeadWireV1>,
-        required_publications: Vec<FencedTransparencyPublicationInclusionWireV1>,
-    }
+    define_broker_wire_struct!(owned FencedPrivacyHeadReadRequestWireV1 { version: u8, required_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, required_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, });
     impl FencedPrivacyHeadReadRequestWireV1 {
         fn from_required_evidence(
             required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -3155,14 +2902,7 @@ mod protocol {
             Ok((required_ancestors, required_publications))
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct FencedTransparencyHeadAncestryProofWireV1 {
-        version: u8,
-        authoritative_head: Option<FencedTransparencyTargetHeadWireV1>,
-        verified_ancestors: Vec<FencedTransparencyTargetHeadWireV1>,
-        verified_publications: Vec<FencedTransparencyPublicationInclusionWireV1>,
-        adapter_proof_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned FencedTransparencyHeadAncestryProofWireV1 { version: u8, authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, verified_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, verified_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, adapter_proof_digest: [u8; 32], });
     impl FencedTransparencyHeadAncestryProofWireV1 {
         fn from_proof(proof: &sorafs_node::FencedTransparencyHeadAncestryProofV1) -> Self {
             Self {
@@ -3230,16 +2970,8 @@ mod protocol {
             Ok(proof)
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyReleaseAnchorFinalizedHeadRequestWireV1 {
-        query_id: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PrivacyReleaseAnchorCompareAndSetRequestWireV1 {
-        expected: PrivacyReleaseAnchorHeadWireV1,
-        next: PrivacyReleaseAnchorHeadWireV1,
-        lease: TransparencyLeaderLeaseGrantWireV1,
-    }
+    define_broker_wire_struct!(copy PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [u8; 32], });
+    define_broker_wire_struct!(owned PrivacyReleaseAnchorCompareAndSetRequestWireV1 { expected: PrivacyReleaseAnchorHeadWireV1, next: PrivacyReleaseAnchorHeadWireV1, lease: TransparencyLeaderLeaseGrantWireV1, });
     fn transparency_runtime_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::TransparencyRuntimeProviderBindingV1, BrokerError> {
@@ -3416,36 +3148,10 @@ mod protocol {
             }
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GovernanceRequestAuthHeaderWireV1 {
-        name: String,
-        value: String,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GovernanceRequestAuthRequestWireV1 {
-        scope: u8,
-        method: String,
-        canonical_url: String,
-        selected_headers: Vec<GovernanceRequestAuthHeaderWireV1>,
-        body_length: u64,
-        body_blake3: [u8; 32],
-        request_digest: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GovernanceRequestAuthResultWireV1 {
-        scope: u8,
-        issued_at_unix_secs: u64,
-        expires_at_unix_secs: u64,
-        nonce: [u8; 32],
-        request_digest: [u8; 32],
-        public_key: [u8; 32],
-        signature: [u8; 64],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct PotrSignRequestWireV1 {
-        payload: Vec<u8>,
-        expected_public_key: Vec<u8>,
-    }
+    define_broker_wire_struct!(owned GovernanceRequestAuthHeaderWireV1 { name: String, value: String, });
+    define_broker_wire_struct!(owned GovernanceRequestAuthRequestWireV1 { scope: u8, method: String, canonical_url: String, selected_headers: Vec<GovernanceRequestAuthHeaderWireV1>, body_length: u64, body_blake3: [u8; 32], request_digest: [u8; 32], });
+    define_broker_wire_struct!(copy GovernanceRequestAuthResultWireV1 { scope: u8, issued_at_unix_secs: u64, expires_at_unix_secs: u64, nonce: [u8; 32], request_digest: [u8; 32], public_key: [u8; 32], signature: [u8; 64], });
+    define_broker_wire_struct!(sensitive PotrSignRequestWireV1 { payload: Vec<u8>, expected_public_key: Vec<u8>, });
     impl_broker_debug_fields!(PotrSignRequestWireV1 as value {
         "payload_len" => value.payload.len(),
         "public_key_len" => value.expected_public_key.len(),
@@ -3455,11 +3161,7 @@ mod protocol {
         expected_public_key
     });
     impl_scrub_fields_on_drop!(VariableSignatureResultWireV1 { signature });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct DurationWireV1 {
-        secs: u64,
-        nanos: u32,
-    }
+    define_broker_wire_struct!(copy DurationWireV1 { secs: u64, nanos: u32, });
     impl DurationWireV1 {
         fn from_duration(duration: Duration) -> Self {
             Self {
@@ -3474,11 +3176,7 @@ mod protocol {
             Ok(Duration::new(self.secs, self.nanos))
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct IpAddressWireV1 {
-        family: u8,
-        octets: Vec<u8>,
-    }
+    define_broker_wire_struct!(owned IpAddressWireV1 { family: u8, octets: Vec<u8>, });
     impl From<std::net::IpAddr> for IpAddressWireV1 {
         fn from(address: std::net::IpAddr) -> Self {
             match address {
@@ -3516,11 +3214,7 @@ mod protocol {
             }
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SystemTimeWireV1 {
-        unix_secs: u64,
-        nanos: u32,
-    }
+    define_broker_wire_struct!(copy SystemTimeWireV1 { unix_secs: u64, nanos: u32, });
     impl SystemTimeWireV1 {
         fn from_system_time(value: std::time::SystemTime) -> Result<Self, BrokerError> {
             let duration = value
@@ -3542,24 +3236,8 @@ mod protocol {
                 .ok_or(BrokerError::Rejected)
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GatewayAcmeOrderRequestWireV1 {
-        hostnames: Vec<String>,
-        account_email: Option<String>,
-        directory_url: String,
-        dns_provider_id: Option<String>,
-        dns01: bool,
-        tls_alpn_01: bool,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct GatewayAcmeOrderOutcomeWireV1 {
-        outcome: u8,
-        certificate_pem: String,
-        private_key_pem: String,
-        ech_config: Option<Vec<u8>>,
-        not_after: Option<SystemTimeWireV1>,
-        retry_after: Option<DurationWireV1>,
-    }
+    define_broker_wire_struct!(owned GatewayAcmeOrderRequestWireV1 { hostnames: Vec<String>, account_email: Option<String>, directory_url: String, dns_provider_id: Option<String>, dns01: bool, tls_alpn_01: bool, });
+    define_broker_wire_struct!(sensitive GatewayAcmeOrderOutcomeWireV1 { outcome: u8, certificate_pem: String, private_key_pem: String, ech_config: Option<Vec<u8>>, not_after: Option<SystemTimeWireV1>, retry_after: Option<DurationWireV1>, });
     fn scrub_secret_string(value: &mut String) {
         let mut bytes = std::mem::take(value).into_bytes();
         bytes.fill(0);
@@ -3580,84 +3258,28 @@ mod protocol {
             }
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GatewayComplianceResolveRequestWireV1 {
-        hostname: String,
-        timeout: DurationWireV1,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GatewayComplianceResolveOutcomeWireV1 {
-        outcome: u8,
-        addresses: Vec<IpAddressWireV1>,
-        found: u64,
-        maximum: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct GatewayComplianceFetchRequestWireV1 {
-        url: String,
-        pinned_addresses: Vec<IpAddressWireV1>,
-        connect_timeout: DurationWireV1,
-        total_timeout: DurationWireV1,
-        max_encoded_bytes: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct GatewayComplianceFetchOutcomeWireV1 {
-        outcome: u8,
-        status: u16,
-        redirect_location: Option<String>,
-        connected_address: Option<IpAddressWireV1>,
-        peer_spki_sha256: [u8; 32],
-        content_encoding: u8,
-        body: Vec<u8>,
-        elapsed: Option<DurationWireV1>,
-        found: u64,
-        maximum: u64,
-    }
+    define_broker_wire_struct!(owned GatewayComplianceResolveRequestWireV1 { hostname: String, timeout: DurationWireV1, });
+    define_broker_wire_struct!(owned GatewayComplianceResolveOutcomeWireV1 { outcome: u8, addresses: Vec<IpAddressWireV1>, found: u64, maximum: u64, });
+    define_broker_wire_struct!(owned GatewayComplianceFetchRequestWireV1 { url: String, pinned_addresses: Vec<IpAddressWireV1>, connect_timeout: DurationWireV1, total_timeout: DurationWireV1, max_encoded_bytes: u64, });
+    define_broker_wire_struct!(sensitive GatewayComplianceFetchOutcomeWireV1 { outcome: u8, status: u16, redirect_location: Option<String>, connected_address: Option<IpAddressWireV1>, peer_spki_sha256: [u8; 32], content_encoding: u8, body: Vec<u8>, elapsed: Option<DurationWireV1>, found: u64, maximum: u64, });
     impl_broker_debug_fields!(GatewayComplianceFetchOutcomeWireV1 as value {
         "outcome" => value.outcome,
         "status" => value.status,
         "body_len" => value.body.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(GatewayComplianceFetchOutcomeWireV1 { body });
-    #[derive(PartialEq, Eq, Decode, Encode)]
-    struct PopAuthenticateRequestWireV1 {
-        opaque_credential: Vec<u8>,
-        action: u8,
-        request_binding: [u8; 32],
-        now_epoch: u64,
-    }
+    define_broker_wire_struct!(move_sensitive PopAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], now_epoch: u64, });
     impl_broker_debug_fields!(PopAuthenticateRequestWireV1 as value {
         "opaque_credential" => "[REDACTED]",
         "action" => value.action,
         "now_epoch" => value.now_epoch,
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(PopAuthenticateRequestWireV1 { opaque_credential });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopAuthenticatedPrincipalWireV1 {
-        principal_digest: [u8; 32],
-        expires_at_epoch: u64,
-        caller_signed_transaction: bool,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopRegistrySubmitRequestWireV1 {
-        idempotency_key: [u8; 32],
-        operation: sorafs_node::pop_credentials::PopRegistryOperationV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopRegistryNextRequestWireV1 {
-        cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopRegistryNextResultWireV1 {
-        projection: Option<sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1>,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct PopMembershipWitnessWireV1 {
-        holder_secret: [u8; 32],
-        credential_siblings: Vec<[u8; 32]>,
-        credential_directions: Vec<bool>,
-        revocation_siblings: Vec<[u8; 32]>,
-    }
+    define_broker_wire_struct!(copy PopAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], expires_at_epoch: u64, caller_signed_transaction: bool, });
+    define_broker_wire_struct!(owned PopRegistrySubmitRequestWireV1 { idempotency_key: [u8; 32], operation: sorafs_node::pop_credentials::PopRegistryOperationV1, });
+    define_broker_wire_struct!(copy PopRegistryNextRequestWireV1 { cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>, });
+    define_broker_wire_struct!(owned PopRegistryNextResultWireV1 { projection: Option<sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1>, });
+    define_broker_wire_struct!(sensitive PopMembershipWitnessWireV1 { holder_secret: [u8; 32], credential_siblings: Vec<[u8; 32]>, credential_directions: Vec<bool>, revocation_siblings: Vec<[u8; 32]>, });
     impl_broker_debug_fields!(PopMembershipWitnessWireV1 as value {
         "private_witness" => "[REDACTED]",
     } => finish_non_exhaustive);
@@ -3706,121 +3328,46 @@ mod protocol {
             witness
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuanceDraftRequestWireV1 {
-        request_id: [u8; 32],
-        now_epoch: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuanceDraftResultWireV1 {
-        request_id: [u8; 32],
-        credential: sorafs_manifest::pop_credentials::PopCredentialV1,
-        commitment_root: sorafs_manifest::pop_credentials::PopCommitmentRootV1,
-        revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1,
-        witness: PopMembershipWitnessWireV1,
-    }
+    define_broker_wire_struct!(copy PopIssuanceDraftRequestWireV1 { request_id: [u8; 32], now_epoch: u64, });
+    define_broker_wire_struct!(sensitive PopIssuanceDraftResultWireV1 { request_id: [u8; 32], credential: sorafs_manifest::pop_credentials::PopCredentialV1, commitment_root: sorafs_manifest::pop_credentials::PopCommitmentRootV1, revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1, witness: PopMembershipWitnessWireV1, });
     impl_broker_debug_fields!(PopIssuanceDraftResultWireV1 as value {
         "request_id" => value.request_id,
         "private_issuance_material" => "[REDACTED]",
     } => finish_non_exhaustive);
-    #[derive(PartialEq, Eq, Decode, Encode)]
-    struct PopWalletWrapDekRequestWireV1 {
-        context: [u8; 32],
-        dek: [u8; 32],
-    }
+    define_broker_wire_struct!(move_sensitive PopWalletWrapDekRequestWireV1 { context: [u8; 32], dek: [u8; 32], });
     impl_broker_debug_fields!(PopWalletWrapDekRequestWireV1 as value {
         "dek" => "[REDACTED]",
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(PopWalletWrapDekRequestWireV1 { dek });
-    #[derive(PartialEq, Eq, Decode, Encode)]
-    struct PopWalletWrapDekResultWireV1 {
-        wrapped_dek: Vec<u8>,
-    }
+    define_broker_wire_struct!(move_sensitive PopWalletWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
     impl_broker_debug_fields!(PopWalletWrapDekResultWireV1 as value {
         "wrapped_dek_len" => value.wrapped_dek.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(PopWalletWrapDekResultWireV1 { wrapped_dek });
-    #[derive(PartialEq, Eq, Decode, Encode)]
-    struct PopWalletUnwrapDekRequestWireV1 {
-        key_id: String,
-        context: [u8; 32],
-        wrapped_dek: Vec<u8>,
-    }
+    define_broker_wire_struct!(move_sensitive PopWalletUnwrapDekRequestWireV1 { key_id: String, context: [u8; 32], wrapped_dek: Vec<u8>, });
     impl_broker_debug_fields!(PopWalletUnwrapDekRequestWireV1 as value {
         "key_id" => value.key_id,
         "wrapped_dek_len" => value.wrapped_dek.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(PopWalletUnwrapDekRequestWireV1 { wrapped_dek });
-    #[derive(PartialEq, Eq, Decode, Encode)]
-    struct PopWalletUnwrapDekResultWireV1 {
-        dek: [u8; 32],
-    }
+    define_broker_wire_struct!(move_sensitive PopWalletUnwrapDekResultWireV1 { dek: [u8; 32], });
     impl_broker_debug_fields!(PopWalletUnwrapDekResultWireV1 as value {
         "dek" => "[REDACTED]",
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(PopWalletUnwrapDekResultWireV1 { dek });
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopWalletWitnessRequestWireV1 {
-        credential_commitment: [u8; 32],
-        projection: sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopFinalizedTimeResultWireV1 {
-        finalized_block_height: u64,
-        finalized_block_hash: [u8; 32],
-        finalized_epoch: u64,
-        observed_epoch: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PorReplayArchiveAppendRequestWireV1 {
-        canonical_record: Vec<u8>,
-        expected_previous_head: Option<[u8; 32]>,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PorReplayArchiveLookupRequestWireV1 {
-        challenge_id: [u8; 32],
-        expected_checkpoint_head: sorafs_node::PorFinalizedReplayArchiveReceiptV1,
-        max_successor_receipts: u32,
-        max_successor_proof_bytes: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PorReplayArchiveLookupOutcomeWireV1 {
-        outcome: u8,
-        canonical_record: Vec<u8>,
-        receipt: Option<sorafs_node::PorFinalizedReplayArchiveReceiptV1>,
-        declared_successor_receipts: u32,
-        canonical_successor_receipts: Vec<u8>,
-        absence_proof: Option<sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct AppealFinanceCheckpointCompareAndSwapWireV1 {
-        expected_revision: Option<[u8; 32]>,
-        next: sorafs_node::appeal_finance_transaction_forwarder::
-            AppealFinanceSealedCheckpointRecordV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerIssueChallengeRequestWireV1 {
-        binding_digest: [u8; 32],
-        issued_at_unix_ms: u64,
-        expires_at_unix_ms: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerSecretResultWireV1 {
-        secret: Vec<u8>,
-    }
+    define_broker_wire_struct!(owned PopWalletWitnessRequestWireV1 { credential_commitment: [u8; 32], projection: sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1, });
+    define_broker_wire_struct!(copy PopFinalizedTimeResultWireV1 { finalized_block_height: u64, finalized_block_hash: [u8; 32], finalized_epoch: u64, observed_epoch: u64, });
+    define_broker_wire_struct!(owned PorReplayArchiveAppendRequestWireV1 { canonical_record: Vec<u8>, expected_previous_head: Option<[u8; 32]>, });
+    define_broker_wire_struct!(copy PorReplayArchiveLookupRequestWireV1 { challenge_id: [u8; 32], expected_checkpoint_head: sorafs_node::PorFinalizedReplayArchiveReceiptV1, max_successor_receipts: u32, max_successor_proof_bytes: u64, });
+    define_broker_wire_struct!(owned PorReplayArchiveLookupOutcomeWireV1 { outcome: u8, canonical_record: Vec<u8>, receipt: Option<sorafs_node::PorFinalizedReplayArchiveReceiptV1>, declared_successor_receipts: u32, canonical_successor_receipts: Vec<u8>, absence_proof: Option<sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1>, });
+    define_broker_wire_struct!(owned AppealFinanceCheckpointCompareAndSwapWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::appeal_finance_transaction_forwarder:: AppealFinanceSealedCheckpointRecordV1, });
+    define_broker_wire_struct!(copy EvidenceViewerIssueChallengeRequestWireV1 { binding_digest: [u8; 32], issued_at_unix_ms: u64, expires_at_unix_ms: u64, });
+    define_broker_wire_struct!(sensitive EvidenceViewerSecretResultWireV1 { secret: Vec<u8>, });
     impl_broker_debug_fields!(EvidenceViewerSecretResultWireV1 as value {
         "secret_len" => value.secret.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(EvidenceViewerSecretResultWireV1 { secret });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerVerifyAndConsumeRequestWireV1 {
-        challenge: Vec<u8>,
-        assertion: Vec<u8>,
-        binding_digest: [u8; 32],
-        rp_id: String,
-        allowed_origins: Vec<String>,
-        now_unix_ms: u64,
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerVerifyAndConsumeRequestWireV1 { challenge: Vec<u8>, assertion: Vec<u8>, binding_digest: [u8; 32], rp_id: String, allowed_origins: Vec<String>, now_unix_ms: u64, });
     impl_broker_debug_fields!(EvidenceViewerVerifyAndConsumeRequestWireV1 as value {
         "challenge_len" => value.challenge.len(),
         "assertion_len" => value.assertion.len(),
@@ -3841,12 +3388,7 @@ mod protocol {
         }
         Ok(())
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerWebAuthnResultWireV1 {
-        attestation_digest: [u8; 32],
-        credential_id_digest: [u8; 32],
-        authenticator_counter: u64,
-    }
+    define_broker_wire_struct!(copy EvidenceViewerWebAuthnResultWireV1 { attestation_digest: [u8; 32], credential_id_digest: [u8; 32], authenticator_counter: u64, });
     fn scrub_evidence_viewer_string(value: &mut String) {
         let mut bytes = std::mem::take(value).into_bytes();
         bytes.fill(0);
@@ -3859,22 +3401,14 @@ mod protocol {
         scrub_evidence_viewer_string(&mut claims.round_id);
         scrub_evidence_viewer_string(&mut claims.viewer_account);
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerGrantIssueRequestWireV1 {
-        claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerGrantIssueRequestWireV1 { claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, });
     impl_broker_debug_fields!(EvidenceViewerGrantIssueRequestWireV1 as value {} => finish_non_exhaustive);
     impl Drop for EvidenceViewerGrantIssueRequestWireV1 {
         fn drop(&mut self) {
             scrub_evidence_viewer_grant_claims(&mut self.claims);
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerGrantVerifyRequestWireV1 {
-        token: Vec<u8>,
-        claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
-        now_unix_ms: u64,
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerGrantVerifyRequestWireV1 { token: Vec<u8>, claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, now_unix_ms: u64, });
     impl_broker_debug_fields!(EvidenceViewerGrantVerifyRequestWireV1 as value {
         "token_len" => value.token.len(),
     } => finish_non_exhaustive);
@@ -3885,19 +3419,10 @@ mod protocol {
             let _ = std::hint::black_box(&self.token);
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerGrantRevokeRequestWireV1 {
-        token_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerGrantRevokeRequestWireV1 { token_digest: [u8; 32], });
     impl_broker_debug_fields!(EvidenceViewerGrantRevokeRequestWireV1 as value {} => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(EvidenceViewerGrantRevokeRequestWireV1 { token_digest });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerEraseRequestWireV1 {
-        operation_id: [u8; 32],
-        quarantine_id: [u8; 16],
-        object_id: [u8; 16],
-        evidence_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerEraseRequestWireV1 { operation_id: [u8; 32], quarantine_id: [u8; 16], object_id: [u8; 16], evidence_digest: [u8; 32], });
     impl_broker_debug_fields!(EvidenceViewerEraseRequestWireV1 as value {} => finish_non_exhaustive);
     impl Drop for EvidenceViewerEraseRequestWireV1 {
         fn drop(&mut self) {
@@ -3913,15 +3438,8 @@ mod protocol {
             ));
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerEraseResultWireV1 {
-        commit_digest: [u8; 32],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
-        expected_revision: Option<[u8; 32]>,
-        next_record: Vec<u8>,
-    }
+    define_broker_wire_struct!(copy EvidenceViewerEraseResultWireV1 { commit_digest: [u8; 32], });
+    define_broker_wire_struct!(sensitive EvidenceViewerCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
     impl_broker_debug_fields!(EvidenceViewerCheckpointCompareAndSwapRequestWireV1 as value {
         "expected_revision" => value.expected_revision,
         "next_record_len" => value.next_record.len(),
@@ -3935,12 +3453,7 @@ mod protocol {
             let _ = std::hint::black_box((&self.expected_revision, &self.next_record));
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerArchiveInstallRequestWireV1 {
-        operation_id: [u8; 32],
-        receipt_message: [u8; 32],
-        canonical_artifact: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerArchiveInstallRequestWireV1 { operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
     impl_broker_debug_fields!(EvidenceViewerArchiveInstallRequestWireV1 as value {
         "canonical_artifact_len" => value.canonical_artifact.len(),
     } => finish_non_exhaustive);
@@ -3956,50 +3469,22 @@ mod protocol {
             ));
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerArchiveReadRequestWireV1 {
-        operation_id: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerArchiveReadRequestWireV1 { operation_id: [u8; 32], });
     impl_broker_debug_fields!(EvidenceViewerArchiveReadRequestWireV1 as value {} => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadRequestWireV1 { operation_id });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerArchiveReadbackWireV1 {
-        canonical_artifact: Vec<u8>,
-        signature: [u8; 64],
-    }
+    define_broker_wire_struct!(sensitive EvidenceViewerArchiveReadbackWireV1 { canonical_artifact: Vec<u8>, signature: [u8; 64], });
     impl_broker_debug_fields!(EvidenceViewerArchiveReadbackWireV1 as value {
         "canonical_artifact_len" => value.canonical_artifact.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadbackWireV1 { canonical_artifact });
     const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1: u16 = 1;
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveQualifyRequestWireV1 {
-        version: u16,
-        slot: u16,
-        network_id: NetworkId,
-    }
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveQualifyRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveQualifyRequestWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
     } => finish_non_exhaustive);
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveQualificationWireV1 {
-        version: u16,
-        slot: u16,
-        revision: u64,
-        policy_digest: [u8; 32],
-        archive_id: [u8; 32],
-        public_key: [u8; 32],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveInstallRequestWireV1 {
-        version: u16,
-        slot: u16,
-        network_id: NetworkId,
-        operation_id: [u8; 32],
-        receipt_message: [u8; 32],
-        canonical_artifact: Vec<u8>,
-    }
+    define_broker_wire_struct!(copy ModerationPanelNotificationArchiveQualificationWireV1 { version: u16, slot: u16, revision: u64, policy_digest: [u8; 32], archive_id: [u8; 32], public_key: [u8; 32], });
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveInstallRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveInstallRequestWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
@@ -4017,19 +3502,8 @@ mod protocol {
             ));
         }
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveInstallResultWireV1 {
-        version: u16,
-        slot: u16,
-        signature: [u8; 64],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveReadRequestWireV1 {
-        version: u16,
-        slot: u16,
-        network_id: NetworkId,
-        operation_id: [u8; 32],
-    }
+    define_broker_wire_struct!(copy ModerationPanelNotificationArchiveInstallResultWireV1 { version: u16, slot: u16, signature: [u8; 64], });
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveReadRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadRequestWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
@@ -4037,13 +3511,7 @@ mod protocol {
     impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadRequestWireV1 {
         operation_id
     });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveReadbackWireV1 {
-        version: u16,
-        slot: u16,
-        canonical_artifact: Vec<u8>,
-        signature: [u8; 64],
-    }
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveReadbackWireV1 { version: u16, slot: u16, canonical_artifact: Vec<u8>, signature: [u8; 64], });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadbackWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
@@ -4052,29 +3520,9 @@ mod protocol {
     impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadbackWireV1 {
         canonical_artifact
     });
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationSourceAttestRequestWireV1 {
-        version: u16,
-        slot: u16,
-        network_id: NetworkId,
-        statement:
-            sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationSourceAttestResultWireV1 {
-        version: u16,
-        slot: u16,
-        statement_digest: [u8; 32],
-        signature: [u8; 64],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
-        version: u16,
-        slot: u16,
-        network_id: NetworkId,
-        head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
-        canonical_head: Vec<u8>,
-    }
+    define_broker_wire_struct!(owned ModerationPanelNotificationSourceAttestRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, statement: sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1, });
+    define_broker_wire_struct!(copy ModerationPanelNotificationSourceAttestResultWireV1 { version: u16, slot: u16, statement_digest: [u8; 32], signature: [u8; 64], });
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveHeadPublishRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1, canonical_head: Vec<u8>, });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
@@ -4084,21 +3532,8 @@ mod protocol {
     impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
         canonical_head
     });
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
-        version: u16,
-        slot: u16,
-        operation_id: [u8; 32],
-        head_digest: [u8; 32],
-        chain_commitment: [u8; 32],
-        outcome: u8,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationArchiveHeadReadResultWireV1 {
-        version: u16,
-        slot: u16,
-        canonical_head: Option<Vec<u8>>,
-    }
+    define_broker_wire_struct!(copy ModerationPanelNotificationArchiveHeadPublishResultWireV1 { version: u16, slot: u16, operation_id: [u8; 32], head_digest: [u8; 32], chain_commitment: [u8; 32], outcome: u8, });
+    define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveHeadReadResultWireV1 { version: u16, slot: u16, canonical_head: Option<Vec<u8>>, });
     impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadReadResultWireV1 as value {
         "version" => value.version,
         "slot" => value.slot,
@@ -4112,244 +3547,66 @@ mod protocol {
             }
         }
     }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationQuarantineWrapDekRequestWireV1 {
-        context_digest: [u8; 32],
-        dek: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive ModerationQuarantineWrapDekRequestWireV1 { context_digest: [u8; 32], dek: [u8; 32], });
     impl_broker_debug_fields!(ModerationQuarantineWrapDekRequestWireV1 as value {} => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekRequestWireV1 { dek });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationQuarantineWrapDekResultWireV1 {
-        wrapped_dek: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive ModerationQuarantineWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
     impl_broker_debug_fields!(ModerationQuarantineWrapDekResultWireV1 as value {
         "wrapped_dek_len" => value.wrapped_dek.len(),
     } => finish);
     impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekResultWireV1 { wrapped_dek });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationQuarantineUnwrapDekRequestWireV1 {
-        key_id: String,
-        context_digest: [u8; 32],
-        wrapped_dek: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive ModerationQuarantineUnwrapDekRequestWireV1 { key_id: String, context_digest: [u8; 32], wrapped_dek: Vec<u8>, });
     impl_broker_debug_fields!(ModerationQuarantineUnwrapDekRequestWireV1 as value {
         "wrapped_dek_len" => value.wrapped_dek.len(),
     } => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekRequestWireV1 { wrapped_dek });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationQuarantineUnwrapDekResultWireV1 {
-        dek: [u8; 32],
-    }
+    define_broker_wire_struct!(sensitive ModerationQuarantineUnwrapDekResultWireV1 { dek: [u8; 32], });
     impl_broker_debug_fields!(ModerationQuarantineUnwrapDekResultWireV1 as value {} => finish_non_exhaustive);
     impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekResultWireV1 { dek });
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationDurableHandoffRequestWireV1 {
-        handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1,
-        canonical_handoff: Vec<u8>,
-    }
+    define_broker_wire_struct!(sensitive ModerationDurableHandoffRequestWireV1 { handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1, canonical_handoff: Vec<u8>, });
     impl_broker_debug_fields!(ModerationDurableHandoffRequestWireV1 as value {
         "canonical_handoff_len" => value.canonical_handoff.len(),
     } => finish_non_exhaustive);
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ModerationDurableHandoffOutcomeWireV1 {
-        outcome: u8,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct ModerationDurablePanelNotificationRequestWireV1 {
-        notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1,
-        canonical_notification: Vec<u8>,
-        lease_expires_at_unix_ms: u64,
-        attempt: u32,
-        attempt_limit: u32,
-    }
+    define_broker_wire_struct!(copy ModerationDurableHandoffOutcomeWireV1 { outcome: u8, });
+    define_broker_wire_struct!(sensitive ModerationDurablePanelNotificationRequestWireV1 { notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1, canonical_notification: Vec<u8>, lease_expires_at_unix_ms: u64, attempt: u32, attempt_limit: u32, });
     impl_broker_debug_fields!(ModerationDurablePanelNotificationRequestWireV1 as value {
         "canonical_notification_len" => value.canonical_notification.len(),
         "attempt" => value.attempt,
         "attempt_limit" => value.attempt_limit,
     } => finish_non_exhaustive);
-    #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
-    struct ModerationPanelNotificationReceiptWireV1 {
-        notification_id: [u8; 32],
-        receipt_digest: [u8; 32],
-        delivered_at_unix_ms: u64,
-    }
+    define_broker_wire_struct!(copy_sensitive ModerationPanelNotificationReceiptWireV1 { notification_id: [u8; 32], receipt_digest: [u8; 32], delivered_at_unix_ms: u64, });
     impl_broker_debug_fields!(ModerationPanelNotificationReceiptWireV1 as value {} => finish_non_exhaustive);
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SealedLoadRequestWireV1 {
-        slot: u8,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SealedRecordWireV1 {
-        generation: u64,
-        revision: [u8; 32],
-        payload: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SealedCompareAndSwapRequestWireV1 {
-        slot: u8,
-        expected_revision: Option<[u8; 32]>,
-        next: SealedRecordWireV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SealedDeleteRequestWireV1 {
-        slot: u8,
-        expected_revision: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestResolverQualificationWireV1 {
-        revision: u64,
-        policy_digest: [u8; 32],
-        signer_binding: ProviderIngestSignerBindingWireV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestRuntimeQualificationWireV1 {
-        revision: u64,
-        policy_digest: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSignerRequestContextWireV1 {
-        provider_owner: Vec<u8>,
-        signer_policy_id: [u8; 32],
-        signer_policy_revision: u64,
-        signer_policy_predecessor_digest: Option<[u8; 32]>,
-        signer_policy_digest: [u8; 32],
-        expected_assignment_revision: u64,
-        finalized_height: u64,
-        finalized_block_hash: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestResolveSignerRequestWireV1 {
-        context: ProviderIngestSignerRequestContextWireV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestResolveSignerResultWireV1 {
-        eligible: bool,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSignRequestWireV1 {
-        context: ProviderIngestSignerRequestContextWireV1,
-        transaction_payload: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSignResultWireV1 {
-        signed_transaction: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestCheckpointCompareAndSwapRequestWireV1 {
-        expected_revision: Option<[u8; 32]>,
-        next_record: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
-        expected_revision: Option<[u8; 32]>,
-        next_record: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestRetentionLoadRequestWireV1 {
-        network_id: NetworkId,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestRetentionCompareAndSwapRequestWireV1 {
-        network_id: NetworkId,
-        expected_revision: Option<[u8; 32]>,
-        next_record: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationRetentionLoadRequestWireV1 {
-        network_id: NetworkId,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationRetentionCompareAndSwapRequestWireV1 {
-        network_id: NetworkId,
-        expected_revision: Option<[u8; 32]>,
-        next_record: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationJournalSupportsAuthorityRequestWireV1 {
-        authority: iroha_data_model::account::AccountId,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationJournalTransactionRequestWireV1 {
-        sequence: u64,
-        network_id: iroha_data_model::NetworkId,
-        authority: iroha_data_model::account::AccountId,
-        event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1,
-        source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1,
-        attempt: u32,
-        idempotency_key: [u8; 32],
-        instruction_kind: u8,
-        canonical_instruction: Vec<u8>,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationJournalTransactionSubmitResultWireV1 {
-        outcome: u8,
-        receipt: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationThresholdSigningRequestWireV1 {
-        sequence: u64,
-        material_digest: [u8; 32],
-        idempotency_key: [u8; 32],
-        material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationGovernanceDagPublicationRequestWireV1 {
-        sequence: u64,
-        material_digest: [u8; 32],
-        signed_result_digest: [u8; 32],
-        idempotency_key: [u8; 32],
-        canonical_signed_result: Vec<u8>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationReconcileResultWireV1 {
-        outcome: u8,
-        canonical_result: Vec<u8>,
-        failure_receipt: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingAdapterIdentityWireV1 {
-        handle: String,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingStatementSignerIdentityWireV1 {
-        provider_handle: String,
-        signer_id: String,
-        public_key: [u8; 32],
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingStatementPublisherIdentityWireV1 {
-        provider_handle: String,
-        publisher_id: String,
-        route_id: String,
-        public_key: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingFinalizedQueryCapabilitiesWireV1 {
-        supplies_period_closes: bool,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingQueryPositionWireV1 {
-        next_sequence: u64,
-        journal_commitment:
-            Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingQueryPageRequestWireV1 {
-        position: BillingQueryPositionWireV1,
-        max_events: u32,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingQueryPeriodCloseRequestWireV1 {
-        period_end_unix: u64,
-        position: BillingQueryPositionWireV1,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BillingVerifyPageRequestWireV1 {
-        network_id: iroha_data_model::NetworkId,
-        previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
-        page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
-    }
+    define_broker_wire_struct!(copy SealedLoadRequestWireV1 { slot: u8, });
+    define_broker_wire_struct!(owned SealedRecordWireV1 { generation: u64, revision: [u8; 32], payload: Vec<u8>, });
+    define_broker_wire_struct!(owned SealedCompareAndSwapRequestWireV1 { slot: u8, expected_revision: Option<[u8; 32]>, next: SealedRecordWireV1, });
+    define_broker_wire_struct!(copy SealedDeleteRequestWireV1 { slot: u8, expected_revision: [u8; 32], });
+    define_broker_wire_struct!(owned ProviderIngestResolverQualificationWireV1 { revision: u64, policy_digest: [u8; 32], signer_binding: ProviderIngestSignerBindingWireV1, });
+    define_broker_wire_struct!(copy ProviderIngestRuntimeQualificationWireV1 { revision: u64, policy_digest: [u8; 32], });
+    define_broker_wire_struct!(owned ProviderIngestSignerRequestContextWireV1 { provider_owner: Vec<u8>, signer_policy_id: [u8; 32], signer_policy_revision: u64, signer_policy_predecessor_digest: Option<[u8; 32]>, signer_policy_digest: [u8; 32], expected_assignment_revision: u64, finalized_height: u64, finalized_block_hash: [u8; 32], });
+    define_broker_wire_struct!(owned ProviderIngestResolveSignerRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, });
+    define_broker_wire_struct!(copy ProviderIngestResolveSignerResultWireV1 { eligible: bool, });
+    define_broker_wire_struct!(owned ProviderIngestSignRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, transaction_payload: Vec<u8>, });
+    define_broker_wire_struct!(owned ProviderIngestSignResultWireV1 { signed_transaction: Vec<u8>, });
+    define_broker_wire_struct!(owned ProviderIngestCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+    define_broker_wire_struct!(owned ReputationJournalCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+    define_broker_wire_struct!(owned ProviderIngestRetentionLoadRequestWireV1 { network_id: NetworkId, });
+    define_broker_wire_struct!(owned ProviderIngestRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+    define_broker_wire_struct!(owned ReputationRetentionLoadRequestWireV1 { network_id: NetworkId, });
+    define_broker_wire_struct!(owned ReputationRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+    define_broker_wire_struct!(owned ReputationJournalSupportsAuthorityRequestWireV1 { authority: iroha_data_model::account::AccountId, });
+    define_broker_wire_struct!(owned ReputationJournalTransactionRequestWireV1 { sequence: u64, network_id: iroha_data_model::NetworkId, authority: iroha_data_model::account::AccountId, event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1, source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1, attempt: u32, idempotency_key: [u8; 32], instruction_kind: u8, canonical_instruction: Vec<u8>, });
+    define_broker_wire_struct!(copy ReputationJournalTransactionSubmitResultWireV1 { outcome: u8, receipt: [u8; 32], });
+    define_broker_wire_struct!(owned ReputationThresholdSigningRequestWireV1 { sequence: u64, material_digest: [u8; 32], idempotency_key: [u8; 32], material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1, });
+    define_broker_wire_struct!(owned ReputationGovernanceDagPublicationRequestWireV1 { sequence: u64, material_digest: [u8; 32], signed_result_digest: [u8; 32], idempotency_key: [u8; 32], canonical_signed_result: Vec<u8>, });
+    define_broker_wire_struct!(owned ReputationReconcileResultWireV1 { outcome: u8, canonical_result: Vec<u8>, failure_receipt: [u8; 32], });
+    define_broker_wire_struct!(owned BillingAdapterIdentityWireV1 { handle: String, });
+    define_broker_wire_struct!(owned BillingStatementSignerIdentityWireV1 { provider_handle: String, signer_id: String, public_key: [u8; 32], });
+    define_broker_wire_struct!(owned BillingStatementPublisherIdentityWireV1 { provider_handle: String, publisher_id: String, route_id: String, public_key: [u8; 32], });
+    define_broker_wire_struct!(copy BillingFinalizedQueryCapabilitiesWireV1 { supplies_period_closes: bool, });
+    define_broker_wire_struct!(copy BillingQueryPositionWireV1 { next_sequence: u64, journal_commitment: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, });
+    define_broker_wire_struct!(owned BillingQueryPageRequestWireV1 { position: BillingQueryPositionWireV1, max_events: u32, });
+    define_broker_wire_struct!(owned BillingQueryPeriodCloseRequestWireV1 { period_end_unix: u64, position: BillingQueryPositionWireV1, });
+    define_broker_wire_struct!(sensitive BillingVerifyPageRequestWireV1 { network_id: iroha_data_model::NetworkId, previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1, });
     impl_broker_debug_fields!(BillingVerifyPageRequestWireV1 as value {
         "network_id" => value.network_id,
         "previous_next_sequence" => value .previous .map(|commitment| commitment.journal_next_sequence),
@@ -4357,64 +3614,27 @@ mod protocol {
         "page_next_sequence" => value.page.next_sequence,
         "event_count" => value.page.events.len(),
     } => finish_non_exhaustive);
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingVerifyPeriodCloseRequestWireV1 {
-        network_id: iroha_data_model::NetworkId,
-        close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingVerifyEpochTransitionRequestWireV1 {
-        network_id: iroha_data_model::NetworkId,
-        transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingSignDigestRequestWireV1 {
-        digest: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingSignDigestResultWireV1 {
-        signature: [u8; 64],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BillingPublishStatementRequestWireV1 {
-        idempotency_key: [u8; 32],
-        signed_statement_digest: [u8; 32],
-        statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
-    }
+    define_broker_wire_struct!(owned BillingVerifyPeriodCloseRequestWireV1 { network_id: iroha_data_model::NetworkId, close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1, });
+    define_broker_wire_struct!(owned BillingVerifyEpochTransitionRequestWireV1 { network_id: iroha_data_model::NetworkId, transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1, });
+    define_broker_wire_struct!(copy BillingSignDigestRequestWireV1 { digest: [u8; 32], });
+    define_broker_wire_struct!(copy BillingSignDigestResultWireV1 { signature: [u8; 64], });
+    define_broker_wire_struct!(sensitive BillingPublishStatementRequestWireV1 { idempotency_key: [u8; 32], signed_statement_digest: [u8; 32], statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, });
     impl_broker_debug_fields!(BillingPublishStatementRequestWireV1 as value {
         "idempotency_key" => value.idempotency_key,
         "signed_statement_digest" => value.signed_statement_digest,
     } => finish_non_exhaustive);
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingLookupRequestWireV1 {
-        record_id: [u8; 32],
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BillingAuthoritativePublicationWireV1 {
-        signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
-        receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1,
-    }
+    define_broker_wire_struct!(copy BillingLookupRequestWireV1 { record_id: [u8; 32], });
+    define_broker_wire_struct!(sensitive BillingAuthoritativePublicationWireV1 { signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1, });
     impl_broker_debug_fields!(BillingAuthoritativePublicationWireV1 as value {
         "statement_id" => value .signed_statement .governed_statement .statement .statement_id,
     } => finish_non_exhaustive);
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BillingAcknowledgementRequestWireV1 {
-        statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
-        acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
-    }
+    define_broker_wire_struct!(sensitive BillingAcknowledgementRequestWireV1 { statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1, });
     impl_broker_debug_fields!(BillingAcknowledgementRequestWireV1 as value {
         "statement_id" => value.acknowledgement.statement_id,
         "authentication_proof_len" => value.acknowledgement.authentication_proof.len(),
     } => finish_non_exhaustive);
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct BillingLoadEpochRequestWireV1 {
-        epoch_sequence: u64,
-    }
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BillingCompareAndSwapEpochRequestWireV1 {
-        expected_revision: Option<[u8; 32]>,
-        next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1,
-    }
+    define_broker_wire_struct!(copy BillingLoadEpochRequestWireV1 { epoch_sequence: u64, });
+    define_broker_wire_struct!(sensitive BillingCompareAndSwapEpochRequestWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1, });
     impl_broker_debug_fields!(BillingCompareAndSwapEpochRequestWireV1 as value {
         "expected_revision" => value.expected_revision,
         "epoch_sequence" => value.next.epoch_sequence,
@@ -4739,78 +3959,21 @@ mod protocol {
         }
         Ok(())
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceMusubiArchiveWireV1 {
-        network_id: iroha_data_model::NetworkId,
-        observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1,
-        binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1,
-    }
+    define_broker_wire_struct!(owned ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceFetchRequestWireV2 {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
         musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
     }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestCarPlanWireV1 {
-        chunk_profile: ProviderIngestChunkProfileWireV1,
-        payload_digest: [u8; 32],
-        content_length: u64,
-        chunks: Vec<ProviderIngestCarChunkWireV1>,
-        files: Vec<ProviderIngestFilePlanWireV1>,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestChunkProfileWireV1 {
-        min_size: u64,
-        target_size: u64,
-        max_size: u64,
-        break_mask: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestCarChunkWireV1 {
-        offset: u64,
-        length: u32,
-        digest: [u8; 32],
-        taikai_segment_hint: Option<ProviderIngestTaikaiSegmentHintWireV1>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestTaikaiSegmentHintWireV1 {
-        event: String,
-        stream: String,
-        rendition: String,
-        sequence: u64,
-        payload_len: Option<u64>,
-        payload_digest: Option<[u8; 32]>,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestFilePlanWireV1 {
-        path: Vec<String>,
-        first_chunk: u64,
-        chunk_count: u64,
-        size: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceHeaderWireV1 {
-        manifest: Vec<u8>,
-        plan: Vec<u8>,
-        content_length: u64,
-        frame_count: u64,
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceChunkWireV1 {
-        sequence: u64,
-        offset: u64,
-        bytes: Vec<u8>,
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceTrailerWireV1 {
-        status: u8,
-        content_length: u64,
-        frame_count: u64,
-        payload_digest: [u8; 32],
-        transcript_digest: [u8; 32],
-        provider_metadata_digest: [u8; 32],
-    }
+    define_broker_wire_struct!(owned ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
+    define_broker_wire_struct!(copy ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
+    define_broker_wire_struct!(owned ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], taikai_segment_hint: Option<ProviderIngestTaikaiSegmentHintWireV1>, });
+    define_broker_wire_struct!(owned ProviderIngestTaikaiSegmentHintWireV1 { event: String, stream: String, rendition: String, sequence: u64, payload_len: Option<u64>, payload_digest: Option<[u8; 32]>, });
+    define_broker_wire_struct!(owned ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
+    define_broker_wire_struct!(owned ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
+    define_broker_wire_struct!(owned ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
+    define_broker_wire_struct!(copy ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum BrokerError {
         Unavailable,

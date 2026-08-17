@@ -1,5 +1,5 @@
 use crate::{
-    emitter_ext::EmitterExt,
+    EmitterExt,
     utils::{attr_struct, darling_result, parse_single_list_attr, parse_single_list_attr_opt},
 };
 use darling::{FromDeriveInput, FromVariant};

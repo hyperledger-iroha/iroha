@@ -129,8 +129,12 @@ fn canonical_body_recovery_flushes_owned_effects_after_local_completion() {
     );
     assert!(canonical_recovery_source_work_remains(true, 0));
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(canonical_body_recovery_dispatch_drains_old_output_before_new_reservations);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(historical_recovery_cancels_completed_requests_before_exact_output_retry);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    canonical_body_recovery_dispatch_drains_old_output_before_new_reservations
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    historical_recovery_cancels_completed_requests_before_exact_output_retry
+);
 #[test]
 fn canonical_body_recovery_successor_request_gets_a_fresh_retry_deadline() {
     let started = Instant::now();
@@ -193,45 +197,6 @@ fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
         "a carrierless live Serve lifecycle must restart into local startup discharge"
     );
 }
-#[test]
-fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
-    let revision = Cell::new((1_u64, 1_u64, 1_u64));
-    let mut publisher = CommittedLaneStatusPublisher::default();
-    assert!(publisher.publish_if_changed_with(|| revision.get(), Vec::new));
-    assert_eq!(publisher.published_revision, Some((1, 1, 1)));
-    revision.set((2, 1, 1));
-    let projection_ran = Cell::new(false);
-    assert!(
-        !publisher.publish_if_changed_with(
-            || revision.get(),
-            || {
-                projection_ran.set(true);
-                revision.set((3, 1, 1));
-                Vec::new()
-            },
-        ),
-        "a projection spanning two revisions must not replace the global status root"
-    );
-    assert!(projection_ran.get());
-    assert_eq!(
-        publisher.published_revision,
-        Some((1, 1, 1)),
-        "revision drift must retain the prior acknowledgement for retry"
-    );
-    assert!(
-        super::super::status::committed_lane_blocks_snapshot().is_empty(),
-        "revision drift must retain the prior global status root"
-    );
-    assert!(
-        publisher.publish_if_changed_with(|| revision.get(), Vec::new),
-        "the next stable runner edge must retry the newer revision"
-    );
-    assert_eq!(publisher.published_revision, Some((3, 1, 1)));
-    super::super::status::clear_v2_status();
-}
-#[test]
 fn pending_tip_recovery_gate_precedes_lane_work_construction() {
     let constructed = Cell::new(false);
     let error = construct_after_pending_tip_application_recovery(true, false, || {

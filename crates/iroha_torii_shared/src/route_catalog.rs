@@ -2361,9 +2361,6 @@ pub mod telemetry {
     /// Read pacemaker status.
     pub const PACEMAKER: RouteDescriptor =
         telemetry_operator_get("operator.sumeragi.pacemaker", "/v1/sumeragi/pacemaker");
-    /// Read consensus phase timings.
-    pub const PHASES: RouteDescriptor =
-        telemetry_operator_get("operator.sumeragi.phases", "/v1/sumeragi/phases");
     /// Read the atomic cross-transaction cache diagnostic.
     pub const DEBUG_AXT_CACHE: RouteDescriptor =
         telemetry_operator_get("operator.debug.axt_cache", "/v1/debug/axt/cache")
@@ -2389,7 +2386,6 @@ pub mod telemetry {
     /// Complete route family registered by `add_telemetry_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         PACEMAKER,
-        PHASES,
         DEBUG_AXT_CACHE,
         DEBUG_WITNESS,
         SORANET_PRIVACY_EVENT,
@@ -2548,9 +2544,6 @@ pub mod sumeragi {
     /// List consensus-key lifecycle records as an authenticated operator.
     pub const KEY_LIFECYCLE: RouteDescriptor =
         telemetry_operator_get("sumeragi.key_lifecycle.list", "/v1/sumeragi/key-lifecycle");
-    /// Read aggregated consensus telemetry as an authenticated operator.
-    pub const TELEMETRY: RouteDescriptor =
-        telemetry_operator_get("sumeragi.telemetry.read", "/v1/sumeragi/telemetry");
     /// Read effective Sumeragi parameters as an authenticated operator.
     pub const PARAMETERS: RouteDescriptor =
         telemetry_operator_get("sumeragi.parameter.read", "/v1/sumeragi/params");
@@ -2586,7 +2579,6 @@ pub mod sumeragi {
         VALIDATOR_SET_BY_HEIGHT,
         CONSENSUS_KEYS,
         KEY_LIFECYCLE,
-        TELEMETRY,
         PARAMETERS,
         COMMIT_QC,
     ];

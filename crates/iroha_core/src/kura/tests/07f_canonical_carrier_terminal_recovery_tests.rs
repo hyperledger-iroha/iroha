@@ -156,7 +156,7 @@ fn canonical_terminal_payload_for_test(
         )])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
     let mut proposal = template.origin_proposal;
     proposal.descriptor.subject_hash =
         Hash::new_from_chunks(&[b"kura:canonical-terminal:subject:v1\0", &[salt]]);
@@ -183,7 +183,6 @@ fn canonical_terminal_payload_for_test(
         .expect("derive canonical terminal reservation identities");
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura:canonical-terminal:queue-plan:v1\0",
@@ -860,9 +859,9 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         })
         .collect::<Vec<_>>();
     assert_ne!(
-        payloads[0].reservation_keys[0].signed_transaction_hash,
-        payloads[1].reservation_keys[0].signed_transaction_hash,
-        "carrier members require distinct transaction identities",
+        payloads[0].reservation_keys[0].entrypoint_hash,
+        payloads[1].reservation_keys[0].entrypoint_hash,
+        "carrier members require distinct entrypoint identities",
     );
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;

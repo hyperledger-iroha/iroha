@@ -38,6 +38,8 @@ def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     assert result.returncode == 0, result.stderr
     assert "--genesis-external-signer" in result.stdout
     assert "--trusted-genesis-external-signer-sha256" in result.stdout
+    assert "--authenticated-tool-controller" in result.stdout
+    assert "--trusted-authenticated-tool-controller-sha256" in result.stdout
     assert "genesis-private-key" not in result.stdout
     assert "--kagami" not in result.stdout
     assert "--onboarding-token-hash-tool" in result.stdout
@@ -428,6 +430,7 @@ def _fake_renderer(
     include_kagemusha_qualification_seal: bool = True,
     **_kwargs,
 ) -> list[Path]:
+    bundle_root = _kwargs.get("bundle_root")
     _mkdir_private(output_dir)
     if base_genesis_path is not None:
         _write_private(output_dir / "genesis.json", base_genesis_path.read_bytes())
@@ -456,6 +459,8 @@ def _fake_renderer(
             or reset_bundle.renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER
         )
         config = f'peer = {index}\nexpected = "{expected}"\n'
+        if bundle_root is not None:
+            config += f'bundle_root = "{bundle_root}"\n'
         if kagemusha_release_root is not None:
             config += (
                 "\n[settlement.offline]\n"
@@ -514,6 +519,33 @@ def _stub_receipt_signer_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _passthrough_tool_controller(private: Path) -> Path:
+    """Create a test-only controller shim that preserves the protocol boundary."""
+
+    controller = private / "authenticated-tool-controller"
+    if not controller.exists():
+        controller.write_text(
+            "#!/bin/sh\n"
+            "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n"
+            "[ \"$#\" -gt 0 ] || exit 97\n"
+            "shift\n"
+            "exec \"$@\"\n",
+            encoding="utf-8",
+        )
+        controller.chmod(0o700)
+    return controller
+
+
+def _isolation_kwargs(private: Path) -> dict[str, object]:
+    controller = _passthrough_tool_controller(private)
+    return {
+        "authenticated_tool_controller": controller,
+        "trusted_authenticated_tool_controller_sha256": reset_bundle.sha256(
+            controller
+        ),
+    }
+
+
 def _prepare_args(
     private: Path,
     source: Path,
@@ -527,12 +559,17 @@ def _prepare_args(
     controller_manifest = private / "authority-controller-v1.json"
     if not controller_manifest.exists():
         _write_private(controller_manifest, b'{"test":"controller"}\n')
+    tool_controller = _passthrough_tool_controller(private)
     return argparse.Namespace(
         source_bundle=source,
         source_bundle_sha256=reset_bundle.source_bundle_sha256(source),
         privacy_release_dir=privacy,
         genesis_external_signer=genesis_signer,
         trusted_genesis_external_signer_sha256=reset_bundle.sha256(genesis_signer),
+        authenticated_tool_controller=tool_controller,
+        trusted_authenticated_tool_controller_sha256=reset_bundle.sha256(
+            tool_controller
+        ),
         onboarding_token_hash_tool=token_hash_tool,
         output_bundle=private / "output",
         irohad_sha256="66" * 32,
@@ -582,6 +619,151 @@ def test_private_file_guard_rejects_symlink_hardlink_and_permissive_mode(
     original.chmod(0o640)
     with pytest.raises(RuntimeError, match="unsafe private file identity"):
         reset_bundle.require_private_regular_file(original)
+
+
+def test_acl_gate_is_a_stable_noop_off_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "trusted"
+    _write_private(path, b"trusted")
+    expected = path.lstat()
+    monkeypatch.setattr(reset_bundle.sys, "platform", "linux")
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_macos_acl_inspection",
+        lambda *_args, **_kwargs: pytest.fail("non-macOS ACL inspector ran"),
+    )
+
+    actual = reset_bundle.require_acl_free_path(path, "test trusted path")
+
+    assert reset_bundle._metadata_identity(actual) == reset_bundle._metadata_identity(
+        expected
+    )
+
+
+def test_acl_gate_rejects_simulated_extended_acl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "trusted"
+    _write_private(path, b"trusted")
+    monkeypatch.setattr(reset_bundle.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_macos_acl_inspection",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=b"-rw------- trusted\n 0: everyone allow read\n",
+            stderr=b"",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="extended ACL"):
+        reset_bundle.require_acl_free_path(path, "test trusted path")
+
+
+def test_acl_gate_rejects_path_replacement_during_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "trusted"
+    replacement = tmp_path / "replacement"
+    _write_private(path, b"trusted")
+    _write_private(replacement, b"replacement")
+    monkeypatch.setattr(reset_bundle.sys, "platform", "darwin")
+
+    def replace_path(*_args, **_kwargs):
+        os.replace(replacement, path)
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"-rw------- trusted\n", stderr=b""
+        )
+
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_macos_acl_inspection",
+        replace_path,
+    )
+
+    with pytest.raises(RuntimeError, match="changed during ACL validation"):
+        reset_bundle.require_acl_free_path(path, "test trusted path")
+
+
+def test_private_tree_rejects_nested_acl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "private"
+    _mkdir_private(root)
+    _mkdir_private(root / "nested")
+    protected = root / "nested" / "runtime-key"
+    _write_private(protected, b"secret")
+    monkeypatch.setattr(reset_bundle.sys, "platform", "darwin")
+
+    def inspect(path: Path, _label: str):
+        output = b"entry\n"
+        if path == protected:
+            output += b" 0: everyone allow read\n"
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=output, stderr=b""
+        )
+
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_macos_acl_inspection",
+        inspect,
+    )
+
+    with pytest.raises(RuntimeError, match="extended ACL"):
+        reset_bundle.require_private_tree(root)
+
+
+def test_new_private_candidate_rejects_inherited_acl_before_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private = tmp_path / "private"
+    destination = private / "secret"
+    _mkdir_private(private)
+    monkeypatch.setattr(reset_bundle.sys, "platform", "darwin")
+
+    def inspect(path: Path, _label: str):
+        output = b"entry\n"
+        if path.name.startswith(f".{destination.name}."):
+            output += b" 0: everyone allow read\n"
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=output, stderr=b""
+        )
+
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_macos_acl_inspection",
+        inspect,
+    )
+
+    with pytest.raises(RuntimeError, match="extended ACL"):
+        reset_bundle.write_private_file(destination, b"secret")
+
+    assert not destination.exists()
+    assert not list(private.glob(".secret.*.tmp"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACL semantics")
+def test_acl_gate_rejects_real_macos_extended_acl(tmp_path: Path) -> None:
+    path = tmp_path / "trusted"
+    _write_private(path, b"trusted")
+    grant = subprocess.run(
+        ["/bin/chmod", "+a", "everyone allow write", str(path)],
+        check=False,
+        capture_output=True,
+    )
+    assert grant.returncode == 0, grant.stderr.decode(errors="replace")
+    try:
+        with pytest.raises(RuntimeError, match="extended ACL"):
+            reset_bundle.require_acl_free_path(path, "test trusted path")
+    finally:
+        subprocess.run(
+            ["/bin/chmod", "-N", str(path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def test_receipt_signer_public_map_rejects_omission_reorder_mismatch_and_secret() -> None:
@@ -708,12 +890,12 @@ def test_external_genesis_signer_never_receives_private_key_material(
     signed = private / "genesis.signed.nrt"
     _write_private(genesis, b'{"bound":true}\n')
     _write_private(config, b"config\n")
-    record = private / "argv.json"
+    record = tmp_path / "argv.json"
     signer = private / "external-genesis-signer"
     signer.write_text(
         "#!/usr/bin/env python3\n"
-        "import json,os,sys\n"
-        f"open({str(record)!r}, 'w').write(json.dumps({{'argv':sys.argv,'env':dict(os.environ)}}))\n"
+        "import json,os,resource,sys\n"
+        f"open({str(record)!r}, 'w').write(json.dumps({{'argv':sys.argv,'env':dict(os.environ),'fsize':resource.getrlimit(resource.RLIMIT_FSIZE)[0]}}))\n"
         "args=sys.argv\n"
         "open(args[args.index('--signed-genesis-out')+1], 'wb').write(b'signed')\n"
         "open(args[args.index('--expected-hash-out')+1], 'w').write('"
@@ -726,6 +908,7 @@ def test_external_genesis_signer_never_receives_private_key_material(
     expected = reset_bundle._sign_genesis(
         external_signer=signer,
         trusted_external_signer_sha256=reset_bundle.sha256(signer),
+        **_isolation_kwargs(private),
         rendered_genesis=genesis,
         peer_one_config=config,
         signed_genesis=signed,
@@ -747,6 +930,11 @@ def test_external_genesis_signer_never_receives_private_key_material(
     ]
     assert len(argv) == 11
     assert "private-key" not in json.dumps(argv).lower()
+    assert str(genesis) not in argv
+    assert str(config) not in argv
+    assert str(signed) not in argv
+    assert signed.read_bytes() == b"signed"
+    assert 0 < invocation["fsize"] <= reset_bundle.MAX_PRIVATE_FILE_BYTES
     assert {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"} <= set(invocation["env"])
     assert not any(
         token in name.upper()
@@ -788,6 +976,7 @@ def test_external_genesis_signer_digest_mismatch_fails_before_execution(
         reset_bundle._sign_genesis(
             external_signer=signer,
             trusted_external_signer_sha256="f" * 64,
+            **_isolation_kwargs(private),
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
@@ -796,6 +985,135 @@ def test_external_genesis_signer_digest_mismatch_fails_before_execution(
 
     assert not marker.exists()
     assert not signed.exists()
+
+
+def test_external_genesis_signer_requires_distinct_authenticated_controller(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    marker = tmp_path / "direct-signer-executed"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/bin/sh\n"
+        f"printf escaped > {str(marker)!r}\n"
+        "setsid /bin/sleep 60 >/dev/null 2>&1 &\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+    controller = _passthrough_tool_controller(private)
+
+    with pytest.raises(
+        RuntimeError,
+        match="isolation controller differs from its trusted SHA-256",
+    ):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            authenticated_tool_controller=controller,
+            trusted_authenticated_tool_controller_sha256="f" * 64,
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    assert not marker.exists()
+    assert not signed.exists()
+
+
+def test_genesis_signer_controller_request_closes_known_escape_classes(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    signer = private / "genesis-signer.snapshot"
+    controller = private / "authenticated-tool-controller.snapshot"
+    bound = private / "genesis.bound.candidate.json"
+    config = private / "peer-one.config.snapshot.toml"
+    signed = private / "genesis.signed.candidate.nrt"
+    expected_hash = private / "genesis.expected_hash.candidate"
+    _write_private(signer, b"signer")
+    signer.chmod(0o700)
+    _write_private(controller, b"controller")
+    controller.chmod(0o700)
+    _write_private(bound, b"{}\n")
+    _write_private(config, b"config\n")
+    signer_command = [
+        str(signer),
+        "--unsigned-genesis",
+        str(bound),
+        "--peer-config",
+        str(config),
+        "--bound-manifest-out",
+        str(bound),
+        "--signed-genesis-out",
+        str(signed),
+        "--expected-hash-out",
+        str(expected_hash),
+    ]
+
+    guard = reset_bundle._SignerDirectoryGuard(signer_command, private)
+    try:
+        request = reset_bundle._genesis_signer_controller_command(
+            controller,
+            signer_command,
+            private,
+            guard.maximum_aggregate_bytes,
+        )
+    finally:
+        guard.close()
+
+    separator = request.index("--")
+    assert request[0:4] == [
+        str(controller),
+        reset_bundle.AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND,
+        "--contract",
+        reset_bundle.AUTHENTICATED_TOOL_CONTROLLER_CONTRACT,
+    ]
+    assert request[separator + 1 :] == signer_command
+    for invariant in (
+        "--use-attested-runtime-identity",
+        "--no-new-privileges",
+        "--close-inherited-fds",
+        "--forward-tool-exit-status",
+        "--exact-tool-stdio",
+        "--deny-network",
+        "--deny-tool-process-spawn",
+        "--deny-write-outside-allowlist",
+        "--deny-link-rename-unlink",
+        "--deny-symlink",
+        "--deny-special-files",
+        "--account-unlinked-write-bytes",
+        "--require-empty-process-tree",
+        "--cumulative-write-limit-bytes",
+        "--maximum-live-write-root-bytes",
+        "--combined-output-limit-bytes",
+    ):
+        assert invariant in request[:separator]
+    writable = [
+        request[index + 1]
+        for index, value in enumerate(request[:separator])
+        if value == "--writable-file"
+    ]
+    assert writable == [
+        f"{bound.name}:{reset_bundle.MAX_PRIVATE_FILE_BYTES}",
+        f"{signed.name}:{reset_bundle.MAX_PRIVATE_FILE_BYTES}",
+        f"{expected_hash.name}:{reset_bundle.MAX_GENESIS_EXPECTED_HASH_BYTES}",
+    ]
+    aggregate_index = request.index("--cumulative-write-limit-bytes")
+    assert int(request[aggregate_index + 1]) == (
+        2 * reset_bundle.MAX_PRIVATE_FILE_BYTES
+        + reset_bundle.MAX_GENESIS_EXPECTED_HASH_BYTES
+    )
+    live_index = request.index("--maximum-live-write-root-bytes")
+    assert int(request[live_index + 1]) > int(request[aggregate_index + 1])
 
 
 @pytest.mark.parametrize("attack", ("symlink", "hardlink"))
@@ -819,6 +1137,7 @@ def test_external_genesis_signer_rejects_link_aliases(
         reset_bundle._sign_genesis(
             external_signer=alias,
             trusted_external_signer_sha256=trusted_sha256,
+            **_isolation_kwargs(private),
             rendered_genesis=private / "genesis.json",
             peer_one_config=private / "config.toml",
             signed_genesis=private / "genesis.signed.nrt",
@@ -844,21 +1163,26 @@ def test_external_genesis_signer_replacement_during_execution_is_rejected(
     replacement.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     replacement.chmod(0o700)
 
-    def replace_during_run(command, **_kwargs):
+    def replace_during_run(command, _temporary_root, _controller):
         os.replace(replacement, signer)
         Path(command[command.index("--signed-genesis-out") + 1]).write_bytes(b"signed")
         Path(command[command.index("--expected-hash-out") + 1]).write_text(
             "00" * 31 + "01\n",
             encoding="ascii",
         )
-        return SimpleNamespace(returncode=0)
+        return 0
 
-    monkeypatch.setattr(reset_bundle.subprocess, "run", replace_during_run)
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_genesis_signer",
+        replace_during_run,
+    )
 
     with pytest.raises(RuntimeError, match="changed during genesis signing"):
         reset_bundle._sign_genesis(
             external_signer=signer,
             trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
@@ -892,6 +1216,7 @@ def test_external_genesis_signer_diagnostics_cannot_inject_controller_output(
         reset_bundle._sign_genesis(
             external_signer=signer,
             trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
@@ -903,6 +1228,340 @@ def test_external_genesis_signer_diagnostics_cannot_inject_controller_output(
     assert not (private / "genesis-signer.stdout").exists()
     assert not (private / "genesis-signer.stderr").exists()
     assert not (private / "genesis-signer.snapshot").exists()
+
+
+def test_external_genesis_signer_output_limit_is_enforced_while_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    process_id = tmp_path / "signer-process-id"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        f"open({str(process_id)!r}, 'w').write(str(os.getpid()))\n"
+        "chunk = b'x' * 4096\n"
+        "while True:\n"
+        "    os.write(1, chunk)\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+    monkeypatch.setattr(reset_bundle, "MAX_GENESIS_SIGNER_OUTPUT_BYTES", 8192)
+
+    with pytest.raises(RuntimeError, match="oversized diagnostics"):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    assert genesis.read_bytes() == b"{}\n"
+    assert not signed.exists()
+    assert not reset_bundle._signer_process_group_exists(
+        int(process_id.read_text())
+    )
+    assert not list(private.glob("*.candidate*"))
+
+
+def test_external_genesis_signer_rejects_unexpected_live_file_and_reaps_group(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    process_ids = tmp_path / "unexpected-process-ids"
+    unexpected = private / "unapproved-output"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/bin/sh\n"
+        "/bin/sleep 60 &\n"
+        "child=$!\n"
+        f"echo \"$$ $child\" > {str(process_ids)!r}\n"
+        f"printf x > {str(unexpected)!r}\n"
+        "/bin/sleep 60\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+
+    with pytest.raises(RuntimeError, match="unexpected staging entries"):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    leader_pid, _child_pid = map(int, process_ids.read_text().split())
+    assert not reset_bundle._signer_process_group_exists(leader_pid)
+    assert not signed.exists()
+    assert unexpected.read_bytes() == b"x"
+    assert not list(private.glob("*.candidate*"))
+
+
+def test_external_genesis_signer_rejects_live_expected_hash_overflow(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    process_id = tmp_path / "hash-overflow-process-id"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os,sys,time\n"
+        f"open({str(process_id)!r}, 'w').write(str(os.getpid()))\n"
+        "args=sys.argv\n"
+        "open(args[args.index('--expected-hash-out')+1], 'wb').write(b'x' * 257)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+
+    with pytest.raises(RuntimeError, match="256-byte bound"):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    assert not reset_bundle._signer_process_group_exists(int(process_id.read_text()))
+    assert not signed.exists()
+    assert not list(private.glob("*.candidate*"))
+
+
+def test_external_genesis_signer_rejects_live_aggregate_growth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    bound = private / "genesis.bound.candidate.json"
+    config = private / "peer-one.config.snapshot.toml"
+    signed = private / "genesis.signed.candidate.nrt"
+    expected_hash = private / "genesis.expected_hash.candidate"
+    _write_private(bound, b"{}\n")
+    _write_private(config, b"config\n")
+    protected = [private / f"protected-{index}" for index in range(3)]
+    for path in protected:
+        _write_private(path, b"x")
+    signer = private / "genesis-signer.snapshot"
+    signer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    signer.chmod(0o700)
+    monkeypatch.setattr(reset_bundle, "MAX_PRIVATE_FILE_BYTES", 1024)
+    command = [
+        str(signer),
+        "--unsigned-genesis",
+        str(bound),
+        "--peer-config",
+        str(config),
+        "--bound-manifest-out",
+        str(bound),
+        "--signed-genesis-out",
+        str(signed),
+        "--expected-hash-out",
+        str(expected_hash),
+    ]
+    guard = reset_bundle._SignerDirectoryGuard(command, private)
+    try:
+        for path in protected:
+            path.write_bytes(b"x" * 1024)
+        assert "staging aggregate exceeded" in str(guard.check())
+    finally:
+        guard.close()
+
+
+def test_external_genesis_signer_inherits_exact_file_size_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    bound = private / "genesis.bound.candidate.json"
+    config = private / "peer-one.config.snapshot.toml"
+    signed = private / "genesis.signed.candidate.nrt"
+    expected_hash = private / "genesis.expected_hash.candidate"
+    process_id = tmp_path / "file-limit-process-id"
+    _write_private(bound, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "genesis-signer.snapshot"
+    signer.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {str(process_id)!r}\n"
+        "/usr/bin/yes x > \"$8\"\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+    monkeypatch.setattr(reset_bundle, "MAX_PRIVATE_FILE_BYTES", 8192)
+    command = [
+        str(signer),
+        "--unsigned-genesis",
+        str(bound),
+        "--peer-config",
+        str(config),
+        "--bound-manifest-out",
+        str(bound),
+        "--signed-genesis-out",
+        str(signed),
+        "--expected-hash-out",
+        str(expected_hash),
+    ]
+
+    returncode = reset_bundle._run_bounded_genesis_signer(
+        command,
+        private,
+        _passthrough_tool_controller(private),
+    )
+
+    assert returncode != 0
+    assert signed.stat().st_size <= 8192
+    assert not reset_bundle._signer_process_group_exists(int(process_id.read_text()))
+
+
+def test_external_genesis_signer_fails_closed_without_file_size_rlimit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    marker = tmp_path / "signer-executed"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        f"#!/bin/sh\ntouch {str(marker)!r}\nexit 0\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+    monkeypatch.setattr(reset_bundle, "posix_resource", None)
+
+    with pytest.raises(RuntimeError, match="file-size resource limit is unavailable"):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    assert not marker.exists()
+    assert not signed.exists()
+    assert not list(private.glob("*.candidate*"))
+
+
+def test_external_genesis_signer_timeout_kills_and_reaps_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    process_ids = tmp_path / "signer-process-ids"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/bin/sh\n"
+        "/bin/sleep 60 &\n"
+        "child=$!\n"
+        f"echo \"$$ $child\" > {str(process_ids)!r}\n"
+        "/bin/sleep 60\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+    monkeypatch.setattr(reset_bundle, "GENESIS_SIGNER_TIMEOUT_SECONDS", 0.5)
+
+    with pytest.raises(RuntimeError, match="execution timeout"):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            temporary_root=private,
+        )
+
+    leader_pid, _child_pid = map(int, process_ids.read_text().split())
+    assert not reset_bundle._signer_process_group_exists(leader_pid)
+    assert genesis.read_bytes() == b"{}\n"
+    assert not signed.exists()
+    assert not list(private.glob("*.candidate*"))
+
+
+def test_successful_external_genesis_signer_cannot_leave_output_descendant(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    process_ids = tmp_path / "signer-process-ids"
+    _write_private(genesis, b'{"bound":true}\n')
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os,subprocess,sys\n"
+        "child = subprocess.Popen(['/bin/sleep', '60'])\n"
+        f"open({str(process_ids)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}\\n')\n"
+        "args = sys.argv\n"
+        "open(args[args.index('--signed-genesis-out') + 1], 'wb').write(b'signed')\n"
+        "open(args[args.index('--expected-hash-out') + 1], 'w').write('"
+        + "00" * 31
+        + "01\\n')\n",
+        encoding="utf-8",
+    )
+    signer.chmod(0o700)
+
+    expected = reset_bundle._sign_genesis(
+        external_signer=signer,
+        trusted_external_signer_sha256=reset_bundle.sha256(signer),
+        **_isolation_kwargs(private),
+        rendered_genesis=genesis,
+        peer_one_config=config,
+        signed_genesis=signed,
+        temporary_root=private,
+    )
+
+    leader_pid, _child_pid = map(int, process_ids.read_text().split())
+    assert expected == "00" * 31 + "01"
+    assert signed.read_bytes() == b"signed"
+    assert not reset_bundle._signer_process_group_exists(leader_pid)
+    assert not list(private.glob("*.candidate*"))
 
 
 def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
@@ -942,7 +1601,7 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
-        lambda output, _expected: {
+        lambda output, _expected, **_kwargs: {
             slug: reset_bundle.sha256(output / "rendered" / slug / "config.toml")
             for slug in reset_bundle.SLUGS
         },
@@ -1024,6 +1683,10 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     assert set(manifest["configs"]) == set(reset_bundle.SLUGS)
     for slug in reset_bundle.SLUGS:
         assert not any((output / "rendered" / slug / "storage").iterdir())
+        config = (output / "rendered" / slug / "config.toml").read_text()
+        assert str(output) in config
+        assert ".output." not in config
+    assert not list(private.glob(".output.*.staging"))
 
 
 def test_prepare_removes_all_partial_output_when_native_signing_fails(
@@ -1049,22 +1712,124 @@ def test_prepare_removes_all_partial_output_when_native_signing_fails(
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
-        lambda output, _expected: {
+        lambda output, _expected, **_kwargs: {
             slug: reset_bundle.sha256(output / "rendered" / slug / "config.toml")
             for slug in reset_bundle.SLUGS
         },
     )
-    monkeypatch.setattr(
-        reset_bundle,
-        "_sign_genesis",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("signing rejected")),
-    )
     args = _prepare_args(private, source, privacy, signer)
     _trust_test_controller(args, monkeypatch)
+
+    def reject_signing(**_kwargs) -> str:
+        assert not args.output_bundle.exists()
+        raise RuntimeError("signing rejected")
+
+    monkeypatch.setattr(reset_bundle, "_sign_genesis", reject_signing)
 
     with pytest.raises(RuntimeError, match="signing rejected"):
         reset_bundle.prepare(args)
     assert not args.output_bundle.exists()
+    assert not list(private.glob(".output.*.staging"))
+
+
+def test_private_tree_fsyncs_final_files_then_directories_bottom_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "bundle"
+    nested = root / "nested"
+    leaf = nested / "leaf"
+    _mkdir_private(leaf)
+    root_file = root / "root.bin"
+    nested_file = nested / "nested.bin"
+    leaf_file = leaf / "leaf.bin"
+    _write_private(root_file, b"root")
+    _write_private(nested_file, b"nested")
+    _write_private(leaf_file, b"leaf")
+    root.chmod(0o750)
+    nested.chmod(0o750)
+    leaf.chmod(0o750)
+    root_file.chmod(0o640)
+    nested_file.chmod(0o640)
+    leaf_file.chmod(0o640)
+    reset_bundle._chmod_private_tree(root)
+
+    labels = {
+        (path.lstat().st_dev, path.lstat().st_ino): label
+        for path, label in (
+            (root_file, "root file"),
+            (nested_file, "nested file"),
+            (leaf_file, "leaf file"),
+            (leaf, "leaf directory"),
+            (nested, "nested directory"),
+            (root, "root directory"),
+        )
+    }
+    real_fsync = os.fsync
+    events: list[tuple[str, int]] = []
+
+    def record_fsync(descriptor: int) -> None:
+        info = os.fstat(descriptor)
+        events.append(
+            (
+                labels[(info.st_dev, info.st_ino)],
+                info.st_mode & 0o777,
+            )
+        )
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(reset_bundle.os, "fsync", record_fsync)
+
+    reset_bundle._fsync_private_tree(root)
+
+    assert events == [
+        ("root file", 0o600),
+        ("nested file", 0o600),
+        ("leaf file", 0o600),
+        ("leaf directory", 0o700),
+        ("nested directory", 0o700),
+        ("root directory", 0o700),
+    ]
+
+
+def test_atomic_bundle_publication_preserves_an_existing_winner(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    staging = private / ".output.staging"
+    output = private / "output"
+    _mkdir_private(private)
+    _mkdir_private(staging)
+    _write_private(staging / "candidate", b"candidate")
+    _mkdir_private(output)
+    _write_private(output / "winner", b"winner")
+
+    with pytest.raises(RuntimeError, match="appeared before atomic no-replace"):
+        reset_bundle._publish_directory_noreplace(staging, output)
+
+    assert (staging / "candidate").read_bytes() == b"candidate"
+    assert (output / "winner").read_bytes() == b"winner"
+
+
+def test_atomic_bundle_publication_reports_committed_uncertain_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private = tmp_path / "private"
+    staging = private / ".output.staging"
+    output = private / "output"
+    _mkdir_private(private)
+    _mkdir_private(staging)
+    _write_private(staging / "candidate", b"candidate")
+
+    def reject_parent_fsync(_descriptor: int) -> None:
+        raise OSError("simulated parent fsync failure")
+
+    monkeypatch.setattr(reset_bundle.os, "fsync", reject_parent_fsync)
+
+    with pytest.raises(RuntimeError, match="publication committed.*uncertain"):
+        reset_bundle._publish_directory_noreplace(staging, output)
+
+    assert not staging.exists()
+    assert (output / "candidate").read_bytes() == b"candidate"
 
 
 def test_prepare_refuses_invalid_first_pass_before_using_external_signer(

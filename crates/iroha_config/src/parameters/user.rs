@@ -162,6 +162,7 @@ use iroha_data_model::{
     content::ContentAuthMode,
     da::{
         commitment::DaProofScheme,
+        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
@@ -173,9 +174,10 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
-        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
-        ShardId, UniversalAccountId,
+        AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneSchedulerPolicy,
+        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
+        UniversalAccountId,
     },
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
@@ -9084,33 +9086,45 @@ pub struct Nexus {
     #[config(nested)]
     pub da: Da,
 }
-impl Default for Nexus {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::ENABLED,
-            storage: NexusStorage::default(),
-            lane_count: defaults::nexus::LANE_COUNT,
-            lane_catalog: Vec::new(),
-            dataspace_catalog: Vec::new(),
-            staking: NexusStaking::default(),
-            fees: NexusFees::default(),
-            relay_worker: NexusRelayWorker::default(),
-            hf_shared_leases: NexusHfSharedLeases::default(),
-            uploaded_models: NexusUploadedModels::default(),
-            endorsement: NexusEndorsement::default(),
-            axt: NexusAxt::default(),
-            lane_relay_emergency: LaneRelayEmergency::default(),
-            routing_policy: RoutingPolicy::default(),
-            registry: LaneRegistryConfig::default(),
-            governance: GovernanceCatalogConfig::default(),
-            compliance: LaneCompliance::default(),
-            fusion: Fusion::default(),
-            autoscale: Autoscale::default(),
-            commit: Commit::default(),
-            da: Da::default(),
+macro_rules! impl_default {
+    ($ty:ident { $($field:ident: $value:expr),* $(,)? }) => {
+        impl Default for $ty {
+            fn default() -> Self {
+                Self { $($field: $value),* }
+            }
         }
-    }
+    };
+    ($ty:ident => $value:expr) => {
+        impl Default for $ty {
+            fn default() -> Self {
+                $value
+            }
+        }
+    };
 }
+impl_default!(Nexus {
+    enabled: defaults::nexus::ENABLED,
+    storage: NexusStorage::default(),
+    lane_count: defaults::nexus::LANE_COUNT,
+    lane_catalog: Vec::new(),
+    dataspace_catalog: Vec::new(),
+    staking: NexusStaking::default(),
+    fees: NexusFees::default(),
+    relay_worker: NexusRelayWorker::default(),
+    hf_shared_leases: NexusHfSharedLeases::default(),
+    uploaded_models: NexusUploadedModels::default(),
+    endorsement: NexusEndorsement::default(),
+    axt: NexusAxt::default(),
+    lane_relay_emergency: LaneRelayEmergency::default(),
+    routing_policy: RoutingPolicy::default(),
+    registry: LaneRegistryConfig::default(),
+    governance: GovernanceCatalogConfig::default(),
+    compliance: LaneCompliance::default(),
+    fusion: Fusion::default(),
+    autoscale: Autoscale::default(),
+    commit: Commit::default(),
+    da: Da::default(),
+});
 /// User-level configuration container for Nexus storage budgets.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
@@ -9129,17 +9143,12 @@ pub struct NexusStorage {
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
 }
-impl Default for NexusStorage {
-    fn default() -> Self {
-        Self {
-            local_budget_bytes: None,
-            budget_enforce_interval_blocks:
-                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
-            max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
-            disk_budget_weights: NexusStorageWeights::default(),
-        }
-    }
-}
+impl_default!(NexusStorage {
+    local_budget_bytes: None,
+    budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
+    max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+    disk_budget_weights: NexusStorageWeights::default(),
+});
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
@@ -9209,17 +9218,13 @@ pub struct NexusStorageWeights {
     #[config(default = "defaults::nexus::storage::SORAVPN_SPOOL_BPS")]
     pub soravpn_spool_bps: u16,
 }
-impl Default for NexusStorageWeights {
-    fn default() -> Self {
-        Self {
-            kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
-            wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
-            sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
-            soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
-            soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
-        }
-    }
-}
+impl_default!(NexusStorageWeights {
+    kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
+    wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
+    sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
+    soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
+    soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
+});
 impl NexusStorageWeights {
     fn total_bps(&self) -> u32 {
         u32::from(self.kura_blocks_bps)
@@ -9274,7 +9279,7 @@ pub struct LaneDescriptor {
     pub dataspace: Option<String>,
     /// Storage profile identifier (`full_replica`, `commitment_only`, `split_replica`).
     pub storage: Option<String>,
-    /// Declarative visibility (e.g., `public`, `private`).
+    /// Declarative visibility (`public` or `restricted`).
     pub visibility: Option<String>,
     /// Optional shard identifier used for DA cursor tracking (defaults to lane id).
     pub shard_id: Option<u32>,
@@ -9282,17 +9287,78 @@ pub struct LaneDescriptor {
     ///
     /// KZG is not part of the V1 data model.
     pub proof_scheme: Option<String>,
+    /// DA manifest availability policy (`strict` or `audit`).
+    pub manifest_policy: Option<DaManifestPolicy>,
+    /// Typed confidential-compute policy, absent for ordinary lanes.
+    pub confidential_compute: Option<ConfidentialComputeDescriptor>,
+    /// Optional positive scheduler overrides.
+    pub scheduler: Option<LaneSchedulerDescriptor>,
+    /// Optional typed settlement reserve configuration.
+    pub settlement_buffer: Option<LaneSettlementBufferDescriptor>,
     /// Lane profile/type identifier.
     pub lane_type: Option<String>,
     /// Governance policy identifier.
     pub governance: Option<String>,
     /// Settlement/fee policy identifier.
     pub settlement: Option<String>,
-    /// Arbitrary metadata key-value pairs for instrumentation.
+    /// Operator metadata key-value pairs for instrumentation.
+    ///
+    /// Reserved autoscale keys remain consensus-relevant. Raw scheduler and settlement buffer
+    /// metadata are rejected in favor of their dedicated typed fields.
     #[config(default)]
     pub metadata: BTreeMap<String, String>,
 }
 const RETIRED_LANE_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
+const RETIRED_LANE_FUNCTIONAL_METADATA_KEYS: [&str; 10] = [
+    "da_manifest_policy",
+    "confidential_compute",
+    "confidential_mechanism",
+    "confidential_key_version",
+    "confidential_access",
+    "scheduler.teu_capacity",
+    "scheduler.starvation_bound_slots",
+    "settlement.buffer_account",
+    "settlement.buffer_asset",
+    "settlement.buffer_capacity",
+];
+fn is_retired_lane_functional_metadata_key(key: &str) -> bool {
+    RETIRED_LANE_FUNCTIONAL_METADATA_KEYS.contains(&key)
+        || key.starts_with("confidential_")
+        || key.starts_with("scheduler.")
+        || key.starts_with("settlement.buffer_")
+}
+/// User-facing confidential-compute lane policy.
+#[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ConfidentialComputeDescriptor {
+    /// Protection mechanism (`encryption` or `secret_sharing`).
+    pub mechanism: Option<ConfidentialComputeMechanism>,
+    /// Positive key/share rotation version.
+    pub key_version: Option<u32>,
+    /// Canonical audience labels allowed to fetch confidential payloads.
+    #[config(default)]
+    pub allowed_audiences: Vec<String>,
+}
+/// User-facing positive lane scheduler overrides.
+#[derive(Debug, Clone, Copy, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct LaneSchedulerDescriptor {
+    /// Positive per-block TEU capacity override.
+    pub teu_capacity: Option<u64>,
+    /// Positive starvation bound in slots.
+    pub starvation_bound_slots: Option<u64>,
+}
+/// User-facing typed settlement reserve descriptor.
+#[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct LaneSettlementBufferDescriptor {
+    /// Canonical universal I105 account literal holding the reserve.
+    pub account_id: Option<String>,
+    /// Canonical Base58 asset-definition address.
+    pub asset_definition_id: Option<String>,
+    /// Positive canonical exact XOR quantity.
+    pub capacity: Option<String>,
+}
 /// User-level configuration for one physical execution, storage, and validator boundary.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct DataSpaceDescriptor {
@@ -9321,15 +9387,11 @@ pub struct LaneRegistryConfig {
     #[config(default = "defaults::nexus::registry::POLL_INTERVAL.into()")]
     pub poll_interval_ms: DurationMs,
 }
-impl Default for LaneRegistryConfig {
-    fn default() -> Self {
-        Self {
-            manifest_directory: None,
-            cache_directory: None,
-            poll_interval_ms: defaults::nexus::registry::POLL_INTERVAL.into(),
-        }
-    }
-}
+impl_default!(LaneRegistryConfig {
+    manifest_directory: None,
+    cache_directory: None,
+    poll_interval_ms: defaults::nexus::registry::POLL_INTERVAL.into(),
+});
 /// User-level configuration container for lane compliance policies.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct LaneCompliance {
@@ -9342,15 +9404,11 @@ pub struct LaneCompliance {
     /// Directory holding Norito-encoded policy bundles.
     pub policy_dir: Option<PathBuf>,
 }
-impl Default for LaneCompliance {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::compliance::ENABLED,
-            audit_only: defaults::nexus::compliance::AUDIT_ONLY,
-            policy_dir: None,
-        }
-    }
-}
+impl_default!(LaneCompliance {
+    enabled: defaults::nexus::compliance::ENABLED,
+    audit_only: defaults::nexus::compliance::AUDIT_ONLY,
+    policy_dir: None,
+});
 /// Validator activation policy for a lane (user-level view).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LaneValidatorModeConfig {
@@ -9439,23 +9497,19 @@ pub struct NexusStaking {
     #[config(default = "defaults::nexus::staking::slash_sink_account_id()")]
     pub slash_sink_account_id: String,
 }
-impl Default for NexusStaking {
-    fn default() -> Self {
-        Self {
-            public_validator_mode: LaneValidatorModeConfig::StakeElected,
-            restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
-            max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-            unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-            withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
-            max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
-            stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-            stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-            slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
-        }
-    }
-}
+impl_default!(NexusStaking {
+    public_validator_mode: LaneValidatorModeConfig::StakeElected,
+    restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
+    min_validator_stake: defaults::nexus::staking::min_validator_stake(),
+    max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
+    withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
+    max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
+    reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
+    stake_asset_id: defaults::nexus::staking::stake_asset_id(),
+    stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
+    slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
+});
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
         let lane_validator_cap =
@@ -9534,7 +9588,8 @@ pub struct NexusFees {
     /// Fee settlement mode: `direct` or `lane_relay_burn`.
     #[config(default = "defaults::nexus::fees::SETTLEMENT_MODE.to_string()")]
     pub settlement_mode: String,
-    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
+    /// Canonical I105 authorities allowed to submit fee-free successful SORA v2 XOR claim mint
+    /// transactions.
     #[config(default = "Vec::new()")]
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
@@ -9561,22 +9616,18 @@ pub struct NexusHfSharedLeases {
     #[config(default = "defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS")]
     pub advert_contradiction_slash_bps: u16,
 }
-impl Default for NexusHfSharedLeases {
-    fn default() -> Self {
-        Self {
-            drain_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
-            )),
-            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
-            assigned_heartbeat_miss_slash_bps:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
-            assigned_heartbeat_miss_strike_threshold:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
-            advert_contradiction_slash_bps:
-                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
-        }
-    }
-}
+impl_default!(NexusHfSharedLeases {
+    drain_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
+    )),
+    warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
+    assigned_heartbeat_miss_slash_bps:
+        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
+    assigned_heartbeat_miss_strike_threshold:
+        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
+    advert_contradiction_slash_bps:
+        defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
+});
 impl NexusHfSharedLeases {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusHfSharedLeases> {
         for (field, value) in [
@@ -9639,20 +9690,15 @@ pub struct NexusUploadedModels {
     #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET")]
     pub max_session_image_budget: u16,
 }
-impl Default for NexusUploadedModels {
-    fn default() -> Self {
-        Self {
-            chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
-            max_plaintext_bytes_per_model:
-                defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
-            max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-            max_active_private_sessions_per_apartment:
-                defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
-            max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
-            max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
-        }
-    }
-}
+impl_default!(NexusUploadedModels {
+    chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
+    max_plaintext_bytes_per_model: defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
+    max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
+    max_active_private_sessions_per_apartment:
+        defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
+    max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
+    max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
+});
 impl NexusUploadedModels {
     #[allow(clippy::unnecessary_wraps)]
     fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
@@ -9670,52 +9716,66 @@ impl NexusUploadedModels {
 /// User-level configuration container for domain endorsements.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusEndorsement {
-    /// Committee member public keys allowed to sign endorsements (string form).
+    /// Committee public keys; parsing canonicalizes ordering and removes duplicates.
     #[config(default = "defaults::nexus::endorsement::committee_keys()")]
     pub committee_keys: Vec<String>,
     /// Quorum required to accept an endorsement (0 disables enforcement).
     #[config(default = "defaults::nexus::endorsement::QUORUM")]
     pub quorum: u16,
 }
-impl Default for NexusEndorsement {
-    fn default() -> Self {
-        Self {
-            committee_keys: defaults::nexus::endorsement::committee_keys(),
-            quorum: defaults::nexus::endorsement::QUORUM,
-        }
-    }
-}
+impl_default!(NexusEndorsement {
+    committee_keys: defaults::nexus::endorsement::committee_keys(),
+    quorum: defaults::nexus::endorsement::QUORUM,
+});
 impl NexusEndorsement {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusEndorsement> {
-        if self.quorum > u16::MAX {
+        let mut committee_keys = BTreeSet::new();
+        let mut valid = true;
+        for (index, raw_key) in self.committee_keys.into_iter().enumerate() {
+            match PublicKey::from_str(raw_key.trim()) {
+                Ok(key) => {
+                    committee_keys.insert(key);
+                }
+                Err(error) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.endorsement.committee_keys[{index}] is not a valid public key: {error}"
+                    )));
+                    valid = false;
+                }
+            }
+        }
+        if self.quorum != 0 && usize::from(self.quorum) > committee_keys.len() {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.endorsement.quorum exceeds u16 bounds: {}",
-                self.quorum
+                "nexus.endorsement.quorum {} exceeds the {} unique committee members",
+                self.quorum,
+                committee_keys.len()
             )));
+            valid = false;
+        }
+        if !valid {
             return None;
         }
         Some(actual::NexusEndorsement {
-            committee_keys: self.committee_keys,
+            committee_keys,
             quorum: self.quorum,
         })
     }
 }
-impl Default for NexusFees {
-    fn default() -> Self {
-        Self {
-            fee_asset_id: defaults::nexus::fees::fee_asset_id(),
-            fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
-            base_fee: defaults::nexus::fees::base_fee(),
-            per_byte_fee: defaults::nexus::fees::per_byte_fee(),
-            per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
-            per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
-            sponsor_vault_custody_account_id:
-                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_owned(),
-            settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
-            successful_claim_fee_exempt_authorities: Vec::new(),
-        }
-    }
-}
+#[cfg(test)]
+#[path = "user/nexus_endorsement_tests.rs"]
+mod nexus_endorsement_tests;
+impl_default!(NexusFees {
+    fee_asset_id: defaults::nexus::fees::fee_asset_id(),
+    fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
+    base_fee: defaults::nexus::fees::base_fee(),
+    per_byte_fee: defaults::nexus::fees::per_byte_fee(),
+    per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
+    per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
+    sponsor_vault_custody_account_id: defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+        .to_owned(),
+    settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
+    successful_claim_fee_exempt_authorities: Vec::new(),
+});
 impl NexusFees {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusFees> {
         let fee_asset_id = match validate_nexus_fee_asset_selector_literal(&self.fee_asset_id) {
@@ -9735,9 +9795,9 @@ impl NexusFees {
             );
             return None;
         }
-        let settlement_mode = match self.settlement_mode.trim().to_ascii_lowercase().as_str() {
+        let settlement_mode = match self.settlement_mode.as_str() {
             "direct" => actual::NexusFeeSettlementMode::Direct,
-            "lane_relay_burn" | "lane-relay-burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
+            "lane_relay_burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
             other => {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                     "invalid nexus.fees.settlement_mode `{other}`: expected `direct` or `lane_relay_burn`"
@@ -9749,6 +9809,33 @@ impl NexusFees {
             self.sponsor_vault_custody_account_id.trim(),
             "invalid nexus.fees.sponsor_vault_custody_account_id",
         );
+        let mut successful_claim_fee_exempt_authorities = BTreeSet::new();
+        let mut valid_authorities = true;
+        for (index, literal) in self
+            .successful_claim_fee_exempt_authorities
+            .into_iter()
+            .enumerate()
+        {
+            match AccountId::parse_encoded(&literal) {
+                Ok(parsed) if parsed.canonical() == literal => {
+                    successful_claim_fee_exempt_authorities.insert(parsed.into_account_id());
+                }
+                Ok(parsed) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.fees.successful_claim_fee_exempt_authorities[{index}] must be the exact canonical I105 literal `{}`",
+                        parsed.canonical()
+                    )));
+                    valid_authorities = false;
+                }
+                Err(err) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "invalid nexus.fees.successful_claim_fee_exempt_authorities[{index}] `{literal}`: {err}"
+                    )));
+                    valid_authorities = false;
+                }
+            }
+        }
+        valid_authorities.then_some(())?;
         Some(actual::NexusFees {
             fee_asset_id,
             fee_sink_account_id: self.fee_sink_account_id,
@@ -9758,12 +9845,7 @@ impl NexusFees {
             per_gas_unit_fee: self.per_gas_unit_fee,
             sponsor_vault_custody_account_id,
             settlement_mode,
-            successful_claim_fee_exempt_authorities: self
-                .successful_claim_fee_exempt_authorities
-                .into_iter()
-                .map(|authority| authority.trim().to_string())
-                .filter(|authority| !authority.is_empty())
-                .collect(),
+            successful_claim_fee_exempt_authorities,
         })
     }
 }
@@ -9785,18 +9867,13 @@ pub struct NexusRelayWorker {
     #[config(default = "defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS")]
     pub max_retry_attempts: u32,
 }
-impl Default for NexusRelayWorker {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::relay_worker::ENABLED,
-            authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID
-                .map(str::to_owned),
-            max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
-            retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
-            max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
-        }
-    }
-}
+impl_default!(NexusRelayWorker {
+    enabled: defaults::nexus::relay_worker::ENABLED,
+    authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID.map(str::to_owned),
+    max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
+    retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
+    max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
+});
 impl NexusRelayWorker {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusRelayWorker> {
         let authority_account_id = self.authority_account_id.and_then(|raw| {
@@ -9841,107 +9918,8 @@ impl NexusRelayWorker {
     }
 }
 #[cfg(test)]
-mod nexus_asset_selector_tests {
-    use super::*;
-    fn checked_nexus_contract_ed25519_key_fixture() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked Nexus contract Ed25519 account key fixture")
-    }
-    #[test]
-    fn nexus_contract_fixture_uses_checked_ed25519_key_generation() {
-        let key_pair = checked_nexus_contract_ed25519_key_fixture();
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .expect("Nexus contract fixture account key advertises a valid algorithm");
-        assert_eq!(algorithm, Algorithm::Ed25519);
-    }
-    #[test]
-    fn nexus_staking_parse_accepts_asset_alias_selector() {
-        let cfg = NexusStaking {
-            stake_asset_id: "xor#universal".to_owned(),
-            ..NexusStaking::default()
-        };
-        let mut emitter = Emitter::new();
-        let parsed = cfg
-            .parse(&mut emitter)
-            .expect("staking config should parse");
-        assert_eq!(parsed.stake_asset_id, "xor#universal");
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_invalid_asset_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "invalid selector".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn nexus_fees_parse_accepts_xor_alias_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "xor#universal".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
-        assert_eq!(parsed.fee_asset_id, "xor#universal");
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_uses_typed_sponsor_vault_custody_account() {
-        let cfg = NexusFees::default();
-        let mut emitter = Emitter::new();
-        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
-        assert_eq!(
-            parsed.sponsor_vault_custody_account_id,
-            defaults::nexus::fees::sponsor_vault_custody_account_id()
-        );
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_invalid_sponsor_vault_custody_account() {
-        let result = std::panic::catch_unwind(|| {
-            let cfg = NexusFees {
-                sponsor_vault_custody_account_id: "not-an-account".to_owned(),
-                ..NexusFees::default()
-            };
-            let mut emitter = Emitter::new();
-            let _ = cfg.parse(&mut emitter);
-        });
-        assert!(result.is_err());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_non_xor_asset_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "pkr#paynet".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn nexus_fees_use_nominal_non_negative_quantities() {
-        let cfg = NexusFees::default();
-        for value in [
-            &cfg.base_fee,
-            &cfg.per_byte_fee,
-            &cfg.per_instruction_fee,
-            &cfg.per_gas_unit_fee,
-        ] {
-            value
-                .as_numeric()
-                .validate_decimal()
-                .expect("fee quantity is canonical");
-        }
-        assert!(
-            Quantity::try_from_numeric(iroha_primitives::numeric::Numeric::new(-1_i32, 0)).is_err()
-        );
-    }
-}
+#[path = "user/nexus_asset_selector_tests.rs"]
+mod nexus_asset_selector_tests;
 /// User-level configuration container for governance catalog.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct GovernanceCatalogConfig {
@@ -10008,16 +9986,12 @@ pub struct Fusion {
     #[config(default = "defaults::nexus::fusion::MAX_WINDOW_SLOTS")]
     pub max_window_slots: u16,
 }
-impl Default for Fusion {
-    fn default() -> Self {
-        Self {
-            floor_teu: defaults::nexus::fusion::FLOOR_TEU,
-            exit_teu: defaults::nexus::fusion::EXIT_TEU,
-            observation_slots: defaults::nexus::fusion::OBSERVATION_SLOTS,
-            max_window_slots: defaults::nexus::fusion::MAX_WINDOW_SLOTS,
-        }
-    }
-}
+impl_default!(Fusion {
+    floor_teu: defaults::nexus::fusion::FLOOR_TEU,
+    exit_teu: defaults::nexus::fusion::EXIT_TEU,
+    observation_slots: defaults::nexus::fusion::OBSERVATION_SLOTS,
+    max_window_slots: defaults::nexus::fusion::MAX_WINDOW_SLOTS,
+});
 /// User-level configuration container for deterministic lane autoscaling.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct Autoscale {
@@ -10062,24 +10036,20 @@ pub struct Autoscale {
     #[config(default = "defaults::nexus::autoscale::PER_LANE_TARGET_TPS")]
     pub per_lane_target_tps: u32,
 }
-impl Default for Autoscale {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::autoscale::ENABLED,
-            min_lanes: defaults::nexus::autoscale::MIN_LANES,
-            max_lanes: defaults::nexus::autoscale::MAX_LANES,
-            target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
-            scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
-            scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
-            scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
-            scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
-            scale_out_window_blocks: defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
-            scale_in_window_blocks: defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
-            cooldown_blocks: defaults::nexus::autoscale::COOLDOWN_BLOCKS,
-            per_lane_target_tps: defaults::nexus::autoscale::PER_LANE_TARGET_TPS,
-        }
-    }
-}
+impl_default!(Autoscale {
+    enabled: defaults::nexus::autoscale::ENABLED,
+    min_lanes: defaults::nexus::autoscale::MIN_LANES,
+    max_lanes: defaults::nexus::autoscale::MAX_LANES,
+    target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
+    scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
+    scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
+    scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
+    scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
+    scale_out_window_blocks: defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
+    scale_in_window_blocks: defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
+    cooldown_blocks: defaults::nexus::autoscale::COOLDOWN_BLOCKS,
+    per_lane_target_tps: defaults::nexus::autoscale::PER_LANE_TARGET_TPS,
+});
 /// User-level configuration container for `Commit`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct Commit {
@@ -10134,26 +10104,20 @@ pub struct Da {
     #[config(nested)]
     pub rotation: DaRotation,
 }
-impl Default for Da {
-    fn default() -> Self {
-        Self {
-            q_in_slot_total: defaults::nexus::da::Q_IN_SLOT_TOTAL,
-            q_in_slot_per_ds_min: defaults::nexus::da::Q_IN_SLOT_PER_DS_MIN,
-            sample_size_base: defaults::nexus::da::SAMPLE_SIZE_BASE,
-            sample_size_max: defaults::nexus::da::SAMPLE_SIZE_MAX,
-            threshold_base: defaults::nexus::da::THRESHOLD_BASE,
-            per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
-            ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
-            ingest_quota_max_count_per_account:
-                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-            ingest_quota_max_bytes_per_account:
-                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
-            audit: DaAudit::default(),
-            recovery: DaRecovery::default(),
-            rotation: DaRotation::default(),
-        }
-    }
-}
+impl_default!(Da {
+    q_in_slot_total: defaults::nexus::da::Q_IN_SLOT_TOTAL,
+    q_in_slot_per_ds_min: defaults::nexus::da::Q_IN_SLOT_PER_DS_MIN,
+    sample_size_base: defaults::nexus::da::SAMPLE_SIZE_BASE,
+    sample_size_max: defaults::nexus::da::SAMPLE_SIZE_MAX,
+    threshold_base: defaults::nexus::da::THRESHOLD_BASE,
+    per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
+    ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
+    ingest_quota_max_count_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+    ingest_quota_max_bytes_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
+    audit: DaAudit::default(),
+    recovery: DaRecovery::default(),
+    rotation: DaRotation::default(),
+});
 /// User-level configuration container for `DaAudit`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct DaAudit {
@@ -10167,15 +10131,11 @@ pub struct DaAudit {
     #[config(default = "defaults::nexus::da::audit::INTERVAL.into()")]
     pub interval_ms: DurationMs,
 }
-impl Default for DaAudit {
-    fn default() -> Self {
-        Self {
-            sample_size: defaults::nexus::da::audit::SAMPLE_SIZE,
-            window_count: defaults::nexus::da::audit::WINDOW_COUNT,
-            interval_ms: defaults::nexus::da::audit::INTERVAL.into(),
-        }
-    }
-}
+impl_default!(DaAudit {
+    sample_size: defaults::nexus::da::audit::SAMPLE_SIZE,
+    window_count: defaults::nexus::da::audit::WINDOW_COUNT,
+    interval_ms: defaults::nexus::da::audit::INTERVAL.into(),
+});
 /// User-level configuration container for `DaRecovery`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct DaRecovery {
@@ -10183,13 +10143,9 @@ pub struct DaRecovery {
     #[config(default = "defaults::nexus::da::recovery::REQUEST_TIMEOUT.into()")]
     pub request_timeout_ms: DurationMs,
 }
-impl Default for DaRecovery {
-    fn default() -> Self {
-        Self {
-            request_timeout_ms: defaults::nexus::da::recovery::REQUEST_TIMEOUT.into(),
-        }
-    }
-}
+impl_default!(DaRecovery {
+    request_timeout_ms: defaults::nexus::da::recovery::REQUEST_TIMEOUT.into(),
+});
 /// User-level configuration container for `DaRotation`.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct DaRotation {
@@ -10206,16 +10162,12 @@ pub struct DaRotation {
     #[config(default = "defaults::nexus::da::rotation::LATENCY_DECAY")]
     pub latency_decay: f64,
 }
-impl Default for DaRotation {
-    fn default() -> Self {
-        Self {
-            max_hits_per_window: defaults::nexus::da::rotation::MAX_HITS_PER_WINDOW,
-            window_slots: defaults::nexus::da::rotation::WINDOW_SLOTS,
-            seed_tag: defaults::nexus::da::rotation::SEED_TAG.to_string(),
-            latency_decay: defaults::nexus::da::rotation::LATENCY_DECAY,
-        }
-    }
-}
+impl_default!(DaRotation {
+    max_hits_per_window: defaults::nexus::da::rotation::MAX_HITS_PER_WINDOW,
+    window_slots: defaults::nexus::da::rotation::WINDOW_SLOTS,
+    seed_tag: defaults::nexus::da::rotation::SEED_TAG.to_string(),
+    latency_decay: defaults::nexus::da::rotation::LATENCY_DECAY,
+});
 impl Fusion {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Fusion> {
         let Fusion {
@@ -10827,16 +10779,12 @@ pub struct NexusAxt {
     #[config(default = "defaults::nexus::axt::REPLAY_RETENTION_SLOTS")]
     pub replay_retention_slots: u64,
 }
-impl Default for NexusAxt {
-    fn default() -> Self {
-        Self {
-            slot_length_ms: defaults::nexus::axt::SLOT_LENGTH_MS,
-            max_clock_skew_ms: defaults::nexus::axt::CLOCK_SKEW_MS_DEFAULT,
-            proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
-            replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
-        }
-    }
-}
+impl_default!(NexusAxt {
+    slot_length_ms: defaults::nexus::axt::SLOT_LENGTH_MS,
+    max_clock_skew_ms: defaults::nexus::axt::CLOCK_SKEW_MS_DEFAULT,
+    proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
+    replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
+});
 /// Lane-relay emergency override configuration.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct LaneRelayEmergency {
@@ -10853,16 +10801,12 @@ pub struct LaneRelayEmergency {
     #[config(default = "defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS")]
     pub max_ttl_blocks: u32,
 }
-impl Default for LaneRelayEmergency {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-            multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-            multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-            max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
-        }
-    }
-}
+impl_default!(LaneRelayEmergency {
+    enabled: defaults::nexus::lane_relay_emergency::ENABLED,
+    multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
+    multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
+    max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
+});
 impl LaneRelayEmergency {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::LaneRelayEmergency> {
         let mut invalid = false;
@@ -11286,6 +11230,186 @@ impl Nexus {
                         }
                     }
                 }
+                lane_metadata.manifest_policy = descriptor.manifest_policy.unwrap_or_default();
+                if let Some(confidential) = descriptor.confidential_compute {
+                    let Some(mechanism) = confidential.mechanism else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] confidential_compute.mechanism is required"
+                        )));
+                        continue;
+                    };
+                    let Some(key_version) = confidential.key_version.and_then(NonZeroU32::new)
+                    else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] confidential_compute.key_version must be a positive u32"
+                        )));
+                        continue;
+                    };
+                    let mut allowed_audiences = BTreeSet::new();
+                    let mut invalid_audience = false;
+                    for audience in confidential.allowed_audiences {
+                        if audience.is_empty() || audience.trim() != audience {
+                            lane_errors = true;
+                            invalid_audience = true;
+                            emitter.emit(
+                                Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                                    "lane[{idx}] confidential_compute.allowed_audiences entries must be non-empty and must not contain surrounding whitespace"
+                                )),
+                            );
+                            break;
+                        }
+                        allowed_audiences.insert(audience);
+                    }
+                    if invalid_audience {
+                        continue;
+                    }
+                    lane_metadata.confidential_compute = Some(ConfidentialComputePolicy::new(
+                        mechanism,
+                        key_version,
+                        allowed_audiences,
+                    ));
+                }
+                if let Some(scheduler) = descriptor.scheduler {
+                    let teu_capacity = match scheduler.teu_capacity {
+                        Some(value) => match NonZeroU64::new(value) {
+                            Some(value) => Some(value),
+                            None => {
+                                lane_errors = true;
+                                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] scheduler.teu_capacity must be a positive u64"
+                                    ),
+                                ));
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
+                    let starvation_bound_slots = match scheduler.starvation_bound_slots {
+                        Some(value) => match NonZeroU64::new(value) {
+                            Some(value) => Some(value),
+                            None => {
+                                lane_errors = true;
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                                        "lane[{idx}] scheduler.starvation_bound_slots must be a positive u64"
+                                    )),
+                                );
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
+                    if teu_capacity.is_none() && starvation_bound_slots.is_none() {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] scheduler must define `teu_capacity`, `starvation_bound_slots`, or both"
+                        )));
+                        continue;
+                    }
+                    lane_metadata.scheduler = Some(LaneSchedulerPolicy::new(
+                        teu_capacity,
+                        starvation_bound_slots,
+                    ));
+                }
+                if let Some(settlement_buffer) = descriptor.settlement_buffer {
+                    let (Some(account_raw), Some(asset_raw), Some(capacity_raw)) = (
+                        settlement_buffer.account_id,
+                        settlement_buffer.asset_definition_id,
+                        settlement_buffer.capacity,
+                    ) else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] settlement_buffer must define `account_id`, `asset_definition_id`, and `capacity` together"
+                        )));
+                        continue;
+                    };
+                    let account_id = match AccountId::parse_encoded(&account_raw) {
+                        Ok(parsed) if parsed.canonical() == account_raw => parsed.into_account_id(),
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.account_id must be the exact canonical I105 literal `{}`",
+                                    parsed.canonical()
+                                ),
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.account_id `{account_raw}` is invalid: {error}"
+                                ),
+                            ));
+                            continue;
+                        }
+                    };
+                    let asset_definition_id = match AssetDefinitionId::parse_address_literal(
+                        &asset_raw,
+                    ) {
+                        Ok(parsed) if parsed.canonical_address() == asset_raw => parsed,
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] settlement_buffer.asset_definition_id must be the exact canonical Base58 literal `{}`",
+                                        parsed.canonical_address()
+                                    ),
+                                ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] settlement_buffer.asset_definition_id `{asset_raw}` is invalid: {error}"
+                                    ),
+                                ));
+                            continue;
+                        }
+                    };
+                    let capacity = match capacity_raw.parse::<XorQuantity>() {
+                        Ok(parsed) if parsed.to_string() == capacity_raw && !parsed.is_zero() => {
+                            parsed
+                        }
+                        Ok(parsed) if parsed.is_zero() => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity must be a positive XOR quantity"
+                                ),
+                            ));
+                            continue;
+                        }
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity must be the exact canonical XOR quantity `{parsed}`"
+                                ),
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity `{capacity_raw}` is invalid: {error}"
+                                ),
+                            ));
+                            continue;
+                        }
+                    };
+                    lane_metadata.settlement_buffer = Some(LaneSettlementBufferPolicy::new(
+                        account_id,
+                        asset_definition_id,
+                        capacity,
+                    ));
+                }
                 lane_metadata.lane_type = Self::normalize_opt(descriptor.lane_type);
                 lane_metadata.governance = Self::normalize_opt(descriptor.governance);
                 lane_metadata.settlement = Self::normalize_opt(descriptor.settlement);
@@ -11305,6 +11429,14 @@ impl Nexus {
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
                                     "lane[{idx}] metadata key `{key}` is reserved; use the typed `shard_id` field"
+                                ),
+                            ));
+                            lane_errors = true;
+                            None
+                        } else if is_retired_lane_functional_metadata_key(key) {
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] metadata key `{key}` is retired; use the typed lane policy fields"
                                 ),
                             ));
                             lane_errors = true;
@@ -11752,18 +11884,10 @@ pub struct Telemetry {
 }
 #[derive(Debug, Copy, Clone)]
 struct TelemetryMinRetryPeriod(DurationMs);
-impl Default for TelemetryMinRetryPeriod {
-    fn default() -> Self {
-        Self(DurationMs(defaults::telemetry::MIN_RETRY_PERIOD))
-    }
-}
+impl_default!(TelemetryMinRetryPeriod => Self(DurationMs(defaults::telemetry::MIN_RETRY_PERIOD)));
 #[derive(Debug, Copy, Clone)]
 struct TelemetryMaxRetryDelayExponent(u8);
-impl Default for TelemetryMaxRetryDelayExponent {
-    fn default() -> Self {
-        Self(defaults::telemetry::MAX_RETRY_DELAY_EXPONENT)
-    }
-}
+impl_default!(TelemetryMaxRetryDelayExponent => Self(defaults::telemetry::MAX_RETRY_DELAY_EXPONENT));
 struct FieldState<T> {
     seen: bool,
     value: Option<T>,
@@ -12213,17 +12337,13 @@ pub struct SnapshotResourcePolicy {
     #[config(default = "defaults::snapshot::MAX_TRANSIENT_BYTES")]
     pub max_transient_bytes: NonZeroUsize,
 }
-impl Default for SnapshotResourcePolicy {
-    fn default() -> Self {
-        Self {
-            max_decode_depth: defaults::snapshot::MAX_DECODE_DEPTH,
-            max_decode_items: defaults::snapshot::MAX_DECODE_ITEMS,
-            max_string_bytes: defaults::snapshot::MAX_STRING_BYTES,
-            max_blob_bytes: defaults::snapshot::MAX_BLOB_BYTES,
-            max_transient_bytes: defaults::snapshot::MAX_TRANSIENT_BYTES,
-        }
-    }
-}
+impl_default!(SnapshotResourcePolicy {
+    max_decode_depth: defaults::snapshot::MAX_DECODE_DEPTH,
+    max_decode_items: defaults::snapshot::MAX_DECODE_ITEMS,
+    max_string_bytes: defaults::snapshot::MAX_STRING_BYTES,
+    max_blob_bytes: defaults::snapshot::MAX_BLOB_BYTES,
+    max_transient_bytes: defaults::snapshot::MAX_TRANSIENT_BYTES,
+});
 impl SnapshotResourcePolicy {
     /// Validate resource-budget relationships against the enclosing payload bound.
     ///
@@ -12542,18 +12662,14 @@ pub struct SoracloudRuntimeCacheBudgets {
     #[config(default = "defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES")]
     pub model_weight_bytes: NonZeroU64,
 }
-impl Default for SoracloudRuntimeCacheBudgets {
-    fn default() -> Self {
-        Self {
-            bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
-            static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
-            journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
-            checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
-            model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
-            model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
-        }
-    }
-}
+impl_default!(SoracloudRuntimeCacheBudgets {
+    bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+    static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
+    journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
+    checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
+    model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
+    model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
+});
 impl SoracloudRuntimeCacheBudgets {
     fn parse(self) -> actual::SoracloudRuntimeCacheBudgets {
         actual::SoracloudRuntimeCacheBudgets {
@@ -12648,31 +12764,25 @@ fn default_soracloud_runtime_inrou_stop_grace_ms() -> DurationMs {
         defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
     ))
 }
-impl Default for SoracloudRuntimeInrou {
-    fn default() -> Self {
-        Self {
-            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
-            enabled: defaults::soracloud_runtime::INROU_ENABLED,
-            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
-            bundle_archive_max_compressed_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
-            bundle_archive_max_decoded_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
-            bundle_archive_max_entries:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
-            bundle_archive_max_file_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
-            bundle_archive_max_total_file_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
-            start_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::INROU_START_GRACE_MS,
-            )),
-            stop_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
-            )),
-        }
-    }
-}
+impl_default!(SoracloudRuntimeInrou {
+    max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+    enabled: defaults::soracloud_runtime::INROU_ENABLED,
+    proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+    bundle_archive_max_compressed_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+    bundle_archive_max_decoded_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+    bundle_archive_max_entries: defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+    bundle_archive_max_file_bytes: defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+    bundle_archive_max_total_file_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+    start_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_START_GRACE_MS,
+    )),
+    stop_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
+    )),
+});
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
         if self.bundle_archive_max_compressed_bytes.get()
@@ -31794,6 +31904,203 @@ policy_digest_hex = "{policy_digest_hex}"
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("the internal shard metadata key must not be a configuration alias");
         assert!(format!("{error:?}").contains("use the typed `shard_id` field"));
+    }
+    #[test]
+    fn nexus_lane_functional_metadata_fails_closed() {
+        for retired_key in RETIRED_LANE_FUNCTIONAL_METADATA_KEYS.into_iter().chain([
+            "confidential_future_policy",
+            "scheduler.future_policy",
+            "settlement.buffer_future_policy",
+        ]) {
+            let mut table = base_table();
+            let nexus = nexus_table_mut(&mut table);
+            nexus.insert("enabled".into(), Value::Boolean(true));
+            set_lane_count(nexus, 1);
+            let mut lane = lane_descriptor(0, "primary");
+            let lane = lane.as_table_mut().expect("lane descriptor table");
+            lane.insert(
+                "metadata".into(),
+                Value::Table(Table::from_iter([(
+                    retired_key.into(),
+                    Value::String("retired".into()),
+                )])),
+            );
+            nexus.insert(
+                "lane_catalog".into(),
+                Value::Array(vec![Value::Table(lane.clone())]),
+            );
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("invalid functional lane metadata must fail configuration loading");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains("retired") && report.contains(retired_key),
+                "retired key `{retired_key}` produced an unexpected error: {report}"
+            );
+        }
+    }
+    #[test]
+    fn nexus_lane_typed_functional_policy_loads_from_toml() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_lane_count(nexus, 1);
+        let mut lane = lane_descriptor(0, "private");
+        let lane = lane.as_table_mut().expect("lane descriptor table");
+        let settlement_account = AccountId::new(
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
+                .expect("settlement account key")
+                .public_key()
+                .clone(),
+        );
+        let settlement_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("settlement", "universal").expect("settlement domain"),
+            "xor".parse().expect("asset name"),
+        );
+        lane.insert("storage".into(), Value::String("split_replica".into()));
+        lane.insert("manifest_policy".into(), Value::String("audit".into()));
+        lane.insert(
+            "confidential_compute".into(),
+            Value::Table(Table::from_iter([
+                ("mechanism".into(), Value::String("secret_sharing".into())),
+                ("key_version".into(), Value::Integer(7)),
+                (
+                    "allowed_audiences".into(),
+                    Value::Array(vec![
+                        Value::String("operator".into()),
+                        Value::String("auditor".into()),
+                        Value::String("operator".into()),
+                    ]),
+                ),
+            ])),
+        );
+        lane.insert(
+            "scheduler".into(),
+            Value::Table(Table::from_iter([
+                ("teu_capacity".into(), Value::Integer(2048)),
+                ("starvation_bound_slots".into(), Value::Integer(6)),
+            ])),
+        );
+        lane.insert(
+            "settlement_buffer".into(),
+            Value::Table(Table::from_iter([
+                (
+                    "account_id".into(),
+                    Value::String(settlement_account.to_string()),
+                ),
+                (
+                    "asset_definition_id".into(),
+                    Value::String(settlement_asset.to_string()),
+                ),
+                ("capacity".into(), Value::String("1500".into())),
+            ])),
+        );
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![Value::Table(lane.clone())]),
+        );
+
+        let actual = load_root(table);
+        let lane = actual
+            .nexus
+            .lane_catalog
+            .lanes()
+            .first()
+            .expect("configured lane");
+        assert_eq!(lane.manifest_policy, DaManifestPolicy::Audit);
+        let policy = lane
+            .confidential_compute
+            .as_ref()
+            .expect("typed confidential policy");
+        assert_eq!(
+            policy.mechanism,
+            ConfidentialComputeMechanism::SecretSharing
+        );
+        assert_eq!(policy.key_version.get(), 7);
+        assert_eq!(
+            policy.allowed_audiences,
+            BTreeSet::from(["auditor".to_owned(), "operator".to_owned()])
+        );
+        let scheduler = lane.scheduler.as_ref().expect("typed scheduler policy");
+        assert_eq!(scheduler.teu_capacity.map(NonZeroU64::get), Some(2048));
+        assert_eq!(
+            scheduler.starvation_bound_slots.map(NonZeroU64::get),
+            Some(6)
+        );
+        let settlement = lane
+            .settlement_buffer
+            .as_ref()
+            .expect("typed settlement buffer policy");
+        assert_eq!(settlement.account_id, settlement_account);
+        assert_eq!(settlement.asset_definition_id, settlement_asset);
+        assert_eq!(settlement.capacity.to_string(), "1500");
+        let derived = actual
+            .nexus
+            .lane_config
+            .entry(LaneId::SINGLE)
+            .expect("derived lane entry");
+        assert_eq!(derived.scheduler.as_ref(), lane.scheduler.as_ref());
+        assert_eq!(
+            derived.settlement_buffer.as_ref(),
+            lane.settlement_buffer.as_ref()
+        );
+    }
+    #[test]
+    fn nexus_lane_scheduler_and_settlement_policy_fail_closed() {
+        for (field, value, expected) in [
+            (
+                "scheduler",
+                Value::Table(Table::from_iter([(
+                    "teu_capacity".into(),
+                    Value::Integer(0),
+                )])),
+                "positive u64",
+            ),
+            (
+                "settlement_buffer",
+                Value::Table(Table::from_iter([(
+                    "capacity".into(),
+                    Value::String("0".into()),
+                )])),
+                "must define",
+            ),
+        ] {
+            let mut table = base_table();
+            let nexus = nexus_table_mut(&mut table);
+            nexus.insert("enabled".into(), Value::Boolean(true));
+            set_lane_count(nexus, 1);
+            let mut lane = lane_descriptor(0, "primary");
+            lane.as_table_mut()
+                .expect("lane descriptor table")
+                .insert(field.into(), value);
+            nexus.insert("lane_catalog".into(), Value::Array(vec![lane]));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("invalid typed lane policy must fail configuration loading");
+            assert!(
+                format!("{error:?}").contains(expected),
+                "unexpected `{field}` error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn nexus_fee_settlement_mode_accepts_only_canonical_labels() {
+        for canonical in ["direct", "lane_relay_burn"] {
+            let mut fees = NexusFees::default();
+            fees.settlement_mode = canonical.to_owned();
+            let mut emitter = Emitter::new();
+            assert!(
+                fees.parse(&mut emitter).is_some(),
+                "canonical settlement mode `{canonical}` must parse"
+            );
+        }
+        for alias in ["lane-relay-burn", "Lane_Relay_Burn", " direct", "direct "] {
+            let mut fees = NexusFees::default();
+            fees.settlement_mode = alias.to_owned();
+            let mut emitter = Emitter::new();
+            assert!(
+                fees.parse(&mut emitter).is_none(),
+                "non-canonical settlement mode `{alias}` must fail closed"
+            );
+        }
     }
     #[test]
     fn lane_validator_mode_json_roundtrips_canonical_values_only() {

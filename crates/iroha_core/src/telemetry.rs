@@ -110,7 +110,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc, RwLock as StdRwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -119,7 +119,6 @@ use std::{
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 const PHASE_PREPARE: &str = "prepare";
 const PHASE_COMMIT: &str = "commit";
-const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
@@ -769,13 +768,15 @@ impl StateTelemetry {
                     .get(&lane.dataspace_id.as_u64())
                     .map(|entry| entry.alias.clone());
                 let scheduler_teu_capacity = lane
-                    .metadata
-                    .get("scheduler.teu_capacity")
-                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                    .scheduler
+                    .as_ref()
+                    .and_then(|policy| policy.teu_capacity)
+                    .map(NonZeroU64::get);
                 let scheduler_starvation_bound_slots = lane
-                    .metadata
-                    .get("scheduler.starvation_bound_slots")
-                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                    .scheduler
+                    .as_ref()
+                    .and_then(|policy| policy.starvation_bound_slots)
+                    .map(NonZeroU64::get);
                 guard.insert(
                     lane.id.as_u32(),
                     LaneMetadataSnapshot {
@@ -5455,12 +5456,15 @@ impl Telemetry {
         }
     }
     fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
-        match msg {
-            BlockMessage::QcVote(vote) => {
+        let BlockMessage::V2(message) = msg else {
+            return;
+        };
+        use iroha_data_model::block::consensus_v2::{ConsensusMessageV2Payload, GlobalPhase};
+        match &message.payload {
+            ConsensusMessageV2Payload::Vote(vote) => {
                 let phase_label = match vote.phase {
-                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
-                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
-                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                    GlobalPhase::Prepare => PHASE_PREPARE,
+                    GlobalPhase::Commit => PHASE_COMMIT,
                 };
                 if sent {
                     self.metrics
@@ -5474,11 +5478,10 @@ impl Telemetry {
                         .inc();
                 }
             }
-            BlockMessage::Qc(cert) => {
+            ConsensusMessageV2Payload::QuorumCertificate(cert) => {
                 let phase_label = match cert.phase {
-                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
-                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
-                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                    GlobalPhase::Prepare => PHASE_PREPARE,
+                    GlobalPhase::Commit => PHASE_COMMIT,
                 };
                 if sent {
                     self.metrics
@@ -7170,10 +7173,8 @@ impl Telemetry {
             };
             self.metrics.da_quorum_ratio.set(ratio);
         }
-        // This function is called from within the main loop. Avoid
-        // `blocking_write`: async tests and runtime-driven commit paths can
-        // execute this code on a Tokio worker thread, where blocking the
-        // runtime panics.
+        // This runs in the main loop. Avoid `blocking_write`: async tests and runtime-driven
+        // commit paths can execute on a Tokio worker, where blocking the runtime panics.
         match self.last_reported_block.try_write() {
             Ok(mut lock) => *lock = Some(report),
             Err(_) if tokio::runtime::Handle::try_current().is_ok() => {
@@ -7216,8 +7217,7 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
-    /// Refresh lazy metrics before returning, bounded so callers can fall back
-    /// to the last snapshot when the telemetry actor is unavailable.
+    /// Refresh lazy metrics within a bound, falling back when the actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {
         if let Err(err) = self.synchronize_metrics().await {
@@ -7231,8 +7231,7 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
-    /// Refresh lazy metrics and report synchronization failure to callers that
-    /// must not publish a stale mixed-frontier snapshot.
+    /// Refresh lazy metrics, reporting failure when callers cannot publish stale state.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh_checked(&self) -> Result<&Metrics, String> {
         if let Err(err) = self.synchronize_metrics().await {
@@ -7708,10 +7707,7 @@ impl Actor {
             .set(iroha_p2p::network::cap_violations_health());
         caps.with_label_values(&["Other"])
             .set(iroha_p2p::network::cap_violations_other());
-        // Optional: reconnect successes (uncomment if exposed in metrics)
-        // self.metrics
-        //     .p2p_dns_reconnect_success_total
-        //     .set(iroha_p2p::network::dns_reconnect_success_count());
+        // Reconnect-success export remains pending a dedicated metrics counter.
         let mut last_reported_block = {
             let mut lock = self.last_reported_block.write().await;
             if lock.is_none() {
@@ -7870,9 +7866,8 @@ impl Actor {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
             }
         }
-        // Below metrics could be out of sync with the "latest block" metric,
-        // since the world snapshot might be potentially ahead of the last reported block.
-        // This is fine because this time window _should_ be very narrow.
+        // These metrics may briefly lead "latest block" when the world snapshot is ahead;
+        // that observation window should remain very narrow.
         self.metrics.domains.set(world_view.domains().len() as u64);
         for domain in world_view.domains_iter() {
             match self
@@ -10769,26 +10764,42 @@ mod tests {
     }
     #[test]
     fn consensus_message_counters_update() {
+        use iroha_data_model::block::consensus_v2 as wire;
+
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
-        let vote_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
-            Hash::prehashed([0x11; Hash::LENGTH]),
-        );
-        let vote = consensus::Vote {
-            phase: consensus::Phase::Prepare,
-            block_hash: vote_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"telemetry-v2-context",
+        )));
+        let round = wire::ConsensusRound {
+            context_id,
             height: 1,
             view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
         };
-        let vote_msg = BlockMessage::QcVote(vote.clone());
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
+            payload_hash: Hash::new(b"telemetry-v2-payload"),
+        };
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"telemetry-parent-state"),
+            Hash::new(b"telemetry-post-state"),
+            Hash::new(b"telemetry-ordinary-writes"),
+            1,
+            Hash::new(b"telemetry-executed-wire"),
+        );
+        let vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: vec![1],
+        };
+        let vote_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(vote),
+        ));
         telemetry.note_consensus_message_sent(&vote_msg);
         telemetry.note_consensus_message_received(&vote_msg);
         assert_eq!(
@@ -10805,31 +10816,18 @@ mod tests {
                 .get(),
             1
         );
-        let qc_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
-            Hash::prehashed([0x22; Hash::LENGTH]),
-        );
-        let validator_set = vec![checked_peer_id()];
-        let qc = consensus::Qc {
-            phase: consensus::Phase::Commit,
-            subject_block_hash: qc_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 3,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: consensus::QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: Vec::new(),
-            },
+        let qc = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0],
+            aggregate_signature: vec![2],
         };
-        let qc_msg = BlockMessage::Qc(qc.clone());
+        let qc_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(qc),
+        ));
         telemetry.note_consensus_message_sent(&qc_msg);
         telemetry.note_consensus_message_received(&qc_msg);
         assert_eq!(

@@ -114,7 +114,7 @@ final class FeePaymentJson {
     final Set<String> allowed = payer.equals("sponsor")
         ? keys("charge_limits", "gas_limit", "program_id", "program_revision")
         : keys("charge_limits", "gas_limit");
-    requireExactKeys(body, allowed, keys("charge_limits"), path + ".value");
+    requireExactKeys(body, allowed, allowed, path + ".value");
     if (!(body.get("charge_limits") instanceof List<?>)) {
       throw new IllegalArgumentException(path + ".value.charge_limits must be an array");
     }

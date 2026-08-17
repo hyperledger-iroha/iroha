@@ -1447,16 +1447,13 @@ async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() 
     }
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
+async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_pacemaker_dispatches() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     let app = build_router(cfg);
-    for (id, tool_name, arguments) in [
-        (1042, "iroha.sumeragi.pacemaker", norito::json!({})),
-        (1043, "iroha.sumeragi.phases", norito::json!({})),
-    ] {
+    for (id, tool_name, arguments) in [(1042, "iroha.sumeragi.pacemaker", norito::json!({}))] {
         let (status, call) = post_mcp(
             &app,
             norito::json!({
@@ -2367,10 +2364,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
         "expected operator-exposed sumeragi pacemaker MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.phases"),
-        "expected operator-exposed sumeragi phases MCP tool"
-    );
     for retired_name in [
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",
@@ -2384,6 +2377,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "iroha.sumeragi.bls_keys",
         "iroha.sumeragi.key_lifecycle",
         "iroha.sumeragi.telemetry",
+        "iroha.sumeragi.phases",
         "iroha.sumeragi.commit_qc.get",
         "iroha.sumeragi.evidence.count",
         "iroha.sumeragi.evidence.list",

@@ -228,15 +228,13 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
         let external_entrypoints = transactions
-            .iter()
-            .cloned()
+            .into_iter()
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
-                transactions,
                 external_entrypoints,
                 execution_context: None,
                 da_commitments: None,
@@ -261,15 +259,13 @@ impl SignedBlock {
     ) -> SignedBlock {
         let da_commitments = da_commitments.filter(|bundle| !bundle.is_empty());
         let external_entrypoints = transactions
-            .iter()
-            .cloned()
+            .into_iter()
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
-                transactions,
                 external_entrypoints,
                 execution_context: None,
                 da_commitments,
@@ -430,7 +426,6 @@ impl SignedBlock {
         .unwrap_or(u64::MAX);
         self.payload.header.result_merkle_root = result_merkle.root();
         self.result = Some(BlockResult {
-            external_entrypoints: Vec::new(),
             time_triggers,
             merkle,
             result_merkle,
@@ -911,14 +906,12 @@ impl SignedBlock {
         let signature =
             BlockSignature::new(0, SignatureOf::try_from_hash(private_key, header.hash())?);
         let external_entrypoints: Vec<TransactionEntrypoint> = transactions
-            .iter()
-            .cloned()
+            .into_iter()
             .map(TransactionEntrypoint::from)
             .collect();
         let payload = BlockPayload {
             header,
-            transactions,
-            external_entrypoints: external_entrypoints.clone(),
+            external_entrypoints,
             execution_context: None,
             da_commitments,
             da_proof_policies: Some(proof_policies),
@@ -927,7 +920,6 @@ impl SignedBlock {
             npos_consensus_effects: None,
         };
         let result = BlockResult {
-            external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             merkle: entry_merkle,
             result_merkle,
@@ -1608,7 +1600,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::PreviousRosterEvidence;
+    use crate::consensus::{NposConsensusEffects, PreviousRosterEvidence};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
@@ -1725,7 +1717,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: Some(execution_context),
                 da_commitments: None,
@@ -1742,7 +1733,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let payload = BlockPayload {
             header,
-            transactions: Vec::new(),
             external_entrypoints: Vec::new(),
             execution_context: None,
             da_commitments: None,
@@ -1771,7 +1761,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -1826,7 +1815,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: Some(execution_context),
                 da_commitments: None,
@@ -1906,7 +1894,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -1932,7 +1919,7 @@ mod tests {
             .expect("checked block signature verifies");
     }
     #[test]
-    fn signed_block_wire_skips_runtime_transaction_caches() {
+    fn signed_block_wire_roundtrips_canonical_external_entrypoints() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let tx = TransactionBuilder::new_genesis(
@@ -1942,11 +1929,10 @@ mod tests {
         .sign(key_pair.private_key());
         let entrypoint = TransactionEntrypoint::from(tx.clone());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let mut block = SignedBlock {
+        let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: vec![tx.clone()],
                 external_entrypoints: vec![entrypoint.clone()],
                 execution_context: None,
                 da_commitments: None,
@@ -1956,7 +1942,6 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: Some(BlockResult {
-                external_entrypoints: vec![entrypoint.clone()],
                 ..BlockResult::default()
             }),
         };
@@ -1969,9 +1954,7 @@ mod tests {
             .external_signed_transaction_at(0)
             .expect("explicit signed entrypoint must be directly addressable");
         assert_eq!(entrypoint_hash, entrypoint.hash());
-        let TransactionEntrypoint::External(stored_tx) = &block
-            .external_entrypoints_slice()
-            .expect("explicit entries")[0]
+        let TransactionEntrypoint::External(stored_tx) = &block.external_entrypoints_slice()[0]
         else {
             panic!("expected external signed transaction");
         };
@@ -1982,41 +1965,9 @@ mod tests {
                 .expect("explicit transaction reference"),
             stored_tx
         ));
-        let mut legacy_block = block.clone();
-        legacy_block.payload.external_entrypoints.clear();
-        legacy_block
-            .result
-            .as_mut()
-            .expect("test block result")
-            .external_entrypoints
-            .clear();
-        let mut legacy_iter = legacy_block.external_entrypoints_cloned();
-        assert_eq!(legacy_iter.len(), 1);
-        assert_eq!(legacy_iter.next(), Some(entrypoint.clone()));
-        assert_eq!(legacy_iter.len(), 0);
-        let (legacy_hash, legacy_tx) = legacy_block
-            .external_signed_transaction_at(0)
-            .expect("legacy signed transaction must remain directly addressable");
-        assert_eq!(legacy_hash, entrypoint.hash());
-        assert!(std::ptr::eq(
-            legacy_tx,
-            &legacy_block.payload.transactions[0]
-        ));
         let encoded = block.encode_versioned();
-        block.payload.transactions.clear();
-        assert_eq!(
-            encoded,
-            block.encode_versioned(),
-            "legacy signed-transaction cache must not be serialized"
-        );
-        block.result.as_mut().unwrap().external_entrypoints.clear();
-        assert_eq!(
-            encoded,
-            block.encode_versioned(),
-            "legacy result entrypoint cache must not be serialized"
-        );
         let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
-        assert!(decoded.transactions_vec().is_empty());
+        assert_eq!(decoded, block);
         assert_eq!(
             decoded.external_entrypoints_cloned().collect::<Vec<_>>(),
             vec![entrypoint]
@@ -2024,37 +1975,56 @@ mod tests {
         assert_eq!(decoded.external_transactions().next(), Some(&tx));
     }
     #[test]
-    fn block_payload_decodes_legacy_payload_without_execution_context() {
+    fn block_payload_rejects_pre_release_optional_layout() {
         #[derive(norito::codec::Encode)]
-        struct LegacyBlockPayload {
+        struct PreReleaseBlockPayload {
             header: BlockHeader,
+            #[norito(skip_serializing_if = "Vec::is_empty")]
             external_entrypoints: Vec<TransactionEntrypoint>,
+            #[norito(skip_serializing_if = "Option::is_none")]
             da_commitments: Option<DaCommitmentBundle>,
+            #[norito(skip_serializing_if = "Option::is_none")]
             da_proof_policies: Option<DaProofPolicyBundle>,
+            #[norito(skip_serializing_if = "Option::is_none")]
             da_pin_intents: Option<DaPinIntentBundle>,
+            #[norito(skip_serializing_if = "Option::is_none")]
             previous_roster_evidence: Option<PreviousRosterEvidence>,
+            #[norito(skip_serializing_if = "Option::is_none")]
+            npos_consensus_effects: Option<NposConsensusEffects>,
         }
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
-        let legacy = LegacyBlockPayload {
+        let pre_release = PreReleaseBlockPayload {
             header,
             external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
+            npos_consensus_effects: None,
         };
-        let bytes = legacy.encode();
+        let bytes = pre_release.encode();
         let mut cursor = bytes.as_slice();
-        let decoded =
-            BlockPayload::decode_all(&mut cursor).expect("decode legacy BlockPayload payload");
-        assert_eq!(decoded.header, header);
-        assert!(decoded.transactions.is_empty());
-        assert!(decoded.external_entrypoints.is_empty());
-        assert_eq!(decoded.execution_context, None);
-        assert_eq!(decoded.da_commitments, None);
-        assert_eq!(decoded.da_proof_policies, None);
-        assert_eq!(decoded.da_pin_intents, None);
-        assert_eq!(decoded.previous_roster_evidence, None);
+        assert!(
+            BlockPayload::decode_all(&mut cursor).is_err(),
+            "the first-release BlockPayload layout requires every canonical field"
+        );
+    }
+    #[test]
+    fn block_payload_current_layout_roundtrips_empty_required_values() {
+        let payload = BlockPayload {
+            header: BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0),
+            external_entrypoints: Vec::new(),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+            npos_consensus_effects: None,
+            execution_context: None,
+        };
+        let bytes = payload.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded = BlockPayload::decode_all(&mut cursor).expect("decode current BlockPayload");
+        assert_eq!(decoded, payload);
     }
     #[test]
     fn block_result_rejects_wire_omitting_required_axt_policy_snapshot() {
@@ -2129,7 +2099,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let payload = BlockPayload {
             header,
-            transactions: Vec::new(),
             external_entrypoints: Vec::new(),
             execution_context: None,
             da_commitments: None,
@@ -2142,7 +2111,10 @@ mod tests {
         let signature = checked_block_signature(0, &key_pair, &payload.header);
         let block = SignedBlock::presigned_with_payload(signature.clone(), payload.clone());
         assert_eq!(block.header(), payload.header);
-        assert_eq!(block.transactions_vec(), &payload.transactions);
+        assert_eq!(
+            block.external_entrypoints_slice(),
+            payload.external_entrypoints.as_slice()
+        );
         assert!(block.signatures().any(|sig| sig == &signature));
     }
     #[test]
@@ -2161,7 +2133,6 @@ mod tests {
         assert!(with_da.header().da_commitments_hash().is_none());
         let payload = BlockPayload {
             header,
-            transactions: Vec::new(),
             external_entrypoints: Vec::new(),
             execution_context: None,
             da_commitments: Some(DaCommitmentBundle::default()),
@@ -2178,7 +2149,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "transparent_api")]
-    fn presigned_with_payload_does_not_hydrate_transactions_from_entrypoints() {
+    fn presigned_with_payload_reads_transactions_from_canonical_entrypoints() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let tx = TransactionBuilder::new_genesis(
@@ -2189,7 +2160,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let payload = BlockPayload {
             header,
-            transactions: Vec::new(),
             external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
             execution_context: None,
             da_commitments: None,
@@ -2200,36 +2170,7 @@ mod tests {
         };
         let signature = checked_block_signature(0, &key_pair, &payload.header);
         let block = SignedBlock::presigned_with_payload(signature, payload);
-        assert!(block.transactions_vec().is_empty());
         assert_eq!(block.external_transactions().next(), Some(&tx));
-    }
-    #[test]
-    #[cfg(feature = "transparent_api")]
-    fn explicit_payload_hydration_populates_legacy_transaction_cache() {
-        let key_pair = checked_random_keypair();
-        let authority = crate::account::AccountId::new(key_pair.public_key().clone());
-        let tx = TransactionBuilder::new_genesis(
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(key_pair.private_key());
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let mut payload = BlockPayload {
-            header,
-            transactions: Vec::new(),
-            external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
-            execution_context: None,
-            da_commitments: None,
-            da_proof_policies: None,
-            da_pin_intents: None,
-            previous_roster_evidence: None,
-            npos_consensus_effects: None,
-        };
-        assert_eq!(
-            payload.hydrate_legacy_transaction_cache_from_entrypoints(),
-            1
-        );
-        assert_eq!(payload.transactions.as_slice(), core::slice::from_ref(&tx));
     }
     #[test]
     fn signed_block_is_not_empty_with_time_triggers() {
@@ -2256,7 +2197,6 @@ mod tests {
         result_merkle
             .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
         let result = BlockResult {
-            external_entrypoints: Vec::new(),
             time_triggers: vec![entrypoint],
             merkle: entry_merkle,
             result_merkle,
@@ -2274,7 +2214,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2294,7 +2233,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2315,7 +2253,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2483,7 +2420,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2540,7 +2476,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: vec![tx.clone()],
                 external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
                 execution_context: None,
                 da_commitments: None,
@@ -2580,7 +2515,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2622,7 +2556,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2658,7 +2591,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2702,7 +2634,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2758,7 +2689,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2838,7 +2768,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2867,7 +2796,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2895,7 +2823,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2926,7 +2853,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,
@@ -2998,7 +2924,6 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
                 execution_context: None,
                 da_commitments: None,

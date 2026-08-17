@@ -12,7 +12,10 @@ use norito::codec::{Decode, Encode};
 /// Role for a chunk within an erasure-coded stripe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "role", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "role", content = "value", deny_unknown_fields)
+)]
 pub enum ChunkRole {
     /// Data chunk.
     #[default]
@@ -27,6 +30,7 @@ pub enum ChunkRole {
 /// Chunk commitment record produced during manifest generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -98,9 +102,14 @@ impl ChunkCommitment {
         }
     }
 }
-/// Canonical Norito manifest emitted after chunking a DA blob.
+/// Canonical first-release Norito manifest emitted after chunking a DA blob.
+///
+/// Every field is required in both binary and JSON encodings. Its JSON object
+/// and the manifest-owned carrier objects nested within it reject unknown
+/// fields rather than interpreting pre-release layouts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -133,23 +142,18 @@ pub struct DaManifestV1 {
     /// Chunk size in bytes used during encoding.
     pub chunk_size: u32,
     /// Total stripes in the 2D matrix (data stripes + column parity stripes).
-    #[norito(default)]
     pub total_stripes: u32,
     /// Total shards per stripe (data + row parity).
-    #[norito(default)]
     pub shards_per_stripe: u32,
     /// Erasure coding profile applied to the chunks.
     pub erasure_profile: ErasureProfile,
     /// Retention policy negotiated for the blob.
     pub retention_policy: RetentionPolicy,
     /// Rent and incentive breakdown derived from the configured policy.
-    #[norito(default)]
     pub rent_quote: DaRentQuote,
     /// Chunk commitments ordered by chunk index (row-major over all stripes).
     pub chunks: Vec<ChunkCommitment>,
     /// IPA commitment for the full matrix (row+column parity).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "BlobDigest::is_zero")]
     pub ipa_commitment: BlobDigest,
     /// Additional metadata entries carried over from ingest.
     pub metadata: ExtraMetadata,

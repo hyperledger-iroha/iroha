@@ -34,6 +34,7 @@ RETIRED_PK2_MULTILANE_COMPATIBILITY_SOURCES = (
     f"fn {'pk2_staging_lane_payload_subject_hash_' + 'compatibility'}() {{}}\n",
     f"fn {'pk2_staging_legacy_replay_execution_context_hash_' + 'mismatch'}() {{}}\n",
     f"fn {'allow_missing_legacy_' + 'context'}() {{}}\n",
+    f'const MESSAGE: &str = "{"PK2" + " staging"}";\n',
     f'const MESSAGE: &str = "{"accepting PK2 staging lane payload " + "ownership"}";\n',
     f'const MESSAGE: &str = "{"accepting PK2 staging legacy execution context hash " + "mismatch"}";\n',
 )

@@ -18607,7 +18607,6 @@ seiyaku Privacy {
     fn decode_transaction_receipt_json_roundtrip() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let payload = TransactionSubmissionReceiptPayload {
-            tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
             signed_transaction_hash: None,
             submitted_at_ms: 42,

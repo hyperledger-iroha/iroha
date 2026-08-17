@@ -3,21 +3,29 @@
 The candidate lab contract deliberately proves an offline physical-device run
 without using App Attest.  This module defines a separate production envelope
 which binds that exact run to a governed policy and verifies the App Attest
-assertion cryptographically.  The final Apple X.509 chain/nonce validation is
-not implemented here yet; validation therefore always reports the explicit
-``PLATFORM_TRUST_BLOCKER`` after checking every substrate invariant.
+certificate chain, attestation nonce, and assertion cryptographically.  A
+separately signed online-authority receipt is also verified as an exact claim
+of current Apple revocation status and one-time freshness consumption.  The
+promotion path succeeds only with that receipt and an independently pinned
+authority key.
 
-Keeping that blocker is intentional.  A signed lab statement, a Boolean, or an
-unverified certificate array must never be promoted as Secure Enclave proof.
+Provisioning and auditing the online authority and its durable replay state is
+an external production responsibility: a signature proves what the authority
+attested, not that its backing state is honest.  Operators must review that
+service and its key lifecycle before installing the trusted authority key.  A
+signed lab statement, a Boolean, or an unverified certificate array never
+satisfies this validator.
 """
 
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import re
 from pathlib import Path
+import time
 from typing import Any, Optional
 
 
@@ -40,17 +48,25 @@ ASSERTION_CHALLENGE_DOMAIN = (
 )
 X509_VALIDATION_PROFILE = "apple-app-attest-x509-chain-and-nonce-v1"
 SECURE_ENCLAVE_KEY_PROFILE = "dcappattest-generated-secure-enclave-key-v1"
-PLATFORM_TRUST_BLOCKER = (
-    "production App Attest trust remains blocked: the reviewed validator does "
-    "not yet authenticate the Apple X.509 chain, certificate validity and "
-    "revocation, the leaf nonce extension against the attestation challenge, "
-    "or independently issued freshness/replay state"
+FRESHNESS_RECEIPT_SCHEMA = (
+    "iroha.kagemusha.ios.app_attest_online_freshness_consumption_receipt.v1"
+)
+ONLINE_REVOCATION_SOURCE = "apple-app-attest-online-status-authority-v1"
+MISSING_FRESHNESS_RECEIPT = (
+    "production App Attest requires a separately signed online-authority "
+    "freshness/consumption receipt"
 )
 
 MAX_POLICY_BYTES = 1024 * 1024
+MAX_FRESHNESS_RECEIPT_BYTES = 64 * 1024
 MAX_PLATFORM_OBJECT_BYTES = 128 * 1024
 MAX_CERTIFICATE_BYTES = 64 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
+MAX_X509_CHAIN_CERTIFICATES = 4
+MAX_X509_EXTENSIONS = 64
+MAX_ONLINE_RECEIPT_LIFETIME_MS = 5 * 60 * 1000
+MAX_ONLINE_REVOCATION_AGE_MS = 5 * 60 * 1000
+MAX_ONLINE_CLOCK_SKEW_MS = 30 * 1000
 ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES = 37
 MIN_ASSERTION_AUTHENTICATOR_DATA_BYTES = (
     ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1
@@ -60,6 +76,19 @@ MAX_CBOR_ARRAY_ITEMS = 1024
 MAX_CBOR_MAP_ITEMS = 64
 P256_PUBLIC_KEY_BYTES = 65
 P256_SIGNATURE_DER_MAX_BYTES = 80
+P384_PUBLIC_KEY_BYTES = 97
+X509_SIGNATURE_DER_MAX_BYTES = 128
+
+OID_EC_PUBLIC_KEY = "1.2.840.10045.2.1"
+OID_ECDSA_WITH_SHA256 = "1.2.840.10045.4.3.2"
+OID_ECDSA_WITH_SHA384 = "1.2.840.10045.4.3.3"
+OID_PRIME256V1 = "1.2.840.10045.3.1.7"
+OID_SECP384R1 = "1.3.132.0.34"
+OID_BASIC_CONSTRAINTS = "2.5.29.19"
+OID_KEY_USAGE = "2.5.29.15"
+OID_SUBJECT_KEY_IDENTIFIER = "2.5.29.14"
+OID_AUTHORITY_KEY_IDENTIFIER = "2.5.29.35"
+OID_APP_ATTEST_NONCE = "1.2.840.113635.100.8.2"
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 POLICY_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -140,6 +169,43 @@ ASSERTION_CHALLENGE_FIELDS = frozenset(
     }
 )
 
+FRESHNESS_RECEIPT_FIELDS = frozenset(
+    {
+        "schema",
+        "version",
+        "receipt_id",
+        "consumption_id",
+        "issued_at_unix_ms",
+        "consumed_at_unix_ms",
+        "expires_at_unix_ms",
+        "status",
+        "apple_revocation_checked_at_unix_ms",
+        "apple_revocation_status",
+        "apple_revocation_source",
+        "evidence_sha256",
+        "production_policy_sha256",
+        "release_manifest_sha256",
+        "platform_evidence_sha256",
+        "attestation_client_data_sha256",
+        "attestation_object_sha256",
+        "assertion_client_data_sha256",
+        "assertion_object_sha256",
+        "attestation_challenge_nonce_sha256",
+        "assertion_challenge_nonce_sha256",
+        "attestation_nonce_sha256",
+        "assertion_nonce_sha256",
+        "key_id",
+        "previous_assertion_counter",
+        "assertion_counter",
+        "certificate_chain_sha256",
+        "signer_key_id",
+        "signer_public_key_sha256",
+        "signature_algorithm",
+        "signature_payload_sha256",
+        "signature",
+    }
+)
+
 ARTIFACT_CHALLENGE_BINDINGS = {
     "candidate_record_sha256": "input/candidate-v4.norito",
     "candidate_manifest_sha256": "input/candidate-manifest-v4.norito",
@@ -162,6 +228,74 @@ P256_G = (
     0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296,
     0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5,
 )
+
+P384_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFFFF0000000000000000FFFFFFFF
+P384_A = P384_P - 3
+P384_B = 0xB3312FA7E23EE7E4988E056BE3F82D19181D9C6EFE8141120314088F5013875AC656398D8A2ED19D2A85C8EDD3EC2AEF
+P384_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973
+P384_G = (
+    0xAA87CA22BE8B05378EB1C71EF320AD746E1D3B628BA79B9859F741E082542A385502F25DBF55296C3A545E3872760AB7,
+    0x3617DE4A96262C6F5D9E98BF9292DC29F8F41DBD289A147CE9DA3113B5F0B8C00A60B1CE1D7E819D7A431D7C90EA0E5F,
+)
+
+
+@dataclass(frozen=True)
+class _EcCurve:
+    name: str
+    oid: str
+    coordinate_bytes: int
+    p: int
+    a: int
+    b: int
+    n: int
+    generator: tuple[int, int]
+
+
+P256_CURVE = _EcCurve(
+    "P-256", OID_PRIME256V1, 32, P256_P, P256_A, P256_B, P256_N, P256_G
+)
+P384_CURVE = _EcCurve(
+    "P-384", OID_SECP384R1, 48, P384_P, P384_A, P384_B, P384_N, P384_G
+)
+EC_CURVES_BY_OID = {curve.oid: curve for curve in (P256_CURVE, P384_CURVE)}
+
+
+@dataclass(frozen=True)
+class _X509Extension:
+    critical: bool
+    value: bytes
+
+
+@dataclass(frozen=True)
+class _X509Certificate:
+    der: bytes
+    tbs_der: bytes
+    serial: int
+    signature_algorithm_oid: str
+    signature_der: bytes
+    issuer_der: bytes
+    subject_der: bytes
+    not_before_unix_ms: int
+    not_after_unix_ms: int
+    public_key_curve: _EcCurve
+    public_key: bytes
+    extensions: dict[str, _X509Extension]
+
+
+@dataclass(frozen=True)
+class _PlatformEvidenceFacts:
+    evaluated_at_unix_ms: int
+    key_id: str
+    attestation_client_data: bytes
+    attestation_object: bytes
+    assertion_client_data: bytes
+    assertion_object: bytes
+    attestation_challenge_nonce: bytes
+    assertion_challenge_nonce: bytes
+    attestation_nonce: bytes
+    assertion_nonce: bytes
+    assertion_counter: int
+    certificate_chain: tuple[bytes, ...]
 
 
 @dataclass(frozen=True)
@@ -379,8 +513,20 @@ def _validate_policy(
             digest = _nonzero_digest(root.get("sha256"), f"{label}.sha256", errors)
             if der is not None and digest is not None and hashlib.sha256(der).hexdigest() != digest:
                 errors.append(f"{label}.sha256 does not match DER bytes")
-            if der is not None and not der.startswith(b"\x30"):
-                errors.append(f"{label}.der_base64 is not a DER certificate envelope")
+            if der is not None:
+                try:
+                    certificate = _parse_x509_certificate(der, label)
+                    is_ca, _ = _x509_basic_constraints(certificate, label)
+                    _, key_cert_sign = _x509_key_usage(certificate, label)
+                    if not is_ca or not key_cert_sign:
+                        raise ValueError(
+                            f"{label} must be a certificate-signing CA"
+                        )
+                    if certificate.issuer_der != certificate.subject_der:
+                        raise ValueError(f"{label} must be self-issued")
+                    _verify_x509_signature(certificate, certificate, label)
+                except ValueError as error:
+                    errors.append(str(error))
             if digest is not None:
                 root_digests.append(digest)
         if root_digests != sorted(set(root_digests)):
@@ -507,6 +653,539 @@ def _verify_p256_signature(public_key: bytes, message: bytes, signature_der: byt
         raise ValueError("App Attest assertion signature verification failed")
 
 
+def _ec_point_on_curve(point: tuple[int, int], curve: _EcCurve) -> bool:
+    x, y = point
+    return (
+        0 <= x < curve.p
+        and 0 <= y < curve.p
+        and (y * y - x * x * x - curve.a * x - curve.b) % curve.p == 0
+    )
+
+
+def _ec_point_add(
+    left: Optional[tuple[int, int]],
+    right: Optional[tuple[int, int]],
+    curve: _EcCurve,
+) -> Optional[tuple[int, int]]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    x1, y1 = left
+    x2, y2 = right
+    if x1 == x2 and (y1 + y2) % curve.p == 0:
+        return None
+    if left == right:
+        if y1 == 0:
+            return None
+        slope = (3 * x1 * x1 + curve.a) * pow(2 * y1, -1, curve.p) % curve.p
+    else:
+        slope = (y2 - y1) * pow((x2 - x1) % curve.p, -1, curve.p) % curve.p
+    x3 = (slope * slope - x1 - x2) % curve.p
+    return x3, (slope * (x1 - x3) - y1) % curve.p
+
+
+def _ec_scalar_multiply(
+    scalar: int, point: tuple[int, int], curve: _EcCurve
+) -> Optional[tuple[int, int]]:
+    result: Optional[tuple[int, int]] = None
+    addend: Optional[tuple[int, int]] = point
+    while scalar:
+        if scalar & 1:
+            result = _ec_point_add(result, addend, curve)
+        addend = _ec_point_add(addend, addend, curve)
+        scalar >>= 1
+    return result
+
+
+def _parse_ec_public_key(payload: bytes, curve: _EcCurve, label: str) -> tuple[int, int]:
+    expected_length = 1 + 2 * curve.coordinate_bytes
+    if len(payload) != expected_length or payload[0] != 0x04:
+        raise ValueError(
+            f"{label} must be an uncompressed {curve.name} SEC1 public key"
+        )
+    point = (
+        int.from_bytes(payload[1 : 1 + curve.coordinate_bytes], "big"),
+        int.from_bytes(payload[1 + curve.coordinate_bytes :], "big"),
+    )
+    if (
+        not _ec_point_on_curve(point, curve)
+        or _ec_scalar_multiply(curve.n, point, curve) is not None
+    ):
+        raise ValueError(f"{label} is not a valid {curve.name} point")
+    return point
+
+
+def _parse_ecdsa_der_for_order(
+    payload: bytes, order: int, maximum: int, label: str
+) -> tuple[int, int]:
+    if not 8 <= len(payload) <= maximum or payload[0] != 0x30:
+        raise ValueError(f"{label} is not bounded DER ECDSA")
+    length, offset = _der_length(payload, 1)
+    if offset + length != len(payload):
+        raise ValueError(f"{label} has trailing DER bytes")
+    r, offset = _der_integer(payload, offset)
+    s, offset = _der_integer(payload, offset)
+    if offset != len(payload) or not (1 <= r < order and 1 <= s < order):
+        raise ValueError(f"{label} has invalid ECDSA components")
+    return r, s
+
+
+def _verify_ec_signature(
+    public_key: bytes,
+    curve: _EcCurve,
+    message: bytes,
+    signature_der: bytes,
+    hash_name: str,
+    label: str,
+) -> None:
+    point = _parse_ec_public_key(public_key, curve, f"{label} issuer public key")
+    r, s = _parse_ecdsa_der_for_order(
+        signature_der, curve.n, X509_SIGNATURE_DER_MAX_BYTES, label
+    )
+    digest = hashlib.new(hash_name, message).digest()
+    digest_bits = len(digest) * 8
+    order_bits = curve.n.bit_length()
+    z = int.from_bytes(digest, "big")
+    if digest_bits > order_bits:
+        z >>= digest_bits - order_bits
+    inverse = pow(s, -1, curve.n)
+    candidate = _ec_point_add(
+        _ec_scalar_multiply((z * inverse) % curve.n, curve.generator, curve),
+        _ec_scalar_multiply((r * inverse) % curve.n, point, curve),
+        curve,
+    )
+    if candidate is None or candidate[0] % curve.n != r:
+        raise ValueError(f"{label} verification failed")
+
+
+@dataclass(frozen=True)
+class _DerElement:
+    tag: int
+    content: bytes
+    encoded: bytes
+
+
+class _DerReader:
+    def __init__(self, payload: bytes, label: str) -> None:
+        self.payload = payload
+        self.label = label
+        self.offset = 0
+
+    def peek_tag(self) -> Optional[int]:
+        return self.payload[self.offset] if self.offset < len(self.payload) else None
+
+    def element(self, expected_tag: Optional[int] = None) -> _DerElement:
+        start = self.offset
+        if start >= len(self.payload):
+            raise ValueError(f"{self.label} is truncated")
+        tag = self.payload[start]
+        if tag & 0x1F == 0x1F:
+            raise ValueError(f"{self.label} uses an unsupported high-tag-number DER item")
+        length, content_start = _der_length(self.payload, start + 1)
+        end = content_start + length
+        if end > len(self.payload):
+            raise ValueError(f"{self.label} DER item exceeds input bounds")
+        if expected_tag is not None and tag != expected_tag:
+            raise ValueError(
+                f"{self.label} has DER tag 0x{tag:02x}, expected 0x{expected_tag:02x}"
+            )
+        self.offset = end
+        return _DerElement(
+            tag=tag,
+            content=self.payload[content_start:end],
+            encoded=self.payload[start:end],
+        )
+
+    def finish(self) -> None:
+        if self.offset != len(self.payload):
+            raise ValueError(f"{self.label} has trailing DER bytes")
+
+
+def _der_single(payload: bytes, tag: int, label: str) -> _DerElement:
+    reader = _DerReader(payload, label)
+    value = reader.element(tag)
+    reader.finish()
+    return value
+
+
+def _der_positive_integer(payload: bytes, label: str, *, allow_zero: bool) -> int:
+    if not payload or payload[0] & 0x80:
+        raise ValueError(f"{label} must be a positive DER INTEGER")
+    if len(payload) > 1 and payload[0] == 0 and payload[1] < 0x80:
+        raise ValueError(f"{label} DER INTEGER is not minimally encoded")
+    value = int.from_bytes(payload, "big")
+    if value == 0 and not allow_zero:
+        raise ValueError(f"{label} must be nonzero")
+    return value
+
+
+def _der_oid(payload: bytes, label: str) -> str:
+    if not payload:
+        raise ValueError(f"{label} OID is empty")
+    components: list[int] = []
+    value = 0
+    width = 0
+    for byte in payload:
+        if width == 0 and byte == 0x80:
+            raise ValueError(f"{label} OID has a noncanonical component")
+        value = (value << 7) | (byte & 0x7F)
+        width += 1
+        if width > 10:
+            raise ValueError(f"{label} OID component is too large")
+        if byte & 0x80 == 0:
+            components.append(value)
+            value = 0
+            width = 0
+    if width or not components:
+        raise ValueError(f"{label} OID is truncated")
+    first_value = components[0]
+    if first_value < 40:
+        first, second = 0, first_value
+    elif first_value < 80:
+        first, second = 1, first_value - 40
+    else:
+        first, second = 2, first_value - 80
+    return ".".join(str(item) for item in (first, second, *components[1:]))
+
+
+def _der_algorithm_identifier(payload: bytes, label: str) -> tuple[str, Optional[str]]:
+    sequence = _der_single(payload, 0x30, label)
+    reader = _DerReader(sequence.content, label)
+    algorithm = _der_oid(reader.element(0x06).content, f"{label} algorithm")
+    parameter = None
+    if reader.peek_tag() is not None:
+        parameter = _der_oid(reader.element(0x06).content, f"{label} parameter")
+    reader.finish()
+    return algorithm, parameter
+
+
+def _der_time(payload: bytes, tag: int, label: str) -> int:
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{label} is not ASCII") from error
+    if tag == 0x17:
+        if re.fullmatch(r"[0-9]{12}Z", text) is None:
+            raise ValueError(f"{label} UTCTime is not canonical")
+        year = int(text[:2])
+        year += 2000 if year < 50 else 1900
+        components = (year, int(text[2:4]), int(text[4:6]), int(text[6:8]), int(text[8:10]), int(text[10:12]))
+    elif tag == 0x18:
+        if re.fullmatch(r"[0-9]{14}Z", text) is None:
+            raise ValueError(f"{label} GeneralizedTime is not canonical")
+        components = (int(text[:4]), int(text[4:6]), int(text[6:8]), int(text[8:10]), int(text[10:12]), int(text[12:14]))
+    else:
+        raise ValueError(f"{label} has an unsupported ASN.1 time tag")
+    try:
+        value = datetime(*components, tzinfo=timezone.utc)
+    except ValueError as error:
+        raise ValueError(f"{label} contains an invalid calendar time") from error
+    return int(value.timestamp()) * 1000
+
+
+def _parse_x509_extensions(payload: bytes, label: str) -> dict[str, _X509Extension]:
+    outer = _der_single(payload, 0xA3, label)
+    sequence = _der_single(outer.content, 0x30, label)
+    reader = _DerReader(sequence.content, label)
+    extensions: dict[str, _X509Extension] = {}
+    while reader.peek_tag() is not None:
+        if len(extensions) >= MAX_X509_EXTENSIONS:
+            raise ValueError(f"{label} exceeds {MAX_X509_EXTENSIONS} entries")
+        extension = reader.element(0x30)
+        item = _DerReader(extension.content, f"{label} entry")
+        oid = _der_oid(item.element(0x06).content, f"{label} entry")
+        critical = False
+        if item.peek_tag() == 0x01:
+            boolean = item.element(0x01).content
+            if boolean != b"\xff":
+                raise ValueError(f"{label} {oid} critical flag is not canonical TRUE")
+            critical = True
+        value = item.element(0x04).content
+        item.finish()
+        if oid in extensions:
+            raise ValueError(f"{label} contains duplicate extension {oid}")
+        if critical and oid not in {OID_BASIC_CONSTRAINTS, OID_KEY_USAGE}:
+            raise ValueError(f"{label} contains unsupported critical extension {oid}")
+        extensions[oid] = _X509Extension(critical=critical, value=value)
+    return extensions
+
+
+def _parse_x509_certificate(payload: bytes, label: str) -> _X509Certificate:
+    if not payload or len(payload) > MAX_CERTIFICATE_BYTES:
+        raise ValueError(f"{label} size is outside its bound")
+    certificate = _der_single(payload, 0x30, label)
+    reader = _DerReader(certificate.content, label)
+    tbs = reader.element(0x30)
+    outer_algorithm_element = reader.element(0x30)
+    outer_algorithm = _der_algorithm_identifier(
+        outer_algorithm_element.encoded, f"{label} signature algorithm"
+    )
+    signature_bits = reader.element(0x03).content
+    reader.finish()
+    if not signature_bits or signature_bits[0] != 0:
+        raise ValueError(f"{label} signature BIT STRING is invalid")
+
+    tbs_reader = _DerReader(tbs.content, f"{label} TBSCertificate")
+    version = tbs_reader.element(0xA0)
+    version_value = _der_positive_integer(
+        _der_single(version.content, 0x02, f"{label} version").content,
+        f"{label} version",
+        allow_zero=True,
+    )
+    if version_value != 2:
+        raise ValueError(f"{label} must be an X.509 v3 certificate")
+    serial = _der_positive_integer(
+        tbs_reader.element(0x02).content, f"{label} serial", allow_zero=False
+    )
+    if serial.bit_length() > 160:
+        raise ValueError(f"{label} serial exceeds 20 octets")
+    tbs_algorithm_element = tbs_reader.element(0x30)
+    tbs_algorithm = _der_algorithm_identifier(
+        tbs_algorithm_element.encoded, f"{label} TBSCertificate signature algorithm"
+    )
+    if tbs_algorithm != outer_algorithm:
+        raise ValueError(f"{label} signature algorithms do not match")
+    algorithm_oid, algorithm_parameter = outer_algorithm
+    if algorithm_parameter is not None or algorithm_oid not in {
+        OID_ECDSA_WITH_SHA256,
+        OID_ECDSA_WITH_SHA384,
+    }:
+        raise ValueError(f"{label} uses an unsupported certificate signature algorithm")
+    issuer = tbs_reader.element(0x30)
+    validity = tbs_reader.element(0x30)
+    validity_reader = _DerReader(validity.content, f"{label} validity")
+    not_before_element = validity_reader.element()
+    not_after_element = validity_reader.element()
+    validity_reader.finish()
+    not_before = _der_time(
+        not_before_element.content, not_before_element.tag, f"{label} notBefore"
+    )
+    not_after = _der_time(
+        not_after_element.content, not_after_element.tag, f"{label} notAfter"
+    )
+    if not_before > not_after:
+        raise ValueError(f"{label} validity interval is inverted")
+    subject = tbs_reader.element(0x30)
+    spki = tbs_reader.element(0x30)
+    spki_reader = _DerReader(spki.content, f"{label} subjectPublicKeyInfo")
+    spki_algorithm_element = spki_reader.element(0x30)
+    spki_algorithm, curve_oid = _der_algorithm_identifier(
+        spki_algorithm_element.encoded, f"{label} public-key algorithm"
+    )
+    if spki_algorithm != OID_EC_PUBLIC_KEY or curve_oid not in EC_CURVES_BY_OID:
+        raise ValueError(f"{label} public key must be P-256 or P-384 EC")
+    curve = EC_CURVES_BY_OID[curve_oid]
+    public_key_bits = spki_reader.element(0x03).content
+    spki_reader.finish()
+    if not public_key_bits or public_key_bits[0] != 0:
+        raise ValueError(f"{label} public key BIT STRING is invalid")
+    public_key = public_key_bits[1:]
+    _parse_ec_public_key(public_key, curve, f"{label} public key")
+    if tbs_reader.peek_tag() != 0xA3:
+        raise ValueError(f"{label} must contain one X.509 v3 extension sequence")
+    extensions_element = tbs_reader.element(0xA3)
+    tbs_reader.finish()
+    extensions = _parse_x509_extensions(
+        extensions_element.encoded, f"{label} extensions"
+    )
+    return _X509Certificate(
+        der=payload,
+        tbs_der=tbs.encoded,
+        serial=serial,
+        signature_algorithm_oid=algorithm_oid,
+        signature_der=signature_bits[1:],
+        issuer_der=issuer.encoded,
+        subject_der=subject.encoded,
+        not_before_unix_ms=not_before,
+        not_after_unix_ms=not_after,
+        public_key_curve=curve,
+        public_key=public_key,
+        extensions=extensions,
+    )
+
+
+def _x509_basic_constraints(
+    certificate: _X509Certificate, label: str
+) -> tuple[bool, Optional[int]]:
+    extension = certificate.extensions.get(OID_BASIC_CONSTRAINTS)
+    if extension is None:
+        return False, None
+    if not extension.critical:
+        raise ValueError(f"{label} basic constraints must be critical")
+    sequence = _der_single(extension.value, 0x30, f"{label} basic constraints")
+    reader = _DerReader(sequence.content, f"{label} basic constraints")
+    is_ca = False
+    if reader.peek_tag() == 0x01:
+        value = reader.element(0x01).content
+        if value != b"\xff":
+            raise ValueError(f"{label} basic constraints CA flag is not canonical TRUE")
+        is_ca = True
+    path_length = None
+    if reader.peek_tag() == 0x02:
+        path_length = _der_positive_integer(
+            reader.element(0x02).content,
+            f"{label} basic constraints path length",
+            allow_zero=True,
+        )
+    reader.finish()
+    if path_length is not None and not is_ca:
+        raise ValueError(f"{label} has a CA path length without CA=true")
+    return is_ca, path_length
+
+
+def _x509_key_usage(certificate: _X509Certificate, label: str) -> tuple[bool, bool]:
+    extension = certificate.extensions.get(OID_KEY_USAGE)
+    if extension is None or not extension.critical:
+        raise ValueError(f"{label} key usage must be present and critical")
+    bit_string = _der_single(extension.value, 0x03, f"{label} key usage").content
+    if len(bit_string) < 2 or bit_string[0] > 7:
+        raise ValueError(f"{label} key usage BIT STRING is invalid")
+    unused = bit_string[0]
+    bits = bit_string[1:]
+    if unused and bits[-1] & ((1 << unused) - 1):
+        raise ValueError(f"{label} key usage has nonzero unused bits")
+    digital_signature = bool(bits[0] & 0x80)
+    key_cert_sign = bool(bits[0] & 0x04)
+    return digital_signature, key_cert_sign
+
+
+def _validate_x509_time(
+    certificate: _X509Certificate, evaluation_time_unix_ms: int, label: str
+) -> None:
+    if not (
+        certificate.not_before_unix_ms
+        <= evaluation_time_unix_ms
+        <= certificate.not_after_unix_ms
+    ):
+        raise ValueError(f"{label} is not valid at the evidence evaluation time")
+
+
+def _verify_x509_signature(
+    certificate: _X509Certificate, issuer: _X509Certificate, label: str
+) -> None:
+    hash_name = {
+        OID_ECDSA_WITH_SHA256: "sha256",
+        OID_ECDSA_WITH_SHA384: "sha384",
+    }[certificate.signature_algorithm_oid]
+    _verify_ec_signature(
+        issuer.public_key,
+        issuer.public_key_curve,
+        certificate.tbs_der,
+        certificate.signature_der,
+        hash_name,
+        f"{label} certificate signature",
+    )
+
+
+def _extract_app_attest_nonce(payload: bytes) -> bytes:
+    sequence = _der_single(payload, 0x30, "App Attest nonce extension")
+    sequence_reader = _DerReader(
+        sequence.content, "App Attest nonce extension sequence"
+    )
+    explicit = sequence_reader.element(0xA1)
+    sequence_reader.finish()
+    nonce = _der_single(
+        explicit.content, 0x04, "App Attest nonce extension explicit value"
+    ).content
+    if len(nonce) != 32:
+        raise ValueError("App Attest nonce extension must contain exactly 32 bytes")
+    return nonce
+
+
+def _validate_attestation_certificate_chain(
+    chain_der: tuple[bytes, ...],
+    policy: dict[str, Any],
+    evaluation_time_unix_ms: int,
+    expected_public_key: bytes,
+    auth_data: bytes,
+    attestation_client_data: bytes,
+) -> bytes:
+    if not 2 <= len(chain_der) <= MAX_X509_CHAIN_CERTIFICATES:
+        raise ValueError("App Attest x5c must contain a bounded leaf/intermediate chain")
+    revoked = set(policy["revoked_certificate_sha256"])
+    seen: set[str] = set()
+    chain: list[_X509Certificate] = []
+    for index, der in enumerate(chain_der):
+        digest = hashlib.sha256(der).hexdigest()
+        if digest in revoked:
+            raise ValueError("App Attest certificate is revoked by static production policy")
+        if digest in seen:
+            raise ValueError("App Attest certificate chain contains duplicate certificates")
+        seen.add(digest)
+        certificate = _parse_x509_certificate(der, f"App Attest x5c[{index}]")
+        _validate_x509_time(certificate, evaluation_time_unix_ms, f"App Attest x5c[{index}]")
+        chain.append(certificate)
+
+    leaf = chain[0]
+    leaf_is_ca, _ = _x509_basic_constraints(leaf, "App Attest leaf certificate")
+    leaf_digital_signature, _ = _x509_key_usage(leaf, "App Attest leaf certificate")
+    if leaf_is_ca or not leaf_digital_signature:
+        raise ValueError("App Attest leaf must be an end-entity signing certificate")
+    if leaf.public_key_curve != P256_CURVE or leaf.public_key != expected_public_key:
+        raise ValueError("App Attest leaf public key does not match the assertion key")
+
+    for index, (certificate, issuer) in enumerate(zip(chain, chain[1:])):
+        issuer_is_ca, path_length = _x509_basic_constraints(
+            issuer, f"App Attest x5c[{index + 1}]"
+        )
+        _, issuer_key_cert_sign = _x509_key_usage(
+            issuer, f"App Attest x5c[{index + 1}]"
+        )
+        if not issuer_is_ca or not issuer_key_cert_sign:
+            raise ValueError("App Attest issuer must be a certificate-signing CA")
+        if path_length is not None and path_length < index:
+            raise ValueError("App Attest certificate chain exceeds issuer path length")
+        if certificate.issuer_der != issuer.subject_der:
+            raise ValueError("App Attest certificate issuer chain is invalid")
+        _verify_x509_signature(certificate, issuer, f"App Attest x5c[{index}]")
+
+    tail = chain[-1]
+    anchored = False
+    for root_index, root_value in enumerate(policy["trusted_app_attest_roots"]):
+        root_der = base64.b64decode(root_value["der_base64"], validate=True)
+        root_digest = hashlib.sha256(root_der).hexdigest()
+        if root_digest in revoked:
+            continue
+        root = _parse_x509_certificate(root_der, f"trusted App Attest root[{root_index}]")
+        _validate_x509_time(
+            root, evaluation_time_unix_ms, f"trusted App Attest root[{root_index}]"
+        )
+        root_is_ca, root_path_length = _x509_basic_constraints(
+            root, f"trusted App Attest root[{root_index}]"
+        )
+        _, root_key_cert_sign = _x509_key_usage(
+            root, f"trusted App Attest root[{root_index}]"
+        )
+        if not root_is_ca or not root_key_cert_sign:
+            continue
+        if root_path_length is not None and root_path_length < len(chain) - 1:
+            continue
+        if tail.der == root.der:
+            if tail.issuer_der != tail.subject_der:
+                raise ValueError("App Attest trusted root is not self-issued")
+            _verify_x509_signature(tail, tail, "App Attest trusted root")
+            anchored = True
+            break
+        if tail.issuer_der == root.subject_der:
+            _verify_x509_signature(tail, root, "App Attest chain tail")
+            anchored = True
+            break
+    if not anchored:
+        raise ValueError("App Attest certificate chain is not anchored in a policy root")
+
+    nonce_extension = leaf.extensions.get(OID_APP_ATTEST_NONCE)
+    if nonce_extension is None:
+        raise ValueError("App Attest leaf certificate is missing the nonce extension")
+    nonce = _extract_app_attest_nonce(nonce_extension.value)
+    expected_nonce = hashlib.sha256(
+        auth_data + hashlib.sha256(attestation_client_data).digest()
+    ).digest()
+    if nonce != expected_nonce:
+        raise ValueError("App Attest leaf nonce does not bind the attestation challenge")
+    return nonce
+
+
 def _validate_extensions(
     value: Any,
     *,
@@ -558,11 +1237,13 @@ def _validate_attestation_auth_data(
 
 def _parse_attestation_object(
     payload: bytes,
+    client_data: bytes,
     key_id: bytes,
     public_key: bytes,
     policy: dict[str, Any],
+    evaluation_time_unix_ms: int,
     errors: list[str],
-) -> None:
+) -> Optional[tuple[tuple[bytes, ...], bytes]]:
     try:
         value = _cbor_object(
             _decode_cbor(payload, "App Attest attestation object"),
@@ -583,8 +1264,19 @@ def _parse_attestation_object(
         if not isinstance(receipt, bytes) or not receipt or len(receipt) > MAX_RECEIPT_BYTES:
             raise ValueError("App Attest receipt is missing or oversized")
         _validate_attestation_auth_data(value["authData"], key_id, public_key, policy)
+        certificate_chain = tuple(chain)
+        attestation_nonce = _validate_attestation_certificate_chain(
+            certificate_chain,
+            policy,
+            evaluation_time_unix_ms,
+            public_key,
+            value["authData"],
+            client_data,
+        )
+        return certificate_chain, attestation_nonce
     except ValueError as error:
         errors.append(str(error))
+        return None
 
 
 def _parse_assertion_object(
@@ -593,7 +1285,7 @@ def _parse_assertion_object(
     public_key: bytes,
     policy: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> Optional[tuple[int, bytes]]:
     try:
         value = _cbor_object(
             _decode_cbor(payload, "App Attest assertion object"),
@@ -615,7 +1307,8 @@ def _parse_assertion_object(
             raise ValueError("App Attest assertion RP ID does not match production policy")
         if auth_data[32] != 0x80:
             raise ValueError("App Attest assertion must contain only the extension-data flag")
-        if int.from_bytes(auth_data[33:37], "big") == 0:
+        assertion_counter = int.from_bytes(auth_data[33:37], "big")
+        if assertion_counter == 0:
             raise ValueError("App Attest assertion counter must be positive")
         _validate_extensions(
             _decode_cbor(
@@ -626,9 +1319,12 @@ def _parse_assertion_object(
             policy=policy,
         )
         client_data_hash = hashlib.sha256(client_data).digest()
-        _verify_p256_signature(public_key, auth_data + client_data_hash, signature)
+        assertion_message = auth_data + client_data_hash
+        _verify_p256_signature(public_key, assertion_message, signature)
+        return assertion_counter, hashlib.sha256(assertion_message).digest()
     except ValueError as error:
         errors.append(str(error))
+        return None
 
 
 def _challenge_bindings(
@@ -696,7 +1392,11 @@ def _validate_challenge(
         expected["key_id"] = key_id
     if value != expected:
         errors.append(f"{label} does not bind the exact production policy and benchmark artifacts")
-    _require_base64(value.get("nonce_base64"), f"{label} nonce_base64", 32, errors)
+    nonce = _require_base64(
+        value.get("nonce_base64"), f"{label} nonce_base64", 32, errors
+    )
+    if nonce is not None and len(nonce) != 32:
+        errors.append(f"{label} nonce_base64 must decode to exactly 32 bytes")
     return value
 
 
@@ -709,9 +1409,10 @@ def _validate_platform_evidence(
     raw_snapshot: Any,
     candidate_module: Any,
     errors: list[str],
-) -> None:
+) -> Optional[_PlatformEvidenceFacts]:
+    starting_errors = len(errors)
     if _exact_fields(platform, PLATFORM_EVIDENCE_FIELDS, "production platform evidence", errors) is None:
-        return
+        return None
     if platform.get("schema") != PLATFORM_EVIDENCE_SCHEMA:
         errors.append(f"production platform evidence schema must be {PLATFORM_EVIDENCE_SCHEMA}")
     if platform.get("version") != 1 or isinstance(platform.get("version"), bool):
@@ -825,10 +1526,367 @@ def _validate_platform_evidence(
         and attestation_challenge.get("nonce_base64") == assertion_challenge.get("nonce_base64")
     ):
         errors.append("App Attest attestation and assertion challenges must use distinct nonces")
-    if attestation_object is not None and key_id is not None and public_key is not None:
-        _parse_attestation_object(attestation_object, key_id, public_key, policy, errors)
+    certificate_chain = None
+    attestation_statement_nonce = None
+    if (
+        attestation_object is not None
+        and attestation_client_data is not None
+        and key_id is not None
+        and public_key is not None
+    ):
+        attestation_result = _parse_attestation_object(
+            attestation_object,
+            attestation_client_data,
+            key_id,
+            public_key,
+            policy,
+            evaluated_at,
+            errors,
+        )
+        if attestation_result is not None:
+            certificate_chain, attestation_statement_nonce = attestation_result
+    assertion_counter = None
+    assertion_statement_nonce = None
     if assertion_object is not None and assertion_client_data is not None and public_key is not None:
-        _parse_assertion_object(assertion_object, assertion_client_data, public_key, policy, errors)
+        assertion_result = _parse_assertion_object(
+            assertion_object, assertion_client_data, public_key, policy, errors
+        )
+        if assertion_result is not None:
+            assertion_counter, assertion_statement_nonce = assertion_result
+    if (
+        len(errors) != starting_errors
+        or not isinstance(key_id_text, str)
+        or attestation_client_data is None
+        or attestation_object is None
+        or assertion_client_data is None
+        or assertion_object is None
+        or attestation_challenge is None
+        or assertion_challenge is None
+        or assertion_counter is None
+        or assertion_statement_nonce is None
+        or attestation_statement_nonce is None
+        or certificate_chain is None
+    ):
+        return None
+    attestation_challenge_nonce = _decode_base64(
+        attestation_challenge.get("nonce_base64"), "attestation nonce", 32
+    )
+    assertion_challenge_nonce = _decode_base64(
+        assertion_challenge.get("nonce_base64"), "assertion nonce", 32
+    )
+    if (
+        attestation_challenge_nonce is None
+        or len(attestation_challenge_nonce) != 32
+        or assertion_challenge_nonce is None
+        or len(assertion_challenge_nonce) != 32
+    ):
+        return None
+    return _PlatformEvidenceFacts(
+        evaluated_at_unix_ms=evaluated_at,
+        key_id=key_id_text,
+        attestation_client_data=attestation_client_data,
+        attestation_object=attestation_object,
+        assertion_client_data=assertion_client_data,
+        assertion_object=assertion_object,
+        attestation_challenge_nonce=attestation_challenge_nonce,
+        assertion_challenge_nonce=assertion_challenge_nonce,
+        attestation_nonce=attestation_statement_nonce,
+        assertion_nonce=assertion_statement_nonce,
+        assertion_counter=assertion_counter,
+        certificate_chain=certificate_chain,
+    )
+
+
+def _positive_unix_ms(value: Any, label: str, errors: list[str]) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        errors.append(f"{label} must be a positive integer Unix millisecond timestamp")
+        return None
+    return value
+
+
+def _validate_online_freshness_receipt(
+    receipt_path: Path,
+    trusted_key_id: str,
+    trusted_public_key_path: Path,
+    *,
+    evidence_sha256: str,
+    policy_sha256: str,
+    release_manifest_sha256: str,
+    platform: dict[str, Any],
+    facts: _PlatformEvidenceFacts,
+    lab_signer_key_id: str,
+    lab_signer_public_key_sha256: str,
+    evaluation_time_unix_ms: int,
+    candidate_module: Any,
+    errors: list[str],
+) -> None:
+    """Verify a stateless claim made by a distinct online authority.
+
+    The signed claim binds current Apple revocation status and states that the
+    authority issued and consumed this receipt exactly once.  Verifying the
+    claim does not prove the authority's backing state; production operations
+    must provision and audit that service before trusting its pinned key.
+    """
+
+    receipt_snapshot = None
+    public_key_snapshot = None
+    try:
+        candidate_module._validate_key_id(
+            trusted_key_id, "trusted online freshness authority key id"
+        )
+        receipt_snapshot = candidate_module._snapshot_private_file(
+            receipt_path.resolve(strict=True),
+            "online freshness/consumption receipt",
+            maximum=MAX_FRESHNESS_RECEIPT_BYTES,
+            retain_payload=True,
+        )
+        receipt = candidate_module.parse_strict_json(
+            receipt_snapshot.payload, "online freshness/consumption receipt"
+        )
+        public_key_snapshot = candidate_module._snapshot_key_file(
+            trusted_public_key_path,
+            "online freshness authority public key",
+            private=False,
+        )
+        public_key_der = candidate_module._public_key_der_from_payload(
+            public_key_snapshot.payload
+        )
+    except (OSError, candidate_module.EvidenceError) as error:
+        errors.append(str(error))
+        return
+
+    if (
+        _exact_fields(
+            receipt,
+            FRESHNESS_RECEIPT_FIELDS,
+            "online freshness/consumption receipt",
+            errors,
+        )
+        is None
+    ):
+        return
+    if receipt.get("schema") != FRESHNESS_RECEIPT_SCHEMA:
+        errors.append(
+            f"online freshness/consumption receipt schema must be {FRESHNESS_RECEIPT_SCHEMA}"
+        )
+    if receipt.get("version") != 1 or isinstance(receipt.get("version"), bool):
+        errors.append("online freshness/consumption receipt version must be integer 1")
+    receipt_id = _nonzero_digest(
+        receipt.get("receipt_id"),
+        "online freshness/consumption receipt receipt_id",
+        errors,
+    )
+    consumption_id = _nonzero_digest(
+        receipt.get("consumption_id"),
+        "online freshness/consumption receipt consumption_id",
+        errors,
+    )
+    if receipt_id is not None and receipt_id == consumption_id:
+        errors.append(
+            "online freshness/consumption receipt receipt_id and consumption_id must be distinct"
+        )
+    issued_at = _positive_unix_ms(
+        receipt.get("issued_at_unix_ms"),
+        "online freshness/consumption receipt issued_at_unix_ms",
+        errors,
+    )
+    consumed_at = _positive_unix_ms(
+        receipt.get("consumed_at_unix_ms"),
+        "online freshness/consumption receipt consumed_at_unix_ms",
+        errors,
+    )
+    expires_at = _positive_unix_ms(
+        receipt.get("expires_at_unix_ms"),
+        "online freshness/consumption receipt expires_at_unix_ms",
+        errors,
+    )
+    revocation_checked_at = _positive_unix_ms(
+        receipt.get("apple_revocation_checked_at_unix_ms"),
+        "online freshness/consumption receipt apple_revocation_checked_at_unix_ms",
+        errors,
+    )
+    if receipt.get("status") != "issued-and-consumed-once":
+        errors.append(
+            "online freshness/consumption receipt must attest issued-and-consumed-once"
+        )
+    if receipt.get("apple_revocation_status") != "good":
+        errors.append(
+            "online freshness/consumption receipt must attest good Apple revocation status"
+        )
+    if receipt.get("apple_revocation_source") != ONLINE_REVOCATION_SOURCE:
+        errors.append(
+            "online freshness/consumption receipt has an unsupported Apple revocation source"
+        )
+    previous_counter = receipt.get("previous_assertion_counter")
+    assertion_counter = receipt.get("assertion_counter")
+    if (
+        isinstance(previous_counter, bool)
+        or not isinstance(previous_counter, int)
+        or previous_counter < 0
+        or previous_counter > 0xFFFFFFFF
+    ):
+        errors.append(
+            "online freshness/consumption receipt previous_assertion_counter must be a u32"
+        )
+    if (
+        isinstance(assertion_counter, bool)
+        or not isinstance(assertion_counter, int)
+        or not 1 <= assertion_counter <= 0xFFFFFFFF
+    ):
+        errors.append(
+            "online freshness/consumption receipt assertion_counter must be a positive u32"
+        )
+    if (
+        isinstance(previous_counter, int)
+        and not isinstance(previous_counter, bool)
+        and isinstance(assertion_counter, int)
+        and not isinstance(assertion_counter, bool)
+        and assertion_counter <= previous_counter
+    ):
+        errors.append(
+            "online freshness/consumption receipt assertion counter must strictly increase"
+        )
+    if assertion_counter != facts.assertion_counter:
+        errors.append(
+            "online freshness/consumption receipt assertion_counter does not bind authenticatorData"
+        )
+    if (
+        issued_at is not None
+        and consumed_at is not None
+        and expires_at is not None
+    ):
+        if not issued_at <= consumed_at < expires_at:
+            errors.append(
+                "online freshness/consumption receipt issuance, consumption, and expiry order is invalid"
+            )
+        if expires_at - issued_at > MAX_ONLINE_RECEIPT_LIFETIME_MS:
+            errors.append("online freshness/consumption receipt lifetime exceeds five minutes")
+        if consumed_at > evaluation_time_unix_ms + MAX_ONLINE_CLOCK_SKEW_MS:
+            errors.append("online freshness/consumption receipt consumption is in the future")
+        if evaluation_time_unix_ms > expires_at:
+            errors.append("online freshness/consumption receipt is expired")
+        evidence_delay = issued_at - facts.evaluated_at_unix_ms
+        if not -MAX_ONLINE_CLOCK_SKEW_MS <= evidence_delay <= MAX_ONLINE_RECEIPT_LIFETIME_MS:
+            errors.append(
+                "online freshness/consumption receipt was not issued promptly for this evidence"
+            )
+    if issued_at is not None and revocation_checked_at is not None:
+        revocation_delay = issued_at - revocation_checked_at
+        if not -MAX_ONLINE_CLOCK_SKEW_MS <= revocation_delay <= MAX_ONLINE_REVOCATION_AGE_MS:
+            errors.append(
+                "online Apple revocation status is not fresh at receipt issuance"
+            )
+
+    expected_digests = {
+        "evidence_sha256": evidence_sha256,
+        "production_policy_sha256": policy_sha256,
+        "release_manifest_sha256": release_manifest_sha256,
+        "platform_evidence_sha256": hashlib.sha256(
+            candidate_module.canonical_json_bytes(platform)
+        ).hexdigest(),
+        "attestation_client_data_sha256": hashlib.sha256(
+            facts.attestation_client_data
+        ).hexdigest(),
+        "attestation_object_sha256": hashlib.sha256(
+            facts.attestation_object
+        ).hexdigest(),
+        "assertion_client_data_sha256": hashlib.sha256(
+            facts.assertion_client_data
+        ).hexdigest(),
+        "assertion_object_sha256": hashlib.sha256(
+            facts.assertion_object
+        ).hexdigest(),
+        "attestation_challenge_nonce_sha256": hashlib.sha256(
+            facts.attestation_challenge_nonce
+        ).hexdigest(),
+        "assertion_challenge_nonce_sha256": hashlib.sha256(
+            facts.assertion_challenge_nonce
+        ).hexdigest(),
+        "attestation_nonce_sha256": facts.attestation_nonce.hex(),
+        "assertion_nonce_sha256": facts.assertion_nonce.hex(),
+    }
+    for field, expected in expected_digests.items():
+        observed = _nonzero_digest(
+            receipt.get(field), f"online freshness/consumption receipt {field}", errors
+        )
+        if observed is not None and observed != expected:
+            errors.append(
+                f"online freshness/consumption receipt {field} does not bind exact evidence"
+            )
+    if receipt.get("key_id") != facts.key_id:
+        errors.append(
+            "online freshness/consumption receipt key_id does not bind exact App Attest key"
+        )
+    expected_chain = [hashlib.sha256(value).hexdigest() for value in facts.certificate_chain]
+    observed_chain = receipt.get("certificate_chain_sha256")
+    if observed_chain != expected_chain:
+        errors.append(
+            "online freshness/consumption receipt certificate_chain_sha256 does not bind exact x5c"
+        )
+    if receipt.get("signer_key_id") != trusted_key_id:
+        errors.append(
+            "online freshness/consumption receipt signer_key_id must match trusted authority"
+        )
+    authority_public_key_sha256 = hashlib.sha256(public_key_der).hexdigest()
+    if receipt.get("signer_public_key_sha256") != authority_public_key_sha256:
+        errors.append(
+            "online freshness/consumption receipt public key digest must match trusted authority"
+        )
+    if (
+        trusted_key_id == lab_signer_key_id
+        or authority_public_key_sha256 == lab_signer_public_key_sha256
+    ):
+        errors.append(
+            "online freshness authority must be cryptographically independent from the lab signer"
+        )
+    if receipt.get("signature_algorithm") != "ed25519":
+        errors.append("online freshness/consumption receipt signature must be ed25519")
+    try:
+        signature_payload = candidate_module.canonical_signature_payload(receipt)
+    except candidate_module.EvidenceError as error:
+        errors.append(str(error))
+        return
+    if receipt.get("signature_payload_sha256") != hashlib.sha256(
+        signature_payload
+    ).hexdigest():
+        errors.append(
+            "online freshness/consumption receipt signature_payload_sha256 mismatch"
+        )
+    signature_text = receipt.get("signature")
+    if not isinstance(signature_text, str) or re.fullmatch(
+        r"[0-9a-f]{128}", signature_text
+    ) is None:
+        errors.append(
+            "online freshness/consumption receipt signature must be 64 lowercase hex bytes"
+        )
+    else:
+        try:
+            candidate_module._verify_ed25519_bytes(
+                public_key_der[len(candidate_module.ED25519_SPKI_PREFIX) :],
+                signature_payload,
+                bytes.fromhex(signature_text),
+            )
+        except candidate_module.EvidenceError as error:
+            errors.append(str(error))
+
+    if receipt_snapshot is not None:
+        try:
+            candidate_module._require_private_file_snapshot_unchanged(
+                receipt_snapshot,
+                "online freshness/consumption receipt",
+                maximum=MAX_FRESHNESS_RECEIPT_BYTES,
+            )
+        except candidate_module.EvidenceError as error:
+            errors.append(str(error))
+    if public_key_snapshot is not None:
+        try:
+            candidate_module._require_key_snapshot_unchanged(
+                public_key_snapshot,
+                "online freshness authority public key",
+                private=False,
+            )
+        except candidate_module.EvidenceError as error:
+            errors.append(str(error))
 
 
 def validate_production_signed_evidence(
@@ -838,13 +1896,20 @@ def validate_production_signed_evidence(
     trusted_public_key_path: Path,
     production_policy_path: Path,
     candidate_module: Any,
+    *,
+    freshness_receipt_path: Optional[Path] = None,
+    trusted_freshness_key_id: Optional[str] = None,
+    trusted_freshness_public_key_path: Optional[Path] = None,
+    evaluation_time_unix_ms: Optional[int] = None,
 ) -> list[str]:
-    """Validate the production envelope and return an explicit trust blocker.
+    """Validate the production envelope and online-authority receipt.
 
-    The returned list can be empty only after this module gains reviewed Apple
-    X.509 chain, leaf nonce, time, and revocation verification.  Until then a
-    structurally and cryptographically sound fixture returns exactly the
-    platform trust blocker.
+    Repository-local validation covers the complete static X.509 path, leaf
+    nonce, certificate time, policy revocations, and exact online receipt
+    signature/bindings.  A valid receipt and independently pinned authority key
+    are the success path.  Production operations remain responsible for
+    reviewing the authority's durable issuance/consumption state before
+    provisioning that key.
     """
 
     errors: list[str] = []
@@ -900,7 +1965,7 @@ def validate_production_signed_evidence(
         "signed production evidence",
         errors,
     ) is None:
-        return errors + [PLATFORM_TRUST_BLOCKER]
+        return errors
     policy_valid = _validate_policy(policy, policy_snapshot.payload, errors)
     policy_object = policy if isinstance(policy, dict) else {}
     policy_digest = hashlib.sha256(policy_snapshot.payload).hexdigest()
@@ -931,7 +1996,7 @@ def validate_production_signed_evidence(
         payload = candidate_module.canonical_signature_payload(evidence)
     except candidate_module.EvidenceError as error:
         errors.append(str(error))
-        return errors + [PLATFORM_TRUST_BLOCKER]
+        return errors
     if evidence.get("signature_payload_sha256") != hashlib.sha256(payload).hexdigest():
         errors.append("signed production evidence signature_payload_sha256 mismatch")
     signature_text = evidence.get("signature")
@@ -975,7 +2040,7 @@ def validate_production_signed_evidence(
         and artifact_digests
         and raw_snapshot is not None
     ):
-        _validate_platform_evidence(
+        platform_facts = _validate_platform_evidence(
             evidence.get("platform_evidence"),
             policy_object,
             policy_digest,
@@ -985,6 +2050,61 @@ def validate_production_signed_evidence(
             candidate_module,
             errors,
         )
+    else:
+        platform_facts = None
+
+    freshness_parameters = (
+        freshness_receipt_path,
+        trusted_freshness_key_id,
+        trusted_freshness_public_key_path,
+    )
+    if any(value is None for value in freshness_parameters):
+        errors.append(MISSING_FRESHNESS_RECEIPT)
+    elif platform_facts is not None and release_manifest_sha256 is not None:
+        assert freshness_receipt_path is not None
+        assert trusted_freshness_key_id is not None
+        assert trusted_freshness_public_key_path is not None
+        try:
+            freshness_absolute = freshness_receipt_path.resolve(strict=True)
+            freshness_absolute.relative_to(root_absolute)
+        except ValueError:
+            pass
+        except OSError as error:
+            errors.append(
+                f"online freshness/consumption receipt could not be resolved: {error}"
+            )
+        else:
+            errors.append(
+                "online freshness/consumption receipt must stay outside artifact root"
+            )
+        if evaluation_time_unix_ms is None:
+            evaluation_time_unix_ms = time.time_ns() // 1_000_000
+        if (
+            isinstance(evaluation_time_unix_ms, bool)
+            or not isinstance(evaluation_time_unix_ms, int)
+            or evaluation_time_unix_ms <= 0
+        ):
+            errors.append("online receipt evaluation time must be positive Unix milliseconds")
+        else:
+            platform_value = evidence.get("platform_evidence")
+            if not isinstance(platform_value, dict):
+                errors.append("production platform evidence must be an object")
+            else:
+                _validate_online_freshness_receipt(
+                    freshness_receipt_path,
+                    trusted_freshness_key_id,
+                    trusted_freshness_public_key_path,
+                    evidence_sha256=evidence_snapshot.sha256,
+                    policy_sha256=policy_digest,
+                    release_manifest_sha256=release_manifest_sha256,
+                    platform=platform_value,
+                    facts=platform_facts,
+                    lab_signer_key_id=trusted_key_id,
+                    lab_signer_public_key_sha256=trusted_digest,
+                    evaluation_time_unix_ms=evaluation_time_unix_ms,
+                    candidate_module=candidate_module,
+                    errors=errors,
+                )
 
     if raw_snapshot is not None:
         try:
@@ -1010,8 +2130,4 @@ def validate_production_signed_evidence(
         except candidate_module.EvidenceError as error:
             errors.append(str(error))
 
-    # TODO: Replace this blocker only with direct, reviewed validation matching
-    # `validate_ios_app_attest_report` in iroha_core: pinned Apple roots, the
-    # entire X.509 chain, validity/revocation, leaf public key and nonce OID.
-    errors.append(PLATFORM_TRUST_BLOCKER)
     return errors

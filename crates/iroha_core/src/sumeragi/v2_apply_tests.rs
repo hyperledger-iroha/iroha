@@ -242,9 +242,9 @@ fn finalize_certified_merge_reservations_for_test(
         );
     }
     for (transaction_hash, _) in groups.iter().flatten() {
-        if !state.has_committed_transaction(*transaction_hash) {
-            return Err(V2ReservationLifecycleError::UncommittedMergeTransaction {
-                transaction_hash: *transaction_hash,
+        if !state.has_committed_entrypoint(*transaction_hash) {
+            return Err(V2ReservationLifecycleError::UncommittedMergeEntrypoint {
+                entrypoint_hash: *transaction_hash,
             });
         }
     }

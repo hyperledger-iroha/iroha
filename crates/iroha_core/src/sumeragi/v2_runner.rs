@@ -1060,36 +1060,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         ),
     }
 }
-#[derive(Default)]
-pub(super) struct CommittedLaneStatusPublisher {
-    published_revision: Option<(u64, u64, u64)>,
-}
-impl CommittedLaneStatusPublisher {
-    pub(super) fn publish_if_changed(&mut self, lane_work: &V2LaneWorkAdapter) -> bool {
-        self.publish_if_changed_with(
-            || lane_work.committed_lane_block_status_revision(),
-            || lane_work.committed_lane_block_status_snapshot(),
-        )
-    }
-    fn publish_if_changed_with(
-        &mut self,
-        mut observe_revision: impl FnMut() -> (u64, u64, u64),
-        project: impl FnOnce() -> Vec<super::status::CommittedLaneBlockSnapshot>,
-    ) -> bool {
-        let revision = observe_revision();
-        if self.published_revision == Some(revision) {
-            return false;
-        }
-        let snapshot = project();
-        if observe_revision() != revision {
-            return false;
-        }
-        super::status::set_committed_lane_blocks(snapshot);
-        self.published_revision = Some(revision);
-        true
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LockedBodyRecoveryPlan {
     request: Option<(EventTag, wire::ConsensusRound, wire::BlockSubject)>,

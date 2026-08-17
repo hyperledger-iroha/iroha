@@ -15,7 +15,7 @@ use super::{
         autonomous_lane_reservation_identity_hashes_for_proposal,
         pinned_autoscale_validator_pops_for_set, plan_autonomous_lane_reservation_slot,
         prepare_v2_lane_payload_plan, prepare_v2_lane_payload_validation_plan,
-        proposal_lookahead_enabled, v2_known_lane_tip_for_route,
+        proposal_lookahead_enabled, uses_global_lane_committee, v2_known_lane_tip_for_route,
     },
     message::{
         BlockMessage, CanonicalExecutedBlockNeedV1, LANE_HISTORICAL_RECOVERY_VERSION_V4,
@@ -58,6 +58,8 @@ use super::{
     },
 };
 #[cfg(test)]
+use crate::kura::LaneBlockApplicationReceiptArtifactFormat;
+#[cfg(test)]
 use crate::lane_consensus::LaneAutonomousArtifactError;
 #[cfg(test)]
 use crate::merge_sidecar::{
@@ -80,10 +82,10 @@ use crate::{
         AutonomousLifecycleProcessGenerationClaim, CertifiedLaneBlockArtifact,
         FinalizedMergeCarrierRepair, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
-        LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-        LaneBlockApplicationReceiptRepairPreflight, LaneBlockAuxiliaryPersistenceOutcome,
-        LaneBlockNewViewPersistenceOutcome, LaneBlockPayloadAvailability, LaneReadyAuthorization,
-        STRICT_INIT_MAX_BLOCK_BYTES, sumeragi_v2_validator_storage_supported,
+        LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptRepairPreflight,
+        LaneBlockAuxiliaryPersistenceOutcome, LaneBlockNewViewPersistenceOutcome,
+        LaneBlockPayloadAvailability, LaneReadyAuthorization, STRICT_INIT_MAX_BLOCK_BYTES,
+        sumeragi_v2_validator_storage_supported,
     },
     lane_consensus::{
         CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -177,6 +179,7 @@ const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cach
 /// Maximum progress-bearing sidecar effects drained before one queued,
 /// replayable responder control receives its own scheduler turn.
 const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;
+#[cfg(test)]
 fn classify_committed_lane_block_execution_status(
     receipt_conflicts: impl FnOnce() -> bool,
     matching_receipt: impl FnOnce() -> Option<LaneBlockApplicationReceiptArtifactFormat>,
@@ -311,7 +314,7 @@ fn lane_executable_payload_carries_lane(
                     || !crate::native_amx::receipt_shape_matches_coordinator_payload(
                         receipt.as_ref(),
                         routing_plan,
-                        reservation.signed_transaction_hash.as_ref(),
+                        reservation.entrypoint_hash.as_ref(),
                         *entrypoint_hash,
                         payload.network_id,
                         &payload.origin_proposal,
@@ -395,7 +398,7 @@ fn merge_lane_execution_carries_lane(
                     || !crate::native_amx::receipt_shape_matches_coordinator_payload(
                         receipt.as_ref(),
                         &routing_plan,
-                        reservation.signed_transaction_hash.as_ref(),
+                        reservation.entrypoint_hash.as_ref(),
                         *entrypoint_hash,
                         execution.autonomous_network_id,
                         &execution.origin_proposal,
@@ -3219,7 +3222,6 @@ pub(crate) struct V2LaneWorkAdapter {
     /// carrier body has been pruned.
     historical_autonomous_recovery_records:
         BTreeMap<AutonomousLanePayloadKey, HistoricalAutonomousLaneRecoveryRecordV1>,
-    committed_lane_status_revision: u64,
     historical_recovery_diagnostics: HistoricalRecoveryDiagnostics,
     historical_recovery_requests:
         BTreeMap<HistoricalRecoveryIdentity, OutstandingHistoricalRecoveryRequest>,
@@ -3942,7 +3944,6 @@ impl V2LaneWorkAdapter {
             committed_lane_outputs: VecDeque::new(),
             historical_recovery_sessions: VecDeque::new(),
             historical_autonomous_recovery_records: BTreeMap::new(),
-            committed_lane_status_revision: 0,
             historical_recovery_diagnostics: HistoricalRecoveryDiagnostics::new(
                 limits.session_capacity.get(),
                 limits.historical_recovery_stuck_attempts,
@@ -4138,8 +4139,7 @@ impl V2LaneWorkAdapter {
         queue: &Queue,
     ) -> Result<(), V2LaneWorkError> {
         let nexus = self.state.nexus_snapshot();
-        let autonomous_queue_ownership_active =
-            nexus.enabled && proposal_lookahead_enabled(&nexus, self.context.height);
+        let autonomous_queue_ownership_active = !uses_global_lane_committee(&nexus);
         for payload in self
             .pending_autonomous_anchor_payloads
             .values()
@@ -4155,7 +4155,7 @@ impl V2LaneWorkAdapter {
                 {
                     return Err(V2LaneWorkError::Persistence(format!(
                         "durable hint-free autonomous payload is missing exact live queue reservation {}",
-                        reservation.signed_transaction_hash
+                        reservation.entrypoint_hash
                     )));
                 }
             }
@@ -4624,7 +4624,7 @@ impl V2LaneWorkAdapter {
             return Ok(());
         }
         let nexus = self.state.nexus_snapshot();
-        if !nexus.enabled || !proposal_lookahead_enabled(&nexus, self.context.height) {
+        if uses_global_lane_committee(&nexus) {
             return Ok(());
         }
         let now = Instant::now();
@@ -4990,6 +4990,7 @@ impl V2LaneWorkAdapter {
     /// proposal at that height is double-finalization evidence across views and
     /// suppresses the lane. Classification is then performed once per unique
     /// selected session against exact durable evidence.
+    #[cfg(test)]
     pub(crate) fn committed_lane_block_status_snapshot(
         &self,
     ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
@@ -5136,17 +5137,6 @@ impl V2LaneWorkAdapter {
             })
             .collect()
     }
-    /// Cheap semantic revision used to coalesce operator-status projection.
-    pub(crate) fn committed_lane_block_status_revision(&self) -> (u64, u64, u64) {
-        (
-            self.committed_lane_status_revision,
-            self.kura.committed_lane_status_revision(),
-            self.state.state_view_generation(),
-        )
-    }
-    fn note_committed_lane_status_change(&mut self) {
-        self.committed_lane_status_revision = self.committed_lane_status_revision.wrapping_add(1);
-    }
     /// Bind locally planned lane proposals to the exact global block body.
     pub(crate) fn bind_local_candidate(
         &mut self,
@@ -5171,8 +5161,7 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
         let nexus = self.state.nexus_snapshot();
-        let shared_committee =
-            !nexus.enabled || !proposal_lookahead_enabled(&nexus, self.context.height);
+        let shared_committee = uses_global_lane_committee(&nexus);
         let Some(proposals) = self.planned_lane_proposals.remove(&round) else {
             return V2LaneIngressOutcome::Duplicate;
         };
@@ -5999,8 +5988,7 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         };
         let nexus = self.state.nexus_snapshot();
-        let shared_committee =
-            !nexus.enabled || !proposal_lookahead_enabled(&nexus, self.context.height);
+        let shared_committee = uses_global_lane_committee(&nexus);
         if !canonical_recovery {
             let Ok(expected) = prepare_v2_lane_payload_plan(
                 self.state.as_ref(),
@@ -7100,7 +7088,6 @@ impl V2LaneWorkAdapter {
         self.pending_committed_lanes.clear();
         self.committed_lane_outputs.clear();
         self.committed_lane_output_cursor = 0;
-        self.note_committed_lane_status_change();
         Ok(())
     }
     /// Advance one earlier-height certificate through its strict durability
@@ -12512,7 +12499,6 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
         self.historical_recovery_sessions.push_back(session);
-        self.note_committed_lane_status_change();
         V2LaneIngressOutcome::Inserted
     }
     fn lane_proposal_authorized(
@@ -12585,9 +12571,7 @@ impl V2LaneWorkAdapter {
             return (&record.payload.producer == author).then_some(author);
         }
         let nexus = self.state.nexus_snapshot();
-        if !nexus.enabled
-            || !proposal_lookahead_enabled(&nexus, proposal.descriptor.proposal_height)
-        {
+        if uses_global_lane_committee(&nexus) {
             // Hint-free autonomous proposals exist before the global carrier
             // view is known. Their producer is therefore the deterministic
             // lane author; an attached ordinary proposal remains authored by
@@ -13237,10 +13221,6 @@ impl V2LaneWorkAdapter {
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
     fn retain_committed_lane_outputs_for_subject(&mut self, subject: wire::BlockSubject) {
-        let before = (
-            self.pending_committed_lanes.len(),
-            self.committed_lane_outputs.len(),
-        );
         self.pending_committed_lanes.retain(|session| {
             session
                 .proposal
@@ -13255,14 +13235,6 @@ impl V2LaneWorkAdapter {
                 .payload_block_hint
                 .is_some_and(|hint| hint.proposal_block_hash == subject.block_hash)
         });
-        if before
-            != (
-                self.pending_committed_lanes.len(),
-                self.committed_lane_outputs.len(),
-            )
-        {
-            self.note_committed_lane_status_change();
-        }
     }
     fn schedule_committed_lane_outputs(&mut self) {
         let output_count = self.committed_lane_outputs.len();
@@ -13368,7 +13340,6 @@ impl V2LaneWorkAdapter {
             .filter(|proposal| self.proposal_can_progress(proposal))
             .map(|proposal| proposal.proposal_hash)
             .collect::<BTreeSet<_>>();
-        let mut status_changed = false;
         for session in self
             .lane_sessions
             .drain_committed_sessions_up_to_matching(remaining, &admissible_proposals)
@@ -13385,7 +13356,6 @@ impl V2LaneWorkAdapter {
                         )
                 {
                     self.historical_recovery_sessions.push_back(session);
-                    status_changed = true;
                 }
                 continue;
             }
@@ -13395,10 +13365,6 @@ impl V2LaneWorkAdapter {
                     next_validator: 0,
                 });
             self.pending_committed_lanes.push_back(session);
-            status_changed = true;
-        }
-        if status_changed {
-            self.note_committed_lane_status_change();
         }
         self.schedule_committed_lane_outputs();
     }
@@ -13534,16 +13500,15 @@ impl V2LaneWorkAdapter {
             return None;
         }
         let nexus = self.state.nexus_snapshot();
-        let mut validators = if nexus.enabled && proposal_lookahead_enabled(&nexus, proposal_height)
-        {
-            self.state
-                .authoritative_lane_peer_ids_at_height(lane_id, proposal_height)
-        } else {
+        let mut validators = if uses_global_lane_committee(&nexus) {
             self.context
                 .roster
                 .iter()
                 .map(|entry| entry.validator.clone())
                 .collect()
+        } else {
+            self.state
+                .authoritative_lane_peer_ids_at_height(lane_id, proposal_height)
         };
         validators.sort();
         validators.dedup();
@@ -13641,10 +13606,7 @@ impl V2LaneWorkAdapter {
                 .reservation_group
                 .ordered_keys
                 .iter()
-                .filter(|key| {
-                    self.state
-                        .has_committed_transaction(key.signed_transaction_hash)
-                })
+                .filter(|key| self.state.has_committed_entrypoint(key.entrypoint_hash))
                 .count();
             if committed != 0 && committed != record.reservation_group.ordered_keys.len() {
                 self.output_guard.close_admission_for_restart();
@@ -14268,7 +14230,7 @@ impl V2LaneWorkAdapter {
     ) -> bool {
         let body = &request.body;
         let nexus = self.state.nexus_snapshot();
-        if !nexus.enabled || !proposal_lookahead_enabled(&nexus, self.context.height) {
+        if uses_global_lane_committee(&nexus) {
             return usize::try_from(self.context.leader(body.round.view))
                 .ok()
                 .and_then(|index| self.context.roster.get(index))
@@ -17290,10 +17252,15 @@ pub(crate) fn durable_lane_completion_matches_finality(
         else {
             return Ok(false);
         };
+        let Some(receipt_global_artifact) = receipt.source.global_artifact() else {
+            return Err(
+                "durable canonical lane receipt carries a non-global execution source".to_owned(),
+            );
+        };
         if certified.proposal != proposal
             || receipt.proposal != proposal
-            || receipt.artifact.proposal_block_hash != finality_artifact.block_hash
-            || receipt.artifact.ownership != *ownership
+            || receipt_global_artifact.proposal_block_hash != finality_artifact.block_hash
+            || receipt_global_artifact.ownership != *ownership
             || receipt.application_block_height != finality_artifact.height
             || receipt.application_block_hash != finality_artifact.block_hash
         {
@@ -17474,7 +17441,7 @@ fn canonical_v2_lane_payload_matches_kura_inner(
         return false;
     };
     let nexus = state.nexus_snapshot();
-    let shared_committee = !nexus.enabled || !proposal_lookahead_enabled(&nexus, context.height);
+    let shared_committee = uses_global_lane_committee(&nexus);
     let base_mode_tag = match context.mode {
         wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
         wire::ConsensusMode::Npos => wire::NPOS_TAG,
@@ -17664,6 +17631,8 @@ pub(super) mod tests {
         thread,
         time::{Duration, Instant},
     };
+    macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
+    macro_rules! stmt_row { ($($tokens:tt)*) => { $($tokens)* }; }
     #[test]
     fn pair_only_application_evidence_repair_counts_as_progress() {
         assert_eq!(
@@ -18037,29 +18006,8 @@ pub(super) mod tests {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Vec<PeerId> {
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: lane_id,
-                    dataspace_id,
-                    alias: "independent-lane".to_owned(),
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("multi-lane test catalog");
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: dataspace_id,
-                alias: "independent-dataspace".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("multi-lane test dataspace catalog");
+        let_row! { lane_catalog = LaneCatalog::new( NonZeroU32::new(2).expect("non-zero lane count"), vec![ LaneConfig::default(), LaneConfig { id: lane_id, dataspace_id, alias: "independent-lane".to_owned(), ..LaneConfig::default() }, ], ) .expect("multi-lane test catalog") };
+        let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![ DataSpaceMetadata::default(), DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }, ]) .expect("multi-lane test dataspace catalog") };
         {
             let mut nexus = adapter.state.nexus.write();
             nexus.enabled = true;
@@ -18081,36 +18029,9 @@ pub(super) mod tests {
             peers.apply();
         }
         world_block.commit();
-        let validators = keys
-            .iter()
-            .map(|key| AccountId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        let validator_bindings = validators
-            .iter()
-            .zip(keys)
-            .map(|(validator, key)| ManifestValidatorBinding {
-                validator: validator.clone(),
-                peer_id: PeerId::new(key.public_key().clone()),
-                torii_url: None,
-            })
-            .collect::<Vec<_>>();
-        let default_status = LaneManifestStatus {
-            lane: LaneId::SINGLE,
-            alias: "default".to_owned(),
-            dataspace: DataSpaceId::UNIVERSAL,
-            visibility: LaneVisibility::Public,
-            storage: LaneStorageProfile::FullReplica,
-            governance: Some("default-lane-governance".to_owned()),
-            manifest_path: Some(std::path::PathBuf::from(
-                "/tmp/v2-default-lane-manifest.json",
-            )),
-            governance_rules: Some(GovernanceRules {
-                validators: validators.clone(),
-                validator_bindings: validator_bindings.clone(),
-                ..GovernanceRules::default()
-            }),
-            privacy_commitments: Vec::new(),
-        };
+        let_row! { validators = keys .iter() .map(|key| AccountId::new(key.public_key().clone())) .collect::<Vec<_>>() };
+        let_row! { validator_bindings = validators .iter() .zip(keys) .map(|(validator, key)| ManifestValidatorBinding { validator: validator.clone(), peer_id: PeerId::new(key.public_key().clone()), torii_url: None, }) .collect::<Vec<_>>() };
+        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: Some("default-lane-governance".to_owned()), manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
         let status = LaneManifestStatus {
             lane: lane_id,
             alias: "independent-lane".to_owned(),
@@ -18149,6 +18070,41 @@ pub(super) mod tests {
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
         validators
+    }
+    fn enable_single_custom_lane_nexus(
+        adapter: &mut V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<PeerId> {
+        let validators = enable_multilane_nexus(adapter, keys, lane_id, dataspace_id);
+        let_row! { lane_count = lane_id .as_u32() .checked_add(1) .and_then(NonZeroU32::new) .expect("custom lane id must fit its non-zero catalog bound") };
+        let_row! { lane_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { id: lane_id, dataspace_id, alias: "independent-lane".to_owned(), ..LaneConfig::default() }], ) .expect("single custom-lane test catalog") };
+        let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }]) .expect("single custom-dataspace test catalog") };
+        stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.dataspace_catalog = dataspace_catalog; } }
+        adapter.state.reseed_static_lane_incarnations_for_tests();
+        stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()); }
+        stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
+        stmt_row! { assert!(!proposal_lookahead_enabled(&adapter.state.nexus_snapshot(), adapter.context.height,), "one custom route must retain the narrow proposal scan"); }
+        stmt_row! { assert_eq!(adapter.state.consensus_lane_routes_at_height(adapter.context.height).into_keys().collect::<Vec<_>>(), vec![(lane_id, dataspace_id)], "fixture must expose exactly one enabled custom route"); }
+        stmt_row! { assert_eq!(adapter.state.authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height), validators, "narrowing routing must preserve the custom lane authority"); }
+        validators
+    }
+    #[test]
+    fn enabled_single_custom_lane_uses_rotating_lane_author_for_attached_proposal() {
+        let_row! { (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned) };
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let_row! { validators = enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id) };
+        let_row! { global_leader = usize::try_from(adapter.context.leader(0)) .ok() .and_then(|index| adapter.context.roster.get(index)) .map(|entry| entry.validator.clone()) .expect("fixture global leader") };
+        let validator_count = u64::try_from(validators.len()).expect("validator count fits u64");
+        let_row! { lane_block_height = (1..=validator_count) .find(|height| deterministic_lane_author(&validators, *height) != Some(&global_leader)) .expect("rotating lane authority differs from the global leader in one cycle") };
+        let_row! { lane_incarnation = adapter .state .lane_incarnation_at_height(lane_id, adapter.context.height) .expect("active custom-lane incarnation") };
+        let_row! { proposal = proposal_for_route( &adapter, &keys, lane_id, dataspace_id, lane_incarnation, adapter.context.height, lane_block_height, ) };
+        let_row! { lane_author = deterministic_lane_author(&validators, lane_block_height) .cloned() .expect("deterministic custom-lane author") };
+        stmt_row! { assert_eq!(adapter.expected_lane_validators(lane_id, adapter.context.height), Some(validators)); }
+        stmt_row! { assert_eq!(adapter.expected_lane_author(&proposal), Some(&lane_author)); }
+        stmt_row! { assert_ne!(lane_author, global_leader); }
     }
     fn limits_with_native_capacity(record_capacity: usize) -> V2LaneWorkLimits {
         let one = NonZeroUsize::new(1).expect("non-zero fixture limit");
@@ -22688,103 +22644,6 @@ pub(super) mod tests {
             "status ordering must follow the active lane key, not insertion order"
         );
     }
-    #[test]
-    fn committed_lane_status_publisher_tracks_evidence_revisions_and_clear() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
-        let mut publisher = super::super::v2_runner::CommittedLaneStatusPublisher::default();
-        assert!(publisher.publish_if_changed(&adapter));
-        assert!(
-            super::super::status::committed_lane_blocks_snapshot().is_empty(),
-            "startup must first publish the recovered empty root"
-        );
-        assert!(
-            !publisher.publish_if_changed(&adapter),
-            "an unchanged runner turn must not rescan or republish lane status"
-        );
-        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
-        adapter
-            .pending_committed_lanes
-            .push_back(committed_lane_session(&proposal, &keys));
-        adapter.note_committed_lane_status_change();
-        assert!(
-            publisher.publish_if_changed(&adapter),
-            "a newly committed volatile session must publish on the next bounded runner edge"
-        );
-        let published = super::super::status::committed_lane_blocks_snapshot();
-        assert_eq!(published.len(), 1);
-        assert_eq!(published[0].proposal, proposal);
-        assert_eq!(
-            published[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
-        );
-        assert!(
-            !publisher.publish_if_changed(&adapter),
-            "publication must acknowledge the exact adapter/Kura revision"
-        );
-        adapter
-            .kura
-            .store_block(block)
-            .expect("publish exact canonical payload evidence");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
-        );
-        let recovered = adapter
-            .kura
-            .recover_lane_block_payload(&proposal)
-            .expect("recover exact lane payload");
-        adapter
-            .kura
-            .persist_lane_block_execution_input(&recovered)
-            .expect("persist exact execution input");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
-        );
-        assert_passive_committed_lane_status_reads(&adapter, &proposal);
-        let input = adapter
-            .kura
-            .read_lane_block_execution_input(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.lane_block_height,
-            )
-            .expect("read exact execution input");
-        let clean_result =
-            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
-        adapter
-            .kura
-            .persist_lane_block_execution_preflight(
-                &input,
-                u64::try_from(adapter.state.committed_height()).expect("fixture state height"),
-                Some(adapter.state.lane_execution_state_hash()),
-                vec![clean_result],
-            )
-            .expect("persist current exact clean preflight");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
-        );
-        adapter
-            .kura
-            .persist_lane_block_application_receipt(&proposal)
-            .expect("persist exact canonical receipt");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
-        );
-        super::super::status::clear_v2_status();
-        assert!(
-            super::super::status::committed_lane_blocks_snapshot().is_empty(),
-            "v2 shutdown/reset must not retain the previous runtime's status root"
-        );
-    }
-    #[test]
     fn decided_lane_ownership_moves_to_successor_until_its_session_is_durable() {
         // Result-bearing genesis carries external entrypoints before any lane
         // ownership can exist. Its empty ownership set is complete, not a
@@ -24962,7 +24821,6 @@ pub(super) mod tests {
         ));
         let mut reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(admission_binding),
             routing_plan_digest: routing_plan.digest(),
@@ -27453,11 +27311,11 @@ pub(super) mod tests {
         route: RoutingDecision,
     }
     impl crate::queue::LaneRouter for AutonomousTestRouter {
-        fn route(
+        fn try_route(
             &self,
             _transaction: &dyn crate::queue::TransactionRoutingView,
-        ) -> RoutingDecision {
-            self.route
+        ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+            Ok(self.route)
         }
     }
     fn prepare_autonomous_test_lane(
@@ -27767,7 +27625,7 @@ pub(super) mod tests {
                 &ordered_keys,
             )
             .expect("authorize the complete FIFO-ordered V4/V5 group");
-        let contested_hash = ordered_keys[0].signed_transaction_hash;
+        let contested_hash = ordered_keys[0].entrypoint_hash;
         assert!(
             matches!(
                 queue.release_lane_reservation(&ordered_keys[0]),
@@ -27864,7 +27722,6 @@ pub(super) mod tests {
         ));
         let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"pending-autonomous-queue-plan-admission-binding",

@@ -758,11 +758,7 @@ if status_snapshot.status.lane_governance_sealed_total:
         print("sealed aliases:", ", ".join(status_snapshot.status.lane_governance_sealed_aliases))
 print("DA reschedules (delta):", status_snapshot.metrics.da_reschedule_delta)
 
-# Inspect aggregate consensus telemetry and parameters
-telemetry = client.get_sumeragi_telemetry_typed()
-print("RBC backlog sessions:", telemetry.rbc_backlog.pending_sessions)
-for collector in telemetry.availability.collectors:
-    print("collector", collector.collector_idx, collector.votes_ingested)
+# Inspect governed consensus parameters
 params = client.get_sumeragi_params_typed()
 print(params.block_time_ms, params.next_mode)
 
@@ -1974,26 +1970,6 @@ client.stream_pipeline_witnesses(
 )
 ```
 
-## Consensus telemetry snapshot
-
-```python
-from iroha_python import ToriiClient
-
-client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
-telemetry = client.get_sumeragi_telemetry_typed()
-
-print("Votes ingested:", telemetry.availability.total_votes_ingested)
-for collector in telemetry.availability.collectors:
-    print("Collector", collector.collector_idx, collector.peer_id, collector.votes_ingested)
-
-for entry in telemetry.qc_latency_ms:
-    print(entry.kind, "EMA (ms):", entry.last_ms)
-
-print("RBC backlog sessions:", telemetry.rbc_backlog.pending_sessions)
-if telemetry.vrf.found:
-    print("Active VRF epoch:", telemetry.vrf.epoch, "seed:", telemetry.vrf.seed_hex)
-```
-
 Connect frame encoding and crypto helpers require the compiled
 `iroha_python._crypto` extension. Run `maturin develop --release` from this
 directory before running tests that exercise Connect payloads.
@@ -2402,8 +2378,6 @@ no environment variables need to be exported.
   `list_asset_holders_typed`, `list_account_permissions_typed`) so pagination metadata and core
   fields (ids, ownership, balances, permission payloads) are validated before reaching downstream automation.
 - Offer event filter builders (verifying key, proof, trigger) plus streaming helpers so Torii SSE integrations avoid hand-crafted JSON payloads.
-- Extend the Torii client with typed consensus telemetry helpers covering
-  `/v1/sumeragi/telemetry` for operator tooling.
 - Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
   and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
   without reimplementing the Rust toolchain.

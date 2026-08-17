@@ -204,7 +204,7 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     state_block.world.axt_replay_ledger.insert(
-        AxtHandleReplayKey::from_parts([0xD2; 32], 1, 2, LaneId::SINGLE),
+        AxtHandleReplayKey::from_parts(DataSpaceId::UNIVERSAL, [0xD2; 32], 1, 2, LaneId::SINGLE),
         AxtReplayRecord {
             dataspace: DataSpaceId::UNIVERSAL,
             used_slot: 0,
@@ -222,7 +222,7 @@ fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state.lane_application_block(carrier.header().clone());
     state_block.world.axt_replay_ledger.insert(
-        AxtHandleReplayKey::from_parts([0xD3; 32], 1, 3, LaneId::SINGLE),
+        AxtHandleReplayKey::from_parts(DataSpaceId::UNIVERSAL, [0xD3; 32], 1, 3, LaneId::SINGLE),
         AxtReplayRecord {
             dataspace: DataSpaceId::UNIVERSAL,
             used_slot: 0,
@@ -296,9 +296,9 @@ fn autonomous_execution_pre_vote_rejects_non_empty_carrier_membership() {
         .block_with_certified_merge_entry(carrier.header().clone(), &entry)
         .expect("certified execution stages before the canonical carrier row");
     let carrier_height = autonomous_carrier_transaction_height(&state_block);
-    let unexpected_transaction = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
-        b"unexpected-autonomous-carrier-transaction",
-    ));
+    let unexpected_transaction = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+        Hash::new(b"unexpected-autonomous-carrier-transaction"),
+    );
     state_block
         .transactions
         .insert_block_with_single_tx(unexpected_transaction, carrier_height);
@@ -367,12 +367,22 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
         }
         .into(),
     );
+    let artifact = state
+        .kura
+        .v2_finality_artifact(carrier.header().height().get())
+        .expect("read exact carrier finality")
+        .expect("fixture persists exact carrier finality");
+    let verified_artifact = crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())
+        .expect("fixture finality verifies once");
     let committed = ValidBlock::new_unverified_for_tests(carrier.clone())
-        .commit_unchecked()
-        .unpack(|_| {});
-    let topology = state.commit_topology_snapshot();
+        .commit_with_verified_v2_artifact(
+            verified_artifact,
+            artifact.commit_qc.execution_commitment,
+        )
+        .unpack(|_| {})
+        .expect("carrier binds its exact verified v2 finality");
     assert!(matches!(
-        state_block.apply_without_execution_with_verified_v2_finality(&committed, topology),
+        state_block.apply_without_execution_with_verified_v2_finality(&committed),
         Err(MergeLedgerCommitError::ExecutionDivergence(message))
             if message.contains("event surface drifted before publication")
     ));
@@ -1203,9 +1213,8 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         );
         world.commit();
     }
-    let committed_memberships = committed_transaction_hashes_for_entrypoints(
-        core::slice::from_ref(&conflicting_entrypoint),
-    );
+    let committed_memberships =
+        committed_entrypoint_hashes(core::slice::from_ref(&conflicting_entrypoint));
     let TransactionEntrypoint::External(conflicting_transaction) = &conflicting_entrypoint else {
         unreachable!("QueuePlan fixture entrypoint is External")
     };
@@ -1214,15 +1223,16 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         Some(conflicting_transaction.hash()),
         "the binding must retain the exact External signed identity"
     );
-    assert_eq!(committed_memberships, vec![conflicting_transaction.hash()]);
     assert_eq!(
         committed_memberships,
-        vec![State::queue_plan_entrypoint_membership_hash(
-            conflicting_binding.entrypoint_hash,
-        )],
+        vec![conflicting_transaction.hash_as_entrypoint()]
+    );
+    assert_eq!(
+        committed_memberships,
+        vec![conflicting_binding.entrypoint_hash],
         "the all-External canonical commit path must preserve the typed entrypoint hash bytes"
     );
-    state.record_direct_committed_transactions(
+    state.record_direct_committed_entrypoints(
         committed_memberships,
         NonZeroUsize::new(2).expect("fixture applied height"),
     );
@@ -1330,33 +1340,25 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         );
         world.commit();
     }
-    let sealed_memberships =
-        committed_transaction_hashes_for_entrypoints(core::slice::from_ref(&sealed_entrypoint));
+    let sealed_memberships = committed_entrypoint_hashes(core::slice::from_ref(&sealed_entrypoint));
     assert_eq!(
         sealed_memberships,
-        vec![State::queue_plan_entrypoint_membership_hash(
-            sealed_binding.entrypoint_hash,
-        )],
+        vec![sealed_binding.entrypoint_hash],
         "the heterogeneous canonical commit path must use the sealed-reveal entrypoint identity"
     );
-    let mixed_memberships = committed_transaction_hashes_for_entrypoints(&[
-        conflicting_entrypoint.clone(),
-        sealed_entrypoint.clone(),
-    ]);
+    let mixed_memberships =
+        committed_entrypoint_hashes(&[conflicting_entrypoint.clone(), sealed_entrypoint.clone()]);
     assert_eq!(
         mixed_memberships,
-        vec![
-            State::queue_plan_entrypoint_membership_hash(binding.entrypoint_hash),
-            State::queue_plan_entrypoint_membership_hash(sealed_binding.entrypoint_hash),
-        ],
+        vec![binding.entrypoint_hash, sealed_binding.entrypoint_hash,],
         "a mixed batch must commit both entries through their ordered typed identities"
     );
     assert_eq!(
         mixed_memberships[0],
-        conflicting_transaction.hash(),
+        conflicting_transaction.hash_as_entrypoint(),
         "the External typed identity must remain byte-compatible inside a mixed batch"
     );
-    state.record_direct_committed_transactions(
+    state.record_direct_committed_entrypoints(
         sealed_memberships,
         NonZeroUsize::new(3).expect("fixture sealed applied height"),
     );
@@ -1438,6 +1440,188 @@ fn queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain
             "each exact coordinator or participant incarnation must remain drain-blocked"
         );
     }
+}
+#[test]
+fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let participant_lane = LaneId::new(1);
+    let routing_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let tag = 0x6F;
+    let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        1,
+        tag,
+    );
+    let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
+    assert!(
+        State::pending_queue_plan_binding_for_execution(
+            &state.view(),
+            &entrypoint,
+            &routing_plan,
+            2,
+        )
+        .expect("absent execution binding lookup")
+        .is_none()
+    );
+
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    assert_eq!(
+        State::pending_queue_plan_binding_for_execution(
+            &state.view(),
+            &entrypoint,
+            &routing_plan,
+            2,
+        )
+        .expect("exact execution binding lookup"),
+        Some(binding)
+    );
+
+    let substituted_plan = crate::queue::RoutingPlan::native_amx(
+        routing_plan.coordinator_route(),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    assert!(
+        State::pending_queue_plan_binding_for_execution(
+            &state.view(),
+            &entrypoint,
+            &substituted_plan,
+            2,
+        )
+        .is_err(),
+        "the registry hash must not authenticate a substituted same-topology plan"
+    );
+
+    state.lane_incarnations.write().insert(
+        participant_lane,
+        Hash::new(b"recreated QueuePlan participant lane"),
+    );
+    assert!(
+        State::pending_queue_plan_binding_for_execution(
+            &state.view(),
+            &entrypoint,
+            &routing_plan,
+            2,
+        )
+        .is_err(),
+        "an old binding must not authorize a recreated lane incarnation"
+    );
+}
+fn native_lane_drift_reconciliation_fixture(
+    seed_binding: bool,
+) -> (
+    State,
+    TransactionEntrypoint,
+    crate::queue::RoutingPlan,
+    crate::queue::RoutingPlan,
+) {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let alternate_lane = LaneId::new(1);
+    let committed_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(alternate_lane, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let fresh_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(alternate_lane, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let tag = 0x70;
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        committed_plan.clone(),
+        &validator_keypairs,
+        1,
+        tag,
+    );
+    if seed_binding {
+        seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    }
+    let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
+    (state, entrypoint, committed_plan, fresh_plan)
+}
+#[test]
+fn block_execution_routing_preserves_authenticated_native_lane_choice() {
+    let (state, entrypoint, committed_plan, fresh_plan) =
+        native_lane_drift_reconciliation_fixture(true);
+    assert_eq!(
+        crate::queue::reconcile_committed_routing_plan_with_fresh_plan(
+            &entrypoint,
+            &committed_plan,
+            &fresh_plan,
+            &state.view(),
+            2,
+        )
+        .expect("the exact pending binding authenticates lane-only Native-AMX drift"),
+        committed_plan,
+    );
+}
+#[test]
+fn block_execution_routing_rejects_lane_drift_without_pending_binding() {
+    let (state, entrypoint, committed_plan, fresh_plan) =
+        native_lane_drift_reconciliation_fixture(false);
+    assert!(matches!(
+        crate::queue::reconcile_committed_routing_plan_with_fresh_plan(
+            &entrypoint,
+            &committed_plan,
+            &fresh_plan,
+            &state.view(),
+            2,
+        ),
+        Err(crate::queue::ExecutionRoutingReconciliationError::MissingPendingAdmission)
+    ));
+}
+#[test]
+fn block_execution_routing_rejects_topology_drift_with_pending_binding() {
+    let (state, entrypoint, committed_plan, _) = native_lane_drift_reconciliation_fixture(true);
+    let fresh_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    assert!(matches!(
+        crate::queue::reconcile_committed_routing_plan_with_fresh_plan(
+            &entrypoint,
+            &committed_plan,
+            &fresh_plan,
+            &state.view(),
+            2,
+        ),
+        Err(crate::queue::ExecutionRoutingReconciliationError::TopologyMismatch)
+    ));
+}
+#[test]
+fn block_execution_routing_rejects_admitted_lane_incarnation_aba() {
+    let (state, entrypoint, committed_plan, fresh_plan) =
+        native_lane_drift_reconciliation_fixture(true);
+    state.lane_incarnations.write().insert(
+        LaneId::new(1),
+        Hash::new(b"recreated execution-routing lane"),
+    );
+    assert!(matches!(
+        crate::queue::reconcile_committed_routing_plan_with_fresh_plan(
+            &entrypoint,
+            &committed_plan,
+            &fresh_plan,
+            &state.view(),
+            2,
+        ),
+        Err(crate::queue::ExecutionRoutingReconciliationError::InvalidPendingAdmission(_))
+    ));
 }
 #[test]
 fn queue_plan_same_route_roles_share_one_pending_route_counter() {
@@ -1660,192 +1844,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         }
     }
 }
-#[test]
-fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
-    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
-    let participant_lane = LaneId::new(1);
-    let native_plan = crate::queue::RoutingPlan::native_amx(
-        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-        vec![crate::queue::RouteLeg::new(
-            crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL),
-            crate::queue::RouteLegRole::Participant,
-        )],
-    );
-    let (native_binding, native_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        native_plan,
-        &validator_keypairs,
-        1,
-        0x6C,
-    );
-    let single_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (single_binding, single_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        single_plan,
-        &validator_keypairs,
-        1,
-        0x6D,
-    );
-    let native_obligation = queue_plan_pending_obligation_for_test(&state, &native_certificate);
-    let single_obligation = queue_plan_pending_obligation_for_test(&state, &single_certificate);
-    let coordinator_route = single_obligation.routes[0];
-    let participant_route = *native_obligation
-        .routes
-        .iter()
-        .find(|route| route.lane_id == participant_lane)
-        .expect("fixture participant route");
-    let native_coordinator_member_key = State::queue_plan_pending_route_member_marker_key(
-        coordinator_route,
-        State::queue_plan_pending_route_member_identity(&native_obligation, coordinator_route)
-            .expect("fixture Native coordinator member identity"),
-    )
-    .expect("fixture Native coordinator member key");
-    let native_participant_member_key = State::queue_plan_pending_route_member_marker_key(
-        participant_route,
-        State::queue_plan_pending_route_member_identity(&native_obligation, participant_route)
-            .expect("fixture Native participant member identity"),
-    )
-    .expect("fixture Native participant member key");
-    let single_coordinator_member_key = State::queue_plan_pending_route_member_marker_key(
-        coordinator_route,
-        State::queue_plan_pending_route_member_identity(&single_obligation, coordinator_route)
-            .expect("fixture single coordinator member identity"),
-    )
-    .expect("fixture single coordinator member key");
-    let native_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        native_binding.network_id_digest,
-        native_binding.entrypoint_hash.clone(),
-    )
-    .expect("fixture Native pending-obligation key");
-    let single_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        single_binding.network_id_digest,
-        single_binding.entrypoint_hash.clone(),
-    )
-    .expect("fixture single-route pending-obligation key");
-    seed_exact_queue_plan_admission_state_for_test(&state, &native_certificate);
-    seed_exact_queue_plan_admission_state_for_test(&state, &single_certificate);
-    let world = state.world.view();
-    assert_eq!(
-        State::queue_plan_pending_route_obligation_count_from_world(&world, coordinator_route,)
-            .expect("shared coordinator count"),
-        2
-    );
-    assert_eq!(
-        State::queue_plan_pending_route_obligation_count_from_world(&world, participant_route,)
-            .expect("participant count"),
-        1
-    );
-    drop(world);
-    {
-        let mut world = state.world.block();
-        assert!(
-            State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                native_binding.network_id_digest,
-                native_binding.entrypoint_hash.clone(),
-            )
-            .expect("resolve exact Native QueuePlan obligation")
-        );
-        assert_eq!(
-            State::queue_plan_pending_route_obligation_count_from_world(&world, coordinator_route,)
-                .expect("decremented coordinator count"),
-            1
-        );
-        assert_eq!(
-            State::queue_plan_pending_route_obligation_count_from_world(&world, participant_route,)
-                .expect("removed participant count"),
-            0
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&native_obligation_key)
-                .is_none(),
-            "resolution must remove only the exact Native obligation"
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&single_obligation_key)
-                .is_some(),
-            "the unrelated single-route obligation must remain pending"
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&native_coordinator_member_key)
-                .is_none()
-                && world
-                    .smart_contract_state
-                    .get(&native_participant_member_key)
-                    .is_none(),
-            "resolution must remove every exact member owned by the Native obligation"
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&single_coordinator_member_key)
-                .is_some(),
-            "nonterminal resolution must retain the other coordinator member"
-        );
-        world.commit();
-    }
-    assert!(state.lane_has_drain_blocking_evidence(
-        coordinator_route.lane_id,
-        coordinator_route.dataspace_id,
-        coordinator_route.lane_incarnation,
-    ));
-    assert!(
-        !state.lane_has_drain_blocking_evidence(
-            participant_route.lane_id,
-            participant_route.dataspace_id,
-            participant_route.lane_incarnation,
-        ),
-        "resolving the only participant-bound obligation must unblock that route"
-    );
-    {
-        let mut world = state.world.block();
-        assert!(
-            State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                single_binding.network_id_digest,
-                single_binding.entrypoint_hash,
-            )
-            .expect("resolve exact single-route QueuePlan obligation")
-        );
-        assert_eq!(
-            State::queue_plan_pending_route_obligation_count_from_world(&world, coordinator_route,)
-                .expect("removed coordinator count"),
-            0
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&single_obligation_key)
-                .is_none(),
-            "resolution must remove the final exact pending obligation"
-        );
-        assert!(
-            world
-                .smart_contract_state
-                .get(&single_coordinator_member_key)
-                .is_none(),
-            "final resolution must remove the final exact route member"
-        );
-        world.commit();
-    }
-    assert!(
-        !state.lane_has_drain_blocking_evidence(
-            coordinator_route.lane_id,
-            coordinator_route.dataspace_id,
-            coordinator_route.lane_incarnation,
-        ),
-        "resolving the final coordinator-bound obligation must unblock that route"
-    );
-}
+include!("autonomous_merge_and_queue_plan_route_count_tests.rs");
 #[test]
 #[expect(
     clippy::too_many_lines,

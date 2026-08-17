@@ -401,7 +401,11 @@ def validate_durable_admission_receipt_claims(
     )
 
 
-def require_public_soak_authority_provisioned() -> None:
+def _require_public_soak_authority(
+    *,
+    observation_require_signing: bool = True,
+    replay_require_signing: bool = True,
+) -> None:
     """Authenticate the distinct observation and replay-admission services."""
 
     observation = taira_authority_client.ROLE_REGISTRY[
@@ -419,10 +423,26 @@ def require_public_soak_authority_provisioned() -> None:
     ):
         _fail("public-soak observation signer and replay broker are not distinct")
     try:
-        taira_authority_client.preflight("public-soak-observation")
-        taira_authority_client.preflight("public-soak-replay-admission")
+        if observation_require_signing:
+            taira_authority_client.preflight("public-soak-observation")
+        else:
+            taira_authority_client.preflight(
+                "public-soak-observation", require_signing=False
+            )
+        if replay_require_signing:
+            taira_authority_client.preflight("public-soak-replay-admission")
+        else:
+            taira_authority_client.preflight(
+                "public-soak-replay-admission", require_signing=False
+            )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise PublicSoakAuthorityError(f"{PROVISIONING_ERROR}: {error}") from error
+
+
+def require_public_soak_authority_provisioned() -> None:
+    """Authenticate the distinct observation and replay-admission services."""
+
+    _require_public_soak_authority()
 
 
 def _observation_subject(
@@ -478,7 +498,9 @@ def consume_fresh_public_soak_admission(
 ) -> bytes:
     """Verify the observation and atomically consume its replay identity once."""
 
-    require_public_soak_authority_provisioned()
+    _require_public_soak_authority(
+        observation_require_signing=False
+    )
     _verify_observation_signature(payload, subject_core, completed_at_unix_ms)
     subject = _replay_subject(payload, subject_core, completed_at_unix_ms)
     try:
@@ -515,7 +537,10 @@ def verify_authenticated_public_soak_authority_envelope(
     It must not consume the replay ID again during historical re-verification.
     """
 
-    require_public_soak_authority_provisioned()
+    _require_public_soak_authority(
+        observation_require_signing=False,
+        replay_require_signing=False,
+    )
     structural = validate_durable_admission_receipt_claims(
         durable_admission_receipt,
         authority_envelope=payload,

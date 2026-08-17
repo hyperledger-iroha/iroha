@@ -214,7 +214,11 @@ async fn norito_transaction_returns_submission_receipt() {
     let receipt: TransactionSubmissionReceipt =
         norito::decode_from_bytes(&body).expect("decode receipt");
     assert!(receipt.verify().is_ok());
-    assert_eq!(receipt.payload.tx_hash, expected_hash);
+    assert_eq!(
+        receipt.payload.entrypoint_hash,
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(expected_hash)
+    );
+    assert_eq!(receipt.payload.signed_transaction_hash, Some(expected_hash));
     assert_eq!(
         receipt.payload.signer,
         harness.cfg.common.key_pair.public_key().clone()

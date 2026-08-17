@@ -86,7 +86,11 @@ use iroha_executor_data_model::permission::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::Arc,
+};
 use thiserror::Error;
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
@@ -410,6 +414,16 @@ pub enum RoutingResolveError {
         /// Policy selected by the settlement instruction.
         policy_id: Name,
     },
+    /// A persisted multisig proposal graph recursively approves the same proposal.
+    #[error(
+        "persisted multisig proposal `{instructions_hash}` for account `{account}` contains an approval cycle"
+    )]
+    MultisigProposalCycle {
+        /// Multisig account that owns the cyclic proposal.
+        account: AccountId,
+        /// Instruction-list digest used to address the cyclic proposal.
+        instructions_hash: HashOf<Vec<InstructionBox>>,
+    },
     /// provided routing plan does not match the current Nexus routing policy
     #[error("provided routing plan does not match the current Nexus routing policy")]
     StaleRoutingPlan,
@@ -437,6 +451,7 @@ impl RoutingResolveError {
             Self::FxCorridorPolicyRegistryMissing => "fx_corridor_policy_registry_missing",
             Self::FxCorridorPolicyRegistryMalformed => "fx_corridor_policy_registry_malformed",
             Self::FxCorridorPolicyNotFound { .. } => "fx_corridor_policy_not_found",
+            Self::MultisigProposalCycle { .. } => "multisig_proposal_cycle",
             Self::StaleRoutingPlan => "stale_routing_plan",
         }
     }
@@ -471,51 +486,6 @@ pub fn evaluate_policy(
         .or(target_dataspace)
         .unwrap_or(policy.default_dataspace);
     RoutingDecision::new(lane_id, dataspace_id)
-}
-fn fail_closed_policy_route_with_view(
-    policy: &LaneRoutingPolicy,
-    tx: &dyn TransactionRoutingView,
-    state_view: &StateView<'_>,
-) -> RoutingDecision {
-    let nexus = state_view.nexus();
-    let target_dataspace = if let Some(account_id) = account_permission_holder_routing_target(tx) {
-        account_dataspace_target(
-            Some(state_view.world()),
-            account_id,
-            Some(state_view_ledger_time_ms(state_view)),
-        )
-    } else {
-        let mut target = transaction_dataspace_routing_target_info(
-            tx,
-            Some(&nexus.dataspace_catalog),
-            Some(state_view),
-        )
-        .unwrap_or_default();
-        let matched_rule = policy
-            .rules
-            .iter()
-            .find(|rule| rule_matches(rule, tx, Some(state_view)));
-        apply_authority_dataspace_target(
-            &mut target,
-            authority_dataspace_target(Some(state_view), tx),
-            matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
-        );
-        target.dataspace_id
-    }
-    .unwrap_or(policy.default_dataspace);
-    canonical_dataspace_route(
-        target_dataspace,
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-    )
-    .or_else(|_| {
-        canonical_dataspace_route(
-            policy.default_dataspace,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-        )
-    })
-    .unwrap_or_else(|_| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
 }
 /// Evaluate the routing policy and resolve it against the configured catalogs.
 pub fn evaluate_policy_with_catalog(
@@ -1106,24 +1076,6 @@ fn settlement_routing_decision(
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
 }
-fn settlement_routing_decision_with_world<W: WorldReadOnly>(
-    tx: &dyn TransactionRoutingView,
-    lane_catalog: &LaneCatalog,
-    dataspace_catalog: &DataSpaceCatalog,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-    let Some(dataspace_id) = settlement_transaction_dataspace_target_with_world(
-        tx,
-        Some(dataspace_catalog),
-        world,
-        ledger_time_ms,
-    )?
-    else {
-        return Ok(None);
-    };
-    canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
-}
 fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     matched_rule: Option<&LaneRoutingRule>,
@@ -1211,6 +1163,106 @@ fn fx_corridor_policy_with_world<W: WorldReadOnly>(
             policy_id: policy_id.clone(),
         })
 }
+type MultisigProposalRoutingKey = (AccountId, HashOf<Vec<InstructionBox>>);
+#[derive(Default)]
+struct MultisigProposalRoutingStack {
+    active: BTreeSet<MultisigProposalRoutingKey>,
+    #[cfg(test)]
+    expansions: usize,
+}
+impl MultisigProposalRoutingStack {
+    fn with_proposal<T>(
+        &mut self,
+        account: &AccountId,
+        instructions_hash: &HashOf<Vec<InstructionBox>>,
+        resolve: impl FnOnce(&mut Self) -> Result<T, RoutingResolveError>,
+    ) -> Result<T, RoutingResolveError> {
+        let key = (account.clone(), *instructions_hash);
+        if !self.active.insert(key.clone()) {
+            return Err(RoutingResolveError::MultisigProposalCycle {
+                account: account.clone(),
+                instructions_hash: *instructions_hash,
+            });
+        }
+        #[cfg(test)]
+        {
+            self.expansions = self.expansions.saturating_add(1);
+        }
+        let result = resolve(self);
+        self.active.remove(&key);
+        result
+    }
+}
+#[derive(Clone, Debug, Default)]
+struct FxCorridorRoutingOverlay {
+    policies: BTreeMap<Name, FxCorridorPolicy>,
+    executed_multisig_proposals: BTreeMap<MultisigProposalRoutingKey, Vec<InstructionBox>>,
+}
+impl FxCorridorRoutingOverlay {
+    fn observe(&mut self, instruction: &dyn Instruction) {
+        let any = instruction.as_any();
+        let policy = any
+            .downcast_ref::<SetFxCorridorPolicy>()
+            .map(|set| &set.policy)
+            .or_else(|| {
+                any.downcast_ref::<SettlementInstructionBox>()
+                    .and_then(|settlement| match settlement {
+                        SettlementInstructionBox::SetFxCorridorPolicy(set) => Some(&set.policy),
+                        SettlementInstructionBox::Dvp(_)
+                        | SettlementInstructionBox::Pvp(_)
+                        | SettlementInstructionBox::FundFxCorridorEscrow(_)
+                        | SettlementInstructionBox::RefundFxCorridorEscrow(_)
+                        | SettlementInstructionBox::SettleFxCorridor(_) => None,
+                    })
+            });
+        if let Some(policy) = policy {
+            // A later update cannot change a corridor's immutable identity. Keep the first
+            // transaction-local registration so an invalid replacement cannot reroute siblings.
+            self.policies
+                .entry(policy.policy_id.clone())
+                .or_insert_with(|| policy.clone());
+        }
+    }
+    fn policy_with_world<W: WorldReadOnly>(
+        &self,
+        world: &W,
+        policy_id: &Name,
+    ) -> Result<FxCorridorPolicy, RoutingResolveError> {
+        match fx_corridor_policy_with_world(world, policy_id) {
+            Ok(policy) => Ok(policy),
+            Err(error @ RoutingResolveError::FxCorridorPolicyRegistryMissing)
+            | Err(error @ RoutingResolveError::FxCorridorPolicyNotFound { .. }) => {
+                self.policies.get(policy_id).cloned().ok_or(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    fn record_executed_multisig_proposal(&mut self, propose: MultisigPropose) {
+        let MultisigPropose {
+            account,
+            instructions,
+            ..
+        } = propose;
+        let instructions_hash = HashOf::new(&instructions);
+        self.executed_multisig_proposals
+            .entry((account, instructions_hash))
+            .or_insert(instructions);
+    }
+    fn multisig_proposal_instructions_with_world<W: WorldReadOnly>(
+        &self,
+        world: &W,
+        account: &AccountId,
+        instructions_hash: &HashOf<Vec<InstructionBox>>,
+    ) -> Option<Vec<InstructionBox>> {
+        self.executed_multisig_proposals
+            .get(&(account.clone(), *instructions_hash))
+            .cloned()
+            .or_else(|| {
+                multisig_proposal_state_raw(world, account, instructions_hash)
+                    .map(|proposal| proposal.instructions)
+            })
+    }
+}
 fn fx_corridor_policy_with_state(
     state_view: Option<&StateView<'_>>,
     policy_id: &Name,
@@ -1251,6 +1303,37 @@ where
     let mut merged = None;
     for target in targets {
         merged = settlement_pair_dataspace_target(merged, target?);
+    }
+    Ok(merged)
+}
+fn merge_instruction_dataspace_targets_with_world_and_fx_overlay<'instruction, W, I>(
+    instructions: I,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+) -> Result<Option<DataSpaceId>, RoutingResolveError>
+where
+    W: WorldReadOnly,
+    I: IntoIterator<Item = &'instruction InstructionBox>,
+{
+    let mut merged = None;
+    for instruction in instructions {
+        let target = instruction_transaction_dataspace_target_with_world_and_fx_overlay(
+            &**instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            fx_overlay,
+        )?;
+        merged = settlement_pair_dataspace_target(merged, target);
+        observe_top_level_instruction_fx_effects(
+            fx_overlay,
+            &**instruction,
+            usize::MAX,
+            &[],
+            world,
+        );
     }
     Ok(merged)
 }
@@ -1298,51 +1381,65 @@ fn trigger_executable_transaction_dataspace_target(
         }
     }
 }
-fn trigger_executable_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+fn trigger_executable_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
             Ok(contract_address_dataspace_target(&call.contract_address))
         }
         Executable::Instructions(instructions) => {
-            merge_instruction_dataspace_target_results(instructions.iter().map(|instruction| {
-                instruction_transaction_dataspace_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            }))
+            merge_instruction_dataspace_targets_with_world_and_fx_overlay(
+                instructions.iter(),
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                fx_overlay,
+            )
         }
         Executable::Batch(items) => {
-            merge_instruction_dataspace_target_results(items.iter().map(|item| match item {
-                ExecutableBatchItem::Instruction(instruction) => {
-                    instruction_transaction_dataspace_target_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                }
-                ExecutableBatchItem::ContractCall(call) => {
-                    Ok(contract_address_dataspace_target(&call.contract_address))
-                }
-            }))
+            let mut merged = None;
+            for item in items {
+                let target = match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        let target =
+                            instruction_transaction_dataspace_target_with_world_and_fx_overlay(
+                                &**instruction,
+                                dataspace_catalog,
+                                world,
+                                ledger_time_ms,
+                                fx_overlay,
+                            )?;
+                        observe_top_level_instruction_fx_effects(
+                            fx_overlay,
+                            &**instruction,
+                            usize::MAX,
+                            &[],
+                            world,
+                        );
+                        target
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_address_dataspace_target(&call.contract_address)
+                    }
+                };
+                merged = settlement_pair_dataspace_target(merged, target);
+            }
+            Ok(merged)
         }
         Executable::Ivm(_) => Ok(None),
         Executable::IvmProved(proved) => {
-            merge_instruction_dataspace_target_results(proved.overlay.iter().map(|instruction| {
-                instruction_transaction_dataspace_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            }))
+            merge_instruction_dataspace_targets_with_world_and_fx_overlay(
+                proved.overlay.iter(),
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                fx_overlay,
+            )
         }
     }
 }
@@ -1428,16 +1525,30 @@ fn executable_settlement_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    executable_settlement_dataspace_target_with_stack(
+        executable,
+        dataspace_catalog,
+        state_view,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn executable_settlement_dataspace_target_with_stack(
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let mut target_dataspace = None;
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
                 merge_settlement_target_dataspace(
                     &mut target_dataspace,
-                    instruction_settlement_dataspace_target(
+                    instruction_settlement_dataspace_target_with_stack(
                         &**instruction,
                         dataspace_catalog,
                         state_view,
+                        stack,
                     )?,
                 );
             }
@@ -1448,10 +1559,11 @@ fn executable_settlement_dataspace_target(
                 if let ExecutableBatchItem::Instruction(instruction) = item {
                     merge_settlement_target_dataspace(
                         &mut target_dataspace,
-                        instruction_settlement_dataspace_target(
+                        instruction_settlement_dataspace_target_with_stack(
                             &**instruction,
                             dataspace_catalog,
                             state_view,
+                            stack,
                         )?,
                     );
                 }
@@ -1461,10 +1573,11 @@ fn executable_settlement_dataspace_target(
             for instruction in &proved.overlay {
                 merge_settlement_target_dataspace(
                     &mut target_dataspace,
-                    instruction_settlement_dataspace_target(
+                    instruction_settlement_dataspace_target_with_stack(
                         &**instruction,
                         dataspace_catalog,
                         state_view,
+                        stack,
                     )?,
                 );
             }
@@ -1477,48 +1590,104 @@ fn executable_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    executable_settlement_dataspace_target_with_world_and_stack(
+        executable,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        fx_overlay,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn executable_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>(
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let mut target_dataspace = None;
+    let instruction_refs = executable_instruction_refs(executable);
+    let same_transaction_multisig_proposals =
+        same_transaction_multisig_proposal_targets_with_world(
+            &instruction_refs,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            fx_overlay,
+        )?;
     match executable {
         Executable::Instructions(instructions) => {
-            for instruction in instructions {
+            for (top_level_instruction_index, instruction) in instructions.iter().enumerate() {
                 merge_settlement_target_dataspace(
                     &mut target_dataspace,
-                    instruction_settlement_dataspace_target_with_world(
+                    instruction_settlement_dataspace_target_with_world_and_stack(
                         &**instruction,
                         dataspace_catalog,
                         world,
                         ledger_time_ms,
+                        fx_overlay,
+                        stack,
                     )?,
+                );
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
                 );
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::Batch(items) => {
+            let mut top_level_instruction_index = 0;
             for item in items {
                 if let ExecutableBatchItem::Instruction(instruction) = item {
                     merge_settlement_target_dataspace(
                         &mut target_dataspace,
-                        instruction_settlement_dataspace_target_with_world(
+                        instruction_settlement_dataspace_target_with_world_and_stack(
                             &**instruction,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
+                            fx_overlay,
+                            stack,
                         )?,
                     );
+                    observe_top_level_instruction_fx_effects(
+                        fx_overlay,
+                        &**instruction,
+                        top_level_instruction_index,
+                        &same_transaction_multisig_proposals,
+                        world,
+                    );
+                    top_level_instruction_index += 1;
                 }
             }
         }
         Executable::IvmProved(proved) => {
-            for instruction in &proved.overlay {
+            for (top_level_instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 merge_settlement_target_dataspace(
                     &mut target_dataspace,
-                    instruction_settlement_dataspace_target_with_world(
+                    instruction_settlement_dataspace_target_with_world_and_stack(
                         &**instruction,
                         dataspace_catalog,
                         world,
                         ledger_time_ms,
+                        fx_overlay,
+                        stack,
                     )?,
+                );
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
                 );
             }
         }
@@ -1544,11 +1713,13 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
+    let mut fx_overlay = FxCorridorRoutingOverlay::default();
     executable_settlement_dataspace_target_with_world(
         executable,
         dataspace_catalog,
         world,
         ledger_time_ms,
+        &mut fx_overlay,
     )
 }
 fn instruction_settlement_dataspace_target(
@@ -1556,40 +1727,81 @@ fn instruction_settlement_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    instruction_settlement_dataspace_target_with_stack(
+        instruction,
+        dataspace_catalog,
+        state_view,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn instruction_list_settlement_dataspace_target_with_stack(
+    instructions: &[InstructionBox],
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    let mut target_dataspace = None;
+    for nested in instructions {
+        merge_settlement_target_dataspace(
+            &mut target_dataspace,
+            instruction_settlement_dataspace_target_with_stack(
+                &**nested,
+                dataspace_catalog,
+                state_view,
+                stack,
+            )?,
+        );
+    }
+    Ok(target_dataspace)
+}
+fn instruction_settlement_dataspace_target_with_stack(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
     if let Some(multisig) = multisig_instruction(instruction) {
-        let instructions = match multisig {
-            MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
-            MultisigInstructionBox::Approve(approve) => state_view
-                .and_then(|view| {
-                    multisig_proposal_state(
-                        view.world(),
-                        &approve.account,
-                        &approve.instructions_hash,
-                    )
-                })
-                .map(|proposal| proposal.instructions),
+        return match multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                instruction_list_settlement_dataspace_target_with_stack(
+                    &propose.instructions,
+                    dataspace_catalog,
+                    state_view,
+                    stack,
+                )
+            }
+            MultisigInstructionBox::Approve(approve) => {
+                let Some(view) = state_view else {
+                    return Ok(None);
+                };
+                Ok(with_multisig_proposal_state(
+                    view.world(),
+                    &approve.account,
+                    &approve.instructions_hash,
+                    stack,
+                    |proposal, stack| {
+                        instruction_list_settlement_dataspace_target_with_stack(
+                            &proposal.instructions,
+                            dataspace_catalog,
+                            state_view,
+                            stack,
+                        )
+                    },
+                )?
+                .flatten())
+            }
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
-            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
+            | MultisigInstructionBox::InvalidateOutstanding(_) => Ok(None),
         };
-        let Some(instructions) = instructions else {
-            return Ok(None);
-        };
-        let mut target_dataspace = None;
-        for nested in &instructions {
-            merge_settlement_target_dataspace(
-                &mut target_dataspace,
-                instruction_settlement_dataspace_target(&**nested, dataspace_catalog, state_view)?,
-            );
-        }
-        return Ok(target_dataspace);
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
-        return executable_settlement_dataspace_target(
+        return executable_settlement_dataspace_target_with_stack(
             register.object.action().executable(),
             dataspace_catalog,
             state_view,
+            stack,
         );
     }
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
@@ -1689,42 +1901,102 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    instruction_settlement_dataspace_target_with_world_and_stack(
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        fx_overlay,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn instruction_list_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>(
+    instructions: &[InstructionBox],
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    let mut target_dataspace = None;
+    let mut nested_fx_overlay = fx_overlay.clone();
+    for nested in instructions {
+        merge_settlement_target_dataspace(
+            &mut target_dataspace,
+            instruction_settlement_dataspace_target_with_world_and_stack(
+                &**nested,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                &nested_fx_overlay,
+                stack,
+            )?,
+        );
+        observe_top_level_instruction_fx_effects(
+            &mut nested_fx_overlay,
+            &**nested,
+            usize::MAX,
+            &[],
+            world,
+        );
+    }
+    Ok(target_dataspace)
+}
+fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
     if let Some(multisig) = multisig_instruction(instruction) {
-        let instructions = match multisig {
-            MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
-            MultisigInstructionBox::Approve(approve) => {
-                multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
-                    .map(|proposal| proposal.instructions)
-            }
-            MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_)
-            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
-        };
-        let Some(instructions) = instructions else {
-            return Ok(None);
-        };
-        let mut target_dataspace = None;
-        for nested in &instructions {
-            merge_settlement_target_dataspace(
-                &mut target_dataspace,
-                instruction_settlement_dataspace_target_with_world(
-                    &**nested,
+        return match multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                instruction_list_settlement_dataspace_target_with_world_and_stack(
+                    &propose.instructions,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
-                )?,
-            );
-        }
-        return Ok(target_dataspace);
+                    fx_overlay,
+                    stack,
+                )
+            }
+            MultisigInstructionBox::Approve(approve) => Ok(with_multisig_proposal_instructions(
+                fx_overlay,
+                world,
+                &approve.account,
+                &approve.instructions_hash,
+                stack,
+                |instructions, stack| {
+                    instruction_list_settlement_dataspace_target_with_world_and_stack(
+                        instructions,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                        fx_overlay,
+                        stack,
+                    )
+                },
+            )?
+            .flatten()),
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => Ok(None),
+        };
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
-        return executable_settlement_dataspace_target_with_world(
+        let mut nested_fx_overlay = fx_overlay.clone();
+        return executable_settlement_dataspace_target_with_world_and_stack(
             register.object.action().executable(),
             dataspace_catalog,
             world,
             ledger_time_ms,
+            &mut nested_fx_overlay,
+            stack,
         );
     }
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
@@ -1763,7 +2035,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
         return Ok(Some(DataSpaceId::UNIVERSAL));
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        let policy = fx_overlay.policy_with_world(world, &fx.policy_id)?;
         return Ok(settlement_pair_dataspace_target(
             Some(policy.source_dataspace),
             Some(policy.destination_dataspace),
@@ -1771,12 +2043,16 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     }
     if let Some(fx) = any.downcast_ref::<FundFxCorridorEscrow>() {
         return Ok(Some(
-            fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace,
+            fx_overlay
+                .policy_with_world(world, &fx.policy_id)?
+                .destination_dataspace,
         ));
     }
     if let Some(fx) = any.downcast_ref::<RefundFxCorridorEscrow>() {
         return Ok(Some(
-            fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace,
+            fx_overlay
+                .policy_with_world(world, &fx.policy_id)?
+                .destination_dataspace,
         ));
     }
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
@@ -1810,14 +2086,18 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 )?,
             ),
             SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
-            SettlementInstructionBox::FundFxCorridorEscrow(fx) => {
-                Some(fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace)
-            }
-            SettlementInstructionBox::RefundFxCorridorEscrow(fx) => {
-                Some(fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace)
-            }
+            SettlementInstructionBox::FundFxCorridorEscrow(fx) => Some(
+                fx_overlay
+                    .policy_with_world(world, &fx.policy_id)?
+                    .destination_dataspace,
+            ),
+            SettlementInstructionBox::RefundFxCorridorEscrow(fx) => Some(
+                fx_overlay
+                    .policy_with_world(world, &fx.policy_id)?
+                    .destination_dataspace,
+            ),
             SettlementInstructionBox::SettleFxCorridor(fx) => {
-                let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+                let policy = fx_overlay.policy_with_world(world, &fx.policy_id)?;
                 settlement_pair_dataspace_target(
                     Some(policy.source_dataspace),
                     Some(policy.destination_dataspace),
@@ -1982,8 +2262,10 @@ struct TransactionDataspaceTarget {
     participants: BTreeSet<DataSpaceId>,
 }
 struct SameTransactionMultisigProposalTarget {
+    top_level_instruction_index: usize,
     account: AccountId,
     instructions_hash: HashOf<Vec<InstructionBox>>,
+    instructions: Vec<InstructionBox>,
     dataspace_id: Option<DataSpaceId>,
     concrete_dataspaces: BTreeSet<DataSpaceId>,
     requires_universal_coordinator: bool,
@@ -2086,14 +2368,16 @@ fn executable_instruction_refs(executable: &Executable) -> Vec<&InstructionBox> 
 fn merge_top_level_instruction_dataspace_target(
     target: &mut TransactionDataspaceTarget,
     instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
     reject_cross_dataspace: bool,
 ) -> Result<(), RoutingResolveError> {
-    let same_transaction_approve_target = same_transaction_multisig_approve_route_target(
+    let same_transaction_approve_target = same_transaction_multisig_route_target(
         same_transaction_multisig_proposals,
         instruction,
+        top_level_instruction_index,
     );
     let instruction_target = match same_transaction_approve_target {
         Some(proposal) => proposal.dataspace_id,
@@ -2117,13 +2401,11 @@ fn merge_top_level_instruction_dataspace_target(
     )?;
     let requires_universal_coordinator = match same_transaction_approve_target {
         Some(proposal) => proposal.requires_universal_coordinator,
-        None => {
-            instruction_transaction_target_requires_universal_coordinator(
-                instruction,
-                dataspace_catalog,
-                state_view,
-            )?
-        }
+        None => instruction_transaction_target_requires_universal_coordinator(
+            instruction,
+            dataspace_catalog,
+            state_view,
+        )?,
     };
     if requires_universal_coordinator {
         target.coordinator_route = true;
@@ -2133,34 +2415,37 @@ fn merge_top_level_instruction_dataspace_target(
 fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
     target: &mut TransactionDataspaceTarget,
     instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
     reject_cross_dataspace: bool,
+    fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<(), RoutingResolveError> {
-    let same_transaction_approve_target = same_transaction_multisig_approve_route_target(
+    let same_transaction_approve_target = same_transaction_multisig_route_target(
         same_transaction_multisig_proposals,
         instruction,
+        top_level_instruction_index,
     );
     let instruction_target = match same_transaction_approve_target {
         Some(proposal) => proposal.dataspace_id,
-        None => {
-            instruction_transaction_dataspace_target_with_world(
-                instruction,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )?
-        }
-    };
-    let concrete_dataspaces = match same_transaction_approve_target {
-        Some(proposal) => Some(proposal.concrete_dataspaces.clone()),
-        None => deferred_instruction_concrete_dataspace_targets_with_world(
+        None => instruction_transaction_dataspace_target_with_world_and_fx_overlay(
             instruction,
             dataspace_catalog,
             world,
             ledger_time_ms,
+            fx_overlay,
+        )?,
+    };
+    let concrete_dataspaces = match same_transaction_approve_target {
+        Some(proposal) => Some(proposal.concrete_dataspaces.clone()),
+        None => deferred_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            fx_overlay,
         )?,
     };
     merge_transaction_concrete_or_collapsed_dataspaces(
@@ -2172,11 +2457,12 @@ fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
     let requires_universal_coordinator = match same_transaction_approve_target {
         Some(proposal) => proposal.requires_universal_coordinator,
         None => {
-            instruction_transaction_target_requires_universal_coordinator_with_world(
+            instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
                 instruction,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
+                fx_overlay,
             )?
         }
     };
@@ -2203,10 +2489,11 @@ fn transaction_dataspace_routing_target_info(
     )?;
     match executable {
         Executable::Instructions(instructions) => {
-            for instruction in instructions {
+            for (top_level_instruction_index, instruction) in instructions.iter().enumerate() {
                 merge_top_level_instruction_dataspace_target(
                     &mut target,
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     state_view,
@@ -2216,17 +2503,20 @@ fn transaction_dataspace_routing_target_info(
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::Batch(items) => {
+            let mut top_level_instruction_index = 0;
             for item in items {
                 let item_target = match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         merge_top_level_instruction_dataspace_target(
                             &mut target,
                             &**instruction,
+                            top_level_instruction_index,
                             &same_transaction_multisig_proposals,
                             dataspace_catalog,
                             state_view,
                             reject_cross_dataspace,
                         )?;
+                        top_level_instruction_index += 1;
                         continue;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -2245,10 +2535,11 @@ fn transaction_dataspace_routing_target_info(
             }
         }
         Executable::IvmProved(proved) => {
-            for instruction in &proved.overlay {
+            for (top_level_instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 merge_top_level_instruction_dataspace_target(
                     &mut target,
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     state_view,
@@ -2269,42 +2560,65 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
         return Ok(TransactionDataspaceTarget::default());
     };
     let mut target = TransactionDataspaceTarget::default();
+    let mut fx_overlay = FxCorridorRoutingOverlay::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
     let instruction_refs = executable_instruction_refs(executable);
-    let same_transaction_multisig_proposals = same_transaction_multisig_proposal_targets_with_world(
-        &instruction_refs,
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )?;
+    let same_transaction_multisig_proposals =
+        same_transaction_multisig_proposal_targets_with_world(
+            &instruction_refs,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            &fx_overlay,
+        )?;
     match executable {
         Executable::Instructions(instructions) => {
-            for instruction in instructions {
+            for (top_level_instruction_index, instruction) in instructions.iter().enumerate() {
                 merge_top_level_instruction_dataspace_target_with_world(
                     &mut target,
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
                     reject_cross_dataspace,
+                    &fx_overlay,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
+                );
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::Batch(items) => {
+            let mut top_level_instruction_index = 0;
             for item in items {
                 let item_target = match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         merge_top_level_instruction_dataspace_target_with_world(
                             &mut target,
                             &**instruction,
+                            top_level_instruction_index,
                             &same_transaction_multisig_proposals,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
                             reject_cross_dataspace,
+                            &fx_overlay,
                         )?;
+                        observe_top_level_instruction_fx_effects(
+                            &mut fx_overlay,
+                            &**instruction,
+                            top_level_instruction_index,
+                            &same_transaction_multisig_proposals,
+                            world,
+                        );
+                        top_level_instruction_index += 1;
                         continue;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -2323,16 +2637,25 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
             }
         }
         Executable::IvmProved(proved) => {
-            for instruction in &proved.overlay {
+            for (top_level_instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 merge_top_level_instruction_dataspace_target_with_world(
                     &mut target,
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
                     reject_cross_dataspace,
+                    &fx_overlay,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
+                );
             }
         }
     }
@@ -2359,27 +2682,41 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Result<Vec<DataSpaceId>, RoutingResolveError> {
     let mut dataspaces = std::collections::BTreeSet::new();
+    let mut fx_overlay = FxCorridorRoutingOverlay::default();
+    let mut multisig_stack = MultisigProposalRoutingStack::default();
     let Some(executable) = transaction_executable(tx) else {
         return Ok(Vec::new());
     };
     let instruction_refs = executable_instruction_refs(executable);
-    let same_transaction_multisig_proposals = same_transaction_multisig_proposal_targets_with_world(
-        &instruction_refs,
-        Some(dataspace_catalog),
-        world,
-        ledger_time_ms,
-    )?;
+    let same_transaction_multisig_proposals =
+        same_transaction_multisig_proposal_targets_with_world(
+            &instruction_refs,
+            Some(dataspace_catalog),
+            world,
+            ledger_time_ms,
+            &fx_overlay,
+        )?;
     match executable {
         Executable::Instructions(instructions) => {
-            for instruction in instructions {
+            for (top_level_instruction_index, instruction) in instructions.iter().enumerate() {
                 collect_top_level_instruction_native_amx_participants(
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
                     &mut dataspaces,
+                    &fx_overlay,
+                    &mut multisig_stack,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
+                );
             }
         }
         Executable::ContractCall(call) => {
@@ -2389,17 +2726,29 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
             );
         }
         Executable::Batch(items) => {
+            let mut top_level_instruction_index = 0;
             for item in items {
                 match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         collect_top_level_instruction_native_amx_participants(
                             &**instruction,
+                            top_level_instruction_index,
                             &same_transaction_multisig_proposals,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
                             &mut dataspaces,
+                            &fx_overlay,
+                            &mut multisig_stack,
                         )?;
+                        observe_top_level_instruction_fx_effects(
+                            &mut fx_overlay,
+                            &**instruction,
+                            top_level_instruction_index,
+                            &same_transaction_multisig_proposals,
+                            world,
+                        );
+                        top_level_instruction_index += 1;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         insert_native_amx_participant(
@@ -2412,15 +2761,25 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
         }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
-            for instruction in &proved.overlay {
+            for (top_level_instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 collect_top_level_instruction_native_amx_participants(
                     &**instruction,
+                    top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
                     &mut dataspaces,
+                    &fx_overlay,
+                    &mut multisig_stack,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut fx_overlay,
+                    &**instruction,
+                    top_level_instruction_index,
+                    &same_transaction_multisig_proposals,
+                    world,
+                );
             }
         }
     }
@@ -2428,15 +2787,19 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
 }
 fn collect_top_level_instruction_native_amx_participants<W: WorldReadOnly>(
     instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
     dataspaces: &mut BTreeSet<DataSpaceId>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
-    if let Some(proposal) = same_transaction_multisig_approve_route_target(
+    if let Some(proposal) = same_transaction_multisig_route_target(
         same_transaction_multisig_proposals,
         instruction,
+        top_level_instruction_index,
     ) && !proposal.concrete_dataspaces.is_empty()
     {
         for dataspace in &proposal.concrete_dataspaces {
@@ -2450,6 +2813,8 @@ fn collect_top_level_instruction_native_amx_participants<W: WorldReadOnly>(
         world,
         ledger_time_ms,
         dataspaces,
+        fx_overlay,
+        stack,
     )
 }
 fn reconcile_native_amx_participants_with_world<W: WorldReadOnly>(
@@ -2552,6 +2917,8 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
     dataspaces: &mut BTreeSet<DataSpaceId>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
@@ -2568,7 +2935,16 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                     world,
                     ledger_time_ms,
                     dataspaces,
+                    fx_overlay,
+                    stack,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
             }
         }
         Executable::Batch(items) => {
@@ -2581,7 +2957,16 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                             world,
                             ledger_time_ms,
                             dataspaces,
+                            fx_overlay,
+                            stack,
                         )?;
+                        observe_top_level_instruction_fx_effects(
+                            fx_overlay,
+                            &**instruction,
+                            usize::MAX,
+                            &[],
+                            world,
+                        );
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         insert_native_amx_participant(
@@ -2601,7 +2986,16 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                     world,
                     ledger_time_ms,
                     dataspaces,
+                    fx_overlay,
+                    stack,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
             }
         }
     }
@@ -2613,6 +3007,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
     insert_native_amx_participant(
         dataspaces,
@@ -2641,49 +3037,73 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         return Ok(());
     }
     if let Some(multisig) = multisig_instruction(instruction) {
-        let (account, instructions) = match multisig {
-            MultisigInstructionBox::Propose(propose) => {
-                (Some(propose.account), Some(propose.instructions))
-            }
-            MultisigInstructionBox::Approve(approve) => (
-                Some(approve.account.clone()),
-                multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
-                    .map(|proposal| proposal.instructions),
-            ),
-            MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_)
-            | MultisigInstructionBox::InvalidateOutstanding(_) => (None, None),
-        };
-        let mut nested_dataspaces = BTreeSet::new();
-        if let Some(instructions) = instructions {
-            for nested in &instructions {
+        let collect_payload = |instructions: &[InstructionBox],
+                               account: &AccountId,
+                               stack: &mut MultisigProposalRoutingStack|
+         -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+            let mut nested_dataspaces = BTreeSet::new();
+            let mut nested_fx_overlay = fx_overlay.clone();
+            for nested in instructions {
                 collect_instruction_native_amx_participants(
                     &**nested,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
                     &mut nested_dataspaces,
+                    &nested_fx_overlay,
+                    stack,
                 )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut nested_fx_overlay,
+                    &**nested,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
             }
-        }
-        if nested_dataspaces.is_empty() {
-            insert_native_amx_participant(
-                &mut nested_dataspaces,
-                account.as_ref().and_then(|account| {
-                    account_dataspace_target(Some(world), account, ledger_time_ms)
-                }),
-            );
-        }
+            if nested_dataspaces.is_empty() {
+                insert_native_amx_participant(
+                    &mut nested_dataspaces,
+                    account_dataspace_target(Some(world), account, ledger_time_ms),
+                );
+            }
+            Ok(nested_dataspaces)
+        };
+        let nested_dataspaces = match multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                collect_payload(&propose.instructions, &propose.account, stack)?
+            }
+            MultisigInstructionBox::Approve(approve) => with_multisig_proposal_instructions(
+                fx_overlay,
+                world,
+                &approve.account,
+                &approve.instructions_hash,
+                stack,
+                |instructions, stack| collect_payload(instructions, &approve.account, stack),
+            )?
+            .unwrap_or_else(|| {
+                account_dataspace_target(Some(world), &approve.account, ledger_time_ms)
+                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+                    .into_iter()
+                    .collect()
+            }),
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => BTreeSet::new(),
+        };
         dataspaces.extend(nested_dataspaces);
         return Ok(());
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
+        let mut nested_fx_overlay = fx_overlay.clone();
         return collect_trigger_executable_native_amx_participants(
             register.object.action().executable(),
             dataspace_catalog,
             world,
             ledger_time_ms,
             dataspaces,
+            &mut nested_fx_overlay,
+            stack,
         );
     }
     let fx_instruction = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
@@ -2698,7 +3118,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             })
     });
     if let Some(fx) = fx_instruction {
-        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        let policy = fx_overlay.policy_with_world(world, &fx.policy_id)?;
         insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
         insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
         return Ok(());
@@ -2724,7 +3144,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 })
         });
     if let Some(policy_id) = escrow_policy_id {
-        let policy = fx_corridor_policy_with_world(world, policy_id)?;
+        let policy = fx_overlay.policy_with_world(world, policy_id)?;
         insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
         return Ok(());
     }
@@ -2827,12 +3247,13 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     }
     insert_native_amx_participant(
         dataspaces,
-        instruction_transaction_dataspace_target_with_world(
+        instruction_transaction_dataspace_target_with_world_and_fx_overlay(
             instruction,
             Some(dataspace_catalog),
             world,
             ledger_time_ms,
-        ),
+            fx_overlay,
+        )?,
     );
     Ok(())
 }
@@ -2855,12 +3276,20 @@ fn account_permission_holder_routing_target<'tx>(
         Executable::IvmProved(proved) => account_permission_holder_from_instructions(
             proved.overlay.iter().map(|instruction| &**instruction),
         ),
-        Executable::Batch(items) => account_permission_holder_from_instructions(
-            items.iter().filter_map(|item| match item {
-                ExecutableBatchItem::Instruction(instruction) => Some(&**instruction),
-                ExecutableBatchItem::ContractCall(_) => None,
-            }),
-        ),
+        Executable::Batch(items) => {
+            if items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            {
+                return None;
+            }
+            account_permission_holder_from_instructions(items.iter().filter_map(
+                |item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => Some(&**instruction),
+                    ExecutableBatchItem::ContractCall(_) => None,
+                },
+            ))
+        }
     }
 }
 fn account_permission_holder_from_instructions<'instruction, I>(
@@ -3319,12 +3748,28 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    instruction_transaction_dataspace_target_with_world_and_fx_overlay(
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        &FxCorridorRoutingOverlay::default(),
+    )
+}
+fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
     if let Some(settlement_target) = instruction_settlement_dataspace_target_with_world(
         instruction,
         dataspace_catalog,
         world,
         ledger_time_ms,
+        fx_overlay,
     )? {
         return Ok(Some(settlement_target));
     }
@@ -3356,19 +3801,21 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
-                multisig_propose_transaction_dataspace_target_with_world(
+                multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay(
                     propose,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    fx_overlay,
                 )
             }
             MultisigInstructionBox::Approve(approve) => {
-                multisig_approve_transaction_dataspace_target_with_world(
+                multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay(
                     approve,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    fx_overlay,
                 )
             }
             MultisigInstructionBox::Register(_)
@@ -3377,19 +3824,21 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         };
     }
     if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
-        return multisig_propose_transaction_dataspace_target_with_world(
+        return multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay(
             propose,
             dataspace_catalog,
             world,
             ledger_time_ms,
+            fx_overlay,
         );
     }
     if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
-        return multisig_approve_transaction_dataspace_target_with_world(
+        return multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay(
             approve,
             dataspace_catalog,
             world,
             ledger_time_ms,
+            fx_overlay,
         );
     }
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
@@ -3462,11 +3911,13 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 )
             }
             RegisterBox::Trigger(register) => {
-                trigger_executable_transaction_dataspace_target_with_world(
+                let mut nested_fx_overlay = fx_overlay.clone();
+                trigger_executable_transaction_dataspace_target_with_world_and_fx_overlay(
                     register.object.action().executable(),
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    &mut nested_fx_overlay,
                 )
             }
             RegisterBox::Nft(register) => domain_dataspace_target_with_world(
@@ -3758,7 +4209,9 @@ fn multisig_proposal_state_key(
     ))
     .expect("multisig proposal state path must be valid")
 }
-fn multisig_proposal_state<W: WorldReadOnly>(
+// Decode only one proposal node. Any caller that recursively visits the payload must either use
+// `with_multisig_proposal_state` or complete a guarded recursive pre-walk before expansion.
+fn multisig_proposal_state_raw<W: WorldReadOnly>(
     world: &W,
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -3767,27 +4220,80 @@ fn multisig_proposal_state<W: WorldReadOnly>(
     let bytes = world.smart_contract_state().get(&key)?;
     norito::decode_from_bytes::<MultisigProposalState>(bytes).ok()
 }
+fn with_multisig_proposal_state<W: WorldReadOnly, T>(
+    world: &W,
+    account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+    stack: &mut MultisigProposalRoutingStack,
+    resolve: impl FnOnce(
+        &MultisigProposalState,
+        &mut MultisigProposalRoutingStack,
+    ) -> Result<T, RoutingResolveError>,
+) -> Result<Option<T>, RoutingResolveError> {
+    let Some(proposal) = multisig_proposal_state_raw(world, account, instructions_hash) else {
+        return Ok(None);
+    };
+    stack
+        .with_proposal(account, instructions_hash, |stack| {
+            resolve(&proposal, stack)
+        })
+        .map(Some)
+}
+fn with_multisig_proposal_instructions<W: WorldReadOnly, T>(
+    fx_overlay: &FxCorridorRoutingOverlay,
+    world: &W,
+    account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+    stack: &mut MultisigProposalRoutingStack,
+    resolve: impl FnOnce(
+        &[InstructionBox],
+        &mut MultisigProposalRoutingStack,
+    ) -> Result<T, RoutingResolveError>,
+) -> Result<Option<T>, RoutingResolveError> {
+    let Some(instructions) =
+        fx_overlay.multisig_proposal_instructions_with_world(world, account, instructions_hash)
+    else {
+        return Ok(None);
+    };
+    stack
+        .with_proposal(account, instructions_hash, |stack| {
+            resolve(&instructions, stack)
+        })
+        .map(Some)
+}
 fn extend_instruction_concrete_dataspace_targets(
     targets: &mut BTreeSet<DataSpaceId>,
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<(), RoutingResolveError> {
-    if let Some(nested_targets) = deferred_instruction_concrete_dataspace_targets(
+    extend_instruction_concrete_dataspace_targets_with_stack(
+        targets,
         instruction,
         dataspace_catalog,
         state_view,
-    )?
-        && !nested_targets.is_empty()
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn extend_instruction_concrete_dataspace_targets_with_stack(
+    targets: &mut BTreeSet<DataSpaceId>,
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<(), RoutingResolveError> {
+    if let Some(nested_targets) = deferred_instruction_concrete_dataspace_targets_with_stack(
+        instruction,
+        dataspace_catalog,
+        state_view,
+        stack,
+    )? && !nested_targets.is_empty()
     {
         targets.extend(nested_targets);
         return Ok(());
     }
-    if let Some(target) = instruction_transaction_dataspace_target(
-        instruction,
-        dataspace_catalog,
-        state_view,
-    )?
+    if let Some(target) =
+        instruction_transaction_dataspace_target(instruction, dataspace_catalog, state_view)?
     {
         targets.insert(target);
     }
@@ -3798,6 +4304,19 @@ fn trigger_executable_concrete_dataspace_targets(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+    trigger_executable_concrete_dataspace_targets_with_stack(
+        executable,
+        dataspace_catalog,
+        state_view,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn trigger_executable_concrete_dataspace_targets_with_stack(
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
     let mut targets = BTreeSet::new();
     match executable {
         Executable::ContractCall(call) => {
@@ -3807,11 +4326,12 @@ fn trigger_executable_concrete_dataspace_targets(
         }
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                extend_instruction_concrete_dataspace_targets(
+                extend_instruction_concrete_dataspace_targets_with_stack(
                     &mut targets,
                     &**instruction,
                     dataspace_catalog,
                     state_view,
+                    stack,
                 )?;
             }
         }
@@ -3819,11 +4339,12 @@ fn trigger_executable_concrete_dataspace_targets(
             for item in items {
                 match item {
                     ExecutableBatchItem::Instruction(instruction) => {
-                        extend_instruction_concrete_dataspace_targets(
+                        extend_instruction_concrete_dataspace_targets_with_stack(
                             &mut targets,
                             &**instruction,
                             dataspace_catalog,
                             state_view,
+                            stack,
                         )?;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -3839,11 +4360,12 @@ fn trigger_executable_concrete_dataspace_targets(
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
-                extend_instruction_concrete_dataspace_targets(
+                extend_instruction_concrete_dataspace_targets_with_stack(
                     &mut targets,
                     &**instruction,
                     dataspace_catalog,
                     state_view,
+                    stack,
                 )?;
             }
         }
@@ -3854,6 +4376,19 @@ fn deferred_instruction_concrete_dataspace_targets(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
+) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
+    deferred_instruction_concrete_dataspace_targets_with_stack(
+        instruction,
+        dataspace_catalog,
+        state_view,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn deferred_instruction_concrete_dataspace_targets_with_stack(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
     if let Some(TransferBox::Asset(transfer)) = any.downcast_ref::<TransferBox>() {
@@ -3911,43 +4446,44 @@ fn deferred_instruction_concrete_dataspace_targets(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return Ok(Some(compare_and_set_primary_account_alias_dataspace_targets(
-            primary,
-        )));
+        return Ok(Some(
+            compare_and_set_primary_account_alias_dataspace_targets(primary),
+        ));
     }
     if let Some(multisig) = multisig_instruction(instruction) {
+        let collect = |instructions: &[InstructionBox],
+                       stack: &mut MultisigProposalRoutingStack|
+         -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+            let mut targets = BTreeSet::new();
+            for nested in instructions {
+                extend_instruction_concrete_dataspace_targets_with_stack(
+                    &mut targets,
+                    &**nested,
+                    dataspace_catalog,
+                    state_view,
+                    stack,
+                )?;
+            }
+            Ok(targets)
+        };
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
-                let mut targets = BTreeSet::new();
-                for nested in &propose.instructions {
-                    extend_instruction_concrete_dataspace_targets(
-                        &mut targets,
-                        &**nested,
-                        dataspace_catalog,
-                        state_view,
-                    )?;
-                }
-                Ok(Some(targets))
+                collect(&propose.instructions, stack).map(Some)
             }
             MultisigInstructionBox::Approve(approve) => {
-                let mut targets = BTreeSet::new();
-                if let Some(proposal) = state_view.and_then(|view| {
-                    multisig_proposal_state(
+                let Some(view) = state_view else {
+                    return Ok(Some(BTreeSet::new()));
+                };
+                Ok(Some(
+                    with_multisig_proposal_state(
                         view.world(),
                         &approve.account,
                         &approve.instructions_hash,
-                    )
-                }) {
-                    for nested in &proposal.instructions {
-                        extend_instruction_concrete_dataspace_targets(
-                            &mut targets,
-                            &**nested,
-                            dataspace_catalog,
-                            state_view,
-                        )?;
-                    }
-                }
-                Ok(Some(targets))
+                        stack,
+                        |proposal, stack| collect(&proposal.instructions, stack),
+                    )?
+                    .unwrap_or_default(),
+                ))
             }
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
@@ -3960,10 +4496,11 @@ fn deferred_instruction_concrete_dataspace_targets(
     let RegisterBox::Trigger(register) = register else {
         return Ok(None);
     };
-    trigger_executable_concrete_dataspace_targets(
+    trigger_executable_concrete_dataspace_targets_with_stack(
         register.object.action().executable(),
         dataspace_catalog,
         state_view,
+        stack,
     )
     .map(Some)
 }
@@ -3974,12 +4511,32 @@ fn extend_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<(), RoutingResolveError> {
-    if let Some(nested_targets) = deferred_instruction_concrete_dataspace_targets_with_world(
+    extend_instruction_concrete_dataspace_targets_with_world_and_stack(
+        targets,
         instruction,
         dataspace_catalog,
         world,
         ledger_time_ms,
-    )? && !nested_targets.is_empty()
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn extend_instruction_concrete_dataspace_targets_with_world_and_stack<W: WorldReadOnly>(
+    targets: &mut BTreeSet<DataSpaceId>,
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<(), RoutingResolveError> {
+    if let Some(nested_targets) =
+        deferred_instruction_concrete_dataspace_targets_with_world_and_stack(
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            stack,
+        )?
+        && !nested_targets.is_empty()
     {
         targets.extend(nested_targets);
         return Ok(());
@@ -4000,6 +4557,21 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+    trigger_executable_concrete_dataspace_targets_with_world_and_stack(
+        executable,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn trigger_executable_concrete_dataspace_targets_with_world_and_stack<W: WorldReadOnly>(
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
     let mut targets = BTreeSet::new();
     match executable {
         Executable::ContractCall(call) => {
@@ -4009,12 +4581,13 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
         }
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                extend_instruction_concrete_dataspace_targets_with_world(
+                extend_instruction_concrete_dataspace_targets_with_world_and_stack(
                     &mut targets,
                     &**instruction,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    stack,
                 )?;
             }
         }
@@ -4022,12 +4595,13 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
             for item in items {
                 match item {
                     ExecutableBatchItem::Instruction(instruction) => {
-                        extend_instruction_concrete_dataspace_targets_with_world(
+                        extend_instruction_concrete_dataspace_targets_with_world_and_stack(
                             &mut targets,
                             &**instruction,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
+                            stack,
                         )?;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -4043,12 +4617,13 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
-                extend_instruction_concrete_dataspace_targets_with_world(
+                extend_instruction_concrete_dataspace_targets_with_world_and_stack(
                     &mut targets,
                     &**instruction,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    stack,
                 )?;
             }
         }
@@ -4060,6 +4635,21 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
+    deferred_instruction_concrete_dataspace_targets_with_world_and_stack(
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
     if let Some(TransferBox::Asset(transfer)) = any.downcast_ref::<TransferBox>() {
@@ -4112,42 +4702,44 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return Ok(Some(compare_and_set_primary_account_alias_dataspace_targets(
-            primary,
-        )));
+        return Ok(Some(
+            compare_and_set_primary_account_alias_dataspace_targets(primary),
+        ));
     }
     if let Some(multisig) = multisig_instruction(instruction) {
-        let instructions = match &multisig {
-            MultisigInstructionBox::Propose(propose) => Some(propose.instructions.clone()),
-            MultisigInstructionBox::Approve(approve) => {
-                multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
-                    .map(|proposal| proposal.instructions)
+        let collect = |instructions: &[InstructionBox],
+                       stack: &mut MultisigProposalRoutingStack|
+         -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+            let mut targets = BTreeSet::new();
+            for nested in instructions {
+                extend_instruction_concrete_dataspace_targets_with_world_and_stack(
+                    &mut targets,
+                    &**nested,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    stack,
+                )?;
             }
+            Ok(targets)
+        };
+        return match &multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                collect(&propose.instructions, stack).map(Some)
+            }
+            MultisigInstructionBox::Approve(approve) => Ok(Some(
+                with_multisig_proposal_state(
+                    world,
+                    &approve.account,
+                    &approve.instructions_hash,
+                    stack,
+                    |proposal, stack| collect(&proposal.instructions, stack),
+                )?
+                .unwrap_or_default(),
+            )),
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
-            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
-        };
-        return match instructions {
-            Some(instructions) => {
-                let mut targets = BTreeSet::new();
-                for nested in &instructions {
-                    extend_instruction_concrete_dataspace_targets_with_world(
-                        &mut targets,
-                        &**nested,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )?;
-                }
-                Ok(Some(targets))
-            }
-            None => match multisig {
-                MultisigInstructionBox::Approve(_) => Ok(Some(BTreeSet::new())),
-                MultisigInstructionBox::Propose(_)
-                | MultisigInstructionBox::Register(_)
-                | MultisigInstructionBox::Cancel(_)
-                | MultisigInstructionBox::InvalidateOutstanding(_) => Ok(None),
-            },
+            | MultisigInstructionBox::InvalidateOutstanding(_) => Ok(None),
         };
     }
     let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
@@ -4156,13 +4748,288 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     let RegisterBox::Trigger(register) = register else {
         return Ok(None);
     };
-    trigger_executable_concrete_dataspace_targets_with_world(
+    trigger_executable_concrete_dataspace_targets_with_world_and_stack(
         register.object.action().executable(),
         dataspace_catalog,
         world,
         ledger_time_ms,
+        stack,
     )
     .map(Some)
+}
+fn fx_corridor_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    world: &W,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
+    let any = instruction.as_any();
+    let settle = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::SettleFxCorridor(settle) => Some(settle),
+                SettlementInstructionBox::Dvp(_)
+                | SettlementInstructionBox::Pvp(_)
+                | SettlementInstructionBox::SetFxCorridorPolicy(_)
+                | SettlementInstructionBox::FundFxCorridorEscrow(_)
+                | SettlementInstructionBox::RefundFxCorridorEscrow(_) => None,
+            })
+    });
+    if let Some(settle) = settle {
+        let policy = fx_overlay.policy_with_world(world, &settle.policy_id)?;
+        return Ok(Some(BTreeSet::from([
+            policy.source_dataspace,
+            policy.destination_dataspace,
+        ])));
+    }
+    let escrow_policy_id = any
+        .downcast_ref::<FundFxCorridorEscrow>()
+        .map(|fund| &fund.policy_id)
+        .or_else(|| {
+            any.downcast_ref::<RefundFxCorridorEscrow>()
+                .map(|refund| &refund.policy_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<SettlementInstructionBox>()
+                .and_then(|settlement| match settlement {
+                    SettlementInstructionBox::FundFxCorridorEscrow(fund) => Some(&fund.policy_id),
+                    SettlementInstructionBox::RefundFxCorridorEscrow(refund) => {
+                        Some(&refund.policy_id)
+                    }
+                    SettlementInstructionBox::Dvp(_)
+                    | SettlementInstructionBox::Pvp(_)
+                    | SettlementInstructionBox::SetFxCorridorPolicy(_)
+                    | SettlementInstructionBox::SettleFxCorridor(_) => None,
+                })
+        });
+    let Some(policy_id) = escrow_policy_id else {
+        return Ok(None);
+    };
+    let policy = fx_overlay.policy_with_world(world, policy_id)?;
+    Ok(Some(BTreeSet::from([policy.destination_dataspace])))
+}
+fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay<W: WorldReadOnly>(
+    targets: &mut BTreeSet<DataSpaceId>,
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<(), RoutingResolveError> {
+    extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack(
+        targets,
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        fx_overlay,
+        &mut MultisigProposalRoutingStack::default(),
+    )
+}
+fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack<
+    W: WorldReadOnly,
+>(
+    targets: &mut BTreeSet<DataSpaceId>,
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<(), RoutingResolveError> {
+    if let Some(fx_targets) = fx_corridor_instruction_concrete_dataspace_targets_with_world(
+        instruction,
+        world,
+        fx_overlay,
+    )? {
+        targets.extend(fx_targets);
+        return Ok(());
+    }
+    if let Some(multisig) = multisig_instruction(instruction) {
+        let mut collect = |instructions: &[InstructionBox],
+                           stack: &mut MultisigProposalRoutingStack|
+         -> Result<(), RoutingResolveError> {
+            let mut nested_fx_overlay = fx_overlay.clone();
+            for nested in instructions {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack(
+                    targets,
+                    &**nested,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    &nested_fx_overlay,
+                    stack,
+                )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut nested_fx_overlay,
+                    &**nested,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+            Ok(())
+        };
+        match multisig {
+            MultisigInstructionBox::Propose(propose) => collect(&propose.instructions, stack)?,
+            MultisigInstructionBox::Approve(approve) => {
+                let _ = with_multisig_proposal_instructions(
+                    fx_overlay,
+                    world,
+                    &approve.account,
+                    &approve.instructions_hash,
+                    stack,
+                    collect,
+                )?;
+            }
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => {}
+        }
+        return Ok(());
+    }
+    if let Some(RegisterBox::Trigger(register)) = instruction.as_any().downcast_ref::<RegisterBox>()
+    {
+        let mut nested_fx_overlay = fx_overlay.clone();
+        return extend_trigger_executable_concrete_dataspace_targets_with_world_and_fx_overlay(
+            targets,
+            register.object.action().executable(),
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            &mut nested_fx_overlay,
+            stack,
+        );
+    }
+    extend_instruction_concrete_dataspace_targets_with_world(
+        targets,
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
+}
+fn extend_trigger_executable_concrete_dataspace_targets_with_world_and_fx_overlay<
+    W: WorldReadOnly,
+>(
+    targets: &mut BTreeSet<DataSpaceId>,
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<(), RoutingResolveError> {
+    match executable {
+        Executable::ContractCall(call) => {
+            if let Some(target) = contract_address_dataspace_target(&call.contract_address) {
+                targets.insert(target);
+            }
+        }
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack(
+                    targets,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    fx_overlay,
+                    stack,
+                )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+        }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack(
+                            targets,
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                            fx_overlay,
+                            stack,
+                        )?;
+                        observe_top_level_instruction_fx_effects(
+                            fx_overlay,
+                            &**instruction,
+                            usize::MAX,
+                            &[],
+                            world,
+                        );
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        if let Some(target) =
+                            contract_address_dataspace_target(&call.contract_address)
+                        {
+                            targets.insert(target);
+                        }
+                    }
+                }
+            }
+        }
+        Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_stack(
+                    targets,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    fx_overlay,
+                    stack,
+                )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+fn deferred_instruction_concrete_dataspace_targets_with_world_and_fx_overlay<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
+    let is_nested_scope = multisig_instruction(instruction).is_some()
+        || matches!(
+            instruction.as_any().downcast_ref::<RegisterBox>(),
+            Some(RegisterBox::Trigger(_))
+        );
+    if !is_nested_scope {
+        return deferred_instruction_concrete_dataspace_targets_with_world(
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+    let mut targets = BTreeSet::new();
+    extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+        &mut targets,
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        fx_overlay,
+    )?;
+    Ok(Some(targets))
 }
 fn same_transaction_multisig_proposal_targets(
     instructions: &[&InstructionBox],
@@ -4170,17 +5037,13 @@ fn same_transaction_multisig_proposal_targets(
     state_view: Option<&StateView<'_>>,
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
-    for instruction in instructions.iter().copied() {
-        let Some(MultisigInstructionBox::Propose(propose)) =
-            multisig_instruction(&**instruction)
+    for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
+        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
         else {
             continue;
         };
-        let dataspace_id = multisig_propose_transaction_dataspace_target(
-            &propose,
-            dataspace_catalog,
-            state_view,
-        )?;
+        let dataspace_id =
+            multisig_propose_transaction_dataspace_target(&propose, dataspace_catalog, state_view)?;
         let mut concrete_dataspaces = BTreeSet::new();
         let mut requires_universal_coordinator = false;
         for nested in &propose.instructions {
@@ -4198,8 +5061,10 @@ fn same_transaction_multisig_proposal_targets(
                 )?;
         }
         proposals.push(SameTransactionMultisigProposalTarget {
+            top_level_instruction_index,
             account: propose.account,
             instructions_hash: HashOf::new(&propose.instructions),
+            instructions: propose.instructions,
             dataspace_id,
             concrete_dataspaces,
             requires_universal_coordinator,
@@ -4212,73 +5077,190 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
-    for instruction in instructions.iter().copied() {
-        let Some(MultisigInstructionBox::Propose(propose)) =
-            multisig_instruction(&**instruction)
-        else {
-            continue;
-        };
-        let dataspace_id = multisig_propose_transaction_dataspace_target_with_world(
-            &propose,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )?;
-        let mut concrete_dataspaces = BTreeSet::new();
-        let mut requires_universal_coordinator = false;
-        for nested in &propose.instructions {
-            extend_instruction_concrete_dataspace_targets_with_world(
-                &mut concrete_dataspaces,
-                &**nested,
+    let mut outer_fx_overlay = fx_overlay.clone();
+    for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
+        if let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
+        {
+            let mut target_fx_overlay = outer_fx_overlay.clone();
+            let instruction_target = merge_instruction_dataspace_targets_with_world_and_fx_overlay(
+                propose.instructions.iter(),
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
+                &mut target_fx_overlay,
             )?;
-            requires_universal_coordinator |=
-                instruction_transaction_target_requires_universal_coordinator_with_world(
+            let dataspace_id = instruction_target.or_else(|| {
+                account_dataspace_target(Some(world), &propose.account, ledger_time_ms)
+            });
+            let mut concrete_dataspaces = BTreeSet::new();
+            let mut concrete_fx_overlay = outer_fx_overlay.clone();
+            let mut requires_universal_coordinator = false;
+            for nested in &propose.instructions {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+                    &mut concrete_dataspaces,
                     &**nested,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                    &concrete_fx_overlay,
                 )?;
+                requires_universal_coordinator |=
+                    instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
+                        &**nested,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                        &concrete_fx_overlay,
+                    )?;
+                observe_top_level_instruction_fx_effects(
+                    &mut concrete_fx_overlay,
+                    &**nested,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+            requires_universal_coordinator |= concrete_dataspaces.len() > 1;
+            proposals.push(SameTransactionMultisigProposalTarget {
+                top_level_instruction_index,
+                account: propose.account,
+                instructions_hash: HashOf::new(&propose.instructions),
+                instructions: propose.instructions,
+                dataspace_id,
+                concrete_dataspaces,
+                requires_universal_coordinator,
+            });
         }
-        proposals.push(SameTransactionMultisigProposalTarget {
-            account: propose.account,
-            instructions_hash: HashOf::new(&propose.instructions),
-            dataspace_id,
-            concrete_dataspaces,
-            requires_universal_coordinator,
-        });
+        observe_top_level_instruction_fx_effects(
+            &mut outer_fx_overlay,
+            &**instruction,
+            top_level_instruction_index,
+            &proposals,
+            world,
+        );
     }
     Ok(proposals)
 }
-fn same_transaction_multisig_approve_route_target<'a>(
+fn same_transaction_multisig_route_target<'a>(
     proposals: &'a [SameTransactionMultisigProposalTarget],
     instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
 ) -> Option<&'a SameTransactionMultisigProposalTarget> {
-    let approve = match multisig_instruction(instruction)? {
-        MultisigInstructionBox::Approve(approve) => approve,
-        MultisigInstructionBox::Propose(_)
-        | MultisigInstructionBox::Register(_)
+    let (account, instructions_hash, must_precede) = match multisig_instruction(instruction)? {
+        MultisigInstructionBox::Propose(propose) => {
+            (propose.account, HashOf::new(&propose.instructions), false)
+        }
+        MultisigInstructionBox::Approve(approve) => {
+            (approve.account, approve.instructions_hash, true)
+        }
+        MultisigInstructionBox::Register(_)
         | MultisigInstructionBox::Cancel(_)
         | MultisigInstructionBox::InvalidateOutstanding(_) => return None,
     };
     proposals.iter().find(|proposal| {
-        proposal.account == approve.account
-            && proposal.instructions_hash == approve.instructions_hash
+        proposal.account == account
+            && proposal.instructions_hash == instructions_hash
+            && if must_precede {
+                proposal.top_level_instruction_index < top_level_instruction_index
+            } else {
+                proposal.top_level_instruction_index == top_level_instruction_index
+            }
     })
+}
+fn observe_top_level_instruction_fx_effects<W: WorldReadOnly>(
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+    instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
+    same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
+    world: &W,
+) {
+    let mut active_approvals = BTreeSet::new();
+    observe_authenticated_instruction_fx_effects(
+        fx_overlay,
+        instruction,
+        top_level_instruction_index,
+        same_transaction_multisig_proposals,
+        world,
+        &mut active_approvals,
+    );
+}
+fn observe_authenticated_instruction_fx_effects<W: WorldReadOnly>(
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+    instruction: &dyn Instruction,
+    top_level_instruction_index: usize,
+    same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
+    world: &W,
+    active_approvals: &mut BTreeSet<MultisigProposalRoutingKey>,
+) {
+    fx_overlay.observe(instruction);
+    let Some(multisig) = multisig_instruction(instruction) else {
+        return;
+    };
+    let approve = match multisig {
+        MultisigInstructionBox::Propose(propose) => {
+            // Record only a proposal instruction that execution has actually reached. Its payload
+            // remains inert until a later matching approval executes it.
+            fx_overlay.record_executed_multisig_proposal(propose);
+            return;
+        }
+        MultisigInstructionBox::Approve(approve) => approve,
+        MultisigInstructionBox::Register(_)
+        | MultisigInstructionBox::Cancel(_)
+        | MultisigInstructionBox::InvalidateOutstanding(_) => return,
+    };
+    let approval_key = (approve.account.clone(), approve.instructions_hash);
+    if !active_approvals.insert(approval_key.clone()) {
+        return;
+    }
+    // Any valid approval can be the quorum-completing vote, so routing must cover the
+    // authenticated execution branch even when this particular vote may not reach quorum.
+    // Trigger and proposal payloads remain inert until their own authenticated execution path
+    // runs. Nested approvals are different: a quorum-completing approval executes them inline, so
+    // recursively project their authenticated effects. The active set mirrors the executor's
+    // recursion-stack guard and bounds malformed or cyclic proposal graphs deterministically.
+    let instructions = fx_overlay
+        .executed_multisig_proposals
+        .get(&approval_key)
+        .cloned()
+        .or_else(|| {
+            same_transaction_multisig_route_target(
+                same_transaction_multisig_proposals,
+                instruction,
+                top_level_instruction_index,
+            )
+            .map(|proposal| proposal.instructions.clone())
+        })
+        .or_else(|| {
+            multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)
+                .map(|proposal| proposal.instructions)
+        });
+    if let Some(instructions) = instructions {
+        for nested in &instructions {
+            observe_authenticated_instruction_fx_effects(
+                fx_overlay,
+                &**nested,
+                top_level_instruction_index,
+                same_transaction_multisig_proposals,
+                world,
+                active_approvals,
+            );
+        }
+    }
+    active_approvals.remove(&approval_key);
 }
 fn multisig_propose_transaction_dataspace_target(
     propose: &MultisigPropose,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    let instruction_target =
-        merge_instruction_dataspace_target_results(propose.instructions.iter().map(|instruction| {
-        instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
-    }))?;
+    let instruction_target = merge_instruction_dataspace_target_results(
+        propose.instructions.iter().map(|instruction| {
+            instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
+        }),
+    )?;
     Ok(instruction_target.or_else(|| {
         account_dataspace_target(
             state_view.map(StateView::world),
@@ -4295,71 +5277,70 @@ fn multisig_approve_transaction_dataspace_target(
     let Some(world) = state_view.map(StateView::world) else {
         return Ok(None);
     };
-    let proposal_target = match multisig_proposal_state(
-        world,
-        &approve.account,
-        &approve.instructions_hash,
-    ) {
-        Some(proposal_state) => merge_instruction_dataspace_target_results(
-            proposal_state.instructions.iter().map(|instruction| {
-                instruction_transaction_dataspace_target(
-                    &**instruction,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }),
-        )?,
-        None => None,
-    };
+    // The instruction-target entry point completes its guarded settlement pre-walk before this
+    // helper is reached, so a cyclic graph cannot enter this unguarded result fold.
+    let proposal_target =
+        match multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash) {
+            Some(proposal_state) => merge_instruction_dataspace_target_results(
+                proposal_state.instructions.iter().map(|instruction| {
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
+            )?,
+            None => None,
+        };
     Ok(proposal_target.or_else(|| {
-            account_dataspace_target(
-                Some(world),
-                &approve.account,
-                state_view.map(state_view_ledger_time_ms),
-            )
-        }))
+        account_dataspace_target(
+            Some(world),
+            &approve.account,
+            state_view.map(state_view_ledger_time_ms),
+        )
+    }))
 }
-fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+fn multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
     approve: &MultisigApprove,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    let proposal_target = match multisig_proposal_state(
+    let proposal_target = match fx_overlay.multisig_proposal_instructions_with_world(
         world,
         &approve.account,
         &approve.instructions_hash,
     ) {
-        Some(proposal_state) => merge_instruction_dataspace_target_results(
-            proposal_state.instructions.iter().map(|instruction| {
-                instruction_transaction_dataspace_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            }),
-        )?,
+        Some(instructions) => {
+            let mut nested_fx_overlay = fx_overlay.clone();
+            merge_instruction_dataspace_targets_with_world_and_fx_overlay(
+                instructions.iter(),
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                &mut nested_fx_overlay,
+            )?
+        }
         None => None,
     };
     Ok(proposal_target
         .or_else(|| account_dataspace_target(Some(world), &approve.account, ledger_time_ms)))
 }
-fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+fn multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
     propose: &MultisigPropose,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    let instruction_target = merge_instruction_dataspace_target_results(
-        propose.instructions.iter().map(|instruction| {
-        instruction_transaction_dataspace_target_with_world(
-            &**instruction,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )
-    }),
+    let mut nested_fx_overlay = fx_overlay.clone();
+    let instruction_target = merge_instruction_dataspace_targets_with_world_and_fx_overlay(
+        propose.instructions.iter(),
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+        &mut nested_fx_overlay,
     )?;
     Ok(instruction_target
         .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms)))
@@ -4377,54 +5358,87 @@ fn trigger_executable_requires_universal_coordinator(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
-            contract_address_dataspace_target(&call.contract_address)
-                == Some(DataSpaceId::UNIVERSAL)
+            Ok(contract_address_dataspace_target(&call.contract_address)
+                == Some(DataSpaceId::UNIVERSAL))
         }
         Executable::Instructions(instructions) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || instructions.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator(
-                        &**instruction,
-                        dataspace_catalog,
-                        state_view,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in instructions {
+                if instruction_transaction_target_requires_universal_coordinator(
+                    &**instruction,
+                    dataspace_catalog,
+                    state_view,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         Executable::Batch(items) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || items.iter().any(|item| match item {
+            {
+                return Ok(true);
+            }
+            for item in items {
+                let requires_coordinator = match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         instruction_transaction_target_requires_universal_coordinator(
                             &**instruction,
                             dataspace_catalog,
                             state_view,
-                        )
+                        )?
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         contract_address_dataspace_target(&call.contract_address)
                             == Some(DataSpaceId::UNIVERSAL)
                     }
-                })
+                };
+                if requires_coordinator {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
-        Executable::Ivm(_) => false,
+        Executable::Ivm(_) => Ok(false),
         Executable::IvmProved(proved) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || proved.overlay.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator(
-                        &**instruction,
-                        dataspace_catalog,
-                        state_view,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in &proved.overlay {
+                if instruction_transaction_target_requires_universal_coordinator(
+                    &**instruction,
+                    dataspace_catalog,
+                    state_view,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     }
 }
@@ -4433,72 +5447,93 @@ fn trigger_executable_requires_universal_coordinator_with_world<W: WorldReadOnly
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
-            contract_address_dataspace_target(&call.contract_address)
-                == Some(DataSpaceId::UNIVERSAL)
+            Ok(contract_address_dataspace_target(&call.contract_address)
+                == Some(DataSpaceId::UNIVERSAL))
         }
         Executable::Instructions(instructions) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || instructions.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in instructions {
+                if instruction_transaction_target_requires_universal_coordinator_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         Executable::Batch(items) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || items.iter().any(|item| match item {
+            {
+                return Ok(true);
+            }
+            for item in items {
+                let requires_coordinator = match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         instruction_transaction_target_requires_universal_coordinator_with_world(
                             &**instruction,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
-                        )
+                        )?
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         contract_address_dataspace_target(&call.contract_address)
                             == Some(DataSpaceId::UNIVERSAL)
                     }
-                })
+                };
+                if requires_coordinator {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
-        Executable::Ivm(_) => false,
+        Executable::Ivm(_) => Ok(false),
         Executable::IvmProved(proved) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || proved.overlay.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in &proved.overlay {
+                if instruction_transaction_target_requires_universal_coordinator_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     }
 }
@@ -4506,29 +5541,31 @@ fn instruction_transaction_target_requires_universal_coordinator(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if musubi_instruction_requires_universal_coordinator(any) {
-        return true;
+        return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
+        // Concrete-target collection below is cycle-guarded and completes before the recursive
+        // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
-            MultisigInstructionBox::Approve(approve) => state_view
-                .and_then(|view| {
-                    multisig_proposal_state(
-                        view.world(),
-                        &approve.account,
-                        &approve.instructions_hash,
-                    )
-                })
+            MultisigInstructionBox::Approve(approve) => match state_view {
+                Some(view) => multisig_proposal_state_raw(
+                    view.world(),
+                    &approve.account,
+                    &approve.instructions_hash,
+                )
                 .map(|proposal| proposal.instructions),
+                None => None,
+            },
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
-            return false;
+            return Ok(false);
         };
         let mut concrete_dataspaces = BTreeSet::new();
         for nested in &instructions {
@@ -4537,16 +5574,21 @@ fn instruction_transaction_target_requires_universal_coordinator(
                 &**nested,
                 dataspace_catalog,
                 state_view,
-            );
+            )?;
         }
-        return concrete_dataspaces.len() > 1
-            || instructions.iter().any(|nested| {
-                instruction_transaction_target_requires_universal_coordinator(
-                    &**nested,
-                    dataspace_catalog,
-                    state_view,
-                )
-            });
+        if concrete_dataspaces.len() > 1 {
+            return Ok(true);
+        }
+        for nested in &instructions {
+            if instruction_transaction_target_requires_universal_coordinator(
+                &**nested,
+                dataspace_catalog,
+                state_view,
+            )? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator(
@@ -4561,56 +5603,53 @@ fn instruction_transaction_target_requires_universal_coordinator(
             Some(SettlementInstructionBox::SetFxCorridorPolicy(_))
         )
     {
-        return true;
+        return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        return Ok(fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        return Ok(fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
-        return asset_id_explicit_dataspace_target(&transfer.source)
+        let definition_target = asset_balance_definition_route_target(
+            &transfer.source.definition,
+            dataspace_catalog,
+            state_view,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&transfer.source)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &transfer.source.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
-        return asset_id_explicit_dataspace_target(&mint.destination)
+        let definition_target = asset_balance_definition_route_target(
+            &mint.destination.definition,
+            dataspace_catalog,
+            state_view,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&mint.destination)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &mint.destination.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
-        return asset_id_explicit_dataspace_target(&burn.destination)
+        let definition_target = asset_balance_definition_route_target(
+            &burn.destination.definition,
+            dataspace_catalog,
+            state_view,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&burn.destination)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &burn.destination.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator(
@@ -4633,23 +5672,25 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-    false
+    Ok(false)
 }
 fn instruction_transaction_target_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if musubi_instruction_requires_universal_coordinator(any) {
-        return true;
+        return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
+        // Concrete-target collection below is cycle-guarded and completes before the recursive
+        // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
             MultisigInstructionBox::Approve(approve) => {
-                multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
+                multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions)
             }
             MultisigInstructionBox::Register(_)
@@ -4657,7 +5698,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
-            return false;
+            return Ok(false);
         };
         let mut concrete_dataspaces = BTreeSet::new();
         for nested in &instructions {
@@ -4667,17 +5708,22 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            );
+            )?;
         }
-        return concrete_dataspaces.len() > 1
-            || instructions.iter().any(|nested| {
-                instruction_transaction_target_requires_universal_coordinator_with_world(
-                    &**nested,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            });
+        if concrete_dataspaces.len() > 1 {
+            return Ok(true);
+        }
+        for nested in &instructions {
+            if instruction_transaction_target_requires_universal_coordinator_with_world(
+                &**nested,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator_with_world(
@@ -4693,59 +5739,56 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             Some(SettlementInstructionBox::SetFxCorridorPolicy(_))
         )
     {
-        return true;
+        return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        return Ok(fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        return Ok(fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
-        return asset_id_explicit_dataspace_target(&transfer.source)
+        let definition_target = asset_balance_definition_route_target_with_world(
+            &transfer.source.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&transfer.source)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &transfer.source.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
-        return asset_id_explicit_dataspace_target(&mint.destination)
+        let definition_target = asset_balance_definition_route_target_with_world(
+            &mint.destination.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&mint.destination)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &mint.destination.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
-        return asset_id_explicit_dataspace_target(&burn.destination)
+        let definition_target = asset_balance_definition_route_target_with_world(
+            &burn.destination.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?;
+        return Ok(asset_id_explicit_dataspace_target(&burn.destination)
             == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &burn.destination.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+            || definition_target.balance_scope_policy == Some(AssetBalancePolicy::Global));
     }
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator_with_world(
@@ -4771,7 +5814,215 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-    false
+    Ok(false)
+}
+fn trigger_executable_requires_universal_coordinator_with_world_and_fx_overlay<W: WorldReadOnly>(
+    executable: &Executable,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &mut FxCorridorRoutingOverlay,
+) -> Result<bool, RoutingResolveError> {
+    let mut concrete_dataspaces = BTreeSet::new();
+    let mut requires_universal_coordinator = false;
+    match executable {
+        Executable::ContractCall(call) => {
+            return Ok(contract_address_dataspace_target(&call.contract_address)
+                == Some(DataSpaceId::UNIVERSAL));
+        }
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+                    &mut concrete_dataspaces,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    fx_overlay,
+                )?;
+                requires_universal_coordinator |=
+                    instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                        fx_overlay,
+                    )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+        }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+                            &mut concrete_dataspaces,
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                            fx_overlay,
+                        )?;
+                        requires_universal_coordinator |=
+                            instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
+                                &**instruction,
+                                dataspace_catalog,
+                                world,
+                                ledger_time_ms,
+                                fx_overlay,
+                            )?;
+                        observe_top_level_instruction_fx_effects(
+                            fx_overlay,
+                            &**instruction,
+                            usize::MAX,
+                            &[],
+                            world,
+                        );
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        let target = contract_address_dataspace_target(&call.contract_address);
+                        if let Some(target) = target {
+                            concrete_dataspaces.insert(target);
+                        }
+                        requires_universal_coordinator |= target == Some(DataSpaceId::UNIVERSAL);
+                    }
+                }
+            }
+        }
+        Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+                    &mut concrete_dataspaces,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    fx_overlay,
+                )?;
+                requires_universal_coordinator |=
+                    instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                        fx_overlay,
+                    )?;
+                observe_top_level_instruction_fx_effects(
+                    fx_overlay,
+                    &**instruction,
+                    usize::MAX,
+                    &[],
+                    world,
+                );
+            }
+        }
+    }
+    Ok(requires_universal_coordinator || concrete_dataspaces.len() > 1)
+}
+fn instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay<
+    W: WorldReadOnly,
+>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+    fx_overlay: &FxCorridorRoutingOverlay,
+) -> Result<bool, RoutingResolveError> {
+    let any = instruction.as_any();
+    if let Some(multisig) = multisig_instruction(instruction) {
+        // Concrete-target collection below is cycle-guarded and completes before the recursive
+        // coordinator scan, preventing a cyclic payload from reaching that scan.
+        let instructions = match multisig {
+            MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
+            MultisigInstructionBox::Approve(approve) => fx_overlay
+                .multisig_proposal_instructions_with_world(
+                    world,
+                    &approve.account,
+                    &approve.instructions_hash,
+                ),
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
+        };
+        let Some(instructions) = instructions else {
+            return Ok(false);
+        };
+        let mut concrete_dataspaces = BTreeSet::new();
+        let mut nested_fx_overlay = fx_overlay.clone();
+        let mut requires_universal_coordinator = false;
+        for nested in &instructions {
+            extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay(
+                &mut concrete_dataspaces,
+                &**nested,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                &nested_fx_overlay,
+            )?;
+            requires_universal_coordinator |=
+                instruction_transaction_target_requires_universal_coordinator_with_world_and_fx_overlay(
+                    &**nested,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                    &nested_fx_overlay,
+                )?;
+            observe_top_level_instruction_fx_effects(
+                &mut nested_fx_overlay,
+                &**nested,
+                usize::MAX,
+                &[],
+                world,
+            );
+        }
+        return Ok(requires_universal_coordinator || concrete_dataspaces.len() > 1);
+    }
+    if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
+        let mut nested_fx_overlay = fx_overlay.clone();
+        return trigger_executable_requires_universal_coordinator_with_world_and_fx_overlay(
+            register.object.action().executable(),
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+            &mut nested_fx_overlay,
+        );
+    }
+    if any.is::<SetFxCorridorPolicy>()
+        || matches!(
+            any.downcast_ref::<SettlementInstructionBox>(),
+            Some(SettlementInstructionBox::SetFxCorridorPolicy(_))
+        )
+    {
+        return Ok(true);
+    }
+    let settle = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::SettleFxCorridor(settle) => Some(settle),
+                SettlementInstructionBox::Dvp(_)
+                | SettlementInstructionBox::Pvp(_)
+                | SettlementInstructionBox::SetFxCorridorPolicy(_)
+                | SettlementInstructionBox::FundFxCorridorEscrow(_)
+                | SettlementInstructionBox::RefundFxCorridorEscrow(_) => None,
+            })
+    });
+    if let Some(settle) = settle {
+        let policy = fx_overlay.policy_with_world(world, &settle.policy_id)?;
+        return Ok(policy.source_dataspace != policy.destination_dataspace);
+    }
+    instruction_transaction_target_requires_universal_coordinator_with_world(
+        instruction,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
 }
 fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,
@@ -4836,18 +6087,6 @@ fn account_dataspace_target<W: WorldReadOnly>(
     }
     let dataspace_id = *dataspaces.iter().next()?;
     (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
-}
-fn authority_dataspace_target(
-    state_view: Option<&StateView<'_>>,
-    tx: &dyn TransactionRoutingView,
-) -> Option<DataSpaceId> {
-    tx.authority_opt().and_then(|authority| {
-        account_dataspace_target(
-            state_view.map(StateView::world),
-            authority,
-            state_view.map(state_view_ledger_time_ms),
-        )
-    })
 }
 fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     world: Option<&W>,
@@ -5104,10 +6343,17 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     if any.downcast_ref::<MultisigApprove>().is_some() {
         return true;
     }
-    if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
-        return trigger_executable_transaction_target_needs_state(
-            register.object.action().executable(),
-        );
+    if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Trigger(register) => trigger_executable_transaction_target_needs_state(
+                register.object.action().executable(),
+            ),
+            RegisterBox::Domain(_) | RegisterBox::Nft(_) => true,
+            RegisterBox::AssetDefinition(register) => {
+                register.object.alias.is_some() || register.object.owning_domain.is_some()
+            }
+            RegisterBox::Account(_) | RegisterBox::Peer(_) | RegisterBox::Role(_) => false,
+        };
     }
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
@@ -5153,20 +6399,35 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         };
     }
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
-        return matches!(unregister, UnregisterBox::AssetDefinition(_));
+        return matches!(
+            unregister,
+            UnregisterBox::Domain(_) | UnregisterBox::AssetDefinition(_) | UnregisterBox::Nft(_)
+        );
     }
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
-        return matches!(set_key_value, SetKeyValueBox::Account(_))
-            || matches!(set_key_value, SetKeyValueBox::AssetDefinition(_));
+        return matches!(
+            set_key_value,
+            SetKeyValueBox::Domain(_)
+                | SetKeyValueBox::Account(_)
+                | SetKeyValueBox::AssetDefinition(_)
+                | SetKeyValueBox::Nft(_)
+        );
     }
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
-        return matches!(remove_key_value, RemoveKeyValueBox::Account(_))
-            || matches!(remove_key_value, RemoveKeyValueBox::AssetDefinition(_));
+        return matches!(
+            remove_key_value,
+            RemoveKeyValueBox::Domain(_)
+                | RemoveKeyValueBox::Account(_)
+                | RemoveKeyValueBox::AssetDefinition(_)
+                | RemoveKeyValueBox::Nft(_)
+        );
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
-            TransferBox::AssetDefinition(_) | TransferBox::Asset(_) => true,
-            TransferBox::Domain(_) | TransferBox::Nft(_) => false,
+            TransferBox::Domain(_)
+            | TransferBox::AssetDefinition(_)
+            | TransferBox::Asset(_)
+            | TransferBox::Nft(_) => true,
         };
     }
     if let Some(mint) = any.downcast_ref::<MintBox>() {
@@ -5596,10 +6857,28 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
             .ok()
             .is_some(),
-        // Every asset-definition-alias scope is self-contained: domain and
-        // dataspace scopes resolve through the static catalog, while alias
-        // scopes carry their dataspace explicitly.
-        "CanManageAssetDefinitionAlias" => false,
+        "CanManageAccountAlias" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAccountAlias>()
+            .ok()
+            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+        "CanResolveAccountAlias" => permission
+            .payload()
+            .try_into_any_norito::<CanResolveAccountAlias>()
+            .ok()
+            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+        "CanDelegateAccountAliasResolution" => permission
+            .payload()
+            .try_into_any_norito::<CanDelegateAccountAliasResolution>()
+            .ok()
+            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+        "CanManageAssetDefinitionAlias" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAssetDefinitionAlias>()
+            .ok()
+            .is_some_and(|token| {
+                matches!(token.scope, AssetDefinitionAliasPermissionScope::Domain(_))
+            }),
         "CanManageFeeSponsorProgram" => permission
             .payload()
             .try_into_any_norito::<CanManageFeeSponsorProgram>()
@@ -6502,7 +7781,6 @@ fn rule_matches_smart_contract_deploy(rule: &LaneRoutingRule) -> bool {
     rule.matcher.instruction.as_deref().is_some_and(|matcher| {
         let matcher = matcher.trim();
         matches_label(matcher, "smartcontract::deploy")
-            || matches_label(matcher, "smart_contract::deploy")
     })
 }
 fn resolve_policy_routing_decision(
@@ -7165,8 +8443,7 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         || any.is::<FinalizeSmartContractCodeUpload>()
         || any.is::<CommitContractDeployment>()
     {
-        return matches_label(matcher, "smartcontract::deploy")
-            || matches_label(matcher, "smart_contract::deploy");
+        return matches_label(matcher, "smartcontract::deploy");
     }
     false
 }
@@ -7174,66 +8451,22 @@ fn matches_box_variant(matcher: &str, base: &str, variant: &str) -> bool {
     matches_label(matcher, base) || matches_label(matcher, variant)
 }
 fn matches_label(matcher: &str, label: &str) -> bool {
-    label == matcher || eq_ignoring_underscores(label, matcher)
-}
-fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
-    let mut left_iter = left.bytes().filter(|byte| *byte != b'_');
-    let mut right_iter = right.bytes().filter(|byte| *byte != b'_');
-    loop {
-        match (left_iter.next(), right_iter.next()) {
-            (None, None) => return true,
-            (Some(left_byte), Some(right_byte)) if left_byte == right_byte => {}
-            _ => return false,
-        }
-    }
+    label == matcher
 }
 /// Strategy object that derives lane/dataspace assignments for queued transactions.
 pub trait LaneRouter: Send + Sync + 'static {
-    /// Route the given transaction without requiring a state snapshot.
-    fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision;
-    /// Route the given transaction using an already acquired state view.
-    ///
-    /// Routers that require dynamic world-state can override this method and
-    /// [`LaneRouter::route_without_state`].
-    fn route_with_view(
-        &self,
-        tx: &dyn TransactionRoutingView,
-        _state_view: &StateView<'_>,
-    ) -> RoutingDecision {
-        self.route(tx)
-    }
-    /// Route the given transaction with narrow state access when possible.
-    ///
-    /// The default implementation prefers [`LaneRouter::route_without_state`]
-    /// and only falls back to taking a short-lived [`StateView`] when needed.
-    fn route_with_state(&self, tx: &dyn TransactionRoutingView, state: &State) -> RoutingDecision {
-        if let Some(decision) = self.route_without_state(tx) {
-            return decision;
-        }
-        let state_view = state.view();
-        self.route_with_view(tx, &state_view)
-    }
-    /// Route the given transaction without a state snapshot when possible.
-    ///
-    /// Routers that do not depend on dynamic world-state can override this to
-    /// avoid taking a full [`StateView`] in hot requeue paths.
-    fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
-        Some(self.route(tx))
-    }
     /// Route the given transaction and return deterministic route-resolution errors.
     fn try_route(
         &self,
         tx: &dyn TransactionRoutingView,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
-        Ok(self.route(tx))
-    }
+    ) -> Result<RoutingDecision, RoutingResolveError>;
     /// Route with an existing state view and return deterministic route-resolution errors.
     fn try_route_with_view(
         &self,
         tx: &dyn TransactionRoutingView,
-        state_view: &StateView<'_>,
+        _state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
-        Ok(self.route_with_view(tx, state_view))
+        self.try_route(tx)
     }
     /// Route with narrow state access and return deterministic route-resolution errors.
     fn try_route_with_state(
@@ -7252,7 +8485,7 @@ pub trait LaneRouter: Send + Sync + 'static {
         &self,
         tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-        Ok(self.route_without_state(tx))
+        self.try_route(tx).map(Some)
     }
     /// Build the full routing plan for a transaction and return deterministic errors.
     fn try_route_plan(
@@ -7304,8 +8537,11 @@ impl SingleLaneRouter {
     }
 }
 impl LaneRouter for SingleLaneRouter {
-    fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+    fn try_route(
+        &self,
+        _tx: &dyn TransactionRoutingView,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        Ok(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
     }
 }
 /// Router that applies the declarative policy derived from configuration.
@@ -7353,26 +8589,6 @@ impl ConfigLaneRouter {
     }
 }
 impl LaneRouter for ConfigLaneRouter {
-    fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision {
-        evaluate_policy(&self.policy, tx)
-    }
-    fn route_with_view(
-        &self,
-        tx: &dyn TransactionRoutingView,
-        state_view: &StateView<'_>,
-    ) -> RoutingDecision {
-        self.try_route_with_view(tx, state_view)
-            .unwrap_or_else(|_| {
-                fail_closed_policy_route_with_view(
-                    &state_view.nexus().routing_policy,
-                    tx,
-                    state_view,
-                )
-            })
-    }
-    fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
-        self.try_route_without_state(tx).ok().flatten()
-    }
     fn try_route(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7468,71 +8684,18 @@ impl LaneRouter for ConfigLaneRouter {
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = state_view.nexus();
-        let matched_rule = nexus
-            .routing_policy
-            .rules
-            .iter()
-            .find(|rule| rule_matches(rule, tx, Some(state_view)));
-        if let Some(plan) = native_amx_fx_routing_plan_with_world(
-            tx,
-            matched_rule,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-            state_view.world(),
-            Some(state_view_ledger_time_ms(state_view)),
-        )? {
-            return Ok(plan);
-        }
-        let autoscale_range = Some(AutoscaleElasticRange::from_nexus_for_queue_admission(
-            nexus,
-            u64::try_from(state_view.height()).unwrap_or(u64::MAX),
-        ));
-        if let Some(plan) = dataspace_scoped_permission_routing_plan(
-            tx,
-            matched_rule,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-            Some(state_view),
-        )? {
-            return Ok(plan);
-        }
-        if let Some(account_id) = account_permission_holder_routing_target(tx) {
-            return resolve_query_routing_decision(
-                &nexus.routing_policy,
-                &nexus.lane_catalog,
-                &nexus.dataspace_catalog,
-                account_id,
-                Some(state_view),
-            )
-            .map(|decision| {
-                RoutingPlan::Single(RouteLeg::new(decision, RouteLegRole::Coordinator))
-            });
-        }
-        let mut target = transaction_dataspace_routing_target_info(
-            tx,
-            Some(&nexus.dataspace_catalog),
-            Some(state_view),
-        )?;
-        target = reconcile_native_amx_participants_with_world(
-            target,
-            tx,
-            &nexus.dataspace_catalog,
-            state_view.world(),
-            Some(state_view_ledger_time_ms(state_view)),
-        )?;
-        apply_authority_dataspace_target(
-            &mut target,
-            authority_dataspace_target(Some(state_view), tx),
-            matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
-        );
-        resolve_policy_routing_plan(
+        let ledger_time_ms = state_view_ledger_time_ms(state_view);
+        evaluate_policy_plan_with_catalog_and_world_at_opt(
             &nexus.routing_policy,
-            matched_rule,
-            target,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
-            Some(tx),
-            autoscale_range,
+            tx,
+            state_view.world(),
+            Some(ledger_time_ms),
+            Some(AutoscaleElasticRange::from_nexus_for_queue_admission(
+                nexus,
+                u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+            )),
         )
     }
     fn try_route_without_state(
@@ -8584,8 +9747,12 @@ mod tests {
             let with_view = router
                 .try_route_with_view(&tx, &state.view())
                 .expect("default route should resolve with live catalog");
-            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
-            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                router
+                    .try_route_with_state(&tx, &state)
+                    .expect("default route should resolve with live state"),
+                with_view
+            );
             let with_catalog = evaluate_policy_with_catalog(
                 &policy,
                 router.lane_catalog.as_ref(),
@@ -8657,15 +9824,15 @@ mod tests {
                 None,
                 "state-free no-target IVM routing must defer possible autoscale sharding"
             );
-            assert_eq!(
-                router.route_without_state(&tx),
-                None,
-                "non-fallible state-free hint must not pin no-target IVM traffic to the base lane"
-            );
             let with_view = router
                 .try_route_with_view(&tx, &state.view())
                 .expect("live no-target IVM route should resolve");
-            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                router
+                    .try_route_with_state(&tx, &state)
+                    .expect("live no-target IVM route should resolve with state"),
+                with_view
+            );
             lanes_seen.insert(with_view.lane_id);
             if lanes_seen.len() == 2 {
                 break;
@@ -8703,7 +9870,12 @@ mod tests {
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 "future-created elastic lanes must not receive default-route traffic"
             );
-            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                router
+                    .try_route_with_state(&tx, &state)
+                    .expect("future-created elastic lane route should resolve"),
+                with_view
+            );
             assert_eq!(
                 router
                     .try_route_plan_with_view(&tx, &state.view())
@@ -8965,7 +10137,6 @@ mod tests {
                 .try_route_with_state(&tx, &state)
                 .expect("default route should resolve with live Nexus state");
             assert_eq!(with_state.dataspace_id, DataSpaceId::UNIVERSAL);
-            assert_eq!(router.route_with_state(&tx, &state), with_state);
             assert_eq!(
                 router
                     .try_route_plan_with_state(&tx, &state)
@@ -9010,8 +10181,12 @@ mod tests {
             let with_view = router
                 .try_route_with_view(&tx, &state.view())
                 .expect("default route should resolve with live catalog");
-            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
-            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                router
+                    .try_route_with_state(&tx, &state)
+                    .expect("ranged default route should resolve"),
+                with_view
+            );
             assert_ne!(with_view.lane_id, LaneId::new(8));
             assert_eq!(
                 router
@@ -9086,8 +10261,12 @@ mod tests {
                     "{} corruption must keep default traffic on the base lane until repaired",
                     case.name
                 );
-                assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
-                assert_eq!(router.route_with_state(&tx, &state), with_view);
+                assert_eq!(
+                    router
+                        .try_route_with_state(&tx, &state)
+                        .unwrap_or_else(|err| panic!("{}: state route failed: {err}", case.name)),
+                    with_view
+                );
                 assert_eq!(
                     router
                         .try_route_plan_with_view(&tx, &state.view())
@@ -9126,8 +10305,12 @@ mod tests {
             let with_view = router
                 .try_route_with_view(&tx, &state.view())
                 .expect("default route should resolve with live catalog");
-            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
-            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                router
+                    .try_route_with_state(&tx, &state)
+                    .expect("disabled autoscale default route should resolve"),
+                with_view
+            );
             assert_eq!(
                 with_view,
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
@@ -9375,14 +10558,16 @@ mod tests {
             })
         );
         assert_eq!(
-            router.route_with_view(&tx, &state.view()),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            "non-fallible live routing must not return the autoscale-owned default lane"
+            router.try_route_with_view(&tx, &state.view()),
+            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+                lane_id: LaneId::new(1),
+            })
         );
         assert_eq!(
-            router.route_with_state(&tx, &state),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            "state-backed non-fallible routing must fail closed to a canonical base route"
+            router.try_route_with_state(&tx, &state),
+            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+                lane_id: LaneId::new(1),
+            })
         );
         assert_eq!(router.try_route_without_state(&tx), Ok(None));
     }
@@ -9472,7 +10657,8 @@ mod tests {
             );
             assert_eq!(
                 router
-                    .route_without_state(&tx)
+                    .try_route_without_state(&tx)
+                    .expect("explicit rule state-free route should resolve")
                     .expect("explicit rule route should not need state"),
                 RoutingDecision::new(LaneId::new(2), DataSpaceId::UNIVERSAL)
             );
@@ -9526,14 +10712,16 @@ mod tests {
             })
         );
         assert_eq!(
-            router.route_with_view(&tx, &state.view()),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            "non-fallible live routing must not return the autoscale-owned rule lane"
+            router.try_route_with_view(&tx, &state.view()),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
         );
         assert_eq!(
-            router.route_with_state(&tx, &state),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            "state-backed non-fallible routing must fail closed to a canonical base route"
+            router.try_route_with_state(&tx, &state),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
         );
         assert_eq!(
             router.try_route_without_state(&tx),
@@ -10200,459 +11388,7 @@ mod tests {
             RoutingPlan::single(RoutingDecision::new(delivery_lane, delivery_dataspace,)),
         );
     }
-    #[test]
-    fn route_resolution_rejects_lane_dataspace_mismatch() {
-        use iroha_data_model::nexus::DataSpaceMetadata;
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(4),
-                dataspace: Some(DataSpaceId::new(9)),
-                matcher: LaneRoutingMatcher {
-                    account: Some(alice_id.to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(7),
-                alias: "beta".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            DataSpaceMetadata {
-                id: DataSpaceId::new(9),
-                alias: "gamma".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid dataspace catalog");
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(4), DataSpaceId::new(7)),
-        ]);
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-        let state = blank_state();
-        install_router_nexus(&state, &router);
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("override", "universal").expect("domain"),
-            )))],
-        );
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(
-            decision,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        let helper_err =
-            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
-                .expect_err("mismatched lane/dataspace must be rejected");
-        assert!(matches!(
-            helper_err,
-            RoutingResolveError::LaneDataspaceMismatch { .. }
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_unknown_lane() {
-        use iroha_data_model::nexus::DataSpaceMetadata;
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(9),
-                dataspace: Some(DataSpaceId::new(7)),
-                matcher: LaneRoutingMatcher {
-                    account: Some(alice_id.to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(7),
-                alias: "alpha".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid dataspace catalog");
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-        let state = blank_state();
-        install_router_nexus(&state, &router);
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("fallback", "universal").expect("domain"),
-            )))],
-        );
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(
-            decision,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        let helper_err =
-            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
-                .expect_err("unknown lane must be rejected");
-        assert!(matches!(
-            helper_err,
-            RoutingResolveError::UnknownLane { .. }
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_missing_default_lane() {
-        use iroha_data_model::nexus::DataSpaceMetadata;
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::new(9),
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(11),
-                dataspace: None,
-                matcher: LaneRoutingMatcher {
-                    account: Some(alice_id.to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(7),
-                alias: "alpha".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            DataSpaceMetadata {
-                id: DataSpaceId::new(9),
-                alias: "beta".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid dataspace catalog");
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::new(2), DataSpaceId::new(7)),
-            (LaneId::new(4), DataSpaceId::new(9)),
-        ]);
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-        let state = blank_state();
-        install_router_nexus(&state, &router);
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("fallback", "universal").expect("domain"),
-            )))],
-        );
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(
-            decision,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        let helper_err =
-            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
-                .expect_err("missing default lane must be rejected");
-        assert!(matches!(
-            helper_err,
-            RoutingResolveError::UnknownLane { .. }
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_missing_default_dataspace() {
-        use iroha_data_model::nexus::DataSpaceMetadata;
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::new(11),
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::SINGLE,
-                dataspace: None,
-                matcher: LaneRoutingMatcher {
-                    account: Some(alice_id.to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::new(7),
-            alias: "alpha".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("valid dataspace catalog");
-        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::new(9))]);
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("fallback", "universal").expect("domain"),
-            )))],
-        );
-        let decision = router.route_with_view(&tx, &blank_state().view());
-        assert_eq!(decision.lane_id, LaneId::SINGLE);
-        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-        let helper_err =
-            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
-                .expect_err("missing default dataspace must be rejected");
-        assert!(matches!(
-            helper_err,
-            RoutingResolveError::UnknownDataspace { .. }
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_unknown_dataspace_on_default_public_lane() {
-        let dynamic_dataspace = DataSpaceId::new(4_242);
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let catalog = dataspace_catalog(&[]);
-        let err = resolve_routing_decision(
-            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace),
-            &lane_catalog,
-            &catalog,
-        )
-        .expect_err("unknown dataspaces must not use the universal lane");
-        assert!(matches!(
-            err,
-            RoutingResolveError::UnknownDataspace { dataspace_id }
-                if dataspace_id == dynamic_dataspace
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_unknown_dataspace_on_non_default_universal_lane() {
-        let dynamic_dataspace = DataSpaceId::new(4_242);
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::new(2), DataSpaceId::UNIVERSAL)]);
-        let catalog = dataspace_catalog(&[]);
-        let err = resolve_routing_decision(
-            RoutingDecision::new(LaneId::new(2), dynamic_dataspace),
-            &lane_catalog,
-            &catalog,
-        )
-        .expect_err("non-default universal lanes must not accept unknown dataspaces");
-        assert!(matches!(
-            err,
-            RoutingResolveError::UnknownDataspace { dataspace_id }
-                if dataspace_id == dynamic_dataspace
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_dynamic_dataspace_on_dataspace_scoped_lane() {
-        let configured_dataspace = DataSpaceId::new(7);
-        let dynamic_dataspace = DataSpaceId::new(4_242);
-        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, configured_dataspace)]);
-        let catalog = dataspace_catalog(&[(configured_dataspace, "configured")]);
-        let err = resolve_routing_decision(
-            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace),
-            &lane_catalog,
-            &catalog,
-        )
-        .expect_err("dataspace-scoped lanes must not accept unknown dataspaces");
-        assert!(matches!(
-            err,
-            RoutingResolveError::UnknownDataspace { dataspace_id }
-                if dataspace_id == dynamic_dataspace
-        ));
-    }
-    #[test]
-    fn route_resolution_rejects_universal_when_catalog_omits_universal() {
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let catalog = DataSpaceCatalog::new(vec![iroha_data_model::nexus::DataSpaceMetadata {
-            id: DataSpaceId::new(7),
-            alias: "configured".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("catalog without universal");
-        let err = resolve_routing_decision(
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            &lane_catalog,
-            &catalog,
-        )
-        .expect_err("reserved universal dataspace still needs a catalog entry");
-        assert!(matches!(
-            err,
-            RoutingResolveError::UnknownDataspace { dataspace_id }
-                if dataspace_id == DataSpaceId::UNIVERSAL
-        ));
-    }
-    #[test]
-    fn dataspace_alias_target_with_world_resolves_active_sns_dataspace() {
-        let (authority_id, _) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[]);
-        let world = world_with_dynamic_dataspace("alpha", &authority_id);
-        let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-        assert_eq!(
-            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(0)),
-            Some(expected)
-        );
-        assert_eq!(
-            dataspace_alias_target_with_world("missing", Some(&catalog), &view, Some(0)),
-            None
-        );
-        assert_eq!(
-            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, None),
-            None
-        );
-    }
-    #[test]
-    fn dataspace_alias_target_with_world_rejects_inactive_sns_dataspace_at_ledger_time() {
-        let (authority_id, _) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[]);
-        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
-        let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-        assert_eq!(
-            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(9)),
-            Some(expected)
-        );
-        assert_eq!(
-            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(10)),
-            None
-        );
-    }
-    #[test]
-    fn evaluate_policy_with_catalog_and_world_resolves_static_alias_without_ledger_time() {
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let static_dataspace = DataSpaceId::new(7);
-        let catalog = dataspace_catalog(&[(static_dataspace, "alpha")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, static_dataspace)]);
-        let policy = default_routing_policy();
-        let tx = sample_transaction(
-            &authority_id,
-            authority_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("static", "alpha").expect("domain"),
-            )))],
-        );
-        let world = crate::state::World::default();
-        let view = world.view();
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(&policy, &lane_catalog, &catalog, &tx, &view)
-                .expect("static alias should resolve without a ledger time"),
-            RoutingDecision::new(LaneId::SINGLE, static_dataspace)
-        );
-    }
-    #[test]
-    fn evaluate_policy_with_catalog_and_world_at_rejects_dynamic_sns_without_canonical_lane() {
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[]);
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let policy = default_routing_policy();
-        let tx = sample_transaction(
-            &authority_id,
-            authority_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("dynamic", "alpha").expect("domain"),
-            )))],
-        );
-        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
-        let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world_at(
-                &policy,
-                &lane_catalog,
-                &catalog,
-                &tx,
-                &view,
-                9,
-            ),
-            Err(RoutingResolveError::NoLaneForDataspace {
-                dataspace_id: expected,
-            })
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world_at(
-                &policy,
-                &lane_catalog,
-                &catalog,
-                &tx,
-                &view,
-                10,
-            )
-            .expect("inactive dynamic route should fall back to default"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(&policy, &lane_catalog, &catalog, &tx, &view)
-                .expect("no-time world route should fall back to static catalog only"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn evaluate_policy_plan_with_catalog_and_world_at_rejects_dynamic_sns_without_canonical_lane() {
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[]);
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let policy = default_routing_policy();
-        let tx = sample_transaction(
-            &authority_id,
-            authority_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("dynamic", "alpha").expect("domain"),
-            )))],
-        );
-        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
-        let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world_at(
-                &policy,
-                &lane_catalog,
-                &catalog,
-                &tx,
-                &view,
-                9,
-            ),
-            Err(RoutingResolveError::NoLaneForDataspace {
-                dataspace_id: expected,
-            })
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world_at(
-                &policy,
-                &lane_catalog,
-                &catalog,
-                &tx,
-                &view,
-                10,
-            )
-            .expect("inactive dynamic plan should fall back to default"),
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                &lane_catalog,
-                &catalog,
-                &tx,
-                &view
-            )
-            .expect("no-time world plan should fall back to static catalog only"),
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
-        );
-    }
+    include!("router_route_resolution_tests.rs"); // Preserve stable route-resolution test paths.
     #[test]
     fn matches_register_domain_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10680,11 +11416,21 @@ mod tests {
         );
         let state = blank_state();
         install_router_nexus(&state, &router);
-        let decision = router.route_with_view(&tx, &state.view());
+        let decision = router
+            .try_route_with_view(&tx, &state.view())
+            .expect("register-domain matcher route should resolve");
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
     #[test]
     fn matches_smartcontract_deploy_rule() {
+        assert!(matches_label(
+            "smartcontract::deploy",
+            "smartcontract::deploy"
+        ));
+        assert!(!matches_label(
+            "smart_contract::deploy",
+            "smartcontract::deploy"
+        ));
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -10725,7 +11471,9 @@ mod tests {
         ];
         for instruction in cases {
             let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
-            let decision = router.route_with_view(&tx, &state.view());
+            let decision = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("smart-contract deployment matcher route should resolve");
             assert_eq!(decision.lane_id, LaneId::new(1));
         }
     }
@@ -11836,7 +12584,15 @@ mod tests {
         );
     }
     #[test]
-    fn matches_set_key_value_rule_without_underscores() {
+    fn rejects_noncanonical_instruction_matcher_without_underscores() {
+        assert!(matches_label(
+            "set_key_value::account",
+            "set_key_value::account"
+        ));
+        assert!(!matches_label(
+            "setkeyvalue::account",
+            "set_key_value::account"
+        ));
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -11865,8 +12621,10 @@ mod tests {
         );
         let state = blank_state();
         install_router_nexus(&state, &router);
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(1));
+        let decision = router
+            .try_route_with_view(&tx, &state.view())
+            .expect("noncanonical matcher must leave the canonical default route valid");
+        assert_eq!(decision.lane_id, LaneId::SINGLE);
     }
     #[test]
     fn matches_account_alias_scope_rule() {
@@ -11916,8 +12674,12 @@ mod tests {
             catalog,
         );
         install_router_nexus(&state, &router);
-        let uae_decision = router.route_with_view(&uae_tx, &state.view());
-        let bank_decision = router.route_with_view(&bank_tx, &state.view());
+        let uae_decision = router
+            .try_route_with_view(&uae_tx, &state.view())
+            .expect("UAE alias route should resolve");
+        let bank_decision = router
+            .try_route_with_view(&bank_tx, &state.view())
+            .expect("bank alias route should resolve");
         assert_eq!(uae_decision.lane_id, LaneId::new(1));
         assert_eq!(bank_decision.lane_id, LaneId::SINGLE);
     }
@@ -11967,7 +12729,9 @@ mod tests {
             catalog,
         );
         install_router_nexus(&state, &router);
-        let decision = router.route_with_view(&tx, &state.view());
+        let decision = router
+            .try_route_with_view(&tx, &state.view())
+            .expect("transfer destination alias route should resolve");
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
     #[test]
@@ -12001,7 +12765,9 @@ mod tests {
         );
         let state = blank_state();
         install_router_nexus(&state, &router);
-        let decision = router.route_with_view(&tx, &state.view());
+        let decision = router
+            .try_route_with_view(&tx, &state.view())
+            .expect("transferred domain route should resolve");
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
     #[test]
@@ -12313,8 +13079,16 @@ mod tests {
         assert_eq!(
             router
                 .try_route_without_state(&tx)
-                .expect("declared alias route should not need state"),
-            Some(RoutingDecision::new(lane_id, dataspace_id))
+                .expect("declared alias state requirement should be deterministic"),
+            None
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        assert_eq!(
+            router
+                .try_route_with_state(&tx, &state)
+                .expect("declared alias should resolve against live SNS/static state"),
+            RoutingDecision::new(lane_id, dataspace_id)
         );
     }
     #[test]
@@ -12401,8 +13175,16 @@ mod tests {
         assert_eq!(
             router
                 .try_route_without_state(&tx)
-                .expect("universal alias route should not need state"),
-            Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+                .expect("universal alias state requirement should be deterministic"),
+            None
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        assert_eq!(
+            router
+                .try_route_with_state(&tx, &state)
+                .expect("universal alias should resolve with live state"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
     #[test]
@@ -12446,8 +13228,8 @@ mod tests {
         assert_eq!(
             router
                 .try_route_without_state(&tx)
-                .expect("declared owning-domain route should not need state"),
-            Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL,))
+                .expect("declared owning-domain state requirement should be deterministic"),
+            None
         );
         assert_eq!(
             router
@@ -12489,9 +13271,12 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
+        assert_eq!(router.try_route_without_state(&tx), Ok(None));
+        let state = blank_state();
+        install_router_nexus(&state, &router);
         let err = router
-            .try_route_without_state(&tx)
-            .expect_err("alias home without lane should fail");
+            .try_route_with_state(&tx, &state)
+            .expect_err("state-backed alias home without lane should fail");
         assert_eq!(
             err,
             RoutingResolveError::NoLaneForDataspace { dataspace_id }
@@ -13608,7 +14393,7 @@ mod tests {
         )
     }
     #[test]
-    fn fx_policy_update_mixed_with_private_target_retains_amx_plan_without_state() {
+    fn fx_policy_update_mixed_with_private_target_retains_amx_plan_with_state() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
         let (source_sink, _) = gen_account_in("wonderland");
         let (destination_reserve, _) = gen_account_in("wonderland");
@@ -13657,6 +14442,8 @@ mod tests {
                 RouteLegRole::Participant,
             )],
         );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
         for (index, update) in updates.into_iter().enumerate() {
             let tx = sample_transaction(
                 &authority,
@@ -13667,12 +14454,19 @@ mod tests {
                 router
                     .try_route_plan_without_state(&tx)
                     .unwrap_or_else(|error| panic!("policy update {index} failed: {error}")),
-                Some(expected.clone()),
+                None,
+                "textual domain routing must wait for SNS state",
             );
             assert_eq!(
                 router
                     .try_route_plan(&tx)
                     .unwrap_or_else(|error| panic!("policy update plan {index} failed: {error}")),
+                expected,
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_state(&tx, &state)
+                    .unwrap_or_else(|error| panic!("state plan {index} failed: {error}")),
                 expected,
             );
 
@@ -13687,8 +14481,9 @@ mod tests {
                 vec![update, private_write.clone()],
                 strict_metadata,
             );
+            assert_eq!(router.try_route_plan_without_state(&strict_tx), Ok(None),);
             assert_eq!(
-                router.try_route_plan_without_state(&strict_tx),
+                router.try_route_plan_with_state(&strict_tx, &state),
                 Err(
                     RoutingResolveError::ConflictingTransactionDataspaceTargets {
                         first_dataspace_id: DataSpaceId::UNIVERSAL,
@@ -13697,6 +14492,836 @@ mod tests {
                 ),
             );
         }
+    }
+    #[test]
+    fn same_transaction_fx_policy_overlay_is_ordered_across_executables() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog.clone(),
+            lane_catalog,
+        );
+        let (corridor, settlement) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "same_transaction_policy",
+        );
+        let fund = FundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let refund = RefundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let destination_plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let operations = [
+            (
+                "direct fund",
+                InstructionBox::from(fund),
+                destination_plan.clone(),
+            ),
+            (
+                "boxed refund",
+                InstructionBox::from(SettlementInstructionBox::RefundFxCorridorEscrow(refund)),
+                destination_plan,
+            ),
+            (
+                "boxed settlement",
+                settlement,
+                expected_fx_plan(
+                    source_lane,
+                    source_dataspace,
+                    destination_lane,
+                    destination_dataspace,
+                ),
+            ),
+        ];
+        let updates = [
+            (
+                "direct policy",
+                InstructionBox::from(SetFxCorridorPolicy {
+                    policy: corridor.clone(),
+                }),
+            ),
+            (
+                "boxed policy",
+                InstructionBox::from(SettlementInstructionBox::SetFxCorridorPolicy(
+                    SetFxCorridorPolicy {
+                        policy: corridor.clone(),
+                    },
+                )),
+            ),
+        ];
+        let executable_variants = |instructions: Vec<InstructionBox>| {
+            vec![
+                (
+                    "instructions",
+                    Executable::Instructions(instructions.clone().into()),
+                ),
+                (
+                    "batch",
+                    Executable::Batch(
+                        instructions
+                            .iter()
+                            .cloned()
+                            .map(ExecutableBatchItem::Instruction)
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                ),
+                ("proved overlay", sample_proved_executable(instructions)),
+            ]
+        };
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        for (update_label, update) in updates {
+            for (operation_label, operation, expected) in &operations {
+                for (executable_label, executable) in
+                    executable_variants(vec![update.clone(), operation.clone()])
+                {
+                    let tx = sample_executable_transaction(
+                        &authority,
+                        authority_keypair.private_key(),
+                        executable,
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_view(&tx, &state.view()),
+                        Ok(expected.clone()),
+                        "{update_label} before {operation_label} in {executable_label}",
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_state(&tx, &state),
+                        Ok(expected.clone()),
+                        "state-backed {update_label} before {operation_label} in {executable_label}",
+                    );
+                }
+                for (executable_label, executable) in
+                    executable_variants(vec![operation.clone(), update.clone()])
+                {
+                    let tx = sample_executable_transaction(
+                        &authority,
+                        authority_keypair.private_key(),
+                        executable,
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_view(&tx, &state.view()),
+                        Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                        "{operation_label} before {update_label} in {executable_label}",
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_state(&tx, &state),
+                        Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                        "state-backed {operation_label} before {update_label} in {executable_label}",
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn nested_fx_policy_overlay_is_ordered_and_does_not_leak() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let destination_lane = LaneId::new(4);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(3), source_dataspace),
+                (destination_lane, destination_dataspace),
+            ]),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "nested_policy_overlay",
+        );
+        let update = InstructionBox::from(SetFxCorridorPolicy {
+            policy: corridor.clone(),
+        });
+        let fund = InstructionBox::from(SettlementInstructionBox::FundFxCorridorEscrow(
+            FundFxCorridorEscrow {
+                policy_id: corridor.policy_id,
+                expected_policy_revision: corridor.revision,
+                destination_asset_definition_id: corridor.destination_asset_definition_id,
+                amount: 10_u32.into(),
+            },
+        ));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let nested_cases = [
+            (
+                "trigger",
+                sample_trigger_registration(
+                    &authority,
+                    "ordered_nested_fx_policy",
+                    Executable::Instructions(vec![update.clone(), fund.clone()].into()),
+                ),
+                sample_trigger_registration(
+                    &authority,
+                    "reversed_nested_fx_policy",
+                    Executable::Instructions(vec![fund.clone(), update.clone()].into()),
+                ),
+                sample_trigger_registration(
+                    &authority,
+                    "isolated_nested_fx_policy",
+                    Executable::Instructions(vec![update.clone()].into()),
+                ),
+            ),
+            (
+                "multisig proposal",
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![update.clone(), fund.clone()],
+                    None,
+                )),
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![fund.clone(), update.clone()],
+                    None,
+                )),
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![update.clone()],
+                    None,
+                )),
+            ),
+        ];
+        for (label, ordered, reversed, isolated_update) in nested_cases {
+            let ordered_tx =
+                sample_transaction(&authority, authority_keypair.private_key(), vec![ordered]);
+            assert_eq!(
+                router.try_route_plan_with_state(&ordered_tx, &state),
+                Ok(expected.clone()),
+                "ordered {label} overlay",
+            );
+            let reversed_tx =
+                sample_transaction(&authority, authority_keypair.private_key(), vec![reversed]);
+            assert_eq!(
+                router.try_route_plan_with_state(&reversed_tx, &state),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "reversed {label} overlay",
+            );
+            let leak_tx = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![isolated_update, fund.clone()],
+            );
+            assert_eq!(
+                router.try_route_plan_with_state(&leak_tx, &state),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "{label} overlay must not escape to a later outer instruction",
+            );
+        }
+    }
+    #[test]
+    fn multisig_approve_fx_policy_overlay_flows_to_later_outer_instruction() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let policy = default_routing_policy();
+        let router = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "approved_policy_overlay",
+        );
+        let update = InstructionBox::from(SetFxCorridorPolicy {
+            policy: corridor.clone(),
+        });
+        let fund = InstructionBox::from(SettlementInstructionBox::FundFxCorridorEscrow(
+            FundFxCorridorEscrow {
+                policy_id: corridor.policy_id.clone(),
+                expected_policy_revision: corridor.revision,
+                destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+                amount: 10_u32.into(),
+            },
+        ));
+        let proposed = vec![update.clone()];
+        let proposal_hash = HashOf::new(&proposed);
+        let proposal = InstructionBox::from(MultisigPropose::new(
+            multisig_id.clone(),
+            proposed.clone(),
+            None,
+        ));
+        let approval =
+            InstructionBox::from(MultisigApprove::new(multisig_id.clone(), proposal_hash));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![proposal.clone(), approval.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&tx, &state.view()),
+            Ok(expected.clone()),
+            "an authenticated preceding proposal may execute its FX policy update",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &tx,
+                state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on approval effects",
+        );
+
+        let reversed_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![approval.clone(), proposal.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&reversed_tx, &state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an approval must not authenticate a later sibling proposal",
+        );
+
+        let nested_cases = [
+            sample_trigger_registration(
+                &authority,
+                "nested_multisig_fx_approval",
+                Executable::Instructions(vec![approval.clone()].into()),
+            ),
+            InstructionBox::from(MultisigPropose::new(
+                multisig_id.clone(),
+                vec![approval.clone()],
+                None,
+            )),
+        ];
+        for (index, nested_approval) in nested_cases.into_iter().enumerate() {
+            let leak_tx = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![proposal.clone(), nested_approval, fund.clone()],
+            );
+            assert_eq!(
+                router.try_route_plan_with_view(&leak_tx, &state.view()),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "nested approval case {index} must not leak payload effects",
+            );
+        }
+
+        let mut persisted_state = blank_state();
+        install_router_nexus(&persisted_state, &router);
+        let persisted_proposal = MultisigProposalState::new(
+            multisig_id.clone(),
+            proposal_hash,
+            proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&multisig_id, &proposal_hash),
+                persisted_proposal.encode(),
+            );
+        let persisted_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![approval.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&persisted_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "persisted proposal fallback must propagate the same ordered effect",
+        );
+
+        let (outer_multisig_id, _) = gen_account_in("wonderland");
+        let outer_proposed = vec![approval.clone()];
+        let outer_proposal_hash = HashOf::new(&outer_proposed);
+        let outer_proposal = MultisigProposalState::new(
+            outer_multisig_id.clone(),
+            outer_proposal_hash,
+            outer_proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&outer_multisig_id, &outer_proposal_hash),
+                outer_proposal.encode(),
+            );
+        let nested_approval_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(MultisigApprove::new(outer_multisig_id, outer_proposal_hash)),
+                fund.clone(),
+            ],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&nested_approval_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "a persisted approval chain must propagate authenticated FX policy effects",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &nested_approval_tx,
+                persisted_state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on nested approval effects",
+        );
+
+        let (payload_multisig_id, _) = gen_account_in("wonderland");
+        let payload_proposed = vec![approval.clone(), fund.clone()];
+        let payload_proposal_hash = HashOf::new(&payload_proposed);
+        let payload_proposal = MultisigProposalState::new(
+            payload_multisig_id.clone(),
+            payload_proposal_hash,
+            payload_proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&payload_multisig_id, &payload_proposal_hash),
+                payload_proposal.encode(),
+            );
+        let nested_payload_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                payload_multisig_id,
+                payload_proposal_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&nested_payload_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "an approval chain must expose FX policy effects to later authenticated payload instructions",
+        );
+
+        let (local_multisig_id, _) = gen_account_in("wonderland");
+        let local_proposed = vec![update.clone()];
+        let local_proposal_hash = HashOf::new(&local_proposed);
+        let local_proposal = InstructionBox::from(MultisigPropose::new(
+            local_multisig_id.clone(),
+            local_proposed,
+            None,
+        ));
+        let local_approval =
+            InstructionBox::from(MultisigApprove::new(local_multisig_id, local_proposal_hash));
+        let (ordered_outer_id, _) = gen_account_in("wonderland");
+        let ordered_outer_instructions =
+            vec![local_proposal.clone(), local_approval.clone(), fund.clone()];
+        let ordered_outer_hash = HashOf::new(&ordered_outer_instructions);
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&ordered_outer_id, &ordered_outer_hash),
+                MultisigProposalState::new(
+                    ordered_outer_id.clone(),
+                    ordered_outer_hash,
+                    ordered_outer_instructions,
+                    1,
+                    10_000,
+                    BTreeSet::new(),
+                    None,
+                )
+                .encode(),
+            );
+        let ordered_local_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                ordered_outer_id,
+                ordered_outer_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&ordered_local_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "a persisted payload must observe a locally executed proposal before its approval",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &ordered_local_tx,
+                persisted_state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on local proposal effects",
+        );
+
+        let (reversed_outer_id, _) = gen_account_in("wonderland");
+        let reversed_outer_instructions =
+            vec![local_approval.clone(), local_proposal.clone(), fund.clone()];
+        let reversed_outer_hash = HashOf::new(&reversed_outer_instructions);
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&reversed_outer_id, &reversed_outer_hash),
+                MultisigProposalState::new(
+                    reversed_outer_id.clone(),
+                    reversed_outer_hash,
+                    reversed_outer_instructions,
+                    1,
+                    10_000,
+                    BTreeSet::new(),
+                    None,
+                )
+                .encode(),
+            );
+        let reversed_local_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                reversed_outer_id,
+                reversed_outer_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&reversed_local_tx, &persisted_state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an approval must not see a local proposal that executes later in its payload",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &reversed_local_tx,
+                persisted_state.view().world(),
+            ),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+        );
+
+        let (inert_outer_id, _) = gen_account_in("wonderland");
+        let inert_proposal = InstructionBox::from(MultisigPropose::new(
+            inert_outer_id,
+            vec![local_proposal, local_approval],
+            None,
+        ));
+        let inert_leak_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![inert_proposal, fund],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&inert_leak_tx, &persisted_state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an unapproved proposal payload must not leak its local approval effects",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &inert_leak_tx,
+                persisted_state.view().world(),
+            ),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+        );
+    }
+    #[test]
+    fn authenticated_multisig_approval_fx_effect_projection_breaks_cycles() {
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
+        let approval =
+            InstructionBox::from(MultisigApprove::new(multisig_id.clone(), instructions_hash));
+        let proposal = MultisigProposalState::new(
+            multisig_id.clone(),
+            instructions_hash,
+            vec![approval.clone()],
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        let mut state = blank_state();
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&multisig_id, &instructions_hash),
+            proposal.encode(),
+        );
+        let view = state.view();
+        let mut fx_overlay = FxCorridorRoutingOverlay::default();
+        observe_top_level_instruction_fx_effects(&mut fx_overlay, &*approval, 0, &[], view.world());
+        assert!(fx_overlay.policies.is_empty());
+    }
+    #[test]
+    fn persisted_multisig_proposal_cycle_fails_closed_without_rejecting_repeated_siblings() {
+        let (cyclic_account, _) = gen_account_in("wonderland");
+        let cyclic_hash = HashOf::new(&Vec::<InstructionBox>::new());
+        let cyclic_approval =
+            InstructionBox::from(MultisigApprove::new(cyclic_account.clone(), cyclic_hash));
+        let cyclic_proposal = MultisigProposalState::new(
+            cyclic_account.clone(),
+            cyclic_hash,
+            vec![cyclic_approval.clone()],
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        let mut state = blank_state();
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&cyclic_account, &cyclic_hash),
+            cyclic_proposal.encode(),
+        );
+        let expected = RoutingResolveError::MultisigProposalCycle {
+            account: cyclic_account.clone(),
+            instructions_hash: cyclic_hash,
+        };
+        assert_eq!(expected.as_label(), "multisig_proposal_cycle");
+        {
+            let view = state.view();
+            assert_eq!(
+                instruction_settlement_dataspace_target(&*cyclic_approval, None, Some(&view),),
+                Err(expected.clone()),
+            );
+            assert_eq!(
+                deferred_instruction_concrete_dataspace_targets(
+                    &*cyclic_approval,
+                    None,
+                    Some(&view),
+                ),
+                Err(expected.clone()),
+            );
+            assert_eq!(
+                instruction_transaction_dataspace_target(&*cyclic_approval, None, Some(&view)),
+                Err(expected.clone()),
+            );
+            assert_eq!(
+                instruction_transaction_target_requires_universal_coordinator(
+                    &*cyclic_approval,
+                    None,
+                    Some(&view),
+                ),
+                Err(expected.clone()),
+            );
+            let (authority, authority_keypair) = gen_account_in("wonderland");
+            let transaction = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![cyclic_approval.clone()],
+            );
+            assert_eq!(
+                evaluate_policy_plan_with_catalog_and_world(
+                    &default_routing_policy(),
+                    &catalog_with_lanes(&[LaneId::SINGLE]),
+                    &DataSpaceCatalog::default(),
+                    &transaction,
+                    view.world(),
+                ),
+                Err(expected.clone()),
+            );
+            let mut participants = BTreeSet::new();
+            let mut participant_stack = MultisigProposalRoutingStack::default();
+            assert_eq!(
+                collect_instruction_native_amx_participants(
+                    &*cyclic_approval,
+                    &DataSpaceCatalog::default(),
+                    view.world(),
+                    None,
+                    &mut participants,
+                    &FxCorridorRoutingOverlay::default(),
+                    &mut participant_stack,
+                ),
+                Err(expected.clone()),
+            );
+        }
+
+        let (leaf_account, _) = gen_account_in("wonderland");
+        let leaf_hash = HashOf::new(&vec![role_registration_instruction(
+            &leaf_account,
+            "cycle_guard_leaf",
+        )]);
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&leaf_account, &leaf_hash),
+            MultisigProposalState::new(
+                leaf_account.clone(),
+                leaf_hash,
+                Vec::new(),
+                1,
+                10_000,
+                BTreeSet::new(),
+                None,
+            )
+            .encode(),
+        );
+        let (parent_account, _) = gen_account_in("wonderland");
+        let repeated_approval = InstructionBox::from(MultisigApprove::new(leaf_account, leaf_hash));
+        let parent_instructions = vec![repeated_approval.clone(), repeated_approval];
+        let parent_hash = HashOf::new(&parent_instructions);
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&parent_account, &parent_hash),
+            MultisigProposalState::new(
+                parent_account.clone(),
+                parent_hash,
+                parent_instructions,
+                1,
+                10_000,
+                BTreeSet::new(),
+                None,
+            )
+            .encode(),
+        );
+        let parent_approval =
+            InstructionBox::from(MultisigApprove::new(parent_account, parent_hash));
+        let view = state.view();
+        let mut stack = MultisigProposalRoutingStack::default();
+        assert_eq!(
+            instruction_settlement_dataspace_target_with_stack(
+                &*parent_approval,
+                None,
+                Some(&view),
+                &mut stack,
+            ),
+            Ok(None),
+            "repeated sibling approvals must not be mistaken for a cycle",
+        );
+        assert_eq!(
+            stack.expansions, 3,
+            "the parent and two actual leaf edges must each expand exactly once",
+        );
+    }
+    #[test]
+    fn persisted_multisig_chain_is_checked_in_linear_expansions() {
+        const NODE_COUNT: usize = 64;
+        let nodes: Vec<_> = (0..NODE_COUNT)
+            .map(|index| {
+                let (account, _) = gen_account_in("wonderland");
+                let marker = vec![role_registration_instruction(
+                    &account,
+                    &format!("cycle_guard_node_{index}"),
+                )];
+                (account, HashOf::new(&marker))
+            })
+            .collect();
+        let mut state = blank_state();
+        for (index, (account, instructions_hash)) in nodes.iter().enumerate() {
+            let instructions = nodes
+                .get(index + 1)
+                .map(|(next_account, next_hash)| {
+                    vec![InstructionBox::from(MultisigApprove::new(
+                        next_account.clone(),
+                        *next_hash,
+                    ))]
+                })
+                .unwrap_or_default();
+            state.world.smart_contract_state_mut_for_testing().insert(
+                multisig_proposal_state_key(account, instructions_hash),
+                MultisigProposalState::new(
+                    account.clone(),
+                    *instructions_hash,
+                    instructions,
+                    1,
+                    10_000,
+                    BTreeSet::new(),
+                    None,
+                )
+                .encode(),
+            );
+        }
+        let root_approval =
+            InstructionBox::from(MultisigApprove::new(nodes[0].0.clone(), nodes[0].1));
+        let view = state.view();
+        let mut stack = MultisigProposalRoutingStack::default();
+        assert_eq!(
+            instruction_settlement_dataspace_target_with_stack(
+                &*root_approval,
+                None,
+                Some(&view),
+                &mut stack,
+            ),
+            Ok(None),
+        );
+        assert_eq!(stack.expansions, NODE_COUNT);
     }
     #[test]
     fn fx_escrow_operations_preserve_the_policy_destination_route() {
@@ -14868,47 +16493,6 @@ mod tests {
         );
     }
     #[test]
-    fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                CanManageAssetDefinitionConfidentialPolicy {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("confidential-policy permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("exact confidential-policy permission route must resolve"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
     fn asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
@@ -14949,1818 +16533,8 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-    #[test]
-    fn known_opaque_global_asset_without_home_alias_routes_to_universal() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (receiver_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_quantity(
-            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            1_u32,
-            receiver_id,
-        );
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(transfer)],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition,
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .account_scope_directory
-            .insert(sender_id.clone(), scope_entry);
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("known global asset route must resolve"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn known_opaque_global_asset_mint_without_home_alias_routes_to_universal() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_quantity(
-                1_u32,
-                AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition,
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .account_scope_directory
-            .insert(sender_id.clone(), scope_entry);
-        assert_eq!(
-            router
-                .try_route_with_state(&tx, &state)
-                .expect("known opaque global mint must use state-aware routing"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn known_opaque_global_asset_mint_with_stored_private_home_alias_routes_to_universal() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_quantity(
-                1_u32,
-                AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            ))],
-        );
-        let alias: AssetDefinitionAlias = "xor#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition.clone(),
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), opaque_asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            opaque_asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("known opaque global mint should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_state(&tx, &state)
-                .expect("global mint must ignore the stored private home alias"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn known_opaque_global_asset_mint_ignores_authority_account_rule_override() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![LaneRoutingRule {
-                    lane: lane_id,
-                    dataspace: Some(dataspace_id),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(sender_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                }],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_quantity(
-                1_u32,
-                AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition,
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .account_scope_directory
-            .insert(sender_id.clone(), scope_entry);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("known opaque global mint should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_state(&tx, &state)
-                .expect("global mint must not route to the authority account dataspace"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("global mint plan must keep the universal coordinator")
-                .coordinator_route(),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn known_opaque_global_asset_transfer_ignores_authority_account_rule_override() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![LaneRoutingRule {
-                    lane: lane_id,
-                    dataspace: Some(dataspace_id),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(sender_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                }],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_quantity(
-                AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-                1_u32,
-                receiver_id,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition,
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .account_scope_directory
-            .insert(sender_id.clone(), scope_entry);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("known opaque global transfer should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_state(&tx, &state)
-                .expect("global transfer must not route to the authority account dataspace"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("global transfer plan must keep the universal coordinator")
-                .coordinator_route(),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn known_opaque_global_asset_burn_ignores_authority_account_rule_override() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![LaneRoutingRule {
-                    lane: lane_id,
-                    dataspace: Some(dataspace_id),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(sender_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                }],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "xor".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_quantity(
-                1_u32,
-                AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition,
-                    "xor".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .account_scope_directory
-            .insert(sender_id.clone(), scope_entry);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("known opaque global burn should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_state(&tx, &state)
-                .expect("global burn must not route to the authority account dataspace"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("global burn plan must keep the universal coordinator")
-                .coordinator_route(),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-    #[test]
-    fn opaque_asset_transfer_rejects_dataspace_without_canonical_lane() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "universal").expect("asset definition domain"),
-                "pkr".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_quantity(
-            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            1_u32,
-            receiver_id,
-        );
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(transfer)],
-        );
-        let alias: iroha_data_model::asset::AssetDefinitionAlias =
-            "pkr#paynet".parse().expect("asset alias");
-        let owning_domain = DomainId::try_new("cash", "paynet").expect("owning domain");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    opaque_asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::DataspaceRestricted,
-                    Some(owning_domain),
-                )
-                .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), opaque_asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            opaque_asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
-        );
-        assert_eq!(
-            router.try_route_with_view(&tx, &state.view()),
-            Err(RoutingResolveError::NoLaneForDataspace { dataspace_id })
-        );
-    }
-    #[test]
-    fn opaque_asset_transfer_routes_to_sender_single_scope_when_asset_definition_unresolved() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (receiver_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let transparent_asset_definition =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-                "pkr".parse().expect("asset definition name"),
-            );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &transparent_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_quantity(
-            AssetId::of(opaque_asset_definition, sender_id.clone()),
-            1_u32,
-            receiver_id,
-        );
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(transfer)],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(
-            &[(sender_id.clone(), scope_entry)],
-            dataspace_catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("opaque asset transfer should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("opaque asset transfer should fall back to sender account scope"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
+    include!("router_opaque_asset_scope_tests.rs");
     include!("router_cross_dataspace_plan_tests.rs"); // Preserve stable `queue::router::tests` paths.
-    #[test]
-    fn account_alias_dataspace_permission_grant_routes_by_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
-        let permission = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(dataspace_id),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission, holder_id,
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("dataspace alias permission should route without world state"),
-            Some(RoutingDecision::new(lane_id, dataspace_id))
-        );
-    }
-    #[test]
-    fn account_alias_domain_permission_grant_routes_by_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
-        let permission = Permission::from(CanResolveAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(
-                DomainId::try_new("mibank", "paynet").expect("domain id"),
-            ),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission, holder_id,
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("domain alias permission should route without world state"),
-            Some(RoutingDecision::new(lane_id, dataspace_id))
-        );
-    }
-    #[test]
-    fn account_alias_resolution_delegation_routes_by_exact_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
-        let permission = Permission::from(CanDelegateAccountAliasResolution {
-            scope: AccountAliasPermissionScope::Domain(
-                DomainId::try_new("mibank", "paynet").expect("domain id"),
-            ),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission, holder_id,
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("alias-resolution delegation should route by its exact scope"),
-            Some(RoutingDecision::new(lane_id, dataspace_id))
-        );
-    }
-    #[test]
-    fn account_scope_directory_scope_matches_destination_account_permission_route() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(1),
-                dataspace: Some(dataspace_id),
-                matcher: LaneRoutingMatcher {
-                    account: Some("*@hbl.paynet".to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
-        let permission = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(
-                DomainId::try_new("hbl", "paynet").expect("domain id"),
-            ),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission,
-                holder_id.clone(),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        scope_entry.bind_domain(
-            dataspace_id,
-            AccountAliasDomain::from("hbl".parse::<Name>().expect("domain label")),
-        );
-        let state = state_with_account_scope_entries(&[(holder_id.clone(), scope_entry)], catalog);
-        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
-        let state_view = state.view();
-        assert_eq!(
-            state_view
-                .world()
-                .account_scope_hierarchy(&holder_id)
-                .expect("scope hierarchy"),
-            BTreeMap::from([(
-                dataspace_id,
-                BTreeSet::from([DomainId::try_new("hbl", "paynet").expect("domain id")]),
-            )])
-        );
-        assert!(account_matches_alias_scope(
-            "hbl.paynet",
-            &holder_id,
-            &state_view
-        ));
-        assert_eq!(
-            router.route_with_view(&tx, &state_view),
-            RoutingDecision::new(LaneId::new(1), dataspace_id)
-        );
-    }
-    #[test]
-    fn world_validation_routes_account_permission_holder_by_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: lane_id,
-                dataspace: Some(dataspace_id),
-                matcher: LaneRoutingMatcher {
-                    account: Some("*@paynet".to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let permission = Permission::from(CanRegisterTrigger {
-            authority: holder_id.clone(),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission,
-                holder_id.clone(),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog.clone();
-        let state_view = state.view();
-        let expected = RoutingDecision::new(lane_id, dataspace_id);
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state_view)
-                .expect("state-view routing should use account scope"),
-            expected
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                &lane_catalog,
-                &state_view.nexus().dataspace_catalog,
-                &tx,
-                state_view.world(),
-            )
-            .expect("validation routing should use account scope"),
-            expected
-        );
-    }
-    #[test]
-    fn state_view_routing_uses_committed_nexus_policy_not_cached_router_policy() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let committed_policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: lane_id,
-                dataspace: Some(dataspace_id),
-                matcher: LaneRoutingMatcher {
-                    account: Some("*@paynet".to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy::default(),
-            DataSpaceCatalog::default(),
-            LaneCatalog::default(),
-        );
-        let permission = Permission::from(CanRegisterTrigger {
-            authority: holder_id.clone(),
-        });
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                permission,
-                holder_id.clone(),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-        {
-            let mut nexus = state.nexus.write();
-            nexus.routing_policy = committed_policy;
-            nexus.lane_catalog = lane_catalog;
-        }
-        let state_view = state.view();
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state_view)
-                .expect("state-view routing should use committed nexus policy")
-                .coordinator_route(),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-        assert_eq!(
-            router
-                .try_route_plan_without_state(&tx)
-                .expect("permission grant without a cached rule should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_state(&tx, &state)
-                .expect("state routing should use committed nexus policy")
-                .coordinator_route(),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn account_metadata_write_routes_to_single_scope_dataspace_with_state() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(RemoveKeyValue::account(
-                target_id.clone(),
-                "routing".parse().expect("metadata key"),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("account metadata writes should defer until account scope is loaded"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("single-scope account metadata writes should route to that dataspace"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn register_account_with_dataspace_label_routes_without_state() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Register::account(
-                Account::new(target_id)
-                    .with_label(Some(account_alias("merchant@restricted", &catalog))),
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("account registration with a dataspace label should route without state"),
-            Some(RoutingDecision::new(lane_id, dataspace_id))
-        );
-    }
-    #[test]
-    fn multisig_contract_trigger_proposal_routes_by_immutable_contract_dataspace() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (multisig_id, _) = gen_account_in("multisig");
-        let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let contract_dataspace = DataSpaceId::new(9);
-        let proposed = vec![
-            sample_contract_trigger_registration(
-                &multisig_id,
-                "proposal_contract_call",
-                contract_dataspace,
-                1,
-            ),
-            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-                "proposal_contract_call".parse().expect("trigger id"),
-            )),
-        ];
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigPropose::new(
-                multisig_id.clone(),
-                proposed,
-                None,
-            ))],
-        );
-        let state = state_with_account_scope_entries(
-            &[
-                (submitter_id, account_scope_entry(DataSpaceId::new(7))),
-                (multisig_id, account_scope_entry(DataSpaceId::new(8))),
-            ],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected_route = RoutingDecision::new(LaneId::new(4), contract_dataspace);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("proposal must route by the immutable contract address"),
-            expected_route
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("proposal plan must route by the immutable contract address"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("world-backed proposal routing must match queue routing"),
-            expected_plan
-        );
-        assert_eq!(
-            native_amx_participant_dataspaces_with_world(
-                &tx,
-                &state.view().nexus().dataspace_catalog,
-                state.view().world(),
-            ),
-            vec![contract_dataspace]
-        );
-    }
-    #[test]
-    fn multisig_contract_trigger_same_transaction_approval_keeps_contract_route() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (multisig_id, _) = gen_account_in("multisig");
-        let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let contract_dataspace = DataSpaceId::new(9);
-        let proposed = vec![
-            sample_contract_trigger_registration(
-                &multisig_id,
-                "same_transaction_contract_call",
-                contract_dataspace,
-                2,
-            ),
-            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-                "same_transaction_contract_call"
-                    .parse()
-                    .expect("trigger id"),
-            )),
-        ];
-        let sibling_pair = || {
-            let proposed = proposed.clone();
-            let instructions_hash = HashOf::new(&proposed);
-            vec![
-                InstructionBox::from(MultisigPropose::new(multisig_id.clone(), proposed, None)),
-                InstructionBox::from(MultisigApprove::new(multisig_id.clone(), instructions_hash)),
-            ]
-        };
-        let executables = [
-            (
-                "instructions",
-                Executable::Instructions(sibling_pair().into()),
-            ),
-            (
-                "batch",
-                Executable::Batch(
-                    sibling_pair()
-                        .into_iter()
-                        .map(ExecutableBatchItem::Instruction)
-                        .collect::<Vec<_>>()
-                        .into(),
-                ),
-            ),
-            ("proved overlay", sample_proved_executable(sibling_pair())),
-        ];
-        let state = state_with_account_scope_entries(
-            &[
-                (
-                    submitter_id.clone(),
-                    account_scope_entry(DataSpaceId::new(7)),
-                ),
-                (
-                    multisig_id.clone(),
-                    account_scope_entry(DataSpaceId::new(8)),
-                ),
-            ],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::new(4), contract_dataspace));
-        for (label, executable) in executables {
-            let tx = sample_executable_transaction(
-                &submitter_id,
-                submitter_keypair.private_key(),
-                executable,
-            );
-            assert_eq!(
-                router
-                    .try_route_plan_with_view(&tx, &state.view())
-                    .unwrap_or_else(|error| panic!("{label} sibling approval failed: {error}")),
-                expected,
-                "{label} approval must inherit the proposal contract route",
-            );
-            assert_eq!(
-                evaluate_policy_plan_with_catalog_and_world(
-                    &policy,
-                    router.lane_catalog.as_ref(),
-                    &state.view().nexus().dataspace_catalog,
-                    &tx,
-                    state.view().world(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("world-backed {label} sibling approval failed: {error}")
-                }),
-                expected,
-            );
-            assert_eq!(
-                native_amx_participant_dataspaces_with_world(
-                    &tx,
-                    &state.view().nexus().dataspace_catalog,
-                    state.view().world(),
-                ),
-                vec![contract_dataspace],
-                "the {label} sibling approval must not add the multisig account as a participant",
-            );
-        }
-    }
-    #[test]
-    fn multisig_contract_trigger_later_approval_reads_persisted_contract_route() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (multisig_id, _) = gen_account_in("multisig");
-        let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let contract_dataspace = DataSpaceId::new(9);
-        let proposed = vec![
-            sample_contract_trigger_registration(
-                &multisig_id,
-                "persisted_contract_call",
-                contract_dataspace,
-                3,
-            ),
-            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-                "persisted_contract_call".parse().expect("trigger id"),
-            )),
-        ];
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                instructions_hash,
-            ))],
-        );
-        let mut state = state_with_account_scope_entries(
-            &[
-                (submitter_id, account_scope_entry(DataSpaceId::new(7))),
-                (
-                    multisig_id.clone(),
-                    account_scope_entry(DataSpaceId::new(8)),
-                ),
-            ],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        let proposal_state = MultisigProposalState::new(
-            multisig_id.clone(),
-            instructions_hash,
-            proposed,
-            1,
-            10_000,
-            BTreeSet::new(),
-            None,
-        );
-        state.world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_key(&multisig_id, &instructions_hash),
-            norito::to_bytes(&proposal_state).expect("proposal state should encode"),
-        );
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::new(4), contract_dataspace));
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("persisted proposal must override the multisig account route"),
-            expected
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("world-backed approval must read the persisted contract route"),
-            expected
-        );
-    }
-    #[test]
-    fn nested_trigger_instruction_and_proved_overlay_route_to_contract_dataspace() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (_policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let contract_dataspace = DataSpaceId::new(9);
-        let inner = sample_contract_trigger_registration(
-            &submitter_id,
-            "nested_contract_call",
-            contract_dataspace,
-            4,
-        );
-        let proved = sample_proved_executable(vec![inner]);
-        let outer = sample_trigger_registration(
-            &submitter_id,
-            "proved_contract_wrapper",
-            Executable::Instructions(
-                vec![sample_trigger_registration(
-                    &submitter_id,
-                    "instruction_contract_wrapper",
-                    proved,
-                )]
-                .into(),
-            ),
-        );
-        let tx = sample_transaction(&submitter_id, submitter_keypair.private_key(), vec![outer]);
-        let state = state_with_account_scope_entries(
-            &[(submitter_id, account_scope_entry(DataSpaceId::new(7)))],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("contract-only nested trigger routing must be state-free"),
-            Some(RoutingDecision::new(LaneId::new(4), contract_dataspace))
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("nested trigger executable must resolve recursively"),
-            RoutingDecision::new(LaneId::new(4), contract_dataspace)
-        );
-    }
-    #[test]
-    fn conflicting_nested_contract_triggers_build_amx_plan_or_fail_strictly() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let multisig_dataspace = DataSpaceId::new(8);
-        let contract_dataspace = DataSpaceId::new(9);
-        let nested = vec![
-            sample_contract_trigger_registration(
-                &submitter_id,
-                "first_nested_contract",
-                multisig_dataspace,
-                5,
-            ),
-            sample_contract_trigger_registration(
-                &submitter_id,
-                "second_nested_contract",
-                contract_dataspace,
-                6,
-            ),
-        ];
-        let outer = sample_trigger_registration(
-            &submitter_id,
-            "cross_dataspace_contract_wrapper",
-            Executable::Instructions(nested.into()),
-        );
-        let state = state_with_account_scope_entries(
-            &[(
-                submitter_id.clone(),
-                account_scope_entry(DataSpaceId::new(7)),
-            )],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![outer.clone()],
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("mixed nested contract targets must use the universal coordinator"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        let plan = router
-            .try_route_plan_with_view(&tx, &state.view())
-            .expect("mixed nested contract targets must build an AMX plan");
-        let RoutingPlan::NativeAmx(plan) = plan else {
-            panic!("mixed nested contract targets must not collapse to a single route");
-        };
-        assert_eq!(
-            plan.coordinator.route,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            plan.participants
-                .iter()
-                .map(|participant| participant.route.dataspace_id)
-                .collect::<Vec<_>>(),
-            vec![multisig_dataspace, contract_dataspace]
-        );
-        assert_eq!(
-            native_amx_participant_dataspaces_with_world(
-                &tx,
-                &state.view().nexus().dataspace_catalog,
-                state.view().world(),
-            ),
-            vec![multisig_dataspace, contract_dataspace]
-        );
-        assert!(matches!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            ),
-            Ok(RoutingPlan::NativeAmx(_))
-        ));
-        let mut strict_metadata = Metadata::default();
-        strict_metadata.insert(
-            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
-            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
-        );
-        let strict_tx = sample_transaction_with_metadata(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![outer],
-            strict_metadata,
-        );
-        assert_eq!(
-            router.try_route_plan_with_view(&strict_tx, &state.view()),
-            Err(
-                RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                    first_dataspace_id: multisig_dataspace,
-                    second_dataspace_id: contract_dataspace,
-                }
-            )
-        );
-    }
-    #[test]
-    fn non_contract_trigger_keeps_multisig_account_fallback() {
-        let (submitter_id, submitter_keypair) = gen_account_in("submitter");
-        let (multisig_id, _) = gen_account_in("multisig");
-        let (_policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
-        let proposed = vec![
-            sample_trigger_registration(
-                &multisig_id,
-                "non_contract_proved_trigger",
-                sample_proved_executable(Vec::new()),
-            ),
-            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-                "non_contract_proved_trigger".parse().expect("trigger id"),
-            )),
-        ];
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigPropose::new(
-                multisig_id.clone(),
-                proposed,
-                None,
-            ))],
-        );
-        let state = state_with_account_scope_entries(
-            &[
-                (submitter_id, account_scope_entry(DataSpaceId::new(7))),
-                (multisig_id, account_scope_entry(DataSpaceId::new(8))),
-            ],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("targetless trigger must retain the multisig account fallback"),
-            RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8))
-        );
-    }
-    #[test]
-    fn multisig_propose_routes_by_embedded_instruction_dataspace() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigPropose::new(
-                multisig_id,
-                proposed,
-                None,
-            ))],
-        );
-        let state = state_with_account_scope_entries(&[], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig proposal should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("embedded proposal target should route to its dataspace"),
-            expected_route
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("embedded proposal plan should route to its dataspace"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should match proposal routing"),
-            expected_route
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing plan should match proposal routing plan"),
-            expected_plan
-        );
-    }
-    #[test]
-    fn multisig_propose_plan_prefers_embedded_dataspace_over_multiscope_account() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigPropose::new(
-                multisig_id.clone(),
-                proposed,
-                None,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig proposal should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("proposal plan should use the embedded write dataspace"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation plan should use the embedded write dataspace"),
-            expected_plan
-        );
-    }
-    #[test]
-    fn multisig_same_transaction_approve_uses_sibling_proposal_route() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let proposal_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![
-                InstructionBox::from(MultisigPropose::new(multisig_id.clone(), proposed, None)),
-                InstructionBox::from(MultisigApprove::new(multisig_id.clone(), proposal_hash)),
-            ],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
-        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("same-transaction approval should use the sibling proposal route"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation plan should use the sibling proposal route"),
-            expected_plan
-        );
-    }
-    #[test]
-    fn custom_multisig_propose_defers_and_routes_by_embedded_instruction_dataspace() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(CustomInstruction::new(
-                iroha_primitives::json::Json::new(MultisigInstructionBox::Propose(
-                    MultisigPropose::new(multisig_id, proposed, None),
-                )),
-            ))],
-        );
-        let state = state_with_account_scope_entries(&[], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("custom multisig proposal should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("custom embedded proposal target should route to its dataspace"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should match custom proposal routing"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn multisig_approve_routes_by_multisig_account_scope() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                instructions_hash,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("approval should route by multisig account scope"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should match approval routing"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn custom_multisig_approve_defers_and_routes_by_multisig_account_scope() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(CustomInstruction::new(
-                iroha_primitives::json::Json::new(MultisigInstructionBox::Approve(
-                    MultisigApprove::new(multisig_id.clone(), instructions_hash),
-                )),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("custom multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("custom approval should route by multisig account scope"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should match custom approval routing"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                instructions_hash,
-            ))],
-        );
-        let mut state = state_with_account_scope_entries(&[], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let proposal_state = MultisigProposalState::new(
-            multisig_id.clone(),
-            instructions_hash,
-            proposed,
-            1,
-            10_000,
-            BTreeSet::new(),
-            None,
-        );
-        state.world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_key(&multisig_id, &instructions_hash),
-            norito::to_bytes(&proposal_state).expect("proposal state should encode"),
-        );
-        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router.try_route_with_view(&tx, &state.view()).expect(
-                "approval should route by embedded proposal target when account scope is absent"
-            ),
-            expected_route
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("approval plan should route by embedded proposal target"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should match proposal-state fallback routing"),
-            expected_route
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing plan should match proposal-state fallback routing"),
-            expected_plan
-        );
-    }
-    #[test]
-    fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                instructions_hash,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state =
-            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        state.world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_key(&multisig_id, &instructions_hash),
-            b"not a multisig proposal state".to_vec(),
-        );
-        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("corrupt proposal state should fall back to multisig account scope"),
-            expected_route
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("corrupt proposal state plan should fall back to multisig account scope"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should ignore corrupt proposal state")
-            .coordinator_route(),
-            expected_route
-        );
-    }
-    #[test]
-    fn multisig_approve_ignores_unrelated_persisted_proposal_hash() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (approved_target_id, _) = gen_account_in("wonderland");
-        let (stale_target_id, _) = gen_account_in("wonderland");
-        let account_dataspace = DataSpaceId::new(10);
-        let stale_dataspace = DataSpaceId::new(11);
-        let account_lane = LaneId::new(2);
-        let stale_lane = LaneId::new(3);
-        let catalog = dataspace_catalog(&[
-            (account_dataspace, "restricted"),
-            (stale_dataspace, "stale-restricted"),
-        ]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (account_lane, account_dataspace),
-            (stale_lane, stale_dataspace),
-        ]);
-        let policy = default_routing_policy();
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let approved = vec![InstructionBox::from(Register::account(
-            Account::new(approved_target_id)
-                .with_label(Some(account_alias("approved@restricted", &catalog))),
-        ))];
-        let approved_hash = HashOf::new(&approved);
-        let stale_proposed = vec![InstructionBox::from(Register::account(
-            Account::new(stale_target_id)
-                .with_label(Some(account_alias("stale@stale-restricted", &catalog))),
-        ))];
-        let stale_hash = HashOf::new(&stale_proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                approved_hash,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(account_dataspace);
-        let mut state =
-            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let stale_state = MultisigProposalState::new(
-            multisig_id.clone(),
-            stale_hash,
-            stale_proposed,
-            1,
-            10_000,
-            BTreeSet::new(),
-            None,
-        );
-        state.world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_key(&multisig_id, &stale_hash),
-            norito::to_bytes(&stale_state).expect("stale proposal state should encode"),
-        );
-        let expected_route = RoutingDecision::new(account_lane, account_dataspace);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("unrelated proposal state should not route this approval"),
-            expected_route
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("unrelated proposal state plan should fall back to account scope"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should ignore unrelated proposal state")
-            .coordinator_route(),
-            expected_route
-        );
-    }
-    #[test]
-    fn multisig_approve_plan_prefers_visible_proposal_over_multiscope_account() {
-        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
-        let instructions_hash = HashOf::new(&proposed);
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(MultisigApprove::new(
-                multisig_id.clone(),
-                instructions_hash,
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
-        scope_entry.ensure_dataspace(dataspace_id);
-        let mut state =
-            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let proposal_state = MultisigProposalState::new(
-            multisig_id.clone(),
-            instructions_hash,
-            proposed,
-            1,
-            10_000,
-            BTreeSet::new(),
-            None,
-        );
-        state.world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_key(&multisig_id, &instructions_hash),
-            norito::to_bytes(&proposal_state).expect("proposal state should encode"),
-        );
-        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-        let expected_plan = RoutingPlan::single(expected_route);
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("multisig approval should defer to state-aware routing"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("visible proposal should override multiscope account route"),
-            expected_plan
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation plan should prefer visible proposal target"),
-            expected_plan
-        );
-    }
+    include!("router_multisig_scope_tests.rs");
     include!("router_resolved_asset_scope_tests.rs");
 }

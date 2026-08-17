@@ -540,7 +540,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
     tools.push(iroha_sumeragi_pacemaker_tool());
-    tools.push(iroha_sumeragi_phases_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
     tools.push(iroha_da_proof_policy_snapshot_tool());
@@ -1320,12 +1319,6 @@ async fn handle_named_tool_call(
         },
         "iroha.sumeragi.pacemaker" => {
             match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.phases" => {
-            match dispatch_iroha_sumeragi_phases(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3618,7 +3611,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
         dispatch_iroha_time_now => "/v1/time/now";
         dispatch_iroha_sumeragi_pacemaker => "/v1/sumeragi/pacemaker";
-        dispatch_iroha_sumeragi_phases => "/v1/sumeragi/phases";
         dispatch_iroha_da_proof_policies => "/v1/da/proof-policies";
         dispatch_iroha_da_proof_policy_snapshot => "/v1/da/proof-policies/snapshot";
         dispatch_iroha_runtime_abi_active => "/v1/runtime/abi/active";
@@ -6268,7 +6260,7 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         .or_else(|| body.get("transaction_hash").and_then(Value::as_str))
         .or_else(|| {
             body.get("payload")
-                .and_then(|payload| payload.get("tx_hash"))
+                .and_then(|payload| payload.get("entrypoint_hash"))
                 .and_then(Value::as_str)
         })
         .filter(|hash| !hash.is_empty())
@@ -6283,9 +6275,9 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
             norito::decode_from_bytes(&bytes)
                 .map_err(|err| format!("decode submission receipt: {err}"))?;
-        return Ok(receipt.payload.tx_hash.to_string());
+        return Ok(receipt.payload.entrypoint_hash.to_string());
     }
-    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.tx_hash`, or base64 Norito receipt body)".to_owned())
+    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.entrypoint_hash`, or base64 Norito receipt body)".to_owned())
 }
 fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
     if !hash.starts_with("hash:") {
@@ -8381,13 +8373,6 @@ fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
         "/v1/sumeragi/pacemaker",
     )
 }
-fn iroha_sumeragi_phases_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.sumeragi.phases",
-        "Fetch phase status (`/v1/sumeragi/phases`).",
-        "/v1/sumeragi/phases",
-    )
-}
 fn iroha_da_ingest_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.ingest",
@@ -9294,7 +9279,6 @@ mod tests {
             iroha_node_query_projection_checkpoint_tool(),
             iroha_time_now_tool(),
             iroha_sumeragi_pacemaker_tool(),
-            iroha_sumeragi_phases_tool(),
             iroha_da_proof_policies_tool(),
             iroha_da_proof_policy_snapshot_tool(),
             iroha_runtime_abi_active_tool(),

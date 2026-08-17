@@ -187,6 +187,7 @@ Determinism:
 ## Recovery & Warning Events
 
 - Core persists pipeline recovery sidecars under the Kura store directory (`pipeline/sidecars.norito` with `pipeline/sidecars.index`). Each entry captures:
+  - The index is solely the first-release V1 layout: every present index, including one based at height 1, begins with the 32-byte `(MAX, MAX), (base_height, base_height ^ mask)` header. Absence is represented only by both files being absent; headerless or partial pre-release indexes fail closed and are not promoted or rewritten.
   - The admission sets (canonical read/write keys) per transaction in the block
   - A stable DAG fingerprint (SHA‑256) computed over interned key IDs, per‑tx access vectors, and call hashes
   - A block hash anchor (`pipeline.recovery.v1`) so fingerprints are only compared when the sidecar matches the exact block
@@ -324,6 +325,6 @@ Iroha can group signatures by scheme during block validation and verify them in 
 
 - Evidence audit (non‑consensus):
   - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
-- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal, Censorship).
+- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with the frozen context and exact signed-artifact summary for `SumeragiV2Equivocation` evidence.
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
   - Purpose: quick inspection during development and ops. Data is node‑local and not persisted.

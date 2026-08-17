@@ -564,6 +564,46 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     );
 }
     #[test]
+    fn enabled_single_custom_lane_still_produces_autonomous_payload() {
+        let (mut adapter, keys) =
+            autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let validators =
+            enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+        assert!(
+            !uses_global_lane_committee(&adapter.state.nexus_snapshot()),
+            "enabled single-route Nexus must retain lane-local authority"
+        );
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+        let journal_dir =
+            tempfile::tempdir().expect("single-lane reservation journal directory");
+        let journal_path = journal_dir.path().join("lane-reservations.norito");
+        let queue =
+            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+
+        adapter
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+            .expect("run enabled single custom-lane producer tick");
+
+        let payload = adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .find(|payload| {
+                payload.origin_proposal.descriptor.lane_id == lane_id
+                    && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+            })
+            .expect("enabled single custom-lane author publishes its durable payload");
+        assert_eq!(payload.origin_proposal.payload_block_hint, None);
+        assert_eq!(
+            payload.origin_proposal.descriptor.validator_set, validators,
+            "the payload must bind the custom lane authority, not the global roster mode"
+        );
+        assert_eq!(payload.producer, adapter.local_peer);
+        assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    }
+    #[test]
     fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() {
         let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
@@ -1176,7 +1216,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ));
         let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"direct-decision-queue-plan-admission-binding",

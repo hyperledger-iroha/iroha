@@ -5,25 +5,37 @@ The sealed source reset contributes only its exact public roster, owner-private
 validator/shared secrets, and static codec/config sidecars.  The authenticated
 Linux release contributes the reviewed privacy plan, peer-1 config template,
 genesis template, and broker public export.  An independently provisioned,
-digest-pinned external software signer binds and signs that genesis. The controller
-never reads, snapshots, or passes persistent genesis private-key material.
+digest-pinned external software signer binds and signs that genesis.  The signer
+is never executed directly: an independently pinned controller must confine it
+under the authenticated OS-isolation contract.  The reset composer never reads,
+snapshots, or passes persistent genesis private-key material.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, BinaryIO, NoReturn
+from typing import Any, NoReturn
+
+try:
+    import resource as posix_resource
+except ImportError:  # pragma: no cover - production host is macOS
+    posix_resource = None  # type: ignore[assignment]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -94,6 +106,14 @@ MAX_PRIVATE_FILE_BYTES = 64 * 1024 * 1024
 MAX_RESET_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_GENESIS_SIGNER_OUTPUT_BYTES = 2 * 1024 * 1024
+MAX_GENESIS_EXPECTED_HASH_BYTES = 256
+GENESIS_SIGNER_TIMEOUT_SECONDS = 600
+GENESIS_SIGNER_CLEANUP_TIMEOUT_SECONDS = 5
+AUTHENTICATED_TOOL_CONTROLLER_CONTRACT = "iroha.authenticated-tool-os-isolation.v1"
+AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND = "run-v1"
+MACOS_ACL_INSPECTOR = Path("/bin/ls")
+MACOS_ACL_INSPECTION_TIMEOUT_SECONDS = 5
+MACOS_ACL_INSPECTION_MAX_OUTPUT_BYTES = 64 * 1024
 MAX_NATIVE_TOOL_BYTES = 512 * 1024 * 1024
 MAX_SOURCE_BUNDLE_FILES = 16_384
 MAX_SOURCE_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
@@ -387,27 +407,102 @@ def _require_canonical(path: Path, label: str, *, directory: bool) -> None:
         )
 
 
-def require_private_directory(path: Path) -> None:
+def require_private_directory(path: Path) -> os.stat_result:
     _require_canonical(path, f"private directory {path}", directory=True)
-    metadata = path.lstat()
+    metadata = require_acl_free_path(path, f"private directory {path}")
     if (
-        metadata.st_uid != os.getuid()
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
         or metadata.st_gid != os.getgid()
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
         fail(f"unsafe private directory identity: {path}")
+    return metadata
 
 
-def require_private_regular_file(path: Path) -> None:
+def require_private_regular_file(path: Path) -> os.stat_result:
     _require_canonical(path, f"private file {path}", directory=False)
-    metadata = path.lstat()
+    metadata = require_acl_free_path(path, f"private file {path}")
     if (
-        metadata.st_nlink != 1
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
         or metadata.st_uid != os.getuid()
         or metadata.st_gid != os.getgid()
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
         fail(f"unsafe private file identity: {path}")
+    return metadata
+
+
+def _metadata_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return the complete identity fields sealed around ACL and fsync checks."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def require_acl_free_path(
+    path: Path,
+    label: str,
+    *,
+    descriptor: int | None = None,
+) -> os.stat_result:
+    """Require a stable path and reject every macOS extended ACL."""
+
+    before = path.lstat()
+    if descriptor is not None and _metadata_identity(
+        os.fstat(descriptor)
+    ) != _metadata_identity(before):
+        fail(f"{label} name does not identify its opened inode: {path}")
+    if sys.platform == "darwin":
+        result = _run_bounded_macos_acl_inspection(path, label)
+        if (
+            result.returncode != 0
+            or result.stderr
+            or not result.stdout.endswith(b"\n")
+            or result.stdout.count(b"\n") != 1
+        ):
+            fail(f"{label} must not have an extended ACL: {path}")
+    after = path.lstat()
+    if _metadata_identity(after) != _metadata_identity(before):
+        fail(f"{label} changed during ACL validation: {path}")
+    if descriptor is not None and _metadata_identity(
+        os.fstat(descriptor)
+    ) != _metadata_identity(after):
+        fail(f"{label} name changed from its opened inode: {path}")
+    return after
+
+
+def require_private_tree(root: Path) -> None:
+    """Require an exact owner-private, ACL-free regular directory tree."""
+
+    def reject_walk_error(error: OSError) -> NoReturn:
+        raise RuntimeError(f"cannot inspect private tree: {error}")
+
+    require_private_directory(root)
+    for current_text, directory_names, file_names in os.walk(
+        root,
+        topdown=True,
+        onerror=reject_walk_error,
+        followlinks=False,
+    ):
+        directory_names.sort()
+        file_names.sort()
+        current = Path(current_text)
+        require_private_directory(current)
+        for name in directory_names:
+            require_private_directory(current / name)
+        for name in file_names:
+            require_private_regular_file(current / name)
 
 
 def read_private_file(path: Path, maximum_bytes: int = MAX_PRIVATE_FILE_BYTES) -> bytes:
@@ -447,6 +542,7 @@ def _require_exact_names(path: Path, expected: set[str], label: str) -> None:
 
 def write_private_file(destination: Path, contents: bytes) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require_private_directory(destination.parent)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
@@ -454,13 +550,32 @@ def write_private_file(destination: Path, contents: bytes) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as output_stream:
+        created = require_acl_free_path(
+            temporary,
+            f"new private staging file for {destination}",
+            descriptor=descriptor,
+        )
+        if (
+            not stat.S_ISREG(created.st_mode)
+            or created.st_nlink != 1
+            or created.st_uid != os.getuid()
+            or created.st_gid != os.getgid()
+            or stat.S_IMODE(created.st_mode) != 0o600
+        ):
+            fail(f"unsafe new private staging file identity: {temporary}")
+        output_stream = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with output_stream:
             output_stream.write(contents)
             output_stream.flush()
             os.fsync(output_stream.fileno())
         os.chmod(temporary, 0o600)
+        require_private_regular_file(temporary)
         os.replace(temporary, destination)
+        require_private_regular_file(destination)
     finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         temporary.unlink(missing_ok=True)
 
 
@@ -473,6 +588,7 @@ def copy_private_tree(source: Path, destination: Path) -> None:
     if destination.exists() or destination.is_symlink():
         fail(f"private tree destination already exists: {destination}")
     destination.mkdir(mode=0o700)
+    require_private_directory(destination)
     for current, directory_names, file_names in os.walk(source, followlinks=False):
         directory_names.sort()
         file_names.sort()
@@ -481,10 +597,13 @@ def copy_private_tree(source: Path, destination: Path) -> None:
         output_directory = destination / relative
         output_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(output_directory, 0o700)
+        require_private_directory(output_directory)
         for name in directory_names:
             input_directory = current_path / name
             require_private_directory(input_directory)
-            (output_directory / name).mkdir(mode=0o700, exist_ok=True)
+            copied_directory = output_directory / name
+            copied_directory.mkdir(mode=0o700, exist_ok=True)
+            require_private_directory(copied_directory)
         for name in file_names:
             copy_private_file(current_path / name, output_directory / name)
 
@@ -502,7 +621,7 @@ def _load_authenticated_privacy_release(
     cargo_lock_sha256: str,
     workspace_source_manifest_sha256: str,
 ) -> tuple[dict[str, bytes], dict[str, object], str]:
-    require_private_directory(root)
+    require_private_tree(root)
     expected_names = {privacy_release.OUTPUT_MANIFEST, *privacy_release.PRIVACY_INPUTS}
     try:
         inventory = scan_inventory_paths(root)
@@ -631,7 +750,7 @@ def _source_bundle_inventory(
 ) -> tuple[list[tuple[str, object]], str]:
     """Capture the complete meaningful source tree and its protected digest."""
 
-    require_private_directory(source)
+    require_private_tree(source)
     try:
         paths = scan_inventory_paths(source)
     except ReleaseArtifactError as exc:
@@ -680,8 +799,8 @@ def _source_bundle_inventory(
 def source_bundle_sha256(source: Path) -> str:
     """Return the closed, path-and-mode-bound digest used by release operators."""
 
-    _load_source_manifest(source)
     _, digest = _source_bundle_inventory(source)
+    _load_source_manifest(source)
     return digest
 
 
@@ -695,13 +814,14 @@ def _snapshot_authenticated_source_bundle(
     expected_sha256 = require_sha256(
         expected_sha256, "sealed source reset bundle SHA-256"
     )
-    _load_source_manifest(source)
     captures, captured_sha256 = _source_bundle_inventory(source)
+    _load_source_manifest(source)
     if captured_sha256 != expected_sha256:
         fail("sealed source reset bundle differs from its protected inventory digest")
     if destination.exists() or destination.is_symlink():
         fail("sealed source reset snapshot destination already exists")
     destination.mkdir(mode=0o700)
+    require_private_directory(destination)
 
     for relative, expected in captures:
         output_path = destination / relative
@@ -709,6 +829,7 @@ def _snapshot_authenticated_source_bundle(
         current = output_path.parent
         while current != destination.parent:
             os.chmod(current, 0o700)
+            require_private_directory(current)
             if current == destination:
                 break
             current = current.parent
@@ -736,6 +857,7 @@ def _snapshot_authenticated_source_bundle(
             raise RuntimeError(
                 f"sealed source reset changed during snapshot: {relative}: {exc}"
             ) from exc
+        require_private_regular_file(output_path)
         copied = stable_hash_path(output_path, max_size=MAX_PRIVATE_FILE_BYTES)
         if (
             copied.sha256 != expected.sha256
@@ -747,13 +869,17 @@ def _snapshot_authenticated_source_bundle(
 
     rendered = destination / "rendered"
     rendered.mkdir(mode=0o700, exist_ok=True)
+    require_private_directory(rendered)
     for slug in SLUGS:
         peer = rendered / slug
         peer.mkdir(mode=0o700, exist_ok=True)
+        require_private_directory(peer)
         for name in SOURCE_VALIDATOR_NAMES - {"config.toml"}:
-            (peer / name).mkdir(mode=0o700, exist_ok=True)
-    source_manifest = _load_source_manifest(destination)
+            peer_directory = peer / name
+            peer_directory.mkdir(mode=0o700, exist_ok=True)
+            require_private_directory(peer_directory)
     _, snapshot_sha256 = _source_bundle_inventory(destination)
+    source_manifest = _load_source_manifest(destination)
     if snapshot_sha256 != expected_sha256:
         fail("sealed source reset snapshot inventory digest changed")
     return source_manifest, snapshot_sha256
@@ -761,7 +887,7 @@ def _snapshot_authenticated_source_bundle(
 
 def _executable_identity(path: Path, label: str) -> tuple[object, ...]:
     _require_canonical(path, label, directory=False)
-    info = path.lstat()
+    info = require_acl_free_path(path, label)
     if info.st_nlink != 1 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         fail(f"{label} must have one link and no group/world write permission")
     if not os.access(path, os.X_OK):
@@ -820,22 +946,587 @@ def _snapshot_executable(
     return snapshot_identity
 
 
-def _exclusive_binary_output(path: Path) -> BinaryIO:
-    descriptor = os.open(
-        path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
+def _signer_process_group_exists(process_group_id: int) -> bool:
+    """Return whether the signer's isolated POSIX process group is live."""
+
+    if os.name != "posix":  # pragma: no cover - production host is macOS
+        return False
     try:
-        os.fchmod(descriptor, 0o600)
-        return os.fdopen(descriptor, "wb")
-    except BaseException:
-        os.close(descriptor)
-        raise
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, PermissionError):
+        return True
+    return True
+
+
+def _kill_and_reap_signer(process: subprocess.Popen[bytes]) -> bool:
+    """Kill the complete signer group and reap its direct child boundedly."""
+
+    deadline = time.monotonic() + GENESIS_SIGNER_CLEANUP_TIMEOUT_SECONDS
+    process_group_id = process.pid
+    if os.name == "posix" and (
+        process_group_id <= 1 or process_group_id == os.getpgrp()
+    ):
+        return False
+
+    def kill_group() -> bool:
+        try:
+            if os.name == "posix":
+                os.killpg(process_group_id, signal.SIGKILL)
+            elif process.poll() is None:  # pragma: no cover - production host is macOS
+                process.kill()
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    signal_ok = kill_group()
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            process.wait(timeout=min(remaining, 0.05))
+        except subprocess.TimeoutExpired:
+            signal_ok = kill_group() and signal_ok
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return False
+
+    if os.name != "posix":  # pragma: no cover - production host is macOS
+        return signal_ok
+    while _signer_process_group_exists(process_group_id):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        signal_ok = kill_group() and signal_ok
+        time.sleep(min(remaining, 0.01))
+    return signal_ok
+
+
+def _close_signer_pipe(
+    selector: selectors.BaseSelector,
+    pipe: Any,
+) -> bool:
+    """Unregister and close one signer diagnostic pipe."""
+
+    closed = True
+    try:
+        selector.unregister(pipe)
+    except KeyError:
+        pass
+    except (OSError, ValueError):
+        closed = False
+    try:
+        pipe.close()
+    except OSError:
+        closed = False
+    return closed
+
+
+def _direct_signer_command_path(
+    command: list[str],
+    option: str,
+    temporary_root: Path,
+) -> Path:
+    """Return one exact direct-child path from the signer protocol command."""
+
+    positions = [index for index, value in enumerate(command) if value == option]
+    if len(positions) != 1 or positions[0] + 1 >= len(command):
+        fail(f"external genesis signer command must contain one {option}")
+    path = Path(command[positions[0] + 1])
+    path_text = str(path)
+    if (
+        not path.is_absolute()
+        or path.parent != temporary_root
+        or not path.name
+        or Path(path.name).name != path.name
+        or path_text.startswith("//")
+        or os.path.normpath(path_text) != path_text
+    ):
+        fail(f"external genesis signer {option} must be a direct staging child")
+    return path
+
+
+class _SignerDirectoryGuard:
+    """Bound and authenticate the signer's complete visible staging inventory."""
+
+    def __init__(self, command: list[str], temporary_root: Path) -> None:
+        require_private_tree(temporary_root)
+        self.root = temporary_root
+        root_info = require_private_directory(temporary_root)
+        self.root_identity = (
+            root_info.st_dev,
+            root_info.st_ino,
+            root_info.st_mode,
+            root_info.st_uid,
+            root_info.st_gid,
+        )
+        self.descriptor = os.open(
+            temporary_root,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            unsigned = _direct_signer_command_path(
+                command, "--unsigned-genesis", temporary_root
+            )
+            _direct_signer_command_path(command, "--peer-config", temporary_root)
+            bound = _direct_signer_command_path(
+                command, "--bound-manifest-out", temporary_root
+            )
+            signed = _direct_signer_command_path(
+                command, "--signed-genesis-out", temporary_root
+            )
+            expected_hash = _direct_signer_command_path(
+                command, "--expected-hash-out", temporary_root
+            )
+            if unsigned != bound or len({bound, signed, expected_hash}) != 3:
+                fail("external genesis signer output paths are not exact and distinct")
+            executable = Path(command[0]) if command else Path()
+            if (
+                not executable.is_absolute()
+                or executable.parent != temporary_root
+                or not executable.name
+            ):
+                fail("external genesis signer executable must be a staging snapshot")
+
+            self.output_limits = {
+                bound.name: MAX_PRIVATE_FILE_BYTES,
+                signed.name: MAX_PRIVATE_FILE_BYTES,
+                expected_hash.name: MAX_GENESIS_EXPECTED_HASH_BYTES,
+            }
+            initial = self._read_inventory()
+            if bound.name not in initial:
+                fail("external genesis signer bound input is absent before execution")
+            if signed.name in initial or expected_hash.name in initial:
+                fail("external genesis signer output exists before execution")
+            self.allowed_names = set(initial) | set(self.output_limits)
+            self.protected_names = set(initial) - set(self.output_limits)
+            self.maximum_file_count = len(self.allowed_names)
+            initial_bytes = sum(info.st_size for info in initial.values())
+            for name, limit in self.output_limits.items():
+                if name in initial and initial[name].st_size > limit:
+                    fail(
+                        f"external genesis signer input {name} already exceeds "
+                        f"its {limit}-byte output bound"
+                    )
+            output_growth = sum(
+                limit - initial[name].st_size if name in initial else limit
+                for name, limit in self.output_limits.items()
+            )
+            self.maximum_aggregate_bytes = initial_bytes + output_growth
+        except BaseException:
+            os.close(self.descriptor)
+            self.descriptor = -1
+            raise
+
+    def _read_inventory(self) -> dict[str, os.stat_result]:
+        """Read one descriptor-relative, private regular-file inventory."""
+
+        path_info = self.root.lstat()
+        opened_info = os.fstat(self.descriptor)
+        path_identity = (
+            path_info.st_dev,
+            path_info.st_ino,
+            path_info.st_mode,
+            path_info.st_uid,
+            path_info.st_gid,
+        )
+        opened_identity = (
+            opened_info.st_dev,
+            opened_info.st_ino,
+            opened_info.st_mode,
+            opened_info.st_uid,
+            opened_info.st_gid,
+        )
+        if path_identity != self.root_identity or opened_identity != self.root_identity:
+            fail("external genesis signer staging directory changed during execution")
+
+        inventory: dict[str, os.stat_result] = {}
+        for name in sorted(os.listdir(self.descriptor)):
+            info = os.stat(name, dir_fd=self.descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_uid != os.getuid()
+                or info.st_gid != os.getgid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                fail(
+                    "external genesis signer staging contains a non-private "
+                    f"regular file: {name}"
+                )
+            inventory[name] = info
+        return inventory
+
+    def check(self) -> str | None:
+        """Return a deterministic rejection when the live budget is breached."""
+
+        try:
+            inventory = self._read_inventory()
+        except (OSError, RuntimeError) as error:
+            return f"external genesis signer staging inspection failed: {error}"
+        actual_names = set(inventory)
+        unexpected = sorted(actual_names - self.allowed_names)
+        if unexpected:
+            return (
+                "external genesis signer created unexpected staging entries: "
+                f"{unexpected}"
+            )
+        missing = sorted(self.protected_names - actual_names)
+        if missing:
+            return (
+                "external genesis signer removed protected staging entries: "
+                f"{missing}"
+            )
+        if len(inventory) > self.maximum_file_count:
+            return "external genesis signer staging file count exceeded its bound"
+        for name, maximum_bytes in self.output_limits.items():
+            info = inventory.get(name)
+            if info is not None and info.st_size > maximum_bytes:
+                return (
+                    f"external genesis signer output {name} exceeded its "
+                    f"{maximum_bytes}-byte bound"
+                )
+        aggregate_bytes = sum(info.st_size for info in inventory.values())
+        if aggregate_bytes > self.maximum_aggregate_bytes:
+            return (
+                "external genesis signer staging aggregate exceeded its "
+                f"{self.maximum_aggregate_bytes}-byte bound"
+            )
+        return None
+
+    def close(self) -> None:
+        """Close the pinned staging directory descriptor."""
+
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+def _run_bounded_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: float,
+    maximum_output_bytes: int,
+    timeout_error: str,
+    overflow_error: str,
+    execute_error: str,
+    cleanup_error: str,
+    runtime_guard: Callable[[], str | None] | None = None,
+    file_size_limit: int | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one isolated process with bounded time, output, and descendants."""
+
+    if (
+        timeout_seconds <= 0
+        or maximum_output_bytes <= 0
+        or (file_size_limit is not None and file_size_limit <= 0)
+    ):
+        fail("bounded process limits must be positive")
+    preexec_fn: Callable[[], None] | None = None
+    if file_size_limit is not None:
+        if (
+            os.name != "posix"
+            or posix_resource is None
+            or not hasattr(posix_resource, "RLIMIT_FSIZE")
+        ):
+            fail("bounded process file-size resource limit is unavailable")
+        try:
+            _soft_limit, hard_limit = posix_resource.getrlimit(
+                posix_resource.RLIMIT_FSIZE
+            )
+        except (OSError, ValueError) as error:
+            raise RuntimeError(
+                "bounded process file-size resource limit is unavailable"
+            ) from error
+        effective_file_size_limit = file_size_limit
+        if hard_limit != posix_resource.RLIM_INFINITY:
+            effective_file_size_limit = min(effective_file_size_limit, hard_limit)
+        if effective_file_size_limit <= 0:
+            fail("bounded process file-size resource limit is unusable")
+
+        def apply_file_size_limit() -> None:
+            assert posix_resource is not None
+            posix_resource.setrlimit(
+                posix_resource.RLIMIT_FSIZE,
+                (effective_file_size_limit, effective_file_size_limit),
+            )
+
+        preexec_fn = apply_file_size_limit
+    if runtime_guard is not None:
+        guard_error = runtime_guard()
+        if guard_error is not None:
+            fail(guard_error)
+    process: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    failure: str | None = None
+    returncode: int | None = None
+    stdout = bytearray()
+    stderr = bytearray()
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            close_fds=True,
+            bufsize=0,
+            start_new_session=os.name == "posix",
+            umask=0o077 if os.name == "posix" else -1,
+            env=env,
+            preexec_fn=preexec_fn,
+        )
+        if process.stdout is None or process.stderr is None:
+            fail(execute_error)
+        for pipe, retained in (
+            (process.stdout, stdout),
+            (process.stderr, stderr),
+        ):
+            os.set_blocking(pipe.fileno(), False)
+            selector.register(pipe, selectors.EVENT_READ, retained)
+
+        deadline = time.monotonic() + timeout_seconds
+        output_bytes = 0
+        while failure is None:
+            if runtime_guard is not None:
+                failure = runtime_guard()
+                if failure is not None:
+                    break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = timeout_error
+                break
+            events = (
+                selector.select(min(remaining, 0.05))
+                if selector.get_map()
+                else []
+            )
+            for key, _event_mask in events:
+                allowance = maximum_output_bytes - output_bytes
+                read_bound = min(64 * 1024, max(allowance + 1, 1))
+                try:
+                    chunk = os.read(key.fd, read_bound)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    if not _close_signer_pipe(selector, key.fileobj):
+                        failure = execute_error
+                        break
+                    continue
+                key.data.extend(chunk)
+                output_bytes += len(chunk)
+                if output_bytes > maximum_output_bytes:
+                    failure = overflow_error
+                    break
+
+            if failure is None and runtime_guard is not None:
+                failure = runtime_guard()
+                if failure is not None:
+                    break
+
+            returncode = process.poll()
+            if returncode is not None:
+                # Drain already-buffered bytes without waiting for descendants.
+                if not selector.get_map() or not selector.select(0):
+                    break
+            elif not selector.get_map():
+                time.sleep(min(remaining, 0.01))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(execute_error) from exc
+    finally:
+        cleanup_ok = True
+        if process is not None:
+            cleanup_ok = _kill_and_reap_signer(process)
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None and not pipe.closed:
+                    cleanup_ok = _close_signer_pipe(selector, pipe) and cleanup_ok
+        try:
+            selector.close()
+        except OSError:
+            cleanup_ok = False
+        if not cleanup_ok:
+            fail(cleanup_error)
+
+    if failure is not None:
+        fail(failure)
+    if returncode is None:
+        fail(execute_error)
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        bytes(stdout),
+        bytes(stderr),
+    )
+
+
+def _run_bounded_macos_acl_inspection(
+    path: Path,
+    label: str,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run exact `/bin/ls -ldeq` with bounded time and retained output."""
+
+    if not MACOS_ACL_INSPECTOR.is_absolute() or MACOS_ACL_INSPECTOR != Path(
+        "/bin/ls"
+    ):
+        fail("macOS ACL inspector is not the pinned absolute /bin/ls")
+    return _run_bounded_process(
+        [str(MACOS_ACL_INSPECTOR), "-ldeq", str(path)],
+        cwd=path.parent,
+        env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        timeout_seconds=MACOS_ACL_INSPECTION_TIMEOUT_SECONDS,
+        maximum_output_bytes=MACOS_ACL_INSPECTION_MAX_OUTPUT_BYTES,
+        timeout_error=f"bounded macOS ACL inspection timed out for {label}: {path}",
+        overflow_error=(
+            f"macOS ACL inspection output exceeded its bound for {label}: {path}"
+        ),
+        execute_error=f"bounded macOS ACL inspection failed for {label}: {path}",
+        cleanup_error=(
+            f"macOS ACL inspector process group could not be terminated for {label}"
+        ),
+    )
+
+
+def _authenticated_tool_platform() -> str:
+    """Return the exact platform named by the authenticated isolation contract."""
+
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    fail("authenticated tool isolation is supported only on macOS and Linux")
+
+
+def _genesis_signer_controller_command(
+    controller: Path,
+    signer_command: list[str],
+    temporary_root: Path,
+    maximum_live_write_root_bytes: int,
+) -> list[str]:
+    """Build the complete fail-closed signer-isolation controller request.
+
+    The independently reviewed controller is responsible for applying the
+    platform-native sandbox and aggregate filesystem quota.  In particular,
+    the contract denies writes outside the exact output allowlist and denies
+    link, rename, unlink, symlink, and special-file creation. It also charges
+    even open-unlinked bytes to one cumulative quota, denies network and child
+    creation, and does not return until the isolated job has no residual
+    processes. Those are OS properties and cannot be replaced by this
+    composer's directory polling or per-file ``RLIMIT_FSIZE`` defense in depth.
+    """
+
+    if (
+        not controller.is_absolute()
+        or controller.parent != temporary_root
+        or maximum_live_write_root_bytes <= 0
+    ):
+        fail("authenticated tool controller must be one exact staging snapshot")
+    bound = _direct_signer_command_path(
+        signer_command, "--bound-manifest-out", temporary_root
+    )
+    signed = _direct_signer_command_path(
+        signer_command, "--signed-genesis-out", temporary_root
+    )
+    expected_hash = _direct_signer_command_path(
+        signer_command, "--expected-hash-out", temporary_root
+    )
+    writable_files = (
+        (bound.name, MAX_PRIVATE_FILE_BYTES),
+        (signed.name, MAX_PRIVATE_FILE_BYTES),
+        (expected_hash.name, MAX_GENESIS_EXPECTED_HASH_BYTES),
+    )
+    aggregate_limit = sum(limit for _name, limit in writable_files)
+    request = [
+        str(controller),
+        AUTHENTICATED_TOOL_CONTROLLER_SUBCOMMAND,
+        "--contract",
+        AUTHENTICATED_TOOL_CONTROLLER_CONTRACT,
+        "--platform",
+        _authenticated_tool_platform(),
+        "--working-directory",
+        str(temporary_root),
+        "--use-attested-runtime-identity",
+        "--no-new-privileges",
+        "--close-inherited-fds",
+        "--forward-tool-exit-status",
+        "--exact-tool-stdio",
+        "--deny-network",
+        "--deny-tool-process-spawn",
+        "--deny-write-outside-allowlist",
+        "--deny-link-rename-unlink",
+        "--deny-symlink",
+        "--deny-special-files",
+        "--account-unlinked-write-bytes",
+        "--require-empty-process-tree",
+        "--cumulative-write-limit-bytes",
+        str(aggregate_limit),
+        "--maximum-live-write-root-bytes",
+        str(maximum_live_write_root_bytes),
+        "--wall-time-seconds",
+        str(GENESIS_SIGNER_TIMEOUT_SECONDS),
+        "--stdout-limit-bytes",
+        str(MAX_GENESIS_SIGNER_OUTPUT_BYTES),
+        "--stderr-limit-bytes",
+        str(MAX_GENESIS_SIGNER_OUTPUT_BYTES),
+        "--combined-output-limit-bytes",
+        str(MAX_GENESIS_SIGNER_OUTPUT_BYTES),
+    ]
+    for name, limit in writable_files:
+        request.extend(("--writable-file", f"{name}:{limit}"))
+    request.extend(("--", *signer_command))
+    return request
+
+
+def _run_bounded_genesis_signer(
+    signer_command: list[str],
+    temporary_root: Path,
+    isolation_controller: Path,
+) -> int:
+    """Run one signer request with controller enforcement plus local bounds."""
+
+    guard = _SignerDirectoryGuard(signer_command, temporary_root)
+    try:
+        command = _genesis_signer_controller_command(
+            isolation_controller,
+            signer_command,
+            temporary_root,
+            guard.maximum_aggregate_bytes,
+        )
+        completed = _run_bounded_process(
+            command,
+            cwd=temporary_root,
+            env={
+                "HOME": str(temporary_root),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "TMPDIR": str(temporary_root),
+            },
+            timeout_seconds=GENESIS_SIGNER_TIMEOUT_SECONDS,
+            maximum_output_bytes=MAX_GENESIS_SIGNER_OUTPUT_BYTES,
+            timeout_error="external genesis signer exceeded its execution timeout",
+            overflow_error="external genesis signer emitted oversized diagnostics",
+            execute_error="external genesis signer could not execute",
+            cleanup_error=(
+                "external genesis signer process group could not be terminated"
+            ),
+            runtime_guard=guard.check,
+            file_size_limit=MAX_PRIVATE_FILE_BYTES,
+        )
+        final_guard_error = guard.check()
+        if final_guard_error is not None:
+            fail(final_guard_error)
+        return completed.returncode
+    finally:
+        guard.close()
 
 
 def _sealed_controller_manifest_path() -> Path:
@@ -846,6 +1537,8 @@ def _sign_genesis(
     *,
     external_signer: Path,
     trusted_external_signer_sha256: str,
+    authenticated_tool_controller: Path,
+    trusted_authenticated_tool_controller_sha256: str,
     rendered_genesis: Path,
     peer_one_config: Path,
     signed_genesis: Path,
@@ -854,10 +1547,42 @@ def _sign_genesis(
     identity = _executable_identity(external_signer, "external genesis signer")
     if identity[0] != trusted_external_signer_sha256:
         fail("external genesis signer differs from its trusted SHA-256")
-    expected_hash_path = temporary_root / "genesis.expected_hash"
-    stdout_path = temporary_root / "genesis-signer.stdout"
-    stderr_path = temporary_root / "genesis-signer.stderr"
+    controller_identity = _executable_identity(
+        authenticated_tool_controller,
+        "authenticated tool isolation controller",
+    )
+    if controller_identity[0] != trusted_authenticated_tool_controller_sha256:
+        fail(
+            "authenticated tool isolation controller differs from its trusted SHA-256"
+        )
+    if controller_identity[0] == identity[0]:
+        fail("authenticated tool isolation controller must be distinct from the signer")
+    rendered_genesis_identity = stable_hash_path(
+        rendered_genesis,
+        max_size=MAX_PRIVATE_FILE_BYTES,
+    )
+    peer_one_config_identity = stable_hash_path(
+        peer_one_config,
+        max_size=MAX_CONFIG_BYTES,
+    )
+    bound_candidate = temporary_root / "genesis.bound.candidate.json"
+    signed_candidate = temporary_root / "genesis.signed.candidate.nrt"
+    config_snapshot = temporary_root / "peer-one.config.snapshot.toml"
+    expected_hash_path = temporary_root / "genesis.expected_hash.candidate"
     signer_snapshot = temporary_root / "genesis-signer.snapshot"
+    controller_snapshot = temporary_root / "authenticated-tool-controller.snapshot"
+    for candidate in (
+        bound_candidate,
+        signed_candidate,
+        config_snapshot,
+        expected_hash_path,
+        signer_snapshot,
+        controller_snapshot,
+    ):
+        if candidate.exists() or candidate.is_symlink():
+            fail(f"external genesis signer staging path already exists: {candidate}")
+    copy_private_file(rendered_genesis, bound_candidate)
+    copy_private_file(peer_one_config, config_snapshot)
     snapshot_identity = _snapshot_executable(
         external_signer,
         signer_snapshot,
@@ -865,50 +1590,30 @@ def _sign_genesis(
         "external genesis signer",
     )
     try:
+        controller_snapshot_identity = _snapshot_executable(
+            authenticated_tool_controller,
+            controller_snapshot,
+            controller_identity,
+            "authenticated tool isolation controller",
+        )
         command = [
             str(signer_snapshot),
             "--unsigned-genesis",
-            str(rendered_genesis),
+            str(bound_candidate),
             "--peer-config",
-            str(peer_one_config),
+            str(config_snapshot),
             "--bound-manifest-out",
-            str(rendered_genesis),
+            str(bound_candidate),
             "--signed-genesis-out",
-            str(signed_genesis),
+            str(signed_candidate),
             "--expected-hash-out",
             str(expected_hash_path),
         ]
-        with (
-            _exclusive_binary_output(stdout_path) as stdout,
-            _exclusive_binary_output(stderr_path) as stderr,
-        ):
-            completed = subprocess.run(
-                command,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
-                timeout=600,
-                umask=0o077,
-                env={
-                    "HOME": str(temporary_root),
-                    "LANG": "C",
-                    "LC_ALL": "C",
-                    "PATH": "/usr/bin:/bin",
-                    "TMPDIR": str(temporary_root),
-                },
-            )
-            stdout.flush()
-            stderr.flush()
-            os.fsync(stdout.fileno())
-            os.fsync(stderr.fileno())
-        require_private_regular_file(stdout_path)
-        require_private_regular_file(stderr_path)
-        if (
-            stdout_path.lstat().st_size > MAX_GENESIS_SIGNER_OUTPUT_BYTES
-            or stderr_path.lstat().st_size > MAX_GENESIS_SIGNER_OUTPUT_BYTES
-        ):
-            fail("external genesis signer emitted oversized diagnostics")
+        returncode = _run_bounded_genesis_signer(
+            command,
+            temporary_root,
+            controller_snapshot,
+        )
         if _executable_identity(external_signer, "external genesis signer") != identity:
             fail("external genesis signer changed during genesis signing")
         if (
@@ -916,16 +1621,41 @@ def _sign_genesis(
             != snapshot_identity
         ):
             fail("external genesis signer snapshot changed during genesis signing")
-        if completed.returncode != 0:
+        if (
+            _executable_identity(
+                authenticated_tool_controller,
+                "authenticated tool isolation controller",
+            )
+            != controller_identity
+            or _executable_identity(
+                controller_snapshot,
+                "authenticated tool isolation controller snapshot",
+            )
+            != controller_snapshot_identity
+        ):
+            fail("authenticated tool isolation controller changed during signing")
+        if (
+            stable_hash_path(
+                rendered_genesis,
+                max_size=MAX_PRIVATE_FILE_BYTES,
+            )
+            != rendered_genesis_identity
+            or stable_hash_path(peer_one_config, max_size=MAX_CONFIG_BYTES)
+            != peer_one_config_identity
+        ):
+            fail("external genesis signer changed its authenticated inputs")
+        if returncode != 0:
             fail(
                 "external genesis signer refused Taira genesis signing "
-                f"with exit status {completed.returncode}"
+                f"with exit status {returncode}"
             )
-        signed = read_private_file(signed_genesis, 64 * 1024 * 1024)
-        bound = read_private_file(rendered_genesis, 64 * 1024 * 1024)
+        signed = read_private_file(signed_candidate, MAX_PRIVATE_FILE_BYTES)
+        bound = read_private_file(bound_candidate, MAX_PRIVATE_FILE_BYTES)
         if not signed or not bound:
             fail("external genesis signer emitted empty signed or bound genesis")
-        expected_hash = read_private_file(expected_hash_path, 256)
+        expected_hash = read_private_file(
+            expected_hash_path, MAX_GENESIS_EXPECTED_HASH_BYTES
+        )
         try:
             expected_text = expected_hash.decode("ascii")
         except UnicodeDecodeError as exc:
@@ -937,12 +1667,29 @@ def _sign_genesis(
             or int(expected_text[-3:-1], 16) & 1 == 0
         ):
             fail("external genesis signer emitted a noncanonical genesis expected hash")
+        if (
+            stable_hash_path(
+                rendered_genesis,
+                max_size=MAX_PRIVATE_FILE_BYTES,
+            )
+            != rendered_genesis_identity
+            or stable_hash_path(peer_one_config, max_size=MAX_CONFIG_BYTES)
+            != peer_one_config_identity
+        ):
+            fail("external genesis signer inputs changed before result publication")
+        write_private_file(rendered_genesis, bound)
+        write_private_file(signed_genesis, signed)
         return expected_text[:-1]
     finally:
-        signer_snapshot.unlink(missing_ok=True)
-        stdout_path.unlink(missing_ok=True)
-        stderr_path.unlink(missing_ok=True)
-        expected_hash_path.unlink(missing_ok=True)
+        for candidate in (
+            controller_snapshot,
+            signer_snapshot,
+            bound_candidate,
+            signed_candidate,
+            config_snapshot,
+            expected_hash_path,
+        ):
+            candidate.unlink(missing_ok=True)
 
 
 def _privacy_projection(config_path: Path) -> dict[str, Any]:
@@ -959,15 +1706,40 @@ def _privacy_projection(config_path: Path) -> dict[str, Any]:
     return payload
 
 
-def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, str]:
+def _rebase_rendered_bundle_paths(output: Path, published_output: Path) -> None:
+    """Rewrite renderer-owned staging paths to the final published root."""
+
+    if output == published_output or output.parent != published_output.parent:
+        fail("reset bundle staging and publication roots must be distinct siblings")
+    staging_text = renderer._quote_toml(str(output))[1:-1].encode("utf-8")
+    published_text = renderer._quote_toml(str(published_output))[1:-1].encode("utf-8")
+    for slug in SLUGS:
+        config_path = output / "rendered" / slug / "config.toml"
+        payload = read_private_file(config_path, MAX_CONFIG_BYTES)
+        if staging_text not in payload:
+            fail(f"rendered {slug} config lacks its private staging root")
+        rebased = payload.replace(staging_text, published_text)
+        if staging_text in rebased:
+            fail(f"rendered {slug} config retains its private staging root")
+        write_private_file(config_path, rebased)
+
+
+def _validate_rendered_configs(
+    output: Path,
+    expected_hash: str,
+    *,
+    published_output: Path | None = None,
+) -> dict[str, str]:
     hashes: dict[str, str] = {}
+    logical_output = published_output if published_output is not None else output
     for index, slug in enumerate(SLUGS, start=1):
         root = output / "rendered" / slug
+        logical_root = logical_output / "rendered" / slug
         config_path = root / "config.toml"
         config = _privacy_projection(config_path)
         genesis = config["genesis"]
         if (
-            genesis.get("file") != str(output / "genesis.signed.nrt")
+            genesis.get("file") != str(logical_output / "genesis.signed.nrt")
             or genesis.get("expected_hash") != expected_hash
         ):
             fail(f"rendered {slug} config is not bound to the signed bundle genesis")
@@ -976,19 +1748,123 @@ def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, st
             fail(f"rendered {slug} config lacks the privacy issuer table")
         if issuer.get("enabled") is not (index == 1):
             fail("privacy issuer must be enabled on validator 1 only")
-        expected_state_dir = root / "runtime/privacy/bootle-lantern/issuer"
+        expected_state_dir = logical_root / "runtime/privacy/bootle-lantern/issuer"
         if issuer.get("state_dir") != str(expected_state_dir):
             fail(f"rendered {slug} privacy state is not bundle-local")
         if index > 1 and set(issuer) != renderer.TAIRA_PRIVACY_ISSUER_BASE_FIELDS:
             fail(f"rendered {slug} retains dormant privacy issuer bindings")
         registry = config["nexus"].get("registry")
         if not isinstance(registry, dict) or (
-            registry.get("manifest_directory") != str(root / "manifests")
-            or registry.get("cache_directory") != str(root / "manifests")
+            registry.get("manifest_directory") != str(logical_root / "manifests")
+            or registry.get("cache_directory") != str(logical_root / "manifests")
         ):
             fail(f"rendered {slug} governance manifests are not bundle-local")
         hashes[slug] = sha256(config_path)
     return hashes
+
+
+def _publish_directory_noreplace(staging: Path, destination: Path) -> None:
+    """Atomically publish one complete sibling directory without replacement."""
+
+    if (
+        staging.parent != destination.parent
+        or not staging.name
+        or not destination.name
+        or Path(staging.name).name != staging.name
+        or Path(destination.name).name != destination.name
+    ):
+        fail("reset bundle publication paths must be canonical siblings")
+    parent_info = require_private_directory(staging.parent)
+    staging_info = require_private_directory(staging)
+    parent_fd = os.open(
+        staging.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    published = False
+    try:
+        if _metadata_identity(os.fstat(parent_fd)) != _metadata_identity(parent_info):
+            fail("reset bundle publication parent changed before publication")
+        staged_info = os.stat(
+            staging.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if _metadata_identity(staged_info) != _metadata_identity(staging_info):
+            fail("reset bundle staging directory changed before publication")
+        library = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin" and hasattr(library, "renameatx_np"):
+            rename = library.renameatx_np
+            flag = 0x00000004  # RENAME_EXCL
+        elif sys.platform.startswith("linux") and hasattr(library, "renameat2"):
+            rename = library.renameat2
+            flag = 0x00000001  # RENAME_NOREPLACE
+        else:
+            fail("atomic no-replace reset bundle publication is unavailable")
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(
+            parent_fd,
+            os.fsencode(staging.name),
+            parent_fd,
+            os.fsencode(destination.name),
+            flag,
+        )
+        if result != 0:
+            error_number = ctypes.get_errno()
+            if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+                fail("reset output appeared before atomic no-replace publication")
+            raise OSError(
+                error_number,
+                os.strerror(error_number),
+                os.fspath(destination),
+            )
+        published = True
+        try:
+            published_info = os.stat(
+                destination.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                published_info.st_dev,
+                published_info.st_ino,
+                published_info.st_mode,
+                published_info.st_uid,
+                published_info.st_gid,
+            ) != (
+                staged_info.st_dev,
+                staged_info.st_ino,
+                staged_info.st_mode,
+                staged_info.st_uid,
+                staged_info.st_gid,
+            ):
+                fail("published reset bundle has the wrong directory identity")
+            os.fsync(parent_fd)
+        except (OSError, RuntimeError) as error:
+            raise RuntimeError(
+                "reset bundle publication committed, but post-rename readback or "
+                "destination-parent durability is uncertain; inspect the destination "
+                "before retrying"
+            ) from error
+    finally:
+        try:
+            os.close(parent_fd)
+        except OSError as error:
+            if published:
+                raise RuntimeError(
+                    "reset bundle publication committed, but its directory handle "
+                    "could not be closed; inspect the destination before retrying"
+                ) from error
+            raise
 
 
 def _chmod_private_tree(root: Path) -> None:
@@ -1010,6 +1886,84 @@ def _chmod_private_tree(root: Path) -> None:
             ):
                 fail(f"reset output contains an unsafe file: {path}")
             os.chmod(path, 0o600)
+
+
+def _fsync_stable_private_path(
+    path: Path,
+    expected: os.stat_result,
+    *,
+    directory: bool,
+) -> None:
+    """Durably sync one path while it retains its authenticated inode identity."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot open private path for durable sync: {path}"
+        ) from error
+    try:
+        opened = os.fstat(descriptor)
+        if _metadata_identity(opened) != _metadata_identity(expected):
+            fail(f"private path changed before durable sync: {path}")
+        os.fsync(descriptor)
+        synced = os.fstat(descriptor)
+        if _metadata_identity(synced) != _metadata_identity(opened):
+            fail(f"private path changed during durable sync: {path}")
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_private_tree(root: Path) -> None:
+    """Fsync final files, then every containing directory from leaves to root."""
+
+    directory_identities: dict[Path, os.stat_result] = {}
+    file_identities: list[tuple[Path, os.stat_result]] = []
+
+    def reject_walk_error(error: OSError) -> NoReturn:
+        raise RuntimeError(f"cannot inspect private tree for durable sync: {error}")
+
+    for current_text, directory_names, file_names in os.walk(
+        root,
+        topdown=True,
+        onerror=reject_walk_error,
+        followlinks=False,
+    ):
+        directory_names.sort()
+        file_names.sort()
+        current = Path(current_text)
+        current_info = require_private_directory(current)
+        prior = directory_identities.get(current)
+        if prior is not None and _metadata_identity(current_info) != _metadata_identity(
+            prior
+        ):
+            fail(f"private directory changed during durable inventory: {current}")
+        directory_identities[current] = current_info
+        for name in directory_names:
+            child = current / name
+            directory_identities[child] = require_private_directory(child)
+        for name in file_names:
+            path = current / name
+            file_identities.append((path, require_private_regular_file(path)))
+
+    for path, identity in file_identities:
+        _fsync_stable_private_path(path, identity, directory=False)
+    for path in sorted(
+        directory_identities,
+        key=lambda item: (-len(item.relative_to(root).parts), str(item)),
+    ):
+        _fsync_stable_private_path(
+            path,
+            directory_identities[path],
+            directory=True,
+        )
 
 
 def prepare(args: argparse.Namespace) -> dict[str, object]:
@@ -1045,7 +1999,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         controller_manifest, max_size=MAX_RESET_MANIFEST_BYTES
     ).sha256
     source = args.source_bundle
-    output = args.output_bundle
+    final_output = args.output_bundle
     privacy_root = args.privacy_release_dir
     require_private_directory(source)
     trusted_genesis_signer_sha256 = require_sha256(
@@ -1057,21 +2011,42 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     )
     if genesis_signer_identity[0] != trusted_genesis_signer_sha256:
         fail("external genesis signer differs from its trusted SHA-256")
+    trusted_tool_controller_sha256 = require_sha256(
+        args.trusted_authenticated_tool_controller_sha256,
+        "authenticated tool isolation controller SHA-256",
+    )
+    tool_controller_identity = _executable_identity(
+        args.authenticated_tool_controller,
+        "authenticated tool isolation controller",
+    )
+    if tool_controller_identity[0] != trusted_tool_controller_sha256:
+        fail(
+            "authenticated tool isolation controller differs from its trusted SHA-256"
+        )
+    if tool_controller_identity[0] == genesis_signer_identity[0]:
+        fail("authenticated tool isolation controller must be distinct from the signer")
     token_hash_tool_identity = _executable_identity(
         args.onboarding_token_hash_tool,
         "native onboarding-token hash tool",
     )
     if args.genesis_external_signer == args.onboarding_token_hash_tool:
         fail("external genesis signer and onboarding-token hash tool must be distinct")
-    if not output.is_absolute():
-        fail("output bundle must be an absolute path")
-    if output.exists() or output.is_symlink():
+    final_output_text = str(final_output)
+    if (
+        not final_output.is_absolute()
+        or final_output == Path("/")
+        or final_output_text.startswith("//")
+        or os.path.normpath(final_output_text) != final_output_text
+        or any(ord(character) < 0x20 for character in final_output_text)
+    ):
+        fail("output bundle must be a canonical, non-root absolute path")
+    if final_output.exists() or final_output.is_symlink():
         fail("output bundle already exists")
-    if output.parent.resolve(strict=True) != output.parent:
+    if final_output.parent.resolve(strict=True) != final_output.parent:
         fail("output parent must be canonical")
-    require_private_directory(output.parent)
+    require_private_directory(final_output.parent)
     free_bytes_before_copy = require_minimum_free_space(
-        output.parent, args.minimum_free_bytes
+        final_output.parent, args.minimum_free_bytes
     )
     privacy_payloads, authenticated_manifest, authenticated_manifest_sha = (
         _load_authenticated_privacy_release(
@@ -1100,10 +2075,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         )
 
     source_snapshot_cleanup = tempfile.TemporaryDirectory(
-        prefix="taira-authenticated-source-reset-", dir=output.parent
+        prefix="taira-authenticated-source-reset-", dir=final_output.parent
     )
     snapshot_root = Path(source_snapshot_cleanup.name).resolve(strict=True)
     os.chmod(snapshot_root, 0o700)
+    require_private_directory(snapshot_root)
     source_snapshot = snapshot_root / "source"
     try:
         source_manifest, authenticated_source_sha256 = (
@@ -1118,11 +2094,31 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         raise
     source = source_snapshot
 
+    output: Path | None = None
     try:
-        output.mkdir(mode=0o700)
+        output = Path(
+            tempfile.mkdtemp(
+                prefix=f".{final_output.name}.",
+                suffix=".staging",
+                dir=final_output.parent,
+            )
+        ).resolve(strict=True)
+        os.chmod(output, 0o700)
+        require_private_directory(output)
+        output_info = output.lstat()
+        output_identity = (output_info.st_dev, output_info.st_ino)
     except BaseException:
+        if output is not None:
+            try:
+                failed_staging = output.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if stat.S_ISDIR(failed_staging.st_mode):
+                    shutil.rmtree(output)
         source_snapshot_cleanup.cleanup()
         raise
+    assert output is not None
     try:
         copy_private_file(
             source / "validator-roster.toml", output / "validator-roster.toml"
@@ -1143,6 +2139,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         ) as temporary_name:
             temporary = Path(temporary_name).resolve(strict=True)
             os.chmod(temporary, 0o700)
+            require_private_directory(temporary)
             token_hash_tool_snapshot = temporary / "onboarding-token-hash.snapshot"
             token_hash_snapshot_identity = _snapshot_executable(
                 args.onboarding_token_hash_tool,
@@ -1173,8 +2170,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 output_peer = rendered / slug
                 for tree in STATIC_TREES:
                     copy_private_tree(source_peer / tree, output_peer / tree)
+            _rebase_rendered_bundle_paths(output, final_output)
             _validate_rendered_configs(
-                output, renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER
+                output,
+                renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER,
+                published_output=final_output,
             )
             _require_rendered_kagemusha_config_projection(
                 output,
@@ -1215,6 +2215,10 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             expected_hash = _sign_genesis(
                 external_signer=args.genesis_external_signer,
                 trusted_external_signer_sha256=trusted_genesis_signer_sha256,
+                authenticated_tool_controller=args.authenticated_tool_controller,
+                trusted_authenticated_tool_controller_sha256=(
+                    trusted_tool_controller_sha256
+                ),
                 rendered_genesis=rendered / "genesis.json",
                 peer_one_config=rendered / SLUGS[0] / "config.toml",
                 signed_genesis=output / "genesis.signed.nrt",
@@ -1249,6 +2253,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             )
             if [path.parent.name for path in written] != list(SLUGS):
                 fail("post-signing renderer changed the exact four-validator roster")
+            _rebase_rendered_bundle_paths(output, final_output)
             if (
                 _executable_identity(
                     args.onboarding_token_hash_tool,
@@ -1263,7 +2268,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             ):
                 fail("native onboarding-token hash tool changed during rendering")
 
-        config_hashes = _validate_rendered_configs(output, expected_hash)
+        config_hashes = _validate_rendered_configs(
+            output,
+            expected_hash,
+            published_output=final_output,
+        )
         kagemusha_config_projection = (
             _require_rendered_kagemusha_config_projection(
                 output,
@@ -1387,13 +2396,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             )
             if any((rendered / slug / "storage").iterdir()):
                 fail(f"new storage became non-empty: {slug}")
-        directory_fd = os.open(output, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_private_tree(output)
         result = {
-            "bundle": str(output),
+            "bundle": str(final_output),
             "empty_storage_sha256": hashlib.sha256().hexdigest(),
             "free_bytes_before_copy": free_bytes_before_copy,
             "genesis_expected_hash": expected_hash,
@@ -1413,9 +2418,19 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             result["kagemusha_config_projection_sha256"] = (
                 _kagemusha_config_projection_sha256(args.kagemusha_release_root)
             )
+        _publish_directory_noreplace(output, final_output)
         return result
     except BaseException:
-        shutil.rmtree(output)
+        try:
+            staging_info = output.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(staging_info.st_mode) or not stat.S_ISDIR(
+                staging_info.st_mode
+            ) or (staging_info.st_dev, staging_info.st_ino) != output_identity:
+                fail("reset bundle staging path changed before cleanup")
+            shutil.rmtree(output)
         raise
     finally:
         source_snapshot_cleanup.cleanup()
@@ -1428,6 +2443,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--privacy-release-dir", type=Path, required=True)
     parser.add_argument("--genesis-external-signer", type=Path, required=True)
     parser.add_argument("--trusted-genesis-external-signer-sha256", required=True)
+    parser.add_argument(
+        "--authenticated-tool-controller",
+        type=Path,
+        required=True,
+        help=(
+            "independently reviewed native controller implementing "
+            f"{AUTHENTICATED_TOOL_CONTROLLER_CONTRACT}"
+        ),
+    )
+    parser.add_argument(
+        "--trusted-authenticated-tool-controller-sha256",
+        required=True,
+    )
     parser.add_argument("--onboarding-token-hash-tool", type=Path, required=True)
     parser.add_argument(
         "--kagemusha-release-root",

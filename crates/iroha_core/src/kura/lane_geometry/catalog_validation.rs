@@ -683,37 +683,7 @@ fn lane_proposal_coordinator_targets_retirement(
 fn routing_plan_from_execution_context(
     context: &ExternalExecutionContext,
 ) -> Option<crate::queue::RoutingPlan> {
-    let coordinator = context.routing_plan_legs.first()?;
-    if coordinator.role != ExternalExecutionRouteRole::Coordinator
-        || coordinator.lane_id != context.lane_id
-        || coordinator.dataspace_id != context.dataspace_id
-    {
-        return None;
-    }
-    let coordinator =
-        crate::queue::RoutingDecision::new(coordinator.lane_id, coordinator.dataspace_id);
-    let plan = if context.routing_plan_legs.len() == 1 {
-        crate::queue::RoutingPlan::single(coordinator)
-    } else {
-        let participants = context
-            .routing_plan_legs
-            .iter()
-            .skip(1)
-            .map(|leg| {
-                (leg.role == ExternalExecutionRouteRole::Participant).then_some(
-                    crate::queue::RouteLeg::new(
-                        crate::queue::RoutingDecision::new(leg.lane_id, leg.dataspace_id),
-                        crate::queue::RouteLegRole::Participant,
-                    ),
-                )
-            })
-            .collect::<Option<Vec<_>>>()?;
-        crate::queue::RoutingPlan::native_amx(coordinator, participants)
-    };
-    (plan.digest() == context.routing_plan_digest
-        && crate::queue::execution_context_legs_for_routing_plan(&plan)
-            == context.routing_plan_legs)
-        .then_some(plan)
+    crate::queue::routing_plan_from_execution_context(context).ok()
 }
 fn geometry_catalog_fingerprint(bindings: &[LaneGeometryBinding]) -> Hash {
     let encoded = bindings.to_vec().encode();

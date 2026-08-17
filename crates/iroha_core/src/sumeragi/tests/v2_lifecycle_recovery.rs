@@ -228,30 +228,25 @@ fn lifecycle_payload_for_validators_with_count(
     let reservations = entrypoints
         .iter()
         .enumerate()
-        .map(|(index, entrypoint)| {
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-            LaneQueueReservationKeyV2 {
-                version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: accepted.hash(),
-                entrypoint_hash: entrypoint.hash(),
-                queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
-                    b"lifecycle-recovery-queue-plan-admission\0",
-                    &u64::try_from(index)
-                        .expect("bounded lifecycle index")
-                        .to_be_bytes(),
-                ]),
-                routing_plan_digest: routing_plan.digest(),
-                coordinator_leg: routing_plan.coordinator_leg(),
-                lane_id: proposal.descriptor.lane_id,
-                dataspace_id: proposal.descriptor.dataspace_id,
-                lane_incarnation,
-                proposal_height: proposal.descriptor.proposal_height,
-                lane_block_height: proposal.descriptor.lane_block_height,
-                lane_block_view: proposal.descriptor.lane_block_view,
-                reservation_owner_hash,
-                proposal_identity_hash,
-            }
+        .map(|(index, entrypoint)| LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                b"lifecycle-recovery-queue-plan-admission\0",
+                &u64::try_from(index)
+                    .expect("bounded lifecycle index")
+                    .to_be_bytes(),
+            ]),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash,
+            proposal_identity_hash,
         })
         .collect::<Vec<_>>();
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(

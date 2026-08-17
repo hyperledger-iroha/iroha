@@ -334,6 +334,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'commit_roster_journal/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (
+        'actual/sora_profile_discovery_disabled_test.rs',
+        'actual/sora_profile_runtime_tests.rs',
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
@@ -430,9 +432,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/nexus_reconfigure_manifest_reload_tests.rs',
         'queue/plan_journal_startup_atomicity_tests.rs',
         'queue/global_guard_claim_conflict_tests.rs',
+        'queue/transaction_guard_return_tests.rs',
         'queue/queue_metadata_and_admission_tests.rs',
         'queue/instruction_and_state_routing_tests.rs',
         'queue/routing_batch_admission_tests.rs',
+        'queue/config_factory_test_support.rs',
         'queue/teu_limit_and_backlog_tests.rs',
         'queue/routing_projection_resilience_tests.rs',
         'queue/capacity_and_concurrency_tests.rs',
@@ -470,8 +474,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/evidence.rs': (
         'evidence/missing_signer_pop_test.rs',
-        'evidence/signature_missing_test.rs',
-        'evidence/roundtrip_matrix_test.rs',
     ),
     'crates/iroha_p2p/src/network.rs': (
         'network/handle_update_tests.rs',

@@ -20310,6 +20310,44 @@ mod tests {
             captured,
         ))
     }
+    fn generated_hf_config_routes(
+        resolved_commit: &str,
+        config_json: Vec<u8>,
+    ) -> Result<BTreeMap<(String, String), HttpFixtureResponse>> {
+        let model_info = norito::json!({
+            "sha": resolved_commit,
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        Ok(BTreeMap::from([
+            (
+                (
+                    "GET".to_owned(),
+                    "/api/models/openai-community/gpt2/revision/main".to_owned(),
+                ),
+                HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+            ),
+            (
+                (
+                    "HEAD".to_owned(),
+                    "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+                ),
+                HttpFixtureResponse::head_ok(
+                    "application/json",
+                    u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+                ),
+            ),
+            (
+                (
+                    "GET".to_owned(),
+                    "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+                ),
+                HttpFixtureResponse::json(config_json),
+            ),
+        ]))
+    }
     const TEST_HF_CREDENTIAL_PROVIDER_HANDLE: &str = "kms://soracloud/hf-inference-fixture";
     const TEST_HF_CREDENTIAL_PROVIDER_REVISION: u64 = 7;
     const TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
@@ -20887,6 +20925,19 @@ mod tests {
     struct RecordingRuntimeMutationSink {
         instructions: parking_lot::Mutex<Vec<InstructionBox>>,
     }
+    fn generated_hf_mutation_manager(
+        state: &Arc<State>,
+        local_peer_id: &str,
+    ) -> (SoracloudRuntimeManager, Arc<RecordingRuntimeMutationSink>) {
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        (manager, mutation_sink)
+    }
     impl RecordingRuntimeMutationSink {
         #[allow(dead_code)]
         fn submitted_runtime_states(
@@ -21079,6 +21130,26 @@ mod tests {
         source_id: Hash,
         pool_id: Hash,
         bundle: SoraDeploymentBundleV1,
+    }
+    fn generated_hf_infer_request(
+        fixture: &GeneratedHfServiceFixture,
+        request_commitment: &[u8],
+    ) -> SoracloudLocalReadRequest {
+        SoracloudLocalReadRequest {
+            observed_height: 0,
+            observed_block_hash: None,
+            service_name: fixture.bundle.service.service_name.to_string(),
+            service_version: fixture.bundle.service.service_version.clone(),
+            handler_name: "infer".to_owned(),
+            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+            request_method: "POST".to_owned(),
+            request_path: "/infer".to_owned(),
+            handler_path: "/infer".to_owned(),
+            request_query: None,
+            request_headers: BTreeMap::new(),
+            request_body: br#"{"inputs":"hello"}"#.to_vec(),
+            request_commitment: Hash::new(request_commitment),
+        }
     }
     fn insert_generated_hf_service_fixture(
         state: &mut Arc<State>,
@@ -22920,38 +22991,7 @@ mod tests {
             SoraRouteVisibilityV1::Public,
         );
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-456",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json.clone()),
-        );
+        let routes = generated_hf_config_routes("commit-456", config_json.clone())?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23018,38 +23058,7 @@ mod tests {
             local_peer_id,
         );
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-assigned-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-assigned-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23097,38 +23106,7 @@ mod tests {
             local_peer_id,
         );
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-async-reconcile-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-async-reconcile-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23189,23 +23167,14 @@ mod tests {
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         let error = handle
-            .execute_local_read(SoracloudLocalReadRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                service_name: fixture.bundle.service.service_name.to_string(),
-                service_version: fixture.bundle.service.service_version.clone(),
-                handler_name: "infer".to_owned(),
-                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-                request_method: "POST".to_owned(),
-                request_path: "/infer".to_owned(),
-                handler_path: "/infer".to_owned(),
-                request_query: None,
-                request_headers: BTreeMap::from([(
+            .execute_local_read({
+                let mut request =
+                    generated_hf_infer_request(&fixture, b"hf-infer-no-credential-provider");
+                request.request_headers = BTreeMap::from([(
                     HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1.to_owned(),
                     "1".to_owned(),
-                )]),
-                request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-infer-no-credential-provider"),
+                )]);
+                request
             })
             .expect_err("generated HF inference should require an injected credential provider");
         assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
@@ -23264,21 +23233,10 @@ mod tests {
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         let error = handle
-            .execute_local_read(SoracloudLocalReadRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                service_name: fixture.bundle.service.service_name.to_string(),
-                service_version: fixture.bundle.service.service_version.clone(),
-                handler_name: "infer".to_owned(),
-                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-                request_method: "POST".to_owned(),
-                request_path: "/infer".to_owned(),
-                handler_path: "/infer".to_owned(),
-                request_query: None,
-                request_headers: BTreeMap::new(),
-                request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-infer-no-bridge-opt-in"),
-            })
+            .execute_local_read(generated_hf_infer_request(
+                &fixture,
+                b"hf-infer-no-bridge-opt-in",
+            ))
             .expect_err("generated HF inference should fail closed without bridge opt-in");
         assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
         assert!(error.message.contains("has no enabled runtime backend"));
@@ -23310,38 +23268,7 @@ mod tests {
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"local:"}}"#
                 .to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-local-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-local-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23441,38 +23368,7 @@ mod tests {
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"reuse:"}}"#
                 .to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-local-reuse-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-local-reuse-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23570,38 +23466,7 @@ mod tests {
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"probe:"}}"#
                 .to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-replica-probe-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-replica-probe-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23645,38 +23510,7 @@ mod tests {
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"warm:"}}"#
                 .to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-warming-heartbeat-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-warming-heartbeat-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -23752,30 +23586,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         handle.report_generated_hf_proxy_failure(
-            &SoracloudLocalReadRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                service_name: fixture.bundle.service.service_name.to_string(),
-                service_version: fixture.bundle.service.service_version.clone(),
-                handler_name: "infer".to_owned(),
-                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-                request_method: "POST".to_owned(),
-                request_path: "/infer".to_owned(),
-                handler_path: "/infer".to_owned(),
-                request_query: None,
-                request_headers: BTreeMap::new(),
-                request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-proxy-primary-failure"),
-            },
+            &generated_hf_infer_request(&fixture, b"hf-proxy-primary-failure"),
             "12D3KooWGeneratedHfFixturePrimary",
             &SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -23817,30 +23631,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         handle.report_generated_hf_local_proxy_failure(
-            &SoracloudLocalReadRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                service_name: fixture.bundle.service.service_name.to_string(),
-                service_version: fixture.bundle.service.service_version.clone(),
-                handler_name: "infer".to_owned(),
-                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-                request_method: "POST".to_owned(),
-                request_path: "/infer".to_owned(),
-                handler_path: "/infer".to_owned(),
-                request_query: None,
-                request_headers: BTreeMap::new(),
-                request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-local-replica-forwarding-failure"),
-            },
+            &generated_hf_infer_request(&fixture, b"hf-local-replica-forwarding-failure"),
             &SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 "Soracloud proxy routing requires an attached P2P network",
@@ -23885,29 +23679,9 @@ mod tests {
             &fixture,
             SoraHfPlacementHostStatusV1::Warming,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-missing-primary-reconcile"),
-        };
+        let request = generated_hf_infer_request(&fixture, b"hf-missing-primary-reconcile");
         let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "generated HF service has no warm authoritative primary host",
@@ -23936,29 +23710,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-primary-authority-failure-reconcile"),
-        };
+        let request =
+            generated_hf_infer_request(&fixture, b"hf-primary-authority-failure-reconcile");
         let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "authoritative primary rejected proxy execution",
@@ -24000,29 +23755,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warming,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-warming-primary-authority-failure-reconcile"),
-        };
+        let request =
+            generated_hf_infer_request(&fixture, b"hf-warming-primary-authority-failure-reconcile");
         let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "warming primary rejected proxy execution",
@@ -24062,29 +23798,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-replica-authority-failure-reconcile"),
-        };
+        let request =
+            generated_hf_infer_request(&fixture, b"hf-replica-authority-failure-reconcile");
         let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "local peer rejected generated-HF proxy execution because it is not the authoritative warm primary",
@@ -24113,29 +23830,9 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-unexpected-responder-reconcile"),
-        };
+        let request = generated_hf_infer_request(&fixture, b"hf-unexpected-responder-reconcile");
         handle.request_generated_hf_proxy_responder_reconcile(
             &request,
             "12D3KooWGeneratedHfFixtureReplica",
@@ -24181,29 +23878,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warming,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-unexpected-warming-responder-reconcile"),
-        };
+        let request =
+            generated_hf_infer_request(&fixture, b"hf-unexpected-warming-responder-reconcile");
         handle.request_generated_hf_proxy_responder_reconcile(
             &request,
             "12D3KooWGeneratedHfFixtureReplica",
@@ -24235,29 +23913,10 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let request = SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: fixture.bundle.service.service_name.to_string(),
-            service_version: fixture.bundle.service.service_version.clone(),
-            handler_name: "infer".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "POST".to_owned(),
-            request_path: "/infer".to_owned(),
-            handler_path: "/infer".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: br#"{"inputs":"hello"}"#.to_vec(),
-            request_commitment: Hash::new(b"hf-unexpected-unassigned-responder-reconcile"),
-        };
+        let request =
+            generated_hf_infer_request(&fixture, b"hf-unexpected-unassigned-responder-reconcile");
         handle.request_generated_hf_proxy_responder_reconcile(
             &request,
             "12D3KooWUnexpectedUnassignedResponder",
@@ -24292,38 +23951,7 @@ mod tests {
         );
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"explode"}}"#.to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-local-worker-failure-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-local-worker-failure-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -24413,38 +24041,7 @@ mod tests {
         );
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"explode"}}"#.to_vec();
-        let model_info = norito::json!({
-            "sha": "commit-replica-worker-failure-123",
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json),
-        );
+        let routes = generated_hf_config_routes("commit-replica-worker-failure-123", config_json)?;
         let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
@@ -24508,23 +24105,11 @@ mod tests {
         );
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         let error = handle
-            .execute_local_read(SoracloudLocalReadRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                service_name: fixture.bundle.service.service_name.to_string(),
-                service_version: fixture.bundle.service.service_version.clone(),
-                handler_name: "infer".to_owned(),
-                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-                request_method: "POST".to_owned(),
-                request_path: "/infer".to_owned(),
-                handler_path: "/infer".to_owned(),
-                request_query: None,
-                request_headers: BTreeMap::from([(
-                    "content-type".to_owned(),
-                    "application/json".to_owned(),
-                )]),
-                request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-replica-infer-request"),
+            .execute_local_read({
+                let mut request = generated_hf_infer_request(&fixture, b"hf-replica-infer-request");
+                request.request_headers =
+                    BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]);
+                request
             })
             .expect_err("replica hosts should fail closed until proxy-to-primary is implemented");
         assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);

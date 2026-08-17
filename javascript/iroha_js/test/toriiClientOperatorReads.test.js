@@ -44,7 +44,6 @@ const OPERATOR_READS = [
   ["/v1/sumeragi/bls-keys", (client) => client.getSumeragiBlsKeys()],
   ["/v1/sumeragi/leader", (client) => client.getSumeragiLeader()],
   ["/v1/sumeragi/params", (client) => client.getSumeragiParams()],
-  ["/v1/sumeragi/telemetry", (client) => client.getSumeragiTelemetry()],
   [
     "/v1/sumeragi/commit-certificates",
     async (client) => {

@@ -167,19 +167,28 @@ def _fail(message: str) -> None:
     raise TairaReleaseAuthorityError(message)
 
 
-def require_independent_native_evidence_authority_provisioned(
-    *, require_signing: bool = True
+def _require_independent_native_evidence_authority(
+    *, require_signing: bool
 ) -> None:
     """Authenticate the fixed native-evidence binding and live service."""
 
     try:
-        taira_authority_client.preflight(
-            "native-evidence", require_signing=require_signing
-        )
+        if require_signing:
+            taira_authority_client.preflight("native-evidence")
+        else:
+            taira_authority_client.preflight(
+                "native-evidence", require_signing=False
+            )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise TairaReleaseAuthorityError(
             f"{INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR}: {error}"
         ) from error
+
+
+def require_independent_native_evidence_authority_provisioned() -> None:
+    """Authenticate the fixed native-evidence binding and live service."""
+
+    _require_independent_native_evidence_authority(require_signing=True)
 
 
 def _sha256(value: str, label: str) -> str:
@@ -791,9 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             authorized = build_authority(args)
             expected = authorized.subject
         else:
-            require_independent_native_evidence_authority_provisioned(
-                require_signing=False
-            )
+            _require_independent_native_evidence_authority(require_signing=False)
             expected = _build_untrusted_authority_structure(args)
         expected_bytes = canonical_json_bytes(expected)
         if args.command == "create":

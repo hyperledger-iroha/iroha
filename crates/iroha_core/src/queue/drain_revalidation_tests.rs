@@ -21,7 +21,7 @@ fn state_backed_queue_rechecks_late_drain_publication_under_lifecycle_fence() {
         &time_source,
     ));
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let lifecycle_guard = state.lock_lane_lifecycle_work_admission();
     let (started_sender, started_receiver) = mpsc::sync_channel(0);
     let worker_state = Arc::clone(&state);
@@ -44,7 +44,7 @@ fn state_backed_queue_rechecks_late_drain_publication_under_lifecycle_fence() {
     assert!(matches!(failure.err, Error::UnresolvedRoute { .. }));
     assert!(!queue.txs.contains_key(&hash));
     assert!(queue.routing_plans.get(&hash).is_none());
-    assert_eq!(routing_ledger::get_plan(&hash), None);
+    assert_eq!(queue.routing_plan_hint(&hash), None);
 }
 #[test]
 fn state_backed_queue_routes_reject_inactive_catalog_lane_when_nexus_forcibly_disabled() {

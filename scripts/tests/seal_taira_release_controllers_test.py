@@ -130,6 +130,31 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
         & controller.REQUIRED_FLAGS[("prepare-reset", None)]
     )
     assert "--kagemusha-release-root" in controller.INPUT_PATH_FLAGS
+    authenticated_controller_flag = "--authenticated-tool-controller"
+    authenticated_controller_digest_flag = (
+        "--trusted-authenticated-tool-controller-sha256"
+    )
+    assert authenticated_controller_flag in controller.OPERATION_FLAGS[
+        "prepare-reset"
+    ]
+    assert authenticated_controller_digest_flag in controller.OPERATION_FLAGS[
+        "prepare-reset"
+    ]
+    assert authenticated_controller_flag in controller.REQUIRED_FLAGS[
+        ("prepare-reset", None)
+    ]
+    assert authenticated_controller_digest_flag in controller.REQUIRED_FLAGS[
+        ("prepare-reset", None)
+    ]
+    assert authenticated_controller_flag in controller.INPUT_PATH_FLAGS
+    assert authenticated_controller_flag in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS[authenticated_controller_flag] == (
+        authenticated_controller_digest_flag
+    )
+    for role in ("macos-qualification", "macos-deploy"):
+        assert controller._expected_executable_identity(
+            role, "prepare-reset", authenticated_controller_flag
+        ) == "runtime"
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
@@ -1679,9 +1704,9 @@ def test_prepare_reset_requires_complete_kagemusha_flag_pair(
         )
 
 
-def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
+def _prepare_reset_controller_case(
     tmp_path: Path,
-) -> None:
+) -> tuple[list[str], dict[str, object], Path, Path, str]:
     handoff = tmp_path / "handoff"
     trusted = tmp_path / "trusted"
     handoff.mkdir(mode=0o711)
@@ -1704,9 +1729,21 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
             "path": str(source_bundle),
         }
     ]
+    controller_executable = Path("/usr/bin/false")
+    controller_sha256 = hashlib.sha256(
+        controller_executable.read_bytes()
+    ).hexdigest()
     executable = Path("/usr/bin/true")
     executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
     attestation["trusted_executables"] = [
+        {
+            "digest_flag": "--trusted-authenticated-tool-controller-sha256",
+            "flag": "--authenticated-tool-controller",
+            "operation": "prepare-reset",
+            "path": str(controller_executable),
+            "run_as": "runtime",
+            "sha256": controller_sha256,
+        },
         {
             "digest_flag": "--trusted-genesis-external-signer-sha256",
             "flag": "--genesis-external-signer",
@@ -1716,6 +1753,7 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
             "sha256": executable_sha256,
         },
         {
+            "digest_flag": None,
             "flag": "--onboarding-token-hash-tool",
             "operation": "prepare-reset",
             "path": str(executable),
@@ -1730,6 +1768,8 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "--privacy-release-dir", str(privacy_release),
         "--genesis-external-signer", str(executable),
         "--trusted-genesis-external-signer-sha256", executable_sha256,
+        "--authenticated-tool-controller", str(controller_executable),
+        "--trusted-authenticated-tool-controller-sha256", controller_sha256,
         "--onboarding-token-hash-tool", str(executable),
         "--irohad-sha256", "2" * 64,
         "--source-commit", "a" * 40,
@@ -1742,6 +1782,15 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "--kagemusha-release-root", "/usr",
         "--kagemusha-activation-authority", "genesis-authority",
     ]
+    return args, attestation, output, controller_executable, controller_sha256
+
+
+def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
+    tmp_path: Path,
+) -> None:
+    args, attestation, output, controller_executable, controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path)
+    )
 
     staged, outputs = controller._validate_operation_args(
         "prepare-reset", args, attestation
@@ -1749,6 +1798,95 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
 
     assert not staged
     assert outputs == {output}
+    trusted_controller = controller._trusted_executable_for(
+        attestation,
+        "prepare-reset",
+        "--authenticated-tool-controller",
+        controller_executable,
+    )
+    assert trusted_controller == {
+        "digest_flag": "--trusted-authenticated-tool-controller-sha256",
+        "flag": "--authenticated-tool-controller",
+        "operation": "prepare-reset",
+        "path": str(controller_executable),
+        "run_as": "runtime",
+        "sha256": controller_sha256,
+    }
+
+
+@pytest.mark.parametrize(
+    "omitted_flag",
+    (
+        "--authenticated-tool-controller",
+        "--trusted-authenticated-tool-controller-sha256",
+    ),
+)
+def test_prepare_reset_rejects_omitted_authenticated_controller_pair_member(
+    tmp_path: Path, omitted_flag: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path)
+    )
+    index = args.index(omitted_flag)
+    del args[index : index + 2]
+
+    with pytest.raises(
+        controller.ControllerSealError, match="mandatory options are absent"
+    ):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+@pytest.mark.parametrize(
+    ("substituted_flag", "replacement", "message"),
+    (
+        (
+            "--authenticated-tool-controller",
+            "/usr/bin/true",
+            "lacks one exact trusted executable record",
+        ),
+        (
+            "--trusted-authenticated-tool-controller-sha256",
+            "0" * 64,
+            "trusted executable digest argument differs from trust",
+        ),
+    ),
+)
+def test_prepare_reset_rejects_substituted_authenticated_controller_pair_member(
+    tmp_path: Path,
+    substituted_flag: str,
+    replacement: str,
+    message: str,
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path)
+    )
+    args[args.index(substituted_flag) + 1] = replacement
+
+    with pytest.raises(controller.ControllerSealError, match=message):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+def test_protected_prepare_reset_workflow_owns_authenticated_controller_pair() -> None:
+    workflow = (ROOT / ".github/workflows/publish_taira_validator.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("prepare-reset --") == 2
+    assert workflow.count(
+        "TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: "
+        "${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}"
+    ) == 2
+    assert workflow.count(
+        "TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: "
+        "${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}"
+    ) == 2
+    assert workflow.count(
+        '--authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"'
+    ) == 2
+    assert workflow.count(
+        "--trusted-authenticated-tool-controller-sha256 "
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"'
+    ) == 2
 
 
 def test_controller_has_no_generic_signing_or_direct_close_surface() -> None:

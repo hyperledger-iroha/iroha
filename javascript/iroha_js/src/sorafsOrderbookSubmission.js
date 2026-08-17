@@ -51,10 +51,9 @@ const FIXED_REQUEST_HEADERS = new Set([
   "x-http-method-override",
   "x-method-override",
 ]);
-const IDENTITY_KEYS = ["txHash", "entrypointHash", "signedTransactionHash"];
+const IDENTITY_KEYS = ["entrypointHash", "signedTransactionHash"];
 const RECEIPT_KEYS = ["payload", "signature"];
 const RECEIPT_PAYLOAD_KEYS = [
-  "tx_hash",
   "entrypoint_hash",
   "signed_transaction_hash",
   "submitted_at_ms",
@@ -152,10 +151,6 @@ function normalizeIdentity(value) {
   const record = requirePlainRecord(value, "native orderbook submission identity");
   requireExactKeys(record, IDENTITY_KEYS, "native orderbook submission identity");
   return Object.freeze({
-    txHash: requireHashHex(
-      requireOwnData(record, "txHash", "native orderbook submission identity"),
-      "native orderbook submission identity.txHash",
-    ),
     entrypointHash: requireHashHex(
       requireOwnData(record, "entrypointHash", "native orderbook submission identity"),
       "native orderbook submission identity.entrypointHash",
@@ -310,7 +305,7 @@ function requireMatchingHeader(value, expected, name) {
 }
 
 export function validateSorafsOrderbookSubmissionHeaders(
-  { contentType, contentEncoding, txHash, entrypointHash, signedTransactionHash },
+  { contentType, contentEncoding, entrypointHash, signedTransactionHash },
   identity,
 ) {
   if (contentType !== "application/x-norito") {
@@ -319,7 +314,6 @@ export function validateSorafsOrderbookSubmissionHeaders(
   if (contentEncoding !== null && contentEncoding !== "identity") {
     throw new Error("SoraFS orderbook submission response Content-Encoding must be absent or exactly identity");
   }
-  requireMatchingHeader(txHash, identity.txHash, "x-iroha-transaction-hash");
   requireMatchingHeader(
     entrypointHash,
     identity.entrypointHash,
@@ -345,7 +339,6 @@ function normalizeVerifiedReceipt(value, prepared) {
     "verified orderbook submission receipt.payload",
   );
   for (const [key, identityKey] of [
-    ["tx_hash", "txHash"],
     ["entrypoint_hash", "entrypointHash"],
     ["signed_transaction_hash", "signedTransactionHash"],
   ]) {
@@ -393,7 +386,6 @@ export function verifySorafsOrderbookSubmissionReceipt(body, prepared) {
   }
   const json = prepared.verifyReceipt(
     body,
-    prepared.identity.txHash,
     prepared.identity.entrypointHash,
     prepared.identity.signedTransactionHash,
     prepared.expectedReceiptSigner,

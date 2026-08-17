@@ -38,12 +38,12 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         &[(test_lane, test_dataspace)],
     );
     let queue = Arc::new(queue_inner);
-    let first_hash = first_tx.as_ref().hash();
+    let first_hash = first_tx.as_ref().hash_as_entrypoint();
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
     let second_tx = accepted_tx_by_someone(&time_source);
-    let second_hash = second_tx.as_ref().hash();
+    let second_hash = second_tx.as_ref().hash_as_entrypoint();
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
@@ -65,12 +65,12 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
     );
     assert_eq!(deferred.len(), 1, "one transaction should be deferred");
     assert_eq!(
-        guards[0].as_ref().hash(),
+        guards[0].as_ref().hash_as_entrypoint(),
         first_hash,
         "first transaction should remain executable"
     );
     assert_eq!(
-        deferred[0].as_ref().hash(),
+        deferred[0].as_ref().hash_as_entrypoint(),
         second_hash,
         "second transaction should be deferred"
     );
@@ -86,7 +86,7 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         1,
         "deferred transaction should be available next slot"
     );
-    assert_eq!(next[0].as_ref().hash(), second_hash);
+    assert_eq!(next[0].as_ref().hash_as_entrypoint(), second_hash);
 }
 #[test]
 fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
@@ -119,11 +119,10 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         .iter_mut()
         .find(|lane| lane.id == test_lane)
         .expect("test lane should exist")
-        .metadata
-        .insert(
-            "scheduler.teu_capacity".to_string(),
-            lane_capacity.to_string(),
-        );
+        .scheduler = Some(LaneSchedulerPolicy::new(
+        Some(NonZeroU64::new(lane_capacity).expect("positive lane capacity")),
+        None,
+    ));
     let lane_catalog = LaneCatalog::new(lane_catalog.lane_count(), lanes).expect("lane catalog");
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
@@ -138,7 +137,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     state.set_nexus(nexus).expect("set Nexus config");
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let first_hash = first_tx.as_ref().hash();
+    let first_hash = first_tx.as_ref().hash_as_entrypoint();
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
@@ -153,7 +152,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         ))],
         Metadata::default(),
     );
-    let second_hash = second_tx.as_ref().hash();
+    let second_hash = second_tx.as_ref().hash_as_entrypoint();
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
@@ -165,14 +164,14 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     assert_eq!(guards.len(), 1, "one transaction should remain");
     assert_eq!(deferred.len(), 1, "one transaction should defer");
     assert_eq!(
-        guards[0].as_ref().hash(),
+        guards[0].as_ref().hash_as_entrypoint(),
         first_hash,
         "first transaction should remain executable"
     );
     let deferred_tx = deferred[0].clone_accepted();
     let deferred_plan = deferred[0].routing_plan();
     let deferred_routing = deferred_plan.coordinator_route();
-    assert_eq!(deferred_tx.as_ref().hash(), second_hash);
+    assert_eq!(deferred_tx.as_ref().hash_as_entrypoint(), second_hash);
     assert_eq!(deferred_routing.lane_id, test_lane);
     assert_eq!(deferred_routing.dataspace_id, test_dataspace);
     drop(guards);
@@ -181,7 +180,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         .expect("deferred guard should return atomically");
     let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
     assert_eq!(next.len(), 1, "deferred transaction should be queued next");
-    assert_eq!(next[0].as_ref().hash(), second_hash);
+    assert_eq!(next[0].as_ref().hash_as_entrypoint(), second_hash);
 }
 #[test]
 fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
@@ -216,8 +215,10 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
             .iter_mut()
             .find(|lane| lane.id == coordinator.lane_id)
             .expect("coordinator lane should exist")
-            .metadata
-            .insert("scheduler.teu_capacity".to_string(), first_teu.to_string());
+            .scheduler = Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(first_teu).expect("positive TEU capacity")),
+            None,
+        ));
         nexus.lane_catalog =
             LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
         nexus.lane_config =
@@ -225,7 +226,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     }
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let first_hash = first_tx.hash();
+    let first_hash = first_tx.hash_as_entrypoint();
     queue
         .push_with_gossip_payload_with_state_and_routing_plan(
             first_tx,
@@ -234,7 +235,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
             None,
         )
         .expect("first Native AMX transaction should enqueue");
-    let second_hash = second_tx.hash();
+    let second_hash = second_tx.hash_as_entrypoint();
     queue
         .push_with_gossip_payload_with_state_and_routing_plan(
             second_tx,
@@ -257,10 +258,10 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
         .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
     assert_eq!(guards.len(), 1, "one Native AMX transaction should remain");
     assert_eq!(deferred.len(), 1, "one Native AMX transaction should defer");
-    assert_eq!(guards[0].as_ref().hash(), first_hash);
+    assert_eq!(guards[0].as_ref().hash_as_entrypoint(), first_hash);
     let deferred_tx = deferred[0].clone_accepted();
     let deferred_plan = deferred[0].routing_plan();
-    assert_eq!(deferred_tx.as_ref().hash(), second_hash);
+    assert_eq!(deferred_tx.as_ref().hash_as_entrypoint(), second_hash);
     assert_eq!(
         deferred_plan, second_plan,
         "TEU deferral must preserve the full Native AMX routing plan"
@@ -276,7 +277,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
         1,
         "deferred Native AMX transaction should requeue"
     );
-    assert_eq!(next[0].as_ref().hash(), second_hash);
+    assert_eq!(next[0].as_ref().hash_as_entrypoint(), second_hash);
     assert_eq!(next[0].routing_plan(), second_plan);
 }
 #[test]
@@ -285,9 +286,12 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
         decisions: parking_lot::Mutex<Vec<RoutingDecision>>,
     }
     impl LaneRouter for SequenceRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
+        fn try_route(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
             let mut decisions = self.decisions.lock();
-            decisions.remove(0)
+            Ok(decisions.remove(0))
         }
     }
     let lane_a = LaneId::new(1);
@@ -399,7 +403,7 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
         mut reorder: F,
         first_tx: &AcceptedTransaction<'static>,
         second_tx: &AcceptedTransaction<'static>,
-    ) -> (Vec<SignedTxHash>, Vec<SignedTxHash>)
+    ) -> (Vec<EntrypointHash>, Vec<EntrypointHash>)
     where
         F: FnMut(&mut Vec<TransactionGuard>),
     {
@@ -442,11 +446,11 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
         let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
         let retained_hashes = guards
             .iter()
-            .map(|guard| guard.tx.as_ref().hash())
+            .map(|guard| guard.tx.as_ref().hash_as_entrypoint())
             .collect::<Vec<_>>();
         let deferred_hashes = deferred
             .iter()
-            .map(|guard| guard.as_ref().hash())
+            .map(|guard| guard.as_ref().hash_as_entrypoint())
             .collect::<Vec<_>>();
         (retained_hashes, deferred_hashes)
     }
@@ -486,10 +490,10 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         id: test_lane,
         dataspace_id: test_dataspace,
         alias: "lane11".to_string(),
-        metadata: BTreeMap::from([(
-            "scheduler.teu_capacity".to_string(),
-            lane_capacity.to_string(),
-        )]),
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(lane_capacity).expect("positive lane capacity")),
+            None,
+        )),
         ..LaneConfig::default()
     };
     let dataspace_metadata = DataSpaceMetadata {
@@ -555,12 +559,12 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         .dataspace_teu_pending
         .insert((test_lane, test_dataspace), PendingTeu::default());
     let queue = Arc::new(queue_inner);
-    let first_hash = first_tx.as_ref().hash();
+    let first_hash = first_tx.as_ref().hash_as_entrypoint();
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
     let second_tx = accepted_tx_in_dataspace_by_someone(test_dataspace_alias, &time_source);
-    let second_hash = second_tx.as_ref().hash();
+    let second_hash = second_tx.as_ref().hash_as_entrypoint();
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
@@ -569,8 +573,8 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     let deferred = queue.enforce_lane_teu_limits(&mut guards);
     assert_eq!(guards.len(), 1);
     assert_eq!(deferred.len(), 1);
-    assert_eq!(guards[0].as_ref().hash(), first_hash);
-    assert_eq!(deferred[0].as_ref().hash(), second_hash);
+    assert_eq!(guards[0].as_ref().hash_as_entrypoint(), first_hash);
+    assert_eq!(deferred[0].as_ref().hash_as_entrypoint(), second_hash);
     let lane_label = test_lane.as_u32().to_string();
     let recorded = metrics
         .nexus_scheduler_lane_teu_deferral_total
@@ -611,10 +615,10 @@ fn queue_backlog_reports_available_lane_headroom() {
         id: test_lane,
         dataspace_id: test_dataspace,
         alias: "lane13".to_string(),
-        metadata: BTreeMap::from([(
-            "scheduler.teu_capacity".to_string(),
-            lane_capacity.to_string(),
-        )]),
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(lane_capacity).expect("positive lane capacity")),
+            None,
+        )),
         ..LaneConfig::default()
     };
     let dataspace_metadata = DataSpaceMetadata {

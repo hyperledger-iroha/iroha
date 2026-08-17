@@ -185,6 +185,7 @@ fn proof_blob_for(
             verifier_version: "v1".to_string(),
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         }),
         committed_amount: None,
         amount_commitment: None,

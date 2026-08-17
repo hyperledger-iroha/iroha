@@ -1322,13 +1322,12 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   assert.equal(calls[2].init.headers["Content-Type"], "application/x-norito");
 });
 
-test("ToriiBrowserClient requires equal raw lowercase receipt identities", async () => {
+test("ToriiBrowserClient requires canonical raw lowercase receipt identities", async () => {
   const signedTransaction = compactHashSignedTransactionFixture();
   const entrypointHash = browserSignedTransactionHashHex(signedTransaction);
 
   const correctHeaders = {
     "x-iroha-entrypoint-hash": entrypointHash,
-    "x-iroha-transaction-hash": entrypointHash,
     "x-iroha-signed-transaction-hash": entrypointHash,
   };
   let acceptedInit;
@@ -1355,12 +1354,6 @@ test("ToriiBrowserClient requires equal raw lowercase receipt identities", async
       "does not match",
     ],
     [
-      "forged compatibility hash",
-      { "x-iroha-transaction-hash": forgedHash },
-      "x-iroha-transaction-hash",
-      "does not match",
-    ],
-    [
       "forged signed transaction hash",
       { "x-iroha-signed-transaction-hash": forgedHash },
       "x-iroha-signed-transaction-hash",
@@ -1373,9 +1366,9 @@ test("ToriiBrowserClient requires equal raw lowercase receipt identities", async
       "exactly once",
     ],
     [
-      "uppercase transaction hash",
-      { "x-iroha-transaction-hash": entrypointHash.toUpperCase() },
-      "x-iroha-transaction-hash",
+      "uppercase entrypoint hash",
+      { "x-iroha-entrypoint-hash": entrypointHash.toUpperCase() },
+      "x-iroha-entrypoint-hash",
       "exactly once",
     ],
   ]) {
@@ -1739,6 +1732,13 @@ test("ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte b
 });
 
 test("ToriiBrowserClient keeps raw and typed Sumeragi methods distinct", async () => {
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      ToriiBrowserClient.prototype,
+      "getSumeragiTelemetry",
+    ),
+    false,
+  );
   const payload = { operational_note: "raw payload" };
   const client = new ToriiBrowserClient("https://torii.example", {
     operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
@@ -1773,9 +1773,9 @@ test("ToriiBrowserClient Sumeragi reads require fresh operator auth before dispa
       return jsonResponse({});
     },
   });
-  await signed.getSumeragiTelemetry();
+  await signed.getSumeragiStatus();
   assert.equal(signedCalls.length, 1);
-  assert.equal(signedCalls[0][0], "https://torii.example/v1/sumeragi/telemetry");
+  assert.equal(signedCalls[0][0], "https://torii.example/v1/sumeragi/status");
   assert.equal(signedCalls[0][1].redirect, "error");
   assert.equal(signedCalls[0][1].body, undefined);
   assert.ok(signedCalls[0][1].headers["X-Iroha-Operator-Signature"]);

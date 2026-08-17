@@ -670,6 +670,34 @@ mod tests {
         assert!(!proposal_lookahead_enabled(&nexus, 1));
     }
     #[test]
+    fn enabled_single_route_uses_lane_authority_without_widening_lookahead() {
+        let custom_lane = LaneId::new(1);
+        let nexus = nexus_with_routing(
+            LaneRoutingPolicy {
+                default_lane: custom_lane,
+                ..default_routing_policy()
+            },
+            lane_catalog_from_configs(vec![sidecar_lane_config(custom_lane)]),
+        );
+        assert!(
+            !proposal_lookahead_enabled(&nexus, 1),
+            "one routable lane must keep the narrow proposal scan"
+        );
+        assert!(
+            !uses_global_lane_committee(&nexus),
+            "proposal scan width must not select the global committee for enabled Nexus"
+        );
+
+        let disabled = Nexus {
+            enabled: false,
+            ..Nexus::default()
+        };
+        assert!(
+            uses_global_lane_committee(&disabled),
+            "disabled Nexus retains the canonical shared SINGLE/UNIVERSAL committee"
+        );
+    }
+    #[test]
     fn proposal_lookahead_enables_for_explicit_rule_lane() {
         let routing_policy = LaneRoutingPolicy {
             rules: vec![LaneRoutingRule {

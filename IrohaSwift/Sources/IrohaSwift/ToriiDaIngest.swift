@@ -5,6 +5,32 @@ private let ToriiDaEd25519FunctionCode: UInt8 = 0xED
 private let ToriiDaIngestSigningDomainV1 = Data("iroha:da-ingest-request:v1\0".utf8)
 private let ToriiDaIngestContentDomainV1 = Data("iroha:da-ingest-request:content:v1\0".utf8)
 
+private func requireExactDaFields<K: CodingKey>(
+    from decoder: Decoder,
+    codingKeys: [K],
+    context: String
+) throws {
+    let raw = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+    let expected = Set(codingKeys.map(\.stringValue))
+    if let unknown = raw.allKeys.first(where: { !expected.contains($0.stringValue) }) {
+        throw DecodingError.dataCorruptedError(
+            forKey: unknown,
+            in: raw,
+            debugDescription: "\(context) contains unknown field `\(unknown.stringValue)`"
+        )
+    }
+    let present = Set(raw.allKeys.map(\.stringValue))
+    if let missing = codingKeys.first(where: { !present.contains($0.stringValue) }) {
+        throw DecodingError.keyNotFound(
+            ToriiAnyCodingKey(missing.stringValue),
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "\(context) is missing required field `\(missing.stringValue)`"
+            )
+        )
+    }
+}
+
 public enum ToriiDaBlobClass: Sendable, Equatable {
     case taikaiSegment
     case nexusLaneSidecar
@@ -275,9 +301,9 @@ public struct ToriiDaRentQuote: Decodable, Sendable, Equatable {
 public struct ToriiDaStripeLayout: Decodable, Sendable, Equatable {
     public let totalStripes: UInt32
     public let shardsPerStripe: UInt32
-    public let rowParityStripes: UInt32
+    public let rowParityStripes: UInt16
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case totalStripes = "total_stripes"
         case shardsPerStripe = "shards_per_stripe"
         case rowParityStripes = "row_parity_stripes"
@@ -285,17 +311,22 @@ public struct ToriiDaStripeLayout: Decodable, Sendable, Equatable {
 
     public init(totalStripes: UInt32 = 0,
                 shardsPerStripe: UInt32 = 0,
-                rowParityStripes: UInt32 = 0) {
+                rowParityStripes: UInt16 = 0) {
         self.totalStripes = totalStripes
         self.shardsPerStripe = shardsPerStripe
         self.rowParityStripes = rowParityStripes
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactDaFields(
+            from: decoder,
+            codingKeys: CodingKeys.allCases,
+            context: "receipt.stripe_layout"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.totalStripes = try container.decodeIfPresent(UInt32.self, forKey: .totalStripes) ?? 0
-        self.shardsPerStripe = try container.decodeIfPresent(UInt32.self, forKey: .shardsPerStripe) ?? 0
-        self.rowParityStripes = try container.decodeIfPresent(UInt32.self, forKey: .rowParityStripes) ?? 0
+        self.totalStripes = try container.decode(UInt32.self, forKey: .totalStripes)
+        self.shardsPerStripe = try container.decode(UInt32.self, forKey: .shardsPerStripe)
+        self.rowParityStripes = try container.decode(UInt16.self, forKey: .rowParityStripes)
     }
 }
 
@@ -310,7 +341,7 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
     public let pdpCommitment: Data?
     public let stripeLayout: ToriiDaStripeLayout
     public let queuedAtUnix: UInt64
-    public let rentQuote: ToriiDaRentQuote?
+    public let rentQuote: ToriiDaRentQuote
     public let operatorSignatureHex: String
 
     public var clientBlobIdHex: String { clientBlobId.upperHexString() }
@@ -319,7 +350,7 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
     public var manifestHashHex: String { manifestHash.upperHexString() }
     public var storageTicketHex: String { storageTicket.upperHexString() }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case clientBlobId = "client_blob_id"
         case laneId = "lane_id"
         case epoch
@@ -335,6 +366,11 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactDaFields(
+            from: decoder,
+            codingKeys: CodingKeys.allCases,
+            context: "DA ingest receipt"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.clientBlobId = try Self.decodeDigest(from: container, key: .clientBlobId)
         self.laneId = try container.decode(UInt64.self, forKey: .laneId)
@@ -351,10 +387,9 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         } else {
             self.pdpCommitment = nil
         }
-        self.stripeLayout = try container.decodeIfPresent(ToriiDaStripeLayout.self, forKey: .stripeLayout)
-            ?? ToriiDaStripeLayout()
+        self.stripeLayout = try container.decode(ToriiDaStripeLayout.self, forKey: .stripeLayout)
         self.queuedAtUnix = try container.decode(UInt64.self, forKey: .queuedAtUnix)
-        self.rentQuote = try container.decodeIfPresent(ToriiDaRentQuote.self, forKey: .rentQuote)
+        self.rentQuote = try container.decode(ToriiDaRentQuote.self, forKey: .rentQuote)
         let signature = try container.decode(String.self, forKey: .operatorSignature)
         self.operatorSignatureHex = signature.uppercased()
     }

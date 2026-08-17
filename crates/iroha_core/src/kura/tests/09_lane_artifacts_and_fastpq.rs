@@ -134,7 +134,6 @@ fn lane_block_artifact_read_rejects_global_block_hash_mismatch() {
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "overwrite lane artifact with forged block hash"
     );
@@ -176,7 +175,6 @@ fn lane_block_artifact_read_rejects_replay_material_mismatch() {
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "overwrite lane artifact with forged replay material"
     );
@@ -228,7 +226,6 @@ fn latest_lane_block_artifact_skips_replay_material_mismatch() {
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "overwrite later lane artifact with forged replay material"
     );
@@ -391,7 +388,6 @@ fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
     let index_len = index.metadata().expect("lane index metadata").len();
     let layout = SidecarIndexLayout::read_from(&mut index, index_len)
         .expect("read rolled-back lane index layout");
-    assert!(layout.is_based());
     assert_eq!(layout.base_height, 3);
     assert_eq!(layout.height_range(), Some(3..=3));
 }
@@ -647,6 +643,14 @@ fn framed_sidecar_boundaries_are_canonical_and_ambient_independent() {
 #[test]
 fn bound_progress_intent_identity_is_canonical_and_ambient_independent() {
     let payload = b"bound progress canonical payload";
+    let mut new_index_bytes = SidecarIndexLayout::base_header(1).to_vec();
+    new_index_bytes.extend_from_slice(
+        &SidecarIndexEntry {
+            offset: 0,
+            len: u64::try_from(payload.len()).expect("payload length fits u64"),
+        }
+        .to_bytes(),
+    );
     let intent = BoundProgressAppendIntentV1 {
         version: BOUND_PROGRESS_APPEND_INTENT_VERSION,
         namespace_components: vec!["blocks".to_owned(), "lane".to_owned()],
@@ -658,10 +662,10 @@ fn bound_progress_intent_identity_is_canonical_and_ambient_independent() {
         new_data_len: u64::try_from(payload.len()).expect("payload length fits u64"),
         payload_hash: BoundProgressAppendIntentV1::payload_digest(payload),
         old_index_len: 0,
-        new_index_len: 16,
+        new_index_len: u64::try_from(new_index_bytes.len()).unwrap(),
         index_write_offset: 0,
         old_index_bytes: Vec::new(),
-        new_index_bytes: vec![0; 16],
+        new_index_bytes,
         integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
     }
     .seal();
@@ -734,7 +738,7 @@ fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
 #[test]
 fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
     #[derive(Debug, Clone, Encode, Decode)]
-    struct LegacyPipelineRecoverySidecar {
+    struct PreReleasePipelineRecoverySidecar {
         format: PipelineRecoveryFormat,
         height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -744,8 +748,8 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
         proofs: Vec<PipelineProofSnapshot>,
     }
     let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"legacy-pipeline-sidecar"));
-    let legacy = LegacyPipelineRecoverySidecar {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pre-release-pipeline-sidecar"));
+    let pre_release = PreReleasePipelineRecoverySidecar {
         format: PipelineRecoveryFormat::Current,
         height: 1,
         block_hash,
@@ -756,7 +760,7 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
         txs: Vec::new(),
         proofs: Vec::new(),
     };
-    let mut bytes = norito::to_bytes(&legacy).expect("encode legacy sidecar");
+    let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release sidecar");
     let schema = <PipelineRecoverySidecar as norito::core::NoritoSerialize>::schema_hash();
     let schema_start = MAGIC.len() + 2;
     let schema_end = schema_start + schema.len();
@@ -764,8 +768,8 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
     bytes[schema_start..schema_end].copy_from_slice(&schema);
     let decoded: PipelineRecoverySidecar = norito::decode_from_bytes(&bytes)
         .expect("ordinary decoding accepts the pre-release defaulted field");
-    assert_eq!(decoded.height, legacy.height);
-    assert_eq!(decoded.block_hash, legacy.block_hash);
+    assert_eq!(decoded.height, pre_release.height);
+    assert_eq!(decoded.block_hash, pre_release.block_hash);
     assert!(decoded.proofs.is_empty());
     assert!(decoded.fastpq_proofs.is_empty());
     assert!(
@@ -785,9 +789,9 @@ fn pipeline_tx_snapshot_compact_omits_keys_and_preserves_counts() {
     assert_eq!(snapshot.write_count(), 7);
 }
 #[test]
-fn pipeline_tx_snapshot_legacy_key_lists_contribute_counts() {
+fn pipeline_tx_snapshot_counts_are_explicit_not_inferred_from_samples() {
     let hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-        b"legacy-pipeline-tx-snapshot",
+        b"explicit-pipeline-tx-snapshot",
     ));
     let snapshot = PipelineTxSnapshot {
         hash,
@@ -796,8 +800,34 @@ fn pipeline_tx_snapshot_legacy_key_lists_contribute_counts() {
         read_count: 0,
         write_count: 0,
     };
-    assert_eq!(snapshot.read_count(), 2);
-    assert_eq!(snapshot.write_count(), 1);
+    assert_eq!(snapshot.read_count(), 0);
+    assert_eq!(snapshot.write_count(), 0);
+}
+#[test]
+fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
+    #[derive(Debug, Clone, Encode, Decode)]
+    struct PreReleasePipelineTxSnapshot {
+        hash: HashOf<TransactionEntrypoint>,
+        reads: Vec<String>,
+        writes: Vec<String>,
+    }
+    let pre_release = PreReleasePipelineTxSnapshot {
+        hash: HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"pre-release-pipeline-tx-snapshot",
+        )),
+        reads: vec!["state:alpha".to_owned()],
+        writes: vec!["state:beta".to_owned()],
+    };
+    let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release snapshot");
+    let schema = <PipelineTxSnapshot as norito::core::NoritoSerialize>::schema_hash();
+    let schema_start = MAGIC.len() + 2;
+    let schema_end = schema_start + schema.len();
+    assert!(bytes.len() >= Header::SIZE);
+    bytes[schema_start..schema_end].copy_from_slice(&schema);
+    assert!(
+        norito::decode_from_bytes::<PipelineTxSnapshot>(&bytes).is_err(),
+        "V1 decoding must require explicit read and write counts"
+    );
 }
 #[test]
 fn pipeline_sidecar_enqueue_flushes() {
@@ -1156,6 +1186,8 @@ fn pipeline_sidecar_promotes_temp_index_on_read() {
     }
     .to_bytes();
     let mut temp = std::fs::File::create(&temp_index_path).expect("create temp index");
+    temp.write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     temp.write_all(&entry).expect("write temp index entry");
     temp.flush().expect("flush temp index");
     temp.sync_data().expect("sync temp index");
@@ -1165,7 +1197,50 @@ fn pipeline_sidecar_promotes_temp_index_on_read() {
     let index_len = std::fs::metadata(&index_path)
         .expect("index metadata")
         .len();
-    assert_eq!(index_len, PIPELINE_INDEX_ENTRY_SIZE_U64);
+    assert_eq!(
+        index_len,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64
+    );
+}
+#[test]
+fn indexed_sidecar_recovery_promotes_canonical_header_only_rewrite() {
+    let temp_dir = TempDir::new().expect("create sidecar directory");
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let payload = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode initial sidecar");
+    assert!(Kura::append_indexed_sidecar(
+        &data_path,
+        &index_path,
+        1,
+        &payload,
+        "header-only rewrite recovery test",
+        FsyncMode::Batched,
+        None,
+    ));
+    let temp_data_path = data_path.with_extension("norito.tmp");
+    let temp_index_path = index_path.with_extension("index.tmp");
+    fs::write(&temp_data_path, []).expect("stage empty compacted data");
+    let expected_header = SidecarIndexLayout::base_header(2);
+    fs::write(&temp_index_path, expected_header).expect("stage header-only V1 index");
+    assert!(Kura::recover_indexed_sidecar_artifacts(
+        &data_path,
+        &index_path,
+        "header-only rewrite recovery test",
+    ));
+    assert!(fs::read(&data_path).expect("read promoted data").is_empty());
+    assert_eq!(
+        fs::read(&index_path).expect("read promoted index"),
+        expected_header
+    );
+    assert!(!temp_data_path.exists() && !temp_index_path.exists());
+    let mut index = std::fs::File::open(&index_path).expect("open promoted index");
+    let layout = SidecarIndexLayout::read_from(
+        &mut index,
+        fs::metadata(&index_path).expect("index metadata").len(),
+    )
+    .expect("decode header-only V1 layout");
+    assert_eq!(layout.base_height, 2);
+    assert_eq!(layout.entry_count, 0);
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
@@ -1213,6 +1288,9 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
     }
     .to_bytes();
     let mut index = std::fs::File::create(&index_path).expect("create sidecar index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry).expect("write sidecar index");
     index.flush().expect("flush sidecar index");
     index.sync_data().expect("sync sidecar index");
@@ -1222,6 +1300,9 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
     }
     .to_bytes();
     let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    temp_index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write temp V1 index header");
     temp_index.write_all(&temp_entry).expect("write temp index");
     temp_index.flush().expect("flush temp index");
     temp_index.sync_data().expect("sync temp index");
@@ -1234,6 +1315,9 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
     );
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
     let mut index_file = std::fs::File::open(&index_path).expect("open sidecar index");
+    index_file
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     index_file.read_exact(&mut buf).expect("read sidecar index");
     let entry = SidecarIndexEntry::from_bytes(buf);
     assert_eq!(entry.offset, temp_offset);
@@ -1285,6 +1369,9 @@ fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
     }
     .to_bytes();
     let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    temp_index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write temp V1 index header");
     temp_index.write_all(&entry).expect("write temp index");
     temp_index.flush().expect("flush temp index");
     temp_index.sync_data().expect("sync temp index");
@@ -1340,6 +1427,9 @@ fn pipeline_sidecar_recovery_sync_failure_does_not_expose_new_data_with_old_inde
     }
     .to_bytes();
     let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    temp_index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write new temp V1 index header");
     temp_index
         .write_all(&new_entry)
         .expect("write new temp index");
@@ -1398,7 +1488,6 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
             "pipeline sidecar test",
             FsyncMode::Always,
             None,
-            SidecarIndexOrigin::HeightOne,
         ));
     }
     let old_data = std::fs::read(&data_path).expect("read old data");
@@ -1547,7 +1636,6 @@ fn pipeline_sidecar_rejects_height_mismatch() {
             "pipeline sidecar",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::HeightOne,
         ),
         "append mismatched sidecar"
     );
@@ -1633,7 +1721,7 @@ fn pipeline_sidecars_append_to_single_store() {
         .len();
     assert_eq!(
         index_len,
-        2 * PIPELINE_INDEX_ENTRY_SIZE_U64,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 2 * PIPELINE_INDEX_ENTRY_SIZE_U64,
         "expected two index entries"
     );
     assert!(
@@ -1659,7 +1747,6 @@ fn pipeline_sidecar_overwrite_updates_entry() {
             "dummy sidecar",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::HeightOne,
         ),
         "append height 1 must succeed"
     );
@@ -1673,17 +1760,20 @@ fn pipeline_sidecar_overwrite_updates_entry() {
             "dummy sidecar",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::HeightOne,
         ),
         "overwrite height 1 must succeed"
     );
     let index_len = fs::metadata(&index_path).expect("index metadata").len();
     assert_eq!(
-        index_len, PIPELINE_INDEX_ENTRY_SIZE_U64,
+        index_len,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64,
         "expected single index entry"
     );
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+    index
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     index.read_exact(&mut buf).expect("read index entry");
     let entry = SidecarIndexEntry::from_bytes(buf);
     assert!(entry.len > 0);
@@ -1737,6 +1827,9 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
         len: payload2.len() as u64,
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
     assert!(
@@ -1787,6 +1880,9 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
         len: payload2.len() as u64,
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
     let got = kura.read_pipeline_metadata(2).expect("sidecar exists");
@@ -1820,6 +1916,9 @@ fn pipeline_sidecar_allows_misaligned_index() {
         len: payload.len() as u64,
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry.to_bytes()).expect("write entry");
     index.write_all(&[0u8; 3]).expect("write padding");
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
@@ -1866,7 +1965,9 @@ fn sidecar_reader_rejects_oversized_payloads() {
         len: pipeline_limit + 1,
     }
     .to_bytes();
-    std::fs::write(&index_path, entry).expect("write oversized index entry");
+    let mut index_bytes = SidecarIndexLayout::base_header(1).to_vec();
+    index_bytes.extend_from_slice(&entry);
+    std::fs::write(&index_path, index_bytes).expect("write oversized index entry");
     let decoder_called = std::cell::Cell::new(false);
     assert!(
         Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit::<(), _>(
@@ -1921,6 +2022,9 @@ fn pipeline_sidecar_ignores_invalid_prev_entry() {
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
     index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
+    index
         .write_all(&bogus_prev.to_bytes())
         .expect("write bogus entry");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
@@ -1941,6 +2045,9 @@ fn sidecar_append_truncates_misaligned_index() {
         len: payload1.len() as u64,
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&[0u8; 3]).expect("write padding");
     assert!(
@@ -1952,18 +2059,20 @@ fn sidecar_append_truncates_misaligned_index() {
             "dummy sidecar",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::HeightOne,
         ),
         "append should succeed and truncate misaligned index"
     );
     let index_len = fs::metadata(&index_path).expect("index metadata").len();
     assert_eq!(
         index_len,
-        2 * PIPELINE_INDEX_ENTRY_SIZE_U64,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 2 * PIPELINE_INDEX_ENTRY_SIZE_U64,
         "expected aligned index after append"
     );
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+    index
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     index.read_exact(&mut buf).expect("read entry1");
     let entry1 = SidecarIndexEntry::from_bytes(buf);
     index.read_exact(&mut buf).expect("read entry2");
@@ -1994,6 +2103,9 @@ fn sidecar_prune_truncates_misaligned_index() {
         offset = offset.saturating_add(payload.len() as u64);
     }
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     for entry in &entries {
         index.write_all(&entry.to_bytes()).expect("write entry");
     }
@@ -2005,11 +2117,14 @@ fn sidecar_prune_truncates_misaligned_index() {
     let index_len = fs::metadata(&index_path).expect("index metadata").len();
     assert_eq!(
         index_len,
-        3 * PIPELINE_INDEX_ENTRY_SIZE_U64,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 3 * PIPELINE_INDEX_ENTRY_SIZE_U64,
         "expected aligned index after prune"
     );
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+    index
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     let mut pruned_entries = Vec::new();
     for _ in 0..3 {
         index.read_exact(&mut buf).expect("read entry");
@@ -2050,6 +2165,9 @@ fn sidecar_prune_skips_entries_past_data_len() {
         len: 4,
     };
     let mut index = std::fs::File::create(&index_path).expect("create index");
+    index
+        .write_all(&SidecarIndexLayout::base_header(1))
+        .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
     assert!(
@@ -2058,6 +2176,9 @@ fn sidecar_prune_skips_entries_past_data_len() {
     );
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+    index
+        .seek(SeekFrom::Start(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+        .expect("seek past V1 header");
     index.read_exact(&mut buf).expect("read entry1");
     let entry1 = SidecarIndexEntry::from_bytes(buf);
     index.read_exact(&mut buf).expect("read entry2");
@@ -2087,7 +2208,6 @@ fn native_amx_retention_window_advances_base_and_bounds_index() {
             "dummy Native AMX evidence",
             FsyncMode::Always,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ));
         assert!(Kura::prune_indexed_sidecars_to_retention_window(
             &data_path,
@@ -2178,7 +2298,6 @@ fn terminal_frontier_compaction_retains_every_later_pending_slot() {
             "dummy terminal lane history",
             FsyncMode::Always,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ));
     }
     assert!(Kura::prune_indexed_sidecars_through_terminal_frontier(
@@ -2237,7 +2356,6 @@ fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() 
             "dummy malformed terminal history",
             FsyncMode::Always,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ));
     }
     let mut index = std::fs::OpenOptions::new()
@@ -2245,7 +2363,9 @@ fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() 
         .open(&index_path)
         .expect("open terminal index for corruption");
     index
-        .seek(SeekFrom::Start(2 * PIPELINE_INDEX_ENTRY_SIZE_U64 + 8_u64))
+        .seek(SeekFrom::Start(
+            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 2 * PIPELINE_INDEX_ENTRY_SIZE_U64 + 8_u64,
+        ))
         .expect("seek to pending entry length");
     index
         .write_all(&STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1).to_le_bytes())

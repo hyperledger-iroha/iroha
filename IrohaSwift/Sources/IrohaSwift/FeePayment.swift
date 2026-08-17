@@ -242,13 +242,13 @@ extension FeePaymentIntent: Codable {
             try requireExactStringKeys(
                 rawValue,
                 expected: ["charge_limits", "gas_limit"],
-                required: ["charge_limits"],
+                required: ["charge_limits", "gas_limit"],
                 at: decoder.codingPath + [CodingKeys.value]
             )
             try requireExactKeys(
                 value,
                 expected: [.chargeLimits, .gasLimit],
-                required: [.chargeLimits],
+                required: [.chargeLimits, .gasLimit],
                 at: decoder.codingPath + [CodingKeys.value]
             )
             try FeePaymentIntent.validate(chargeLimits: limits, gasLimit: gasLimit)
@@ -257,13 +257,13 @@ extension FeePaymentIntent: Codable {
             try requireExactStringKeys(
                 rawValue,
                 expected: ["program_id", "program_revision", "charge_limits", "gas_limit"],
-                required: ["program_id", "program_revision", "charge_limits"],
+                required: ["program_id", "program_revision", "charge_limits", "gas_limit"],
                 at: decoder.codingPath + [CodingKeys.value]
             )
             try requireExactKeys(
                 value,
                 expected: Set(ValueKeys.allCases),
-                required: [.programId, .programRevision, .chargeLimits],
+                required: [.programId, .programRevision, .chargeLimits, .gasLimit],
                 at: decoder.codingPath + [CodingKeys.value]
             )
             let revision = try value.decode(UInt64.self, forKey: .programRevision)
@@ -292,7 +292,11 @@ extension FeePaymentIntent: Codable {
             try FeePaymentIntent.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
             try container.encode("authority", forKey: .payer)
             try value.encode(chargeLimits, forKey: .chargeLimits)
-            try value.encodeIfPresent(gasLimit, forKey: .gasLimit)
+            if let gasLimit {
+                try value.encode(gasLimit, forKey: .gasLimit)
+            } else {
+                try value.encodeNil(forKey: .gasLimit)
+            }
         case let .sponsor(programId, programRevision, chargeLimits, gasLimit):
             guard programRevision > 0 else { throw FeePaymentIntentError.zeroProgramRevision }
             try FeePaymentIntent.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
@@ -300,7 +304,11 @@ extension FeePaymentIntent: Codable {
             try value.encode(programId, forKey: .programId)
             try value.encode(programRevision, forKey: .programRevision)
             try value.encode(chargeLimits, forKey: .chargeLimits)
-            try value.encodeIfPresent(gasLimit, forKey: .gasLimit)
+            if let gasLimit {
+                try value.encode(gasLimit, forKey: .gasLimit)
+            } else {
+                try value.encodeNil(forKey: .gasLimit)
+            }
         }
     }
 }

@@ -138,9 +138,12 @@ def _require_provisioned_privacy_governance_authority_v1(
     """Authenticate the fixed privacy-governance binding and live service."""
 
     try:
-        status = taira_authority_client.preflight(
-            "privacy-governance", require_signing=require_signing
-        )
+        if require_signing:
+            status = taira_authority_client.preflight("privacy-governance")
+        else:
+            status = taira_authority_client.preflight(
+                "privacy-governance", require_signing=False
+            )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise PrivacyGovernanceAuthorityError(
             f"{PROVISIONING_BARRIER}: fixed {AUTHORITY_ENVELOPE_SCHEMA} "

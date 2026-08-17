@@ -145,7 +145,7 @@ class HttpClientTransport(
                     response.statusCode,
                     response.body,
                     response.message,
-                    extractTransactionHash(response),
+                    extractEntrypointHash(response),
                     extractRejectCode(response),
                 )
                 if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
@@ -987,7 +987,7 @@ class HttpClientTransport(
                     response.statusCode,
                     response.body,
                     response.message,
-                    extractTransactionHash(response) ?: hashHex,
+                    extractEntrypointHash(response) ?: hashHex,
                     extractRejectCode(response),
                 )
                 if (submissionOutcomeIsAmbiguous(clientResponse.statusCode)) {
@@ -1650,18 +1650,16 @@ class HttpClientTransport(
                 "x-iroha-reject-code",
                 response.body,
             )
-        private fun extractTransactionHash(response: TransportResponse?): String? {
+        private fun extractEntrypointHash(response: TransportResponse?): String? {
             if (response == null) return null
-            for (headerName in listOf("x-iroha-transaction-hash", "x-iroha-tx-hash")) {
-                val values = response.headers[headerName] ?: continue
-                for (value in values) {
-                    val normalized = normalizeTransactionHashHeader(value)
-                    if (normalized != null) return normalized
-                }
+            val values = response.headers["x-iroha-entrypoint-hash"] ?: return null
+            for (value in values) {
+                val normalized = normalizeEntrypointHashHeader(value)
+                if (normalized != null) return normalized
             }
             return null
         }
-        private fun normalizeTransactionHashHeader(value: String?): String? {
+        private fun normalizeEntrypointHashHeader(value: String?): String? {
             var normalized = value?.trim() ?: return null
             if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
                 normalized = normalized.substring(2)

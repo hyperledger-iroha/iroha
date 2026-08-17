@@ -1068,7 +1068,9 @@ pub fn air_composition_value_for_rows(
     let s_meta_set = get("s_meta_set")?;
     let s_perm = get("s_perm")?;
     let delta = get("delta")?;
-    let metadata_hash = get("metadata_hash")?;
+    let metadata_hash_limbs = (0..crate::trace::METADATA_COMMITMENT_LIMBS)
+        .map(|limb| get(&format!("metadata_hash_limb_{limb}")))
+        .collect::<Result<Vec<_>>>()?;
     let dsid = get("dsid")?;
     let slot = get("slot")?;
     let value_old_0 = column_names
@@ -1133,7 +1135,7 @@ pub fn air_composition_value_for_rows(
             mul_mod(numeric_selector, sub_mod(expected_delta, current[delta])),
         );
     }
-    for stable in [metadata_hash, dsid, slot] {
+    for stable in metadata_hash_limbs.into_iter().chain([dsid, slot]) {
         absorb(&mut acc, &mut idx, sub_mod(current[stable], next[stable]));
     }
     Ok(acc)
@@ -2441,6 +2443,45 @@ mod tests {
             assert_eq!(
                 hash_trace_rows_with_mode(&columns, ExecutionMode::Gpu),
                 hash_trace_rows_cpu(&columns)
+            );
+        }
+    }
+    #[test]
+    fn air_constrains_every_metadata_commitment_limb_to_be_stable() {
+        let mut batch = sample_batch(2);
+        batch
+            .metadata
+            .insert("axt_metadata_binding".to_owned(), vec![0x5a; 32]);
+        let trace = build_trace(&batch).expect("trace");
+        let column_names = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let current = trace
+            .columns
+            .iter()
+            .map(|column| column.values[0])
+            .collect::<Vec<_>>();
+        let alphas = [3, 5];
+        assert_eq!(
+            air_composition_value_for_rows(&column_names, &current, &current, &alphas)
+                .expect("valid row composition"),
+            0
+        );
+        for limb in 0..crate::trace::METADATA_COMMITMENT_LIMBS {
+            let name = format!("metadata_hash_limb_{limb}");
+            let index = column_names
+                .iter()
+                .position(|column| column == &name)
+                .expect("metadata commitment limb column");
+            let mut next = current.clone();
+            next[index] = next[index].wrapping_add(1);
+            assert_ne!(
+                air_composition_value_for_rows(&column_names, &current, &next, &alphas)
+                    .expect("mutated row composition"),
+                0,
+                "AIR must reject instability in {name}"
             );
         }
     }

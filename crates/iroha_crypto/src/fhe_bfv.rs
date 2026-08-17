@@ -77,6 +77,26 @@ macro_rules! invalid_guards {
         $(invalid_if!($condition, $($arg)*);)+
     };
 }
+macro_rules! define_release_audit_projection_v1 {
+    (
+        $(#[$meta:meta])*
+        $name:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $output:ty {
+            let $pattern:pat = $source:ident($($call:expr),* $(,)?);
+            $result:expr
+        }
+    ) => {
+        #[doc = concat!(
+            "Return a canonical BFV full-bootstrap release-audit projection from [`",
+            stringify!($source),
+            "`].\n\n# Errors\nReturns [`BfvError`] when canonical release-audit admission or digesting fails."
+        )]
+        $(#[$meta])*
+        pub fn $name($($arg: $arg_ty),*) -> Result<$output, BfvError> {
+            let $pattern = $source($($call),*)?;
+            Ok($result)
+        }
+    };
+}
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const BOUNDED_NOISE_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.bounded_noise.v1";
 /// Seed-derivation domain for exact-lift BFV encryption and rotation refreshes.
@@ -14683,22 +14703,19 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest(
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, artifacts)?;
     bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)
 }
-/// Derive BFV full-bootstrap release audit evidence from canonical artifact-bundle bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails or evidence derivation fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-) -> Result<BfvFullBootstrapReleaseAuditEvidenceV1, BfvError> {
-    let (_, evidence) =
-        bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_decoded_v1(
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+    ) -> BfvFullBootstrapReleaseAuditEvidenceV1 {
+        let (_, evidence) = bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
-        )?;
-    Ok(evidence)
+        );
+        evidence
+    }
 }
 /// Derive BFV full-bootstrap release audit evidence and artifacts from canonical bytes.
 ///
@@ -14723,33 +14740,23 @@ pub fn bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_deco
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, &artifacts)?;
     Ok((artifacts, evidence))
 }
-/// Derive and digest release audit evidence from canonical artifact-bundle bytes.
-///
-/// This byte-admission helper returns the decoded artifacts, derived evidence, and domain-separated
-/// evidence digest that all came from the same canonical artifact-bundle byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission, evidence derivation, or evidence
-/// digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle_bytes_decoded_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle_bytes_decoded_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, _, evidence_digest) =
-        bfv_full_bootstrap_release_audit_evidence_and_digests_from_artifact_bundle_bytes_decoded_v1(
+        ) {
+        let (artifacts, evidence, _, evidence_digest) = bfv_full_bootstrap_release_audit_evidence_and_digests_from_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
-        )?;
-    Ok((artifacts, evidence, evidence_digest))
+        );
+        (artifacts, evidence, evidence_digest)
+    }
 }
 /// Derive and digest release audit evidence from canonical artifact-bundle bytes.
 ///
@@ -14831,65 +14838,44 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bun
     )?;
     Ok(evidence)
 }
-/// Validate canonical release audit evidence and artifact-bundle bytes together.
-///
-/// This raw-byte admission helper admits supplied evidence bytes before governed artifact bytes,
-/// then checks the decoded evidence against those artifacts before returning both decoded objects.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence byte admission fails,
-/// evidence derivation fails, or the decoded evidence does not match the decoded artifacts.
-pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_decoded_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    evidence_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_decoded_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        evidence_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, _) =
-        validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
+        ) {
+        let (artifacts, evidence, _) = validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
             evidence_bytes,
-        )?;
-    Ok((artifacts, evidence))
+        );
+        (artifacts, evidence)
+    }
 }
-/// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
-///
-/// This raw-byte admission helper admits supplied evidence bytes before governed artifact bytes,
-/// verifies that the evidence matches those artifacts, and returns the evidence digest derived from
-/// the admitted evidence byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence byte admission fails,
-/// evidence derivation fails, or the decoded evidence does not match the decoded artifacts.
-pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    evidence_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        evidence_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, _, evidence_digest) =
-        validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
+        ) {
+        let (artifacts, evidence, _, evidence_digest) = validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
             evidence_bytes,
-        )?;
-    Ok((artifacts, evidence, evidence_digest))
+        );
+        (artifacts, evidence, evidence_digest)
+    }
 }
 /// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
 ///
@@ -14930,22 +14916,19 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_
     );
     Ok((artifacts, evidence, artifact_bundle_digest, evidence_digest))
 }
-/// Derive and digest release audit evidence from canonical artifact-bundle bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission, evidence derivation, or evidence digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, _, evidence_digest) =
-        bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle_bytes_decoded_v1(
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_evidence_digest_from_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+    ) -> Hash {
+        let (_, _, evidence_digest) = bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
-        )?;
-    Ok(evidence_digest)
+        );
+        evidence_digest
+    }
 }
 /// Build the signable payload for a BFV full-bootstrap release audit signoff.
 ///
@@ -15168,29 +15151,20 @@ pub fn decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_signoff_v1,
     )
 }
-/// Return the digest of canonical BFV full-bootstrap release audit signoff bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_signoff_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_signoff_digest_from_bytes_v1(bytes: &[u8]) -> Hash {
+        let (_, digest) = bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(bytes);
+        digest
+    }
 }
-/// Decode and digest canonical BFV full-bootstrap release audit signoff bytes.
-///
-/// This byte-admission helper keeps the decoded signed signoff and its domain-separated digest
-/// bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditSignoffV1, Hash), BfvError> {
-    let (signoff, _, signoff_digest) =
-        bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(bytes)?;
-    Ok((signoff, signoff_digest))
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(bytes: &[u8])
+        -> (BfvFullBootstrapReleaseAuditSignoffV1, Hash)
+    {
+        let (signoff, _, signoff_digest) =
+            bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(bytes);
+        (signoff, signoff_digest)
+    }
 }
 /// Decode canonical BFV full-bootstrap release audit signoff bytes and return their digests.
 ///
@@ -15207,59 +15181,35 @@ pub fn bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(
     let signoff_digest = bfv_full_bootstrap_release_audit_signoff_digest_v1(&signoff)?;
     Ok((signoff, evidence_digest, signoff_digest))
 }
-/// Validate canonical release audit signoff bytes against canonical evidence bytes.
-///
-/// This raw-byte admission helper rejects non-canonical evidence or signoff framing before
-/// returning the decoded pair. It then verifies that the signed payload was issued over the
-/// supplied evidence bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when evidence byte admission fails, signoff byte admission fails, signature
-/// verification fails, or the decoded signoff does not match the decoded evidence.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_v1(
-    evidence_bytes: &[u8],
-    signoff_bytes: &[u8],
-) -> Result<
-    (
-        BfvFullBootstrapReleaseAuditEvidenceV1,
-        BfvFullBootstrapReleaseAuditSignoffV1,
-    ),
-    BfvError,
-> {
-    let (evidence, signoff, _) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
-            evidence_bytes,
-            signoff_bytes,
-        )?;
-    Ok((evidence, signoff))
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_v1(
+        evidence_bytes: &[u8],
+        signoff_bytes: &[u8],
+    ) -> (BfvFullBootstrapReleaseAuditEvidenceV1, BfvFullBootstrapReleaseAuditSignoffV1) {
+        let (evidence, signoff, _) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
+                evidence_bytes,
+                signoff_bytes,
+            );
+        (evidence, signoff)
+    }
 }
-/// Validate and digest canonical release audit signoff/evidence bytes.
-///
-/// This raw-byte admission helper decodes evidence and signed signoff objects from canonical bytes,
-/// verifies that the signoff was issued over that evidence, and returns the signoff digest derived
-/// from the admitted signoff byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when evidence byte admission fails, signoff byte admission fails, signature
-/// verification fails, signoff digesting fails, or the decoded signoff does not match the decoded
-/// evidence.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
-    evidence_bytes: &[u8],
-    signoff_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
+        evidence_bytes: &[u8],
+        signoff_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (evidence, signoff, _, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_v1(
-            evidence_bytes,
-            signoff_bytes,
-        )?;
-    Ok((evidence, signoff, signoff_digest))
+    ) {
+        let (evidence, signoff, _, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_v1(
+                evidence_bytes,
+                signoff_bytes,
+            );
+        (evidence, signoff, signoff_digest)
+    }
 }
 /// Validate and digest canonical release audit signoff/evidence bytes.
 ///
@@ -15290,110 +15240,62 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(&signoff, &evidence)?;
     Ok((evidence, signoff, evidence_digest, signoff_digest))
 }
-/// Validate canonical release audit signoff bytes against artifact-bundle bytes.
-///
-/// This byte-level handoff admits canonical signoff bytes before artifact-bundle framing, derives
-/// release-audit evidence from the governed artifacts, and then verifies that the signed payload
-/// binds that derived evidence.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, signoff byte admission fails,
-/// artifact validation fails, or the decoded signoff does not match the derived release-audit
-/// evidence.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-        )?;
-    Ok((artifacts, evidence, signoff))
+    ) {
+        let (artifacts, evidence, signoff, _) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes,
+            );
+        (artifacts, evidence, signoff)
+    }
 }
-/// Validate and digest canonical signoff bytes against artifact-bundle bytes.
-///
-/// This byte-level handoff admits signed signoff bytes before governed artifact bytes, derives
-/// release-audit evidence from the artifacts, verifies the signoff binding, and returns the digest
-/// of the admitted signoff bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, signoff byte admission fails,
-/// artifact validation fails, signoff digesting fails, or the decoded signoff does not match the
-/// derived release-audit evidence.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-        )?;
-    Ok((artifacts, evidence, signoff, signoff_digest))
+    ) {
+        let (artifacts, evidence, signoff, _, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes,
+            );
+        (artifacts, evidence, signoff, signoff_digest)
+    }
 }
-/// Validate and digest canonical signoff bytes against artifact-bundle bytes.
-///
-/// This byte-level handoff admits signed signoff bytes before governed artifact bytes, derives
-/// release-audit evidence from the artifacts, verifies the signoff binding, and returns both the
-/// derived evidence digest and the admitted signoff digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence derivation or digesting
-/// fails, signoff byte admission fails, artifact validation fails, signoff digesting fails, or the
-/// decoded signoff does not match the derived release-audit evidence.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _, evidence_digest, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-        )?;
-    Ok((
-        artifacts,
-        evidence,
-        signoff,
-        evidence_digest,
-        signoff_digest,
-    ))
+    ) {
+        let (artifacts, evidence, signoff, _, evidence_digest, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes,
+            );
+        (artifacts, evidence, signoff, evidence_digest, signoff_digest)
+    }
 }
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
@@ -15439,68 +15341,37 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_f
         signoff_digest,
     ))
 }
-/// Validate canonical release audit signoff/evidence bytes against a trusted reviewer.
-///
-/// This production admission helper starts from raw canonical evidence and signoff bytes, verifies
-/// their binding, and then enforces the caller-trusted reviewer id/key pair before returning the
-/// decoded objects.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, signature verification fails, the signoff does
-/// not match the evidence, or the signed reviewer identity/key does not match the caller's trusted
-/// reviewer inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_trusted_reviewer_v1(
-    evidence_bytes: &[u8],
-    signoff_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
-        BfvFullBootstrapReleaseAuditEvidenceV1,
-        BfvFullBootstrapReleaseAuditSignoffV1,
-    ),
-    BfvError,
-> {
-    let (evidence, signoff, _) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
-            evidence_bytes,
-            signoff_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
-    Ok((evidence, signoff))
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_trusted_reviewer_v1(
+        evidence_bytes: &[u8],
+        signoff_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (BfvFullBootstrapReleaseAuditEvidenceV1, BfvFullBootstrapReleaseAuditSignoffV1) {
+        let (evidence, signoff, _) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
+                evidence_bytes, signoff_bytes, reviewer_id, reviewer_public_key,
+            );
+        (evidence, signoff)
+    }
 }
-/// Validate and digest canonical signoff/evidence bytes against a trusted reviewer.
-///
-/// This production admission helper keeps decoded evidence, decoded signed signoff, and the signoff
-/// digest bound to the same canonical byte streams before enforcing the caller-trusted reviewer
-/// id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, signature verification fails, the signoff does
-/// not match the evidence, signoff digesting fails, or the signed reviewer identity/key does not
-/// match the caller's trusted inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
-    evidence_bytes: &[u8],
-    signoff_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
+        evidence_bytes: &[u8],
+        signoff_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (evidence, signoff, _, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_trusted_reviewer_v1(
-            evidence_bytes,
-            signoff_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
-    Ok((evidence, signoff, signoff_digest))
+    ) {
+        let (evidence, signoff, _, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_trusted_reviewer_v1(
+                evidence_bytes, signoff_bytes, reviewer_id, reviewer_public_key,
+            );
+        (evidence, signoff, signoff_digest)
+    }
 }
 /// Validate and digest canonical signoff/evidence bytes against a trusted reviewer.
 ///
@@ -15542,109 +15413,71 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
     )?;
     Ok((evidence, signoff, evidence_digest, signoff_digest))
 }
-/// Validate canonical signoff/artifact-bundle bytes against a trusted reviewer.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the signoff does not match the derived evidence,
-/// or the signed reviewer identity/key does not match the trusted reviewer inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
-    Ok((artifacts, evidence, signoff))
+    ) {
+        let (artifacts, evidence, signoff, _) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes, reviewer_id,
+                reviewer_public_key,
+            );
+        (artifacts, evidence, signoff)
+    }
 }
-/// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the signoff does not match the derived evidence,
-/// signoff digesting fails, or the signed reviewer identity/key does not match the trusted reviewer
-/// inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
-    Ok((artifacts, evidence, signoff, signoff_digest))
+    ) {
+        let (artifacts, evidence, signoff, _, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes, reviewer_id,
+                reviewer_public_key,
+            );
+        (artifacts, evidence, signoff, signoff_digest)
+    }
 }
-/// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, evidence or signoff digesting fails, the signoff
-/// does not match the derived evidence, or the signed reviewer identity/key does not match the
-/// trusted reviewer inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    signoff_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        signoff_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditEvidenceV1,
         BfvFullBootstrapReleaseAuditSignoffV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, evidence, signoff, _, evidence_digest, signoff_digest) =
-        validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
-            signoff_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
-    Ok((
-        artifacts,
-        evidence,
-        signoff,
-        evidence_digest,
-        signoff_digest,
-    ))
+    ) {
+        let (artifacts, evidence, signoff, _, evidence_digest, signoff_digest) =
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                params, material, artifact_bundle_bytes, signoff_bytes, reviewer_id,
+                reviewer_public_key,
+            );
+        (artifacts, evidence, signoff, evidence_digest, signoff_digest)
+    }
 }
 /// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
 ///
@@ -15739,32 +15572,20 @@ pub fn bfv_full_bootstrap_release_audit_record_v1(
     )?;
     Ok(record)
 }
-/// Build a publishable BFV full-bootstrap release audit record from artifact bytes.
-///
-/// This byte-level construction path rejects malformed reviewer material and external audit digests
-/// before non-canonical artifact-bundle framing, then derives evidence and signs the release-audit
-/// record.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, reviewer inputs or external
-/// audit digests are malformed, evidence derivation fails, or record signing/validation fails.
-pub fn bfv_full_bootstrap_release_audit_record_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_record_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _) =
-        bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, _) = bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -15772,36 +15593,25 @@ pub fn bfv_full_bootstrap_release_audit_record_for_artifact_bundle_bytes_v1(
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, record))
+        );
+        (artifacts, record)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
-///
-/// This is the byte-level companion to [`bfv_full_bootstrap_release_audit_record_v1`] for release
-/// tooling that receives governed artifacts as canonical bytes and needs the signed record plus its
-/// domain-separated digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record construction fails, or
-/// record digesting fails.
-pub fn bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _, record_digest) =
-        bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, _, record_digest) = bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -15809,36 +15619,26 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_by
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, record, record_digest))
+        );
+        (artifacts, record, record_digest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
-///
-/// This richer byte-level companion returns both the artifact-bundle digest derived from the
-/// admitted governed artifact bytes and the signed record digest derived from the generated record.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record construction fails, or
-/// either digesting step fails.
-pub fn bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, artifact_bundle_digest, _, _, record_digest) =
-        bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, artifact_bundle_digest, _, _, record_digest) = bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -15846,8 +15646,9 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_b
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, record, artifact_bundle_digest, record_digest))
+        );
+        (artifacts, record, artifact_bundle_digest, record_digest)
+    }
 }
 /// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
 ///
@@ -16013,29 +15814,25 @@ pub fn decode_bfv_full_bootstrap_release_audit_record_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_record_v1,
     )
 }
-/// Return the digest of canonical BFV full-bootstrap release audit record bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> Hash {
+        let (_, digest) = bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(
+            bytes
+        );
+        digest
+    }
 }
-/// Decode and digest canonical BFV full-bootstrap release audit record bytes.
-///
-/// This byte-admission helper keeps the decoded signed record and its domain-separated record
-/// digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditRecordV1, Hash), BfvError> {
-    let (record, _, _, record_digest) =
-        bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(bytes)?;
-    Ok((record, record_digest))
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> (BfvFullBootstrapReleaseAuditRecordV1, Hash) {
+        let (record, _, _, record_digest) = bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(
+            bytes
+        );
+        (record, record_digest)
+    }
 }
 /// Decode canonical BFV full-bootstrap release audit record bytes and return their digests.
 ///
@@ -16073,98 +15870,65 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifacts_v1(
     )?;
     Ok(record)
 }
-/// Validate canonical artifact-bundle bytes and release audit record bytes together.
-///
-/// This raw-byte admission helper admits the signed record bytes before governed artifact bytes,
-/// then checks the decoded record against those artifacts before returning both decoded objects.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte admission fails,
-/// artifact validation fails, or the decoded record does not match the decoded artifacts.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, _) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
-        )?;
-    Ok((artifacts, record))
+        );
+        (artifacts, record)
+    }
 }
-/// Validate and digest canonical artifact-bundle and release-audit record bytes.
-///
-/// This raw-byte admission helper admits the signed release-audit record bytes before governed
-/// artifact bytes, verifies the record against those artifacts, and returns the record digest
-/// derived from the admitted record byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte admission fails,
-/// artifact validation fails, or the decoded record does not match the decoded artifacts.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _, record_digest) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, _, record_digest) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
-        )?;
-    Ok((artifacts, record, record_digest))
+        );
+        (artifacts, record, record_digest)
+    }
 }
-/// Validate and digest canonical artifact-bundle and release-audit record bytes.
-///
-/// This richer byte-admission helper admits the signed release-audit record bytes before governed
-/// artifact bytes, verifies the record against those artifacts, and returns both the
-/// artifact-bundle digest and the record digest derived from their admitted byte streams.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte admission fails,
-/// artifact validation fails, either digesting step fails, or the decoded record does not match the
-/// decoded artifacts.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, artifact_bundle_digest, _, _, record_digest) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, artifact_bundle_digest, _, _, record_digest) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
-        )?;
-    Ok((artifacts, record, artifact_bundle_digest, record_digest))
+        );
+        (artifacts, record, artifact_bundle_digest, record_digest)
+    }
 }
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
@@ -16212,112 +15976,77 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_fo
         record_digest,
     ))
 }
-/// Validate canonical artifact-bundle and record bytes against a trusted reviewer.
-///
-/// This production admission helper rejects non-canonical artifact or record framing, verifies the
-/// decoded record against the governed artifacts, and then enforces the caller-trusted reviewer
-/// id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the decoded record does not match the decoded
-/// artifacts, or the signed reviewer identity/key does not match the trusted reviewer inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, record, _) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, record))
+        );
+        (artifacts, record)
+    }
 }
-/// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
-///
-/// This production admission helper keeps the decoded artifacts, decoded signed record, and record
-/// digest bound to the same canonical byte streams before enforcing the caller-trusted reviewer
-/// id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the decoded record does not match the decoded
-/// artifacts, the signed reviewer identity/key does not match the trusted reviewer inputs, or
-/// record digesting fails.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, _, record_digest) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, record, _, record_digest) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, record, record_digest))
+        );
+        (artifacts, record, record_digest)
+    }
 }
-/// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
-///
-/// This richer production admission helper keeps the decoded artifacts, decoded signed record,
-/// artifact-bundle digest, and record digest bound to the same canonical byte streams before
-/// enforcing the caller-trusted reviewer id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the decoded record does not match the decoded
-/// artifacts, the signed reviewer identity/key does not match the trusted reviewer inputs, or
-/// either digesting step fails.
-pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, artifact_bundle_digest, _, _, record_digest) =
-        validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, record, artifact_bundle_digest, _, _, record_digest) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, record, artifact_bundle_digest, record_digest))
+        );
+        (artifacts, record, artifact_bundle_digest, record_digest)
+    }
 }
 /// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
 ///
@@ -16411,76 +16140,47 @@ pub fn bfv_full_bootstrap_release_audit_manifest_v1(
     validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(&manifest, record)?;
     Ok(manifest)
 }
-/// Build a BFV full-bootstrap release audit manifest from canonical record bytes.
-///
-/// This byte-level construction path rejects non-canonical record framing before deriving the
-/// publishable manifest from the signed record.
-///
-/// # Errors
-/// Returns [`BfvError`] when record byte admission fails or manifest construction fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_for_record_bytes_v1(
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_for_record_bytes_v1(
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
-    ),
-    BfvError,
-> {
-    let (record, manifest, _) =
-        bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(record_bytes)?;
-    Ok((record, manifest))
+        ) {
+        let (record, manifest, _) = bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(
+            record_bytes
+        );
+        (record, manifest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
-///
-/// This is the byte-level companion to [`bfv_full_bootstrap_release_audit_manifest_v1`] for release
-/// tooling that receives signed records as canonical bytes and needs the machine-checkable manifest
-/// plus its domain-separated digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when record byte admission fails, manifest construction fails, or manifest
-/// digesting fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, _, _, _, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_bytes_v1(
+        ) {
+        let (record, manifest, _, _, _, manifest_digest) = bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_bytes_v1(
             record_bytes,
-        )?;
-    Ok((record, manifest, manifest_digest))
+        );
+        (record, manifest, manifest_digest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
-///
-/// This byte-level construction helper returns the decoded signed record, generated manifest,
-/// admitted record digest, and generated manifest digest from the same canonical record byte
-/// stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when record byte admission fails, manifest construction fails, or any
-/// digesting step fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_record_bytes_v1(
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_and_digests_for_record_bytes_v1(
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, _, _, record_digest, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_bytes_v1(
+        ) {
+        let (record, manifest, _, _, record_digest, manifest_digest) = bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_bytes_v1(
             record_bytes,
-        )?;
-    Ok((record, manifest, record_digest, manifest_digest))
+        );
+        (record, manifest, record_digest, manifest_digest)
+    }
 }
 /// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
 ///
@@ -16517,33 +16217,21 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_byte
         manifest_digest,
     ))
 }
-/// Build a BFV full-bootstrap release audit manifest from artifact bytes.
-///
-/// Reviewer material and external audit digests are preflighted before the artifact bundle is
-/// admitted from canonical bytes, evidence is derived, the release-audit record is signed, and the
-/// manifest is generated.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record signing fails, or
-/// manifest construction fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, manifest, _) =
-        bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, manifest, _) = bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -16551,33 +16239,26 @@ pub fn bfv_full_bootstrap_release_audit_manifest_for_artifact_bundle_bytes_v1(
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, record, manifest))
+        );
+        (artifacts, record, manifest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record signing fails, manifest
-/// construction fails, or manifest digesting fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, manifest, _, _, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, manifest, _, _, manifest_digest) = bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -16585,39 +16266,28 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, record, manifest, manifest_digest))
+        );
+        (artifacts, record, manifest, manifest_digest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
-///
-/// This byte-level construction helper returns the decoded artifact bundle, generated signed
-/// record, generated manifest, admitted artifact-bundle digest, generated record digest, and
-/// generated manifest digest from one canonical artifact-bundle byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, record signing fails, manifest
-/// construction fails, or any digesting step fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_digest: Hash,
-    audit_evidence_archive_digest: Hash,
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_digest: Hash,
+        audit_evidence_archive_digest: Hash,
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         Hash,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, record, manifest, artifact_bundle_digest, _, _, record_digest, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, record, manifest, artifact_bundle_digest, _, _, record_digest, manifest_digest) = bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -16625,15 +16295,16 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle
             audit_evidence_archive_digest,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((
+        );
+        (
         artifacts,
         record,
         manifest,
         artifact_bundle_digest,
         record_digest,
         manifest_digest,
-    ))
+        )
+    }
 }
 /// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
@@ -16988,29 +16659,25 @@ pub fn decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_manifest_v1,
     )
 }
-/// Return the digest of canonical BFV full-bootstrap release audit manifest bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> Hash {
+        let (_, digest) = bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(
+            bytes
+        );
+        digest
+    }
 }
-/// Decode and digest canonical BFV full-bootstrap release audit manifest bytes.
-///
-/// This byte-admission helper keeps the decoded manifest and caller-pinnable manifest digest bound
-/// to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditManifestV1, Hash), BfvError> {
-    let (manifest, _, _, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(bytes)?;
-    Ok((manifest, manifest_digest))
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> (BfvFullBootstrapReleaseAuditManifestV1, Hash) {
+        let (manifest, _, _, manifest_digest) = bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(
+            bytes
+        );
+        (manifest, manifest_digest)
+    }
 }
 /// Decode canonical BFV full-bootstrap release audit manifest bytes and return their digests.
 ///
@@ -17028,85 +16695,53 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(
     let manifest_digest = bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)?;
     Ok((manifest, record_digest, evidence_digest, manifest_digest))
 }
-/// Validate canonical release audit manifest bytes against canonical record bytes.
-///
-/// This byte-level production admission helper rejects non-canonical manifest or record framing
-/// before checking that the decoded manifest binds the decoded signed release-audit record.
-///
-/// # Errors
-/// Returns [`BfvError`] when manifest byte admission fails, record byte admission fails, or the
-/// decoded manifest does not match the decoded record.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (manifest, record, _) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
+        ) {
+        let (manifest, record, _) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
             manifest_bytes,
             record_bytes,
-        )?;
-    Ok((manifest, record))
+        );
+        (manifest, record)
+    }
 }
-/// Validate and digest canonical release audit manifest bytes against record bytes.
-///
-/// This byte-level production admission helper rejects non-canonical manifest or record framing,
-/// checks that the decoded manifest binds the decoded signed release-audit record, and returns the
-/// manifest digest derived from the admitted manifest bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when manifest byte admission fails, record byte admission fails, manifest
-/// digesting fails, or the decoded manifest does not match the decoded record.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (manifest, record, _, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
+        ) {
+        let (manifest, record, _, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
             manifest_bytes,
             record_bytes,
-        )?;
-    Ok((manifest, record, manifest_digest))
+        );
+        (manifest, record, manifest_digest)
+    }
 }
-/// Validate and digest canonical release audit manifest bytes against record bytes.
-///
-/// This byte-level production admission helper rejects non-canonical manifest or record framing,
-/// checks that the decoded manifest binds the decoded signed release-audit record, and returns both
-/// digests derived from the admitted byte streams.
-///
-/// # Errors
-/// Returns [`BfvError`] when manifest byte admission fails, record byte admission fails, either
-/// digest fails, or the decoded manifest does not match the decoded record.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (manifest, record, record_digest, _, _, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_v1(
+        ) {
+        let (manifest, record, record_digest, _, _, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_v1(
             manifest_bytes,
             record_bytes,
-        )?;
-    Ok((manifest, record, record_digest, manifest_digest))
+        );
+        (manifest, record, record_digest, manifest_digest)
+    }
 }
 /// Validate and digest canonical release audit manifest bytes against record bytes.
 ///
@@ -17145,97 +16780,65 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
         manifest_digest,
     ))
 }
-/// Validate canonical release audit manifest/record bytes against a trusted reviewer.
-///
-/// This production admission helper starts from raw canonical manifest and record bytes, verifies
-/// their binding, and then enforces the caller-trusted reviewer id/key pair before returning the
-/// decoded objects.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the manifest does not match the record, or
-/// either decoded object is not bound to the trusted reviewer.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_trusted_reviewer_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_trusted_reviewer_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (manifest, record, _) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (manifest, record, _) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_trusted_reviewer_v1(
             manifest_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((manifest, record))
+        );
+        (manifest, record)
+    }
 }
-/// Validate and digest manifest/record bytes against a trusted reviewer.
-///
-/// This production admission helper keeps the decoded manifest, decoded record, and manifest digest
-/// bound to the admitted canonical bytes before enforcing the caller-trusted reviewer id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the manifest does not match the record, either
-/// decoded object is not bound to the trusted reviewer, or manifest digesting fails.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_trusted_reviewer_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_trusted_reviewer_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (manifest, record, _, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (manifest, record, _, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_trusted_reviewer_v1(
             manifest_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((manifest, record, manifest_digest))
+        );
+        (manifest, record, manifest_digest)
+    }
 }
-/// Validate and digest manifest/record bytes against a trusted reviewer.
-///
-/// This production admission helper keeps the decoded manifest, decoded record, record digest, and
-/// manifest digest bound to the admitted canonical bytes before enforcing the caller-trusted
-/// reviewer id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the manifest does not match the record, either
-/// decoded object is not bound to the trusted reviewer, or either digest fails.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_trusted_reviewer_v1(
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_trusted_reviewer_v1(
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (manifest, record, record_digest, _, _, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (manifest, record, record_digest, _, _, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_trusted_reviewer_v1(
             manifest_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((manifest, record, record_digest, manifest_digest))
+        );
+        (manifest, record, record_digest, manifest_digest)
+    }
 }
 /// Validate and digest manifest/record bytes against a trusted reviewer.
 ///
@@ -17290,34 +16893,21 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
         manifest_digest,
     ))
 }
-/// Validate canonical artifact-bundle, manifest, and record bytes against a trusted reviewer.
-///
-/// This production admission helper admits the signed manifest and record bytes before governed
-/// artifact bytes, validates the signed record against those artifacts, and enforces the
-/// caller-trusted reviewer id/key pair on both signed objects.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the record does not match the artifacts, the
-/// manifest does not match the record, or the signed reviewer identity/key does not match the
-/// trusted reviewer inputs.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, manifest, record, _) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, manifest, record, _) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -17325,38 +16915,26 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bun
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, manifest, record))
+        );
+        (artifacts, manifest, record)
+    }
 }
-/// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
-///
-/// This production admission helper admits the signed manifest and record bytes before governed
-/// artifact bytes, validates the record against those artifacts, and returns the manifest digest
-/// derived from the admitted manifest bytes before enforcing the trusted reviewer id/key pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the record does not match the artifacts, the
-/// manifest does not match the record, the signed reviewer identity/key does not match the trusted
-/// reviewer inputs, or manifest digesting fails.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, manifest, record, _, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, manifest, record, _, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -17364,40 +16942,27 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_a
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, manifest, record, manifest_digest))
+        );
+        (artifacts, manifest, record, manifest_digest)
+    }
 }
-/// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
-///
-/// This production admission helper admits the signed manifest and record bytes before governed
-/// artifact bytes, validates the record against those artifacts, and returns the record and
-/// manifest digests derived from the admitted bytes before enforcing the trusted reviewer id/key
-/// pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, the record does not match the artifacts, the
-/// manifest does not match the record, the signed reviewer identity/key does not match the trusted
-/// reviewer inputs, or either digest fails.
-pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    manifest_bytes: &[u8],
-    record_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        manifest_bytes: &[u8],
+        record_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditRecordV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, manifest, record, _, _, _, record_digest, manifest_digest) =
-        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+        ) {
+        let (artifacts, manifest, record, _, _, _, record_digest, manifest_digest) = validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -17405,8 +16970,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
             record_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, manifest, record, record_digest, manifest_digest))
+        );
+        (artifacts, manifest, record, record_digest, manifest_digest)
+    }
 }
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
@@ -17805,68 +17371,58 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for
         bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(&report_bytes, &archive_bytes)?;
     Ok((report_bytes, archive_bytes, report_digest, archive_digest))
 }
-/// Build deterministic BFV full-bootstrap release-audit inventory bytes from artifact bytes.
-///
-/// This byte-level handoff rejects non-canonical artifact-bundle framing before producing the
-/// machine-generated report/archive inventory. The returned artifact bundle is the decoded
-/// canonical bundle used to derive the deterministic report/archive pair.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails or when deterministic
-/// report/archive generation fails.
-pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifact_bundle_bytes_decoded_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-) -> Result<(BfvFullBootstrapCircuitArtifactBundleV1, Vec<u8>, Vec<u8>), BfvError> {
-    let (artifacts, report_bytes, archive_bytes, _, _, _) =
-        bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests_for_artifact_bundle_bytes_decoded_v1(
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifact_bundle_bytes_decoded_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+    ) -> (BfvFullBootstrapCircuitArtifactBundleV1, Vec<u8>, Vec<u8>) {
+        let (artifacts, report_bytes, archive_bytes, _, _, _) = bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests_for_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
-        )?;
-    Ok((artifacts, report_bytes, archive_bytes))
+        );
+        (artifacts, report_bytes, archive_bytes)
+    }
 }
-/// Build deterministic release-audit inventory bytes and digests from artifact bytes.
-///
-/// This byte-level handoff rejects non-canonical artifact-bundle framing before returning decoded
-/// artifacts, the generated report/archive byte pair, and the digests that release-audit records
-/// sign for those admitted bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, deterministic report/archive
-/// generation fails, or generated byte digesting fails.
-#[expect(
-    clippy::type_complexity,
-    reason = "release-audit inventory admission returns decoded artifacts, generated bytes, and their digests together"
-)]
-pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    /// Build deterministic release-audit inventory bytes and digests from artifact bytes.
+    ///
+    /// This byte-level handoff rejects non-canonical artifact-bundle framing before returning
+    /// decoded artifacts, the generated report/archive byte pair, and the digests that
+    /// release-audit records sign for those admitted bytes.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when artifact-bundle byte admission fails, deterministic report/archive
+    /// generation fails, or generated byte digesting fails.
+    #[expect(
+        clippy::type_complexity,
+        reason = "release-audit inventory admission returns decoded artifacts, generated bytes, and their digests together"
+    )]
+    bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         Vec<u8>,
         Vec<u8>,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, report_bytes, archive_bytes, _, report_digest, archive_digest) =
-        bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests_for_artifact_bundle_bytes_decoded_v1(
+        ) {
+        let (artifacts, report_bytes, archive_bytes, _, report_digest, archive_digest) = bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests_for_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
-        )?;
-    Ok((
+        );
+        (
         artifacts,
         report_bytes,
         archive_bytes,
         report_digest,
         archive_digest,
-    ))
+        )
+    }
 }
 /// Build deterministic release-audit inventory bytes and all admitted digests from artifact bytes.
 ///
@@ -18044,36 +17600,25 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
     let package_digest = bfv_full_bootstrap_release_audit_package_digest_v1(&package)?;
     Ok((package, package_digest))
 }
-/// Build a BFV full-bootstrap release audit package from canonical record and manifest bytes.
-///
-/// This byte-level package handoff rejects malformed report/archive bytes before non-canonical
-/// record or manifest framing, verifies the manifest/record binding, and then packages the supplied
-/// report/archive bytes whose digests were signed by the record.
-///
-/// # Errors
-/// Returns [`BfvError`] when record or manifest byte admission fails, the manifest does not bind
-/// the record, report/archive bytes are malformed, or the package does not validate.
-pub fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_v1(
-    record_bytes: &[u8],
-    manifest_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_v1(
+        record_bytes: &[u8],
+        manifest_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditPackageV1,
-    ),
-    BfvError,
-> {
-    let (record, manifest, package, _, _, _, _) =
-        bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_admitted_digests_v1(
+        ) {
+        let (record, manifest, package, _, _, _, _) = bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_admitted_digests_v1(
             record_bytes,
             manifest_bytes,
             audit_report_bytes,
             audit_evidence_archive_bytes,
-        )?;
-    Ok((record, manifest, package))
+        );
+        (record, manifest, package)
+    }
 }
 #[expect(
     clippy::type_complexity,
@@ -18126,73 +17671,56 @@ fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_a
         manifest_digest,
     ))
 }
-/// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when record or manifest byte admission fails, package construction fails,
-/// or package digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_record_and_manifest_bytes_v1(
-    record_bytes: &[u8],
-    manifest_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digest_for_record_and_manifest_bytes_v1(
+        record_bytes: &[u8],
+        manifest_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, package, _, _, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manifest_bytes_v1(
+        ) {
+        let (record, manifest, package, _, _, package_digest) = bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manifest_bytes_v1(
             record_bytes,
             manifest_bytes,
             audit_report_bytes,
             audit_evidence_archive_bytes,
-        )?;
-    Ok((record, manifest, package, package_digest))
+        );
+        (record, manifest, package, package_digest)
+    }
 }
-/// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
-///
-/// This byte-level package handoff returns the record digest, manifest digest, and package digest
-/// derived from the same admitted canonical byte streams.
-///
-/// # Errors
-/// Returns [`BfvError`] when record or manifest byte admission fails, package construction fails,
-/// or any digesting step fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manifest_bytes_v1(
-    record_bytes: &[u8],
-    manifest_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manifest_bytes_v1(
+        record_bytes: &[u8],
+        manifest_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, package, record_digest, _, _, manifest_digest, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_all_digests_for_record_and_manifest_bytes_v1(
+        ) {
+        let (record, manifest, package, record_digest, _, _, manifest_digest, package_digest) = bfv_full_bootstrap_release_audit_package_and_all_digests_for_record_and_manifest_bytes_v1(
             record_bytes,
             manifest_bytes,
             audit_report_bytes,
             audit_evidence_archive_bytes,
-        )?;
-    Ok((
+        );
+        (
         record,
         manifest,
         package,
         record_digest,
         manifest_digest,
         package_digest,
-    ))
+        )
+    }
 }
 /// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
 ///
@@ -18272,77 +17800,56 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_for_record_and_m
     validate_bfv_full_bootstrap_release_audit_package_external_review_markers_v1(&package)?;
     Ok((record, manifest, package))
 }
-/// Build and digest an externally reviewed package from record and manifest bytes.
-///
-/// This helper keeps canonical signed record/manifest admission, external report/archive marker
-/// validation, and caller-pinnable package digest production in one byte-level handoff.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, externally reviewed package construction fails,
-/// or package digesting fails.
-pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_record_and_manifest_bytes_v1(
-    record_bytes: &[u8],
-    manifest_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_record_and_manifest_bytes_v1(
+        record_bytes: &[u8],
+        manifest_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, package, _, _, package_digest) =
-        bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_record_and_manifest_bytes_v1(
+        ) {
+        let (record, manifest, package, _, _, package_digest) = bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_record_and_manifest_bytes_v1(
             record_bytes,
             manifest_bytes,
             audit_report_bytes,
             audit_evidence_archive_bytes,
-        )?;
-    Ok((record, manifest, package, package_digest))
+        );
+        (record, manifest, package, package_digest)
+    }
 }
-/// Build and digest an externally reviewed package from record and manifest bytes.
-///
-/// This helper keeps canonical signed record/manifest admission, external report/archive marker
-/// validation, and the record, manifest, and package digests derived from the same admitted
-/// byte-level handoff.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails, externally reviewed package construction fails,
-/// or any digesting step fails.
-pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_record_and_manifest_bytes_v1(
-    record_bytes: &[u8],
-    manifest_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_record_and_manifest_bytes_v1(
+        record_bytes: &[u8],
+        manifest_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+    ) -> (
         BfvFullBootstrapReleaseAuditRecordV1,
         BfvFullBootstrapReleaseAuditManifestV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (record, manifest, package, record_digest, _, _, manifest_digest, package_digest) =
-        bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_record_and_manifest_bytes_v1(
+        ) {
+        let (record, manifest, package, record_digest, _, _, manifest_digest, package_digest) = bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_record_and_manifest_bytes_v1(
             record_bytes,
             manifest_bytes,
             audit_report_bytes,
             audit_evidence_archive_bytes,
-        )?;
-    Ok((
+        );
+        (
         record,
         manifest,
         package,
         record_digest,
         manifest_digest,
         package_digest,
-    ))
+        )
+    }
 }
 /// Build and digest an externally reviewed package from record and manifest bytes.
 ///
@@ -18402,33 +17909,20 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_
         package_digest,
     ))
 }
-/// Build an externally reviewed BFV full-bootstrap release audit package from artifact bytes.
-///
-/// This byte-level production handoff rejects malformed reviewer material and report/archive bytes
-/// before non-canonical artifact-bundle framing, then signs the externally reviewed report/archive
-/// bytes. The returned artifact bundle is the decoded canonical bundle used for package
-/// construction.
-///
-/// # Errors
-/// Returns [`BfvError`] when reviewer material is malformed, report/archive byte admission fails,
-/// artifact-bundle byte admission fails, or externally reviewed package construction fails.
-pub fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, _) =
-        bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
+        ) {
+        let (artifacts, package, _) = bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -18436,8 +17930,9 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bun
             audit_evidence_archive_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package))
+        );
+        (artifacts, package)
+    }
 }
 fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
     params: &BfvParameters,
@@ -18485,35 +17980,21 @@ fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_
     )?;
     Ok((artifacts, package, artifact_bundle_digest))
 }
-/// Build an externally reviewed BFV full-bootstrap release audit package and digest from artifact
-/// bytes.
-///
-/// This is the byte-level companion to
-/// [`bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1`]. It keeps canonical
-/// artifact-bundle byte admission, package construction, and caller-pinnable digest production in
-/// one handoff.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, externally reviewed package
-/// construction fails, or package digesting fails.
-pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, _, package_digest) =
-        bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, package, _, package_digest) = bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -18521,37 +18002,26 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_a
             audit_evidence_archive_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package, package_digest))
+        );
+        (artifacts, package, package_digest)
+    }
 }
-/// Build an externally reviewed BFV full-bootstrap release audit package and digests from artifact
-/// bytes.
-///
-/// This helper returns the decoded artifact bundle, generated package, admitted artifact-bundle
-/// digest, and caller-pinnable package digest from one canonical byte-admission path.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, externally reviewed package
-/// construction fails, or digesting fails.
-pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    audit_report_bytes: &[u8],
-    audit_evidence_archive_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        audit_report_bytes: &[u8],
+        audit_evidence_archive_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) =
-        bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) = bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
@@ -18559,8 +18029,9 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_
             audit_evidence_archive_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package, artifact_bundle_digest, package_digest))
+        );
+        (artifacts, package, artifact_bundle_digest, package_digest)
+    }
 }
 /// Build an externally reviewed BFV full-bootstrap release audit package and all digests from
 /// artifact bytes.
@@ -18691,40 +18162,26 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
     let package_digest = bfv_full_bootstrap_release_audit_package_digest_v1(&package)?;
     Ok((package, package_digest))
 }
-/// Build a deterministic BFV full-bootstrap release audit package from artifact bytes.
-///
-/// This byte-level deterministic handoff rejects malformed reviewer material
-/// before non-canonical artifact-bundle framing, then generates the
-/// machine-checkable report/archive bytes and signs the resulting structural
-/// package. Production runtime contexts must still pin an externally reviewed
-/// package accepted by
-/// [`validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1`].
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, reviewer material is malformed,
-/// report/archive generation fails, or package construction fails.
-pub fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, _) =
-        bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
+        ) {
+        let (artifacts, package, _) = bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
             params,
             material,
             artifact_bundle_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package))
+        );
+        (artifacts, package)
+    }
 }
 fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
     params: &BfvParameters,
@@ -18770,73 +18227,50 @@ fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admit
     )?;
     Ok((artifacts, package, artifact_bundle_digest))
 }
-/// Build a deterministic BFV full-bootstrap release audit package and digest from artifact bytes.
-///
-/// This is the byte-level companion to
-/// [`bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1`]. It returns the decoded
-/// artifact bundle, generated package, and caller-pinnable deterministic package digest from one
-/// canonical byte admission path.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, package construction fails, or
-/// package digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digest_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, _, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, package, _, package_digest) = bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package, package_digest))
+        );
+        (artifacts, package, package_digest)
+    }
 }
-/// Build a deterministic BFV full-bootstrap release audit package and digests from artifact bytes.
-///
-/// This byte-level deterministic handoff returns the decoded artifact bundle, generated package,
-/// admitted artifact-bundle digest, and deterministic package digest from one canonical
-/// byte-admission path.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, package construction fails, or
-/// digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_bytes_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_private_key: &PrivateKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_bytes_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_private_key: &PrivateKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bundle_bytes_v1(
+        ) {
+        let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) = bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bundle_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
             reviewer_id,
             reviewer_private_key,
-        )?;
-    Ok((artifacts, package, artifact_bundle_digest, package_digest))
+        );
+        (artifacts, package, artifact_bundle_digest, package_digest)
+    }
 }
 /// Build a deterministic BFV full-bootstrap release audit package and all digests from artifact
 /// bytes.
@@ -19671,44 +19105,35 @@ pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
     validate_bfv_full_bootstrap_release_audit_package_v1(&package)?;
     Ok(package)
 }
-/// Return the digest of canonical BFV full-bootstrap release audit package bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> Hash {
+        let (_, digest) = bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
+            bytes
+        );
+        digest
+    }
 }
-/// Decode and digest canonical BFV full-bootstrap release audit package bytes.
-///
-/// This byte-admission helper keeps the decoded package and caller-pinnable package digest bound to
-/// the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditPackageV1, Hash), BfvError> {
-    let (package, _, _, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(bytes)?;
-    Ok((package, package_digest))
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
+        bytes: &[u8],
+    ) -> (BfvFullBootstrapReleaseAuditPackageV1, Hash) {
+        let (package, _, _, package_digest) = bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
+            bytes
+        );
+        (package, package_digest)
+    }
 }
-/// Decode canonical BFV full-bootstrap release audit package bytes and return their digests.
-///
-/// This byte-admission helper keeps the decoded package, package-embedded record digest,
-/// package-embedded manifest digest, and caller-pinnable package digest bound to the same canonical
-/// byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditPackageV1, Hash, Hash, Hash), BfvError> {
-    let (package, record_digest, _, _, manifest_digest, package_digest) =
-        bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(bytes)?;
-    Ok((package, record_digest, manifest_digest, package_digest))
+define_release_audit_projection_v1! {
+    bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
+        bytes: &[u8],
+    ) -> (BfvFullBootstrapReleaseAuditPackageV1, Hash, Hash, Hash) {
+        let (package, record_digest, _, _, manifest_digest, package_digest) = bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(
+            bytes
+        );
+        (package, record_digest, manifest_digest, package_digest)
+    }
 }
 /// Decode canonical BFV full-bootstrap release audit package bytes and return all nested digests.
 ///
@@ -19885,81 +19310,54 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
     )?;
     Ok((artifacts, package))
 }
-/// Validate canonical artifact-bundle and release-audit package bytes.
-///
-/// This raw-byte production admission helper derives the caller-pinnable package digest from the
-/// same canonical package bytes it validates, while also admitting the governed artifact bundle
-/// from canonical bytes. It returns the decoded artifacts, decoded package, and byte-derived
-/// package digest together so callers do not need to trust an out-of-band package digest at this
-/// boundary.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, package byte admission fails,
-/// package validation fails, the packaged signoff was not issued by the trusted reviewer id/key
-/// pair, or the derived package digest aliases one of the package's signed commitments.
-pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    package_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        package_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, _, package_digest) =
-        validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
+        ) {
+        let (artifacts, package, _, package_digest) = validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
             params,
             material,
             artifact_bundle_bytes,
             package_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, package, package_digest))
+        );
+        (artifacts, package, package_digest)
+    }
 }
-/// Validate canonical artifact-bundle and release-audit package bytes.
-///
-/// This raw-byte production admission helper derives the artifact-bundle digest and caller-pinnable
-/// package digest from the same canonical byte streams it validates. It returns the decoded
-/// artifacts, decoded package, admitted artifact-bundle digest, and byte-derived package digest
-/// together.
-///
-/// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails, package byte admission fails,
-/// package validation fails, the packaged signoff was not issued by the trusted reviewer id/key
-/// pair, or the derived package digest aliases one of the package's signed commitments.
-pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifact_bundle_bytes: &[u8],
-    package_bytes: &[u8],
-    reviewer_id: &str,
-    reviewer_public_key: &PublicKey,
-) -> Result<
-    (
+define_release_audit_projection_v1! {
+    validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifact_bundle_bytes: &[u8],
+        package_bytes: &[u8],
+        reviewer_id: &str,
+        reviewer_public_key: &PublicKey,
+    ) -> (
         BfvFullBootstrapCircuitArtifactBundleV1,
         BfvFullBootstrapReleaseAuditPackageV1,
         Hash,
         Hash,
-    ),
-    BfvError,
-> {
-    let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) =
-        validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
+        ) {
+        let (artifacts, package, artifact_bundle_digest, _, _, _, _, package_digest) = validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
             params,
             material,
             artifact_bundle_bytes,
             package_bytes,
             reviewer_id,
             reviewer_public_key,
-        )?;
-    Ok((artifacts, package, artifact_bundle_digest, package_digest))
+        );
+        (artifacts, package, artifact_bundle_digest, package_digest)
+    }
 }
 /// Validate canonical artifact-bundle and release-audit package bytes.
 ///

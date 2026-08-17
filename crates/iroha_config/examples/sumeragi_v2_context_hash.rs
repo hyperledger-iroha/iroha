@@ -2,13 +2,17 @@
 //!
 //! The optional first argument is a peer configuration TOML. The optional
 //! second argument is canonical Norito containing the staged active public-lane
-//! validator records. Omitting either argument selects repository defaults or
-//! an empty active-validator set, respectively. Pass `--consensus-sections`
-//! before a template config to parse only its `nexus` and `pipeline` tables;
-//! this is useful for deployment templates whose runtime secrets are redacted.
+//! validator records. The optional third argument is canonical Norito containing
+//! the complete retained lane-incarnation lineage, including retired lanes.
+//! Omitting an input selects repository defaults or the empty state projection.
+//! Pass `--consensus-sections` before a template config to parse only its `nexus`
+//! and `pipeline` tables; this is useful for deployment templates whose runtime
+//! secrets are redacted.
 use iroha_config::{
     base::toml::TomlSource,
-    parameters::actual::{Nexus, Pipeline, Root, sumeragi_v2_nexus_amx_context_hash},
+    parameters::actual::{
+        Nexus, Pipeline, Root, SumeragiV2LaneLifecycleEntry, sumeragi_v2_nexus_amx_context_hash,
+    },
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::block::consensus_v2::GenesisActiveNexusLaneRecord;
@@ -27,8 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         first.map(PathBuf::from)
     };
     let active_records_path = args.next().map(PathBuf::from);
+    let retained_lineage_path = args.next().map(PathBuf::from);
     if args.next().is_some() {
-        return Err("usage: sumeragi_v2_context_hash [--consensus-sections] [config.toml] [active-records.norito]".into());
+        return Err("usage: sumeragi_v2_context_hash [--consensus-sections] [config.toml] [active-records.norito] [retained-lane-lineage.norito]".into());
     }
     let (nexus, pipeline) = if let Some(path) = config_path {
         let root = if consensus_sections {
@@ -48,7 +53,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Vec::new()
     };
-    let hash = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active_records, &[]);
+    let retained_lineage = if let Some(path) = retained_lineage_path {
+        let bytes = fs::read(&path)?;
+        norito::decode_from_bytes::<Vec<SumeragiV2LaneLifecycleEntry>>(&bytes)
+            .map_err(|error| format!("failed to decode {}: {error}", path.display()))?
+    } else {
+        Vec::new()
+    };
+    let hash =
+        sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active_records, &retained_lineage);
     println!("{}", hex::encode(hash.as_ref()));
     println!("{}", norito::json::to_json(&<[u8; 32]>::from(hash))?);
     Ok(())

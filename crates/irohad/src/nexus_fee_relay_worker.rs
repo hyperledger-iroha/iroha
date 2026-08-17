@@ -39,7 +39,8 @@ use iroha_data_model::{
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
-        fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
+        fee_sponsor_vault_policy_commitment, fee_sponsor_vault_source_state_root,
+        lane_relay_fastpq_claim_digest,
     },
     state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
@@ -1449,6 +1450,7 @@ fn prove_lane_relay_envelope(
         verifier_version: "v1".to_owned(),
         target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
         effect_binding: None,
+        remote_spend_intent_commitments: Vec::new(),
     };
     let mut batch = transition_batch(
         dsid,
@@ -1472,27 +1474,29 @@ fn prove_lane_relay_envelope(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
-    fastpq_prover::bind_axt_batch(&mut batch, &binding).wrap_err("bind lane relay AXT batch")?;
+    let da_commitment = envelope
+        .da_commitment_hash
+        .map(|commitment| Hash::from(commitment).into());
+    fastpq_prover::bind_axt_batch_with_proof_metadata(
+        &mut batch,
+        &binding,
+        manifest_root,
+        da_commitment,
+        None,
+        Some(expiry_slot),
+    )
+    .wrap_err("bind lane relay AXT batch")?;
     let proof = prover_from_config(fastpq)?
         .prove(&batch)
         .wrap_err("prove lane relay AXT batch")?;
-    let payload =
-        fastpq_prover::encode_axt_fastpq_payload(&batch, proof).wrap_err("encode AXT payload")?;
-    let proof_envelope = AxtProofEnvelope {
-        dsid,
+    let proof_blob = fastpq_prover::axt_proof_blob_from_bound_batch(
+        &batch,
+        proof,
         manifest_root,
-        da_commitment: envelope
-            .da_commitment_hash
-            .map(|commitment| Hash::from(commitment).into()),
-        proof: payload,
-        fastpq_binding: Some(binding),
-        committed_amount: None,
-        amount_commitment: None,
-    };
-    let proof_blob = ProofBlob {
-        payload: norito::to_bytes(&proof_envelope).wrap_err("encode lane relay proof envelope")?,
-        expiry_slot: Some(expiry_slot),
-    };
+        da_commitment,
+        Some(expiry_slot),
+    )
+    .wrap_err("package lane relay proof envelope")?;
     let proven_envelope =
         envelope
             .clone()
@@ -1537,10 +1541,7 @@ fn prove_fee_sponsor_vault_allocation(
         b"nexus-fee-relay:sponsor-vault-witness:v1",
         &[work.source_state_root.as_ref(), work.lease_id.as_ref()],
     );
-    let policy_commitment = worker_digest(
-        b"nexus-fee-relay:sponsor-vault-policy:v1",
-        &[&work.manifest_root],
-    );
+    let policy_commitment = fee_sponsor_vault_policy_commitment(&work.manifest_root);
     let program_text = work.program_id.to_string();
     let binding = fee_sponsor_vault_allocation_binding(
         work,
@@ -1576,27 +1577,26 @@ fn prove_fee_sponsor_vault_allocation(
         source_tx_commitment.as_ref().to_vec(),
     );
     let committed_amount = integer_mantissa(&work.verified_allocation);
-    fastpq_prover::bind_axt_batch_with_committed_amount(&mut batch, &binding, committed_amount)
-        .wrap_err("bind fee sponsor vault allocation AXT batch")?;
+    fastpq_prover::bind_axt_batch_with_proof_metadata(
+        &mut batch,
+        &binding,
+        work.manifest_root,
+        None,
+        committed_amount,
+        Some(work.expires_at_height),
+    )
+    .wrap_err("bind fee sponsor vault allocation AXT batch")?;
     let proof = prover_from_config(fastpq)?
         .prove(&batch)
         .wrap_err("prove fee sponsor vault allocation AXT batch")?;
-    let payload =
-        fastpq_prover::encode_axt_fastpq_payload(&batch, proof).wrap_err("encode AXT payload")?;
-    let proof_envelope = AxtProofEnvelope {
-        dsid: work.source_dataspace_id,
-        manifest_root: work.manifest_root,
-        da_commitment: None,
-        proof: payload,
-        fastpq_binding: Some(binding),
-        committed_amount,
-        amount_commitment: None,
-    };
-    Ok(ProofBlob {
-        payload: norito::to_bytes(&proof_envelope)
-            .wrap_err("encode fee sponsor vault allocation proof envelope")?,
-        expiry_slot: Some(work.expires_at_height),
-    })
+    fastpq_prover::axt_proof_blob_from_bound_batch(
+        &batch,
+        proof,
+        work.manifest_root,
+        None,
+        Some(work.expires_at_height),
+    )
+    .wrap_err("package fee sponsor vault allocation proof envelope")
 }
 fn fee_sponsor_vault_allocation_binding(
     work: &DurableAllocationWork,
@@ -1631,6 +1631,7 @@ fn fee_sponsor_vault_allocation_binding(
             source_amount_i64: None,
             destination_amount_i64: None,
         }),
+        remote_spend_intent_commitments: Vec::new(),
     }
 }
 fn transition_batch(
@@ -2202,7 +2203,7 @@ mod tests {
         )?;
         proven.validate_fastpq_proof_metadata()?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
-        let verified = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;
+        let verified = fastpq_prover::verify_axt_proof_blob(&proof_blob)?;
         assert_eq!(proof_envelope.dsid, envelope.dataspace_id);
         assert_eq!(proof_envelope.manifest_root, [0x42; 32]);
         let binding = proof_envelope.fastpq_binding.expect("fastpq binding");
@@ -2265,7 +2266,7 @@ mod tests {
         };
         let proof_blob = prove_fee_sponsor_vault_allocation(&work, &test_fastpq())?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
-        fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;
+        fastpq_prover::verify_axt_proof_blob(&proof_blob)?;
         let binding = proof_envelope.fastpq_binding.expect("fastpq binding");
         assert_eq!(
             binding.verified_effect_type,

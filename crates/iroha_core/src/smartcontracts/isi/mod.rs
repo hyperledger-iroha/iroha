@@ -1042,6 +1042,7 @@ mod tests {
             verifier_version: "v1".to_owned(),
             target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
@@ -1070,7 +1071,18 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT lane relay batch");
+        let da_commitment = envelope
+            .da_commitment_hash
+            .map(|commitment| iroha_crypto::Hash::from(commitment).into());
+        fastpq_prover::bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            manifest_root,
+            da_commitment,
+            None,
+            Some(expiry_slot),
+        )
+        .expect("bind AXT lane relay batch");
         let proof = fastpq_prover::Prover::canonical_with_modes(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::ExecutionMode::Cpu,
@@ -1084,9 +1096,7 @@ mod tests {
         let proof_envelope = AxtProofEnvelope {
             dsid,
             manifest_root,
-            da_commitment: envelope
-                .da_commitment_hash
-                .map(|commitment| iroha_crypto::Hash::from(commitment).into()),
+            da_commitment,
             proof: fastpq_payload,
             fastpq_binding: Some(binding),
             committed_amount: None,
@@ -1141,6 +1151,7 @@ mod tests {
                 source_amount_i64: Some(10),
                 destination_amount_i64: Some(760),
             }),
+            remote_spend_intent_commitments: Vec::new(),
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
@@ -1170,7 +1181,15 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT effect batch");
+        fastpq_prover::bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            manifest_root,
+            None,
+            None,
+            Some(expiry_slot),
+        )
+        .expect("bind AXT effect batch");
         let proof = fastpq_prover::Prover::canonical_with_modes(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::ExecutionMode::Cpu,
@@ -1330,8 +1349,8 @@ mod tests {
             .fastpq_binding
             .clone()
             .expect("test fastpq binding");
-        let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-            .expect("verify test fastpq proof");
+        let verified_fastpq =
+            fastpq_prover::verify_axt_proof_blob(proof_blob).expect("verify test fastpq proof");
         let lane_finality_statement_hash = envelope
             .lane_finality_statement_hash()
             .expect("test relay finality statement");

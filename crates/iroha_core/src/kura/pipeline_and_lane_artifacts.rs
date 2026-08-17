@@ -182,10 +182,8 @@ pub struct PipelineTxSnapshot {
     /// Optional sampled state keys written during execution.
     pub writes: Vec<String>,
     /// Total number of state keys read during execution.
-    #[norito(default)]
     pub read_count: u32,
     /// Total number of state keys written during execution.
-    #[norito(default)]
     pub write_count: u32,
 }
 impl PipelineTxSnapshot {
@@ -208,13 +206,11 @@ impl PipelineTxSnapshot {
     #[must_use]
     pub fn read_count(&self) -> u32 {
         self.read_count
-            .max(u32::try_from(self.reads.len()).unwrap_or(u32::MAX))
     }
     /// Total number of write keys represented by this snapshot.
     #[must_use]
     pub fn write_count(&self) -> u32 {
         self.write_count
-            .max(u32::try_from(self.writes.len()).unwrap_or(u32::MAX))
     }
 }
 /// ZK proof artifacts captured alongside pipeline metadata.
@@ -369,10 +365,17 @@ impl FastpqProofSnapshot {
     }
     /// Package this snapshot as an AXT proof blob.
     ///
+    /// The snapshot batch must have been bound before proving with the exact
+    /// manifest root, DA commitment, committed amount, and expiry supplied to
+    /// this export path. This method only compares and packages those values;
+    /// it never repairs legacy proof metadata. Pre-binding snapshots therefore
+    /// require reproving before they can be exported as AXT proof blobs.
+    ///
     /// # Errors
     ///
-    /// Returns a FASTPQ prover error when the embedded proof is malformed or
-    /// the batch was not already AXT-bound before proof generation.
+    /// Returns a FASTPQ prover error when the embedded proof is malformed, the
+    /// batch was not already AXT-bound before proof generation, or supplied
+    /// outer metadata differs from its proof-bound value.
     pub fn to_axt_proof_blob(
         &self,
         manifest_root: [u8; 32],
@@ -3367,11 +3370,6 @@ struct SidecarIndexEntry {
     len: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidecarIndexOrigin {
-    HeightOne,
-    FirstWrite,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SidecarIndexLayout {
     base_height: u64,
     entries_offset: u64,
@@ -3387,8 +3385,8 @@ enum IndexedSidecarRewrite {
     /// Advance the based-index window together with the retained payloads.
     ///
     /// This is reserved for evidence whose configured retention is also its
-    /// hard startup scan bound. Generic pipeline sidecars retain their
-    /// historical zero slots for compatibility.
+    /// hard startup scan bound. Generic pipeline sidecars retain zero slots so
+    /// every height in the canonical V1 window keeps a stable position.
     #[cfg(test)]
     RetainNewestWindow { retention: NonZeroUsize },
     /// Discard only the authenticated terminal prefix while retaining a
@@ -3452,19 +3450,9 @@ impl SidecarIndexEntry {
     }
 }
 impl SidecarIndexLayout {
-    const LEGACY_BASE_HEIGHT: u64 = 1;
-    fn legacy(index_len: u64) -> Self {
-        let aligned_len = index_len - index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
-        Self {
-            base_height: Self::LEGACY_BASE_HEIGHT,
-            entries_offset: 0,
-            entry_count: aligned_len / PIPELINE_INDEX_ENTRY_SIZE_U64,
-            aligned_len,
-        }
-    }
     fn based(base_height: u64, index_len: u64) -> Result<Self, &'static str> {
-        if base_height <= Self::LEGACY_BASE_HEIGHT {
-            return Err("sidecar base height must be greater than one");
+        if base_height == 0 || base_height == u64::MAX {
+            return Err("sidecar base height is invalid");
         }
         let entries_len = index_len
             .checked_sub(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
@@ -3480,9 +3468,6 @@ impl SidecarIndexLayout {
             entry_count,
             aligned_len: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + aligned_entries_len,
         })
-    }
-    fn is_based(self) -> bool {
-        self.entries_offset != 0
     }
     fn next_height(self) -> Option<u64> {
         self.base_height.checked_add(self.entry_count)
@@ -3513,8 +3498,8 @@ impl SidecarIndexLayout {
         header
     }
     fn read_from(index: &mut std::fs::File, index_len: u64) -> Result<Self, &'static str> {
-        if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
-            return Ok(Self::legacy(index_len));
+        if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
+            return Err("sidecar V1 base-height header is truncated");
         }
         let mut first_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
@@ -3522,15 +3507,8 @@ impl SidecarIndexLayout {
             .and_then(|_| index.read_exact(&mut first_buf))
             .map_err(|_| "failed to read sidecar index prefix")?;
         let first = SidecarIndexEntry::from_bytes(first_buf);
-        let marker_field_present = first.offset == u64::MAX || first.len == u64::MAX;
-        if !marker_field_present {
-            return Ok(Self::legacy(index_len));
-        }
         if first.offset != u64::MAX || first.len != u64::MAX {
-            return Err("malformed sidecar base-height marker");
-        }
-        if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
-            return Err("sidecar base-height header is truncated");
+            return Err("sidecar V1 base-height marker is missing");
         }
         let mut metadata_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
@@ -3574,15 +3552,8 @@ pub(crate) enum LaneBlockApplicationReceiptRepairPreflight {
 pub struct RecoveredLaneBlockPayload {
     /// Certified lane-block proposal whose descriptor selected this payload.
     pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Chain binding of a lane-owned autonomous payload, when recovery did not
-    /// depend on a committed global block body.
-    pub autonomous_network_id: Option<iroha_data_model::NetworkId>,
-    /// Epoch binding of the autonomous payload.
-    pub autonomous_epoch: Option<u64>,
-    /// Canonical autonomous executable payload digest.
-    pub autonomous_payload_hash: Option<Hash>,
+    /// Authenticated source from which the executable payload was recovered.
+    pub source: LaneBlockExecutionSourceV1,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
@@ -3591,6 +3562,76 @@ pub struct RecoveredLaneBlockPayload {
     pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
+}
+/// Authenticated source of a recovered standalone lane-block execution.
+///
+/// The variants are intentionally disjoint. A globally committed payload is
+/// anchored by its exact ownership sidecar, while a lane-owned autonomous
+/// payload is bound directly to its chain, epoch, and executable-payload hash.
+/// Autonomous inputs never manufacture a global block hash or proposal view.
+#[allow(variant_size_differences)] // The exact global artifact must remain inline and canonical.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub enum LaneBlockExecutionSourceV1 {
+    /// Payload reconstructed from a canonical globally committed block.
+    #[codec(index = 1)]
+    GlobalBlock {
+        /// Exact lane ownership sidecar committed by the global block.
+        artifact: LaneBlockArtifact,
+    },
+    /// Producer-authenticated payload owned and executed by its lane.
+    #[codec(index = 2)]
+    AutonomousLane {
+        /// Chain whose authenticated lane payload is authoritative.
+        network_id: iroha_data_model::NetworkId,
+        /// Consensus epoch of the authenticated lane payload.
+        epoch: u64,
+        /// Canonical digest of the complete executable payload.
+        payload_hash: Hash,
+    },
+}
+impl LaneBlockExecutionSourceV1 {
+    /// Construct a source anchored to a globally committed block.
+    #[must_use]
+    pub fn global_block(artifact: LaneBlockArtifact) -> Self {
+        Self::GlobalBlock { artifact }
+    }
+
+    /// Construct a source bound directly to an autonomous lane payload.
+    #[must_use]
+    pub fn autonomous_lane(
+        network_id: iroha_data_model::NetworkId,
+        epoch: u64,
+        payload_hash: Hash,
+    ) -> Self {
+        Self::AutonomousLane {
+            network_id,
+            epoch,
+            payload_hash,
+        }
+    }
+
+    /// Return the global ownership artifact, when global-block recovery was used.
+    #[must_use]
+    pub fn global_artifact(&self) -> Option<&LaneBlockArtifact> {
+        match self {
+            Self::GlobalBlock { artifact } => Some(artifact),
+            Self::AutonomousLane { .. } => None,
+        }
+    }
+
+    /// Return the autonomous chain, epoch, and payload binding, when applicable.
+    #[must_use]
+    pub fn autonomous_binding(&self) -> Option<(iroha_data_model::NetworkId, u64, Hash)> {
+        match self {
+            Self::GlobalBlock { .. } => None,
+            Self::AutonomousLane {
+                network_id,
+                epoch,
+                payload_hash,
+            } => Some((*network_id, *epoch, *payload_hash)),
+        }
+    }
 }
 /// Known metadata format variants for durable lane-block execution input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -3607,14 +3648,8 @@ pub struct LaneBlockExecutionInputArtifact {
     pub format: LaneBlockExecutionInputArtifactFormat,
     /// Certified lane-block proposal whose descriptor selected this payload.
     pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Chain binding when this input came from a lane-owned payload.
-    pub autonomous_network_id: Option<iroha_data_model::NetworkId>,
-    /// Epoch binding when this input came from a lane-owned payload.
-    pub autonomous_epoch: Option<u64>,
-    /// Canonical autonomous executable payload digest, when applicable.
-    pub autonomous_payload_hash: Option<Hash>,
+    /// Exact authenticated source of the recovered executable payload.
+    pub source: LaneBlockExecutionSourceV1,
     /// Accepted entrypoint hashes in lane descriptor order.
     pub entrypoint_hashes: Vec<Hash>,
     /// Accepted entrypoints in lane descriptor order.
@@ -3639,10 +3674,7 @@ impl LaneBlockExecutionInputArtifact {
         Self {
             format: LaneBlockExecutionInputArtifactFormat::Current,
             proposal: recovered.proposal,
-            artifact: recovered.artifact,
-            autonomous_network_id: recovered.autonomous_network_id,
-            autonomous_epoch: recovered.autonomous_epoch,
-            autonomous_payload_hash: recovered.autonomous_payload_hash,
+            source: recovered.source,
             entrypoint_hashes,
             entrypoints: recovered.entrypoints,
             reservation_keys: recovered.reservation_keys,
@@ -3675,13 +3707,14 @@ pub enum LaneBlockExecutionPreflightArtifactFormat {
 }
 /// Durable result of non-committing direct-execution preflight for a lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionPreflightArtifact {
     /// Schema / evolution tag for the preflight format.
     pub format: LaneBlockExecutionPreflightArtifactFormat,
     /// Certified lane-block proposal whose descriptor selected this payload.
     pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
+    /// Exact authenticated source of the preflighted executable payload.
+    pub source: LaneBlockExecutionSourceV1,
     /// Local committed state height used as the preflight base.
     pub preflight_state_height: u64,
     /// Local committed WSV snapshot hash used as the preflight base.
@@ -3712,7 +3745,7 @@ impl LaneBlockExecutionPreflightArtifact {
         Self {
             format: LaneBlockExecutionPreflightArtifactFormat::Current,
             proposal: input.proposal.clone(),
-            artifact: input.artifact.clone(),
+            source: input.source.clone(),
             preflight_state_height,
             preflight_state_hash,
             entrypoint_indices: input.proposal.descriptor.accepted_candidate_indices.clone(),
@@ -3763,8 +3796,8 @@ pub struct LaneBlockApplicationReceiptArtifact {
     pub format: LaneBlockApplicationReceiptArtifactFormat,
     /// Certified lane-block proposal whose descriptor selected this payload.
     pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
+    /// Exact authenticated source of the applied executable payload.
+    pub source: LaneBlockExecutionSourceV1,
     /// Canonical block height, or committed preflight base height for direct execution.
     pub application_block_height: u64,
     /// Canonical block hash, or committed preflight base WSV hash for direct execution.
@@ -3881,7 +3914,7 @@ impl LaneBlockApplicationReceiptArtifact {
         Self {
             format: LaneBlockApplicationReceiptArtifactFormat::Current,
             proposal: recovered.proposal,
-            artifact: recovered.artifact,
+            source: recovered.source,
             application_block_height,
             application_block_hash,
             entrypoint_indices,
@@ -3910,7 +3943,7 @@ impl LaneBlockApplicationReceiptArtifact {
         let application_block_hash = preflight.preflight_state_hash?;
         if preflight.has_rejections()
             || input.proposal != preflight.proposal
-            || input.artifact != preflight.artifact
+            || input.source != preflight.source
             || input.proposal.descriptor.accepted_candidate_indices != preflight.entrypoint_indices
             || input.entrypoint_hashes != preflight.entrypoint_hashes
         {
@@ -3919,7 +3952,7 @@ impl LaneBlockApplicationReceiptArtifact {
         Some(Self {
             format: LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
             proposal: input.proposal.clone(),
-            artifact: input.artifact.clone(),
+            source: input.source.clone(),
             application_block_height: preflight.preflight_state_height,
             application_block_hash,
             entrypoint_indices: preflight.entrypoint_indices.clone(),
@@ -3943,14 +3976,14 @@ impl LaneBlockApplicationReceiptArtifact {
         entry: &MergeLedgerEntry,
         batch: &MergeExecutionBatch,
         execution: &MergeLaneExecution,
-        artifact: LaneBlockArtifact,
+        source: LaneBlockExecutionSourceV1,
         carrier_block_height: u64,
         carrier_block_hash: HashOf<BlockHeader>,
     ) -> Self {
         Self {
             format: LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
             proposal: execution.proposal.clone(),
-            artifact,
+            source,
             application_block_height: carrier_block_height,
             application_block_hash: carrier_block_hash,
             entrypoint_indices: execution

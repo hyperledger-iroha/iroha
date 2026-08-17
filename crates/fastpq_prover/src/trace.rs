@@ -17,7 +17,7 @@ use core::{cmp::max, convert::TryFrom};
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
-use iroha_crypto::Hash;
+use iroha_crypto::{Blake2b256, Hash, blake2::digest::Digest as _};
 use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
 use rayon::prelude::*;
 #[cfg(feature = "fastpq-gpu")]
@@ -32,8 +32,10 @@ use std::{
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 /// Sparse Merkle tree height used by the stage 1 trace layout.
 const SMT_HEIGHT: usize = transfer::TRANSFER_MERKLE_HEIGHT;
-/// Domain tag for hashing metadata payloads.
-const METADATA_DOMAIN: &[u8] = b"fastpq:v1:metadata";
+/// Domain tag for the full-width metadata commitment.
+const METADATA_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:metadata-commitment:blake2b-256";
+/// Number of exact 32-bit limbs carrying the 256-bit metadata commitment.
+pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 8;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
 /// Domain tag used for column hashes.
@@ -244,7 +246,7 @@ struct RowData {
     delta: u64,
     running_asset_delta: u64,
     supply_counter: u64,
-    metadata_hash: u64,
+    metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
     perm_hash: u64,
     neighbour_leaf: u64,
     selectors: Selectors,
@@ -267,7 +269,11 @@ struct Selectors {
     perm: u64,
 }
 impl RowData {
-    fn padding(metadata_hash: u64, dsid: u64, slot: u64) -> Self {
+    fn padding(
+        metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
+        dsid: u64,
+        slot: u64,
+    ) -> Self {
         Self {
             key_limbs: Vec::new(),
             value_old_limbs: Vec::new(),
@@ -276,7 +282,7 @@ impl RowData {
             delta: 0,
             running_asset_delta: 0,
             supply_counter: 0,
-            metadata_hash,
+            metadata_hash_limbs,
             perm_hash: 0,
             neighbour_leaf: 0,
             selectors: Selectors::default(),
@@ -529,7 +535,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         &canonical.public_inputs,
     )?;
     let transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
-    let metadata_hash = metadata_hash(&canonical.metadata)?;
+    let metadata_hash_limbs = metadata_commitment_limbs(&canonical.metadata)?;
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
     let slot_value = canonical.public_inputs.slot;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
@@ -631,7 +637,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
             delta,
             running_asset_delta: field_from_i128(running_next),
             supply_counter: field_from_i128(supply_next),
-            metadata_hash,
+            metadata_hash_limbs,
             perm_hash,
             neighbour_leaf: 0,
             selectors,
@@ -664,7 +670,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let padded_len = pow2_ceil(max(1, n_rows));
     let row_usage = RowUsage::from_rows(&rows, n_rows);
     while rows.len() < padded_len {
-        rows.push(RowData::padding(metadata_hash, dsid_hash, slot_value));
+        rows.push(RowData::padding(metadata_hash_limbs, dsid_hash, slot_value));
     }
     let max_key_limbs = rows
         .iter()
@@ -735,10 +741,12 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         "running_asset_delta",
         rows.iter().map(|row| row.running_asset_delta),
     ));
-    columns.push(TraceColumn::new(
-        "metadata_hash",
-        rows.iter().map(|row| row.metadata_hash),
-    ));
+    for limb in 0..METADATA_COMMITMENT_LIMBS {
+        columns.push(TraceColumn::new(
+            format!("metadata_hash_limb_{limb}"),
+            rows.iter().map(|row| row.metadata_hash_limbs[limb]),
+        ));
+    }
     columns.push(TraceColumn::new(
         "supply_counter",
         rows.iter().map(|row| row.supply_counter),
@@ -817,10 +825,13 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
     columns.extend((0..max_value_new).map(|idx| format!("value_new_limb_{idx}")));
     columns.extend((0..max_asset_limbs).map(|idx| format!("asset_id_limb_{idx}")));
     columns.extend(
+        ["delta", "running_asset_delta"]
+            .into_iter()
+            .map(str::to_owned),
+    );
+    columns.extend((0..METADATA_COMMITMENT_LIMBS).map(|limb| format!("metadata_hash_limb_{limb}")));
+    columns.extend(
         [
-            "delta",
-            "running_asset_delta",
-            "metadata_hash",
             "supply_counter",
             "perm_hash",
             "neighbour_leaf",
@@ -846,12 +857,41 @@ impl TraceColumn {
         }
     }
 }
-fn metadata_hash(metadata: &BTreeMap<String, Vec<u8>>) -> Result<u64> {
-    if metadata.is_empty() {
-        return Ok(0);
+fn metadata_commitment_limbs(
+    metadata: &BTreeMap<String, Vec<u8>>,
+) -> Result<[u64; METADATA_COMMITMENT_LIMBS]> {
+    let encoded = {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::to_bytes(metadata)?
+    };
+    Ok(metadata_commitment_limbs_from_digest(
+        metadata_commitment_digest(&encoded),
+    ))
+}
+fn metadata_commitment_digest(encoded: &[u8]) -> [u8; 32] {
+    let domain_len = u64::try_from(METADATA_COMMITMENT_DOMAIN.len())
+        .expect("fixed metadata commitment domain length fits in u64")
+        .to_le_bytes();
+    let encoded_len = u64::try_from(encoded.len())
+        .expect("in-memory metadata encoding length fits in u64")
+        .to_le_bytes();
+    let mut hasher = Blake2b256::new();
+    hasher.update(domain_len);
+    hasher.update(METADATA_COMMITMENT_DOMAIN);
+    hasher.update(encoded_len);
+    hasher.update(encoded);
+    hasher.finalize().into()
+}
+fn metadata_commitment_limbs_from_digest(digest: [u8; 32]) -> [u64; METADATA_COMMITMENT_LIMBS] {
+    let mut limbs = [0_u64; METADATA_COMMITMENT_LIMBS];
+    for (limb, chunk) in limbs.iter_mut().zip(digest.chunks_exact(4)) {
+        let bytes: [u8; 4] = chunk
+            .try_into()
+            .expect("Blake2b-256 digest divides into exact u32 limbs");
+        *limb = u64::from(u32::from_le_bytes(bytes));
     }
-    let encoded = norito::core::to_bytes(metadata)?;
-    hash_with_domain(METADATA_DOMAIN, &encoded)
+    limbs
 }
 fn extract_transfer_witnesses(
     metadata: &BTreeMap<String, Vec<u8>>,
@@ -2097,6 +2137,134 @@ mod tests {
             .map(|column| column.name.clone())
             .collect::<Vec<_>>();
         assert_eq!(column_names_for_batch(&batch), expected);
+    }
+    #[test]
+    fn metadata_commitment_uses_full_width_canonical_limbs() {
+        let first = sample_batch();
+        let mut second = first.clone();
+        second.metadata.insert(
+            "axt_full_width_collision_regression".to_owned(),
+            b"metadata outside the former single-field projection".to_vec(),
+        );
+        let first_limbs =
+            metadata_commitment_limbs(&first.metadata).expect("first metadata commitment");
+        let second_limbs =
+            metadata_commitment_limbs(&second.metadata).expect("second metadata commitment");
+        assert!(
+            first_limbs
+                .iter()
+                .chain(&second_limbs)
+                .all(|limb| *limb <= u64::from(u32::MAX)),
+            "every digest limb must be injected exactly into Goldilocks"
+        );
+        assert_ne!(first_limbs, second_limbs);
+        assert_ne!(
+            first_limbs[2..],
+            second_limbs[2..],
+            "metadata changes must affect commitment material beyond the first 64 bits"
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let under_alternate_flags = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            metadata_commitment_limbs(&first.metadata).expect("canonical metadata commitment")
+        };
+        assert_eq!(under_alternate_flags, first_limbs);
+
+        let params = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == first.parameter)
+            .copied()
+            .expect("canonical parameter set");
+        assert_ne!(
+            crate::trace_commitment(&params, &first).expect("first trace commitment"),
+            crate::trace_commitment(&params, &second).expect("second trace commitment"),
+            "full-width metadata changes must alter the externally checked trace commitment"
+        );
+    }
+    #[test]
+    fn metadata_commitment_has_pinned_raw_blake2b_vector_and_canonical_map_order() {
+        assert_eq!(
+            hex::encode(metadata_commitment_digest(b"canonical-metadata-vector-v1")),
+            "d09dd80e40fe3292521739048dd1ea9d3076b6af314e1665a08e65f4ba9ab991"
+        );
+        assert_eq!(
+            metadata_commitment_limbs_from_digest(metadata_commitment_digest(
+                b"canonical-metadata-vector-v1"
+            )),
+            [
+                0x0ed8_9dd0,
+                0x9232_fe40,
+                0x0439_1752,
+                0x9dea_d18d,
+                0xafb6_7630,
+                0x6516_4e31,
+                0xf465_8ea0,
+                0x91b9_9aba,
+            ]
+        );
+
+        let empty = BTreeMap::new();
+        let empty_commitment =
+            metadata_commitment_limbs(&empty).expect("empty metadata commitment");
+        let mut first_order = BTreeMap::new();
+        first_order.insert("beta".to_owned(), vec![2]);
+        first_order.insert("alpha".to_owned(), vec![1]);
+        let mut second_order = BTreeMap::new();
+        second_order.insert("alpha".to_owned(), vec![1]);
+        second_order.insert("beta".to_owned(), vec![2]);
+        let first_commitment =
+            metadata_commitment_limbs(&first_order).expect("first ordered metadata commitment");
+        let second_commitment =
+            metadata_commitment_limbs(&second_order).expect("second ordered metadata commitment");
+        assert_ne!(empty_commitment, first_commitment);
+        assert_eq!(first_commitment, second_commitment);
+    }
+    #[test]
+    fn trace_commitment_includes_every_metadata_hash_limb_column() {
+        let batch = sample_batch();
+        let params = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == batch.parameter)
+            .copied()
+            .expect("canonical parameter set");
+        let trace = build_trace(&batch).expect("build trace");
+        for limb in 0..METADATA_COMMITMENT_LIMBS {
+            assert!(
+                trace
+                    .columns
+                    .iter()
+                    .any(|column| column.name == format!("metadata_hash_limb_{limb}")),
+                "metadata limb {limb} must be present in the trace schema"
+            );
+        }
+        assert!(
+            trace
+                .columns
+                .iter()
+                .all(|column| column.name != "metadata_hash"),
+            "the collision-prone single-field metadata projection must not remain in V1"
+        );
+        let original_digests = column_hashes(&trace, &params).expect("original column hashes");
+        let original_commitment =
+            crate::digest::trace_commitment_from_digests(&params, &trace, &original_digests)
+                .expect("original trace commitment");
+
+        let mut mutated = trace.clone();
+        let high_limb = mutated
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "metadata_hash_limb_7")
+            .expect("highest metadata limb column");
+        for value in &mut high_limb.values {
+            *value ^= 1;
+        }
+        let mutated_digests = column_hashes(&mutated, &params).expect("mutated column hashes");
+        let mutated_commitment =
+            crate::digest::trace_commitment_from_digests(&params, &mutated, &mutated_digests)
+                .expect("mutated trace commitment");
+        assert_ne!(original_commitment, mutated_commitment);
     }
     #[test]
     fn column_hashes_match_merkle_root() {

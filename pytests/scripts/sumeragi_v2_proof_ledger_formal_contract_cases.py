@@ -40,6 +40,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('commit_roster_journal/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
+        Path('actual/sora_profile_discovery_disabled_test.rs'), Path('actual/sora_profile_runtime_tests.rs'),
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
@@ -171,6 +172,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
+        Path('queue/config_factory_test_support.rs'),
         Path('queue/teu_limit_and_backlog_tests.rs'),
         Path('queue/routing_projection_resilience_tests.rs'),
         Path('queue/capacity_and_concurrency_tests.rs'),

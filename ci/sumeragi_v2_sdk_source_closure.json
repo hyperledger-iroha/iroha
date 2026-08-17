@@ -786,7 +786,6 @@
       "javascript/iroha_js/src/subscriptionTypes.d.ts",
       "javascript/iroha_js/src/sumeragiTyped.js",
       "javascript/iroha_js/src/sumeragiTypedLimits.js",
-      "javascript/iroha_js/src/telemetryReplay.js",
       "javascript/iroha_js/src/toriiBoundedResponse.js",
       "javascript/iroha_js/src/toriiBrowserClient.js",
       "javascript/iroha_js/src/toriiBrowserExplorerTypes.d.ts",

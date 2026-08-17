@@ -5,7 +5,9 @@
 //! universal lane; deployments may declare additional lane and dataspace entries
 //! for independent routing, storage, and consensus policy.
 use crate::{
-    da::commitment::DaProofScheme,
+    account::AccountId,
+    asset::AssetDefinitionId,
+    da::{commitment::DaProofScheme, confidential_compute::ConfidentialComputePolicy},
     id::IdBox,
     parameter::{CustomParameter, CustomParameterId},
 };
@@ -13,12 +15,13 @@ use derive_more::Display;
 use iroha_crypto::Hash;
 #[cfg(feature = "json")]
 use iroha_primitives::json::Json;
+use iroha_primitives::numeric::XorQuantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     str::FromStr,
 };
 use thiserror::Error;
@@ -627,6 +630,147 @@ pub const AUTOSCALE_META_DRAIN_STATE: &str = "autoscale.drain_state";
 /// Metadata key pinning the authoritative committee for one elastic-lane incarnation.
 pub const AUTOSCALE_META_COMMITTEE: &str = "autoscale.committee_v1";
 const RETIRED_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
+const RETIRED_FUNCTIONAL_METADATA_KEYS: [&str; 10] = [
+    "da_manifest_policy",
+    "confidential_compute",
+    "confidential_mechanism",
+    "confidential_key_version",
+    "confidential_access",
+    "scheduler.teu_capacity",
+    "scheduler.starvation_bound_slots",
+    "settlement.buffer_account",
+    "settlement.buffer_asset",
+    "settlement.buffer_capacity",
+];
+/// Lane-level DA manifest availability policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode, IntoSchema)]
+pub enum DaManifestPolicy {
+    /// Missing manifests block commitment and proposal sealing.
+    #[default]
+    Strict,
+    /// Missing manifests are reported but do not block commitment.
+    Audit,
+}
+impl DaManifestPolicy {
+    /// Return the exact first-release configuration label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Audit => "audit",
+        }
+    }
+}
+impl fmt::Display for DaManifestPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+impl FromStr for DaManifestPolicy {
+    type Err = DaManifestPolicyParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "strict" => Ok(Self::Strict),
+            "audit" => Ok(Self::Audit),
+            _ => Err(DaManifestPolicyParseError(value.to_owned())),
+        }
+    }
+}
+/// Error returned for a non-canonical DA manifest policy label.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid DA manifest policy `{0}`")]
+pub struct DaManifestPolicyParseError(pub String);
+/// Optional positive per-lane scheduler overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneSchedulerPolicy {
+    /// Positive per-block TEU capacity override; absent values use the global fallback.
+    #[norito(required)]
+    pub teu_capacity: Option<NonZeroU64>,
+    /// Positive starvation bound in slots; absent values use the global fallback.
+    #[norito(required)]
+    pub starvation_bound_slots: Option<NonZeroU64>,
+}
+impl LaneSchedulerPolicy {
+    /// Construct scheduler overrides. At least one override must be present for catalog admission.
+    #[must_use]
+    pub const fn new(
+        teu_capacity: Option<NonZeroU64>,
+        starvation_bound_slots: Option<NonZeroU64>,
+    ) -> Self {
+        Self {
+            teu_capacity,
+            starvation_bound_slots,
+        }
+    }
+    /// Return whether this descriptor carries no override.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.teu_capacity.is_none() && self.starvation_bound_slots.is_none()
+    }
+}
+/// Typed settlement reserve configuration for one lane.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneSettlementBufferPolicy {
+    /// Canonical universal account holding the reserve asset.
+    pub account_id: AccountId,
+    /// Canonical asset definition debited for settlement headroom.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Positive exact XOR capacity.
+    pub capacity: XorQuantity,
+}
+impl LaneSettlementBufferPolicy {
+    /// Construct a typed settlement buffer policy.
+    #[must_use]
+    pub fn new(
+        account_id: AccountId,
+        asset_definition_id: AssetDefinitionId,
+        capacity: XorQuantity,
+    ) -> Self {
+        Self {
+            account_id,
+            asset_definition_id,
+            capacity,
+        }
+    }
+}
+/// Canonical first-release projection of one lane's consensus-relevant configuration.
+///
+/// Human-facing aliases and descriptions, together with arbitrary instrumentation metadata, are
+/// deliberately excluded. Reserved autoscale metadata remains committed because it can affect
+/// deterministic execution; scheduler and settlement policy are dedicated typed fields.
+#[derive(Debug, Clone, PartialEq, Eq, Encode)]
+pub struct LaneConsensusProjectionV1 {
+    version: u16,
+    id: LaneId,
+    shard_id: ShardId,
+    dataspace_id: DataSpaceId,
+    visibility: LaneVisibility,
+    lane_type: Option<String>,
+    governance: Option<String>,
+    settlement: Option<String>,
+    storage: LaneStorageProfile,
+    proof_scheme: DaProofScheme,
+    manifest_policy: DaManifestPolicy,
+    confidential_compute: Option<ConfidentialComputePolicy>,
+    scheduler: Option<LaneSchedulerPolicy>,
+    settlement_buffer: Option<LaneSettlementBufferPolicy>,
+    consensus_metadata: BTreeMap<String, String>,
+}
+impl LaneConsensusProjectionV1 {
+    /// Current canonical projection layout.
+    pub const VERSION: u16 = 1;
+}
 /// Metadata describing an execution lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneConfig {
@@ -652,7 +796,18 @@ pub struct LaneConfig {
     pub storage: LaneStorageProfile,
     /// Proof scheme used for DA commitments on this lane.
     pub proof_scheme: DaProofScheme,
-    /// Arbitrary metadata key-value pairs.
+    /// DA manifest availability policy.
+    pub manifest_policy: DaManifestPolicy,
+    /// Confidential-compute policy, absent for ordinary lanes.
+    pub confidential_compute: Option<ConfidentialComputePolicy>,
+    /// Optional positive scheduler overrides.
+    pub scheduler: Option<LaneSchedulerPolicy>,
+    /// Optional typed settlement reserve policy.
+    pub settlement_buffer: Option<LaneSettlementBufferPolicy>,
+    /// Operator metadata for instrumentation.
+    ///
+    /// Reserved autoscale keys remain consensus-relevant. Raw scheduler and settlement buffer
+    /// metadata are rejected in favor of their dedicated typed fields.
     pub metadata: BTreeMap<String, String>,
 }
 impl Default for LaneConfig {
@@ -669,15 +824,102 @@ impl Default for LaneConfig {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         }
     }
 }
 impl LaneConfig {
+    /// Project this descriptor onto fields that can affect deterministic lane behavior.
+    #[must_use]
+    pub fn consensus_projection(&self) -> LaneConsensusProjectionV1 {
+        LaneConsensusProjectionV1 {
+            version: LaneConsensusProjectionV1::VERSION,
+            id: self.id,
+            shard_id: self.effective_shard_id(),
+            dataspace_id: self.dataspace_id,
+            visibility: self.visibility,
+            lane_type: self.lane_type.clone(),
+            governance: self.governance.clone(),
+            settlement: self.settlement.clone(),
+            storage: self.storage,
+            proof_scheme: self.proof_scheme,
+            manifest_policy: self.manifest_policy,
+            confidential_compute: self.confidential_compute.clone(),
+            scheduler: self.scheduler.clone(),
+            settlement_buffer: self.settlement_buffer.clone(),
+            consensus_metadata: self
+                .metadata
+                .iter()
+                .filter(|(key, _)| is_consensus_lane_metadata_key(key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }
+    }
     /// Resolve the effective DA/storage shard for this lane.
     #[must_use]
     pub fn effective_shard_id(&self) -> ShardId {
         self.shard_id.unwrap_or_else(|| self.id.into())
+    }
+    fn validate_policy_surface(&self) -> Result<(), LaneCatalogError> {
+        if self.metadata.contains_key(RETIRED_SHARD_ID_METADATA_KEY) {
+            return Err(LaneCatalogError::RetiredShardIdMetadata(self.id));
+        }
+        if let Some(key) = self
+            .metadata
+            .keys()
+            .find(|key| is_retired_functional_metadata_key(key))
+        {
+            return Err(LaneCatalogError::RetiredFunctionalMetadata {
+                lane: self.id,
+                key: key.clone(),
+            });
+        }
+        let invalid = |reason: String| LaneCatalogError::InvalidFunctionalPolicy {
+            lane: self.id,
+            reason,
+        };
+        if self
+            .scheduler
+            .as_ref()
+            .is_some_and(LaneSchedulerPolicy::is_empty)
+        {
+            return Err(invalid(
+                "scheduler policy must define `teu_capacity`, `starvation_bound_slots`, or both"
+                    .to_owned(),
+            ));
+        }
+        if self
+            .settlement_buffer
+            .as_ref()
+            .is_some_and(|policy| policy.capacity.is_zero())
+        {
+            return Err(invalid(
+                "settlement buffer capacity must be positive".to_owned(),
+            ));
+        }
+        let Some(policy) = self.confidential_compute.as_ref() else {
+            return Ok(());
+        };
+        if self.storage == LaneStorageProfile::FullReplica {
+            return Err(invalid(
+                "confidential compute requires `commitment_only` or `split_replica` storage"
+                    .to_owned(),
+            ));
+        }
+        if let Some(audience) = policy
+            .allowed_audiences
+            .iter()
+            .find(|audience| audience.is_empty() || audience.trim() != audience.as_str())
+        {
+            return Err(invalid(format!(
+                "confidential audience `{audience}` must be non-empty and must not contain surrounding whitespace"
+            )));
+        }
+        Ok(())
     }
     /// Return `true` when this lane uses the reserved autoscale ownership metadata key.
     #[must_use]
@@ -728,6 +970,10 @@ impl LaneConfig {
             && self.settlement == base.settlement
             && self.storage == base.storage
             && self.proof_scheme == base.proof_scheme
+            && self.manifest_policy == base.manifest_policy
+            && self.confidential_compute == base.confidential_compute
+            && self.scheduler == base.scheduler
+            && self.settlement_buffer == base.settlement_buffer
             && self
                 .metadata
                 .iter()
@@ -746,6 +992,15 @@ fn is_reserved_autoscale_metadata_key(key: &str) -> bool {
             | AUTOSCALE_META_DRAIN_STATE
             | AUTOSCALE_META_COMMITTEE
     )
+}
+fn is_consensus_lane_metadata_key(key: &str) -> bool {
+    is_reserved_autoscale_metadata_key(key)
+}
+fn is_retired_functional_metadata_key(key: &str) -> bool {
+    RETIRED_FUNCTIONAL_METADATA_KEYS.contains(&key)
+        || key.starts_with("confidential_")
+        || key.starts_with("scheduler.")
+        || key.starts_with("settlement.buffer_")
 }
 /// Declarative visibility profile for a lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Display)]
@@ -770,7 +1025,7 @@ impl LaneVisibility {
 impl FromStr for LaneVisibility {
     type Err = LaneVisibilityParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
+        match s {
             "public" => Ok(Self::Public),
             "restricted" => Ok(Self::Restricted),
             other => Err(LaneVisibilityParseError(other.to_string())),
@@ -812,7 +1067,7 @@ impl fmt::Display for LaneStorageProfile {
 impl FromStr for LaneStorageProfile {
     type Err = LaneStorageProfileParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
+        match s {
             "full_replica" => Ok(Self::FullReplica),
             "commitment_only" => Ok(Self::CommitmentOnly),
             "split_replica" => Ok(Self::SplitReplica),
@@ -885,6 +1140,32 @@ impl norito::json::JsonDeserialize for LaneStorageProfile {
     }
 }
 #[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for DaManifestPolicy {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for DaManifestPolicy {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser
+            .parse_string()?
+            .parse()
+            .map_err(|error: DaManifestPolicyParseError| {
+                norito::json::Error::Message(error.to_string())
+            })
+    }
+}
+#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneConfig {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -932,6 +1213,22 @@ impl norito::json::FastJsonWrite for LaneConfig {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.proof_scheme.to_string(), out);
         out.push(',');
+        norito::json::write_json_string("manifest_policy", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.manifest_policy, out);
+        out.push(',');
+        norito::json::write_json_string("confidential_compute", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.confidential_compute, out);
+        out.push(',');
+        norito::json::write_json_string("scheduler", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.scheduler, out);
+        out.push(',');
+        norito::json::write_json_string("settlement_buffer", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.settlement_buffer, out);
+        out.push(',');
         norito::json::write_json_string("metadata", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.metadata, out);
@@ -964,6 +1261,14 @@ impl norito::json::FastJsonWrite for LaneConfig {
         norito::json::JsonSerialize::json_serialize_to(&self.storage, out)?;
         out.push_str(",\"proof_scheme\":")?;
         norito::json::write_json_string_to(&self.proof_scheme.to_string(), out)?;
+        out.push_str(",\"manifest_policy\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.manifest_policy, out)?;
+        out.push_str(",\"confidential_compute\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.confidential_compute, out)?;
+        out.push_str(",\"scheduler\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.scheduler, out)?;
+        out.push_str(",\"settlement_buffer\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.settlement_buffer, out)?;
         out.push_str(",\"metadata\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.metadata, out)?;
         out.push('}')?;
@@ -984,7 +1289,7 @@ impl norito::json::JsonDeserialize for LaneConfig {
             let key_name = key.as_str();
             if !seen_fields.insert(key_name.to_owned()) {
                 return Err(norito::json::Error::Message(format!(
-                    "duplicate field `{key_name}` in lane metadata"
+                    "duplicate field `{key_name}` in lane config"
                 )));
             }
             match key_name {
@@ -1026,12 +1331,24 @@ impl norito::json::JsonDeserialize for LaneConfig {
                         ))
                     })?;
                 }
+                "manifest_policy" => {
+                    lane.manifest_policy = visitor.parse_value()?;
+                }
+                "confidential_compute" => {
+                    lane.confidential_compute = visitor.parse_value()?;
+                }
+                "scheduler" => {
+                    lane.scheduler = visitor.parse_value()?;
+                }
+                "settlement_buffer" => {
+                    lane.settlement_buffer = visitor.parse_value()?;
+                }
                 "metadata" => {
                     lane.metadata = visitor.parse_value()?;
                 }
                 other => {
                     return Err(norito::json::Error::Message(format!(
-                        "unknown field `{other}` in lane metadata"
+                        "unknown field `{other}` in lane config"
                     )));
                 }
             }
@@ -1049,6 +1366,10 @@ impl norito::json::JsonDeserialize for LaneConfig {
             "settlement",
             "storage",
             "proof_scheme",
+            "manifest_policy",
+            "confidential_compute",
+            "scheduler",
+            "settlement_buffer",
             "metadata",
         ];
         if let Some(missing_field) = required_fields
@@ -1056,9 +1377,11 @@ impl norito::json::JsonDeserialize for LaneConfig {
             .find(|field| !seen_fields.contains(*field))
         {
             return Err(norito::json::Error::Message(format!(
-                "missing required lane metadata field `{missing_field}`"
+                "missing required lane config field `{missing_field}`"
             )));
         }
+        lane.validate_policy_surface()
+            .map_err(|error| norito::json::Error::Message(error.to_string()))?;
         Ok(lane)
     }
 }
@@ -1125,8 +1448,16 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
         }
         visitor.finish()?;
         Ok(Self {
-            additions: additions.unwrap_or_default(),
-            retire: retire.unwrap_or_default(),
+            additions: additions.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle plan field `additions`".into(),
+                )
+            })?,
+            retire: retire.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle plan field `retire`".into(),
+                )
+            })?,
         })
     }
 }
@@ -1482,9 +1813,9 @@ impl LaneCatalog {
     /// Build a catalog ensuring identifiers and aliases are unique and in range.
     ///
     /// # Errors
-    /// Returns a [`LaneCatalogError`] when lane metadata uses the retired shard key, violates alias
-    /// or identifier uniqueness, exceeds the configured lane count, or exceeds the consensus-wide
-    /// active-lane bound.
+    /// Returns a [`LaneCatalogError`] when lane metadata uses the retired shard key, carries an
+    /// invalid functional policy, violates alias or identifier uniqueness, exceeds the configured
+    /// lane count, or exceeds the consensus-wide active-lane bound.
     pub fn new(
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
@@ -1504,9 +1835,7 @@ impl LaneCatalog {
             if lane.alias.trim().is_empty() {
                 return Err(LaneCatalogError::EmptyAlias(lane.id));
             }
-            if lane.metadata.contains_key(RETIRED_SHARD_ID_METADATA_KEY) {
-                return Err(LaneCatalogError::RetiredShardIdMetadata(lane.id));
-            }
+            lane.validate_policy_surface()?;
             if lane.id.as_u32() >= lane_count.get() {
                 return Err(LaneCatalogError::LaneOutOfBounds {
                     lane: lane.id,
@@ -1539,12 +1868,26 @@ impl LaneCatalog {
     pub fn lanes(&self) -> &[LaneConfig] {
         &self.lanes
     }
+    /// Project the namespace bound and canonically ordered lanes onto consensus-relevant fields.
+    #[must_use]
+    pub fn consensus_projection(&self) -> (u32, Vec<LaneConsensusProjectionV1>) {
+        (
+            self.lane_count.get(),
+            self.lanes
+                .iter()
+                .map(LaneConfig::consensus_projection)
+                .collect(),
+        )
+    }
     /// Find a lane by alias.
     #[must_use]
     pub fn by_alias(&self, alias: &str) -> Option<&LaneConfig> {
         self.lanes.iter().find(|lane| lane.alias == alias)
     }
     /// Apply a lifecycle plan, producing a new catalog with the requested additions and retirements.
+    ///
+    /// The exclusive namespace bound expands for higher additions but never shrinks when lanes are
+    /// retired, preserving sparse identifiers and retained incarnation lineage.
     ///
     /// # Errors
     /// Returns a [`LaneCatalogError`] when additions or retirements are duplicated, retirements
@@ -1586,7 +1929,7 @@ impl LaneCatalog {
         let Some(max_lane_id) = merged.iter().map(|lane| lane.id.as_u32()).max() else {
             return Err(LaneCatalogError::EmptyCatalog);
         };
-        let lane_count = NonZeroU32::new(max_lane_id.saturating_add(1))
+        let lane_count = NonZeroU32::new(self.lane_count.get().max(max_lane_id.saturating_add(1)))
             .expect("lane ids are u32 so +1 always fits NonZeroU32");
         LaneCatalog::new(lane_count, merged)
     }
@@ -1620,6 +1963,24 @@ pub enum LaneCatalogError {
     /// Lane used the retired string metadata representation for its shard override.
     #[error("lane {0} uses retired metadata key `da_shard_id`; use the typed `shard_id` field")]
     RetiredShardIdMetadata(LaneId),
+    /// Lane used a retired string metadata key for typed functional policy.
+    #[error(
+        "lane {lane} uses retired functional metadata key `{key}`; use typed lane policy fields"
+    )]
+    RetiredFunctionalMetadata {
+        /// Lane carrying the retired metadata key.
+        lane: LaneId,
+        /// Retired key which must be represented by a typed field.
+        key: String,
+    },
+    /// Lane functional policy was internally inconsistent.
+    #[error("lane {lane} has invalid functional policy: {reason}")]
+    InvalidFunctionalPolicy {
+        /// Lane carrying the invalid policy metadata.
+        lane: LaneId,
+        /// Deterministic explanation of the rejected metadata.
+        reason: String,
+    },
     /// Lifecycle plan would leave the catalog empty.
     #[error("lane catalog cannot be empty")]
     EmptyCatalog,
@@ -1764,8 +2125,24 @@ impl norito::json::JsonDeserialize for DataSpaceId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::da::confidential_compute::ConfidentialComputeMechanism;
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::{DecodeAll, Encode};
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU64};
+    fn settlement_buffer_policy() -> LaneSettlementBufferPolicy {
+        let keypair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("settlement account key");
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            crate::domain::DomainId::try_new("settlement", "universal").expect("settlement domain"),
+            "xor".parse().expect("asset name"),
+        );
+        LaneSettlementBufferPolicy::new(
+            account_id,
+            asset_definition_id,
+            "1000".parse().expect("positive XOR capacity"),
+        )
+    }
     fn incarnation_map(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
         catalog
             .lanes()
@@ -1813,6 +2190,49 @@ mod tests {
                 lane_count: 2
             }
         );
+    }
+    #[test]
+    fn lane_profile_labels_are_canonical() {
+        assert_eq!(
+            "public".parse::<LaneVisibility>().expect("public lane"),
+            LaneVisibility::Public
+        );
+        assert_eq!(
+            "split_replica"
+                .parse::<LaneStorageProfile>()
+                .expect("split replica"),
+            LaneStorageProfile::SplitReplica
+        );
+        assert_eq!(
+            "audit"
+                .parse::<DaManifestPolicy>()
+                .expect("audit manifest policy"),
+            DaManifestPolicy::Audit
+        );
+        for retired_alias in ["Public", "PUBLIC", "Restricted"] {
+            assert!(
+                retired_alias.parse::<LaneVisibility>().is_err(),
+                "non-canonical visibility `{retired_alias}` must fail closed"
+            );
+        }
+        for retired_alias in ["Full_Replica", "FULL_REPLICA", "split-replica"] {
+            assert!(
+                retired_alias.parse::<LaneStorageProfile>().is_err(),
+                "non-canonical storage profile `{retired_alias}` must fail closed"
+            );
+        }
+        for retired_alias in ["Audit", "audit_only", "warn"] {
+            assert!(
+                retired_alias.parse::<DaManifestPolicy>().is_err(),
+                "non-canonical manifest policy `{retired_alias}` must fail closed"
+            );
+        }
+        for retired_alias in ["MerkleSha256", "merkle-sha256", "MERKLE_SHA256"] {
+            assert!(
+                retired_alias.parse::<DaProofScheme>().is_err(),
+                "non-canonical proof scheme `{retired_alias}` must fail closed"
+            );
+        }
     }
     #[test]
     fn dataspace_id_roundtrip() {
@@ -1903,6 +2323,85 @@ mod tests {
         );
     }
     #[test]
+    fn lane_catalog_uses_only_typed_functional_policy() {
+        let lane_count = NonZeroU32::new(1).expect("nonzero lane count");
+        for retired_key in RETIRED_FUNCTIONAL_METADATA_KEYS.into_iter().chain([
+            "confidential_future_policy",
+            "scheduler.future_policy",
+            "settlement.buffer_future_policy",
+        ]) {
+            let mut retired = LaneConfig::default();
+            retired
+                .metadata
+                .insert(retired_key.to_owned(), "retired".to_owned());
+            assert!(matches!(
+                LaneCatalog::new(lane_count, vec![retired]),
+                Err(LaneCatalogError::RetiredFunctionalMetadata { lane, key })
+                    if lane == LaneId::SINGLE && key == retired_key
+            ));
+        }
+
+        let full_replica = LaneConfig {
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::Encryption,
+                NonZeroU32::new(7).expect("nonzero key version"),
+                BTreeSet::new(),
+            )),
+            ..LaneConfig::default()
+        };
+        assert!(matches!(
+            LaneCatalog::new(lane_count, vec![full_replica]),
+            Err(LaneCatalogError::InvalidFunctionalPolicy { .. })
+        ));
+
+        let padded_audience = LaneConfig {
+            storage: LaneStorageProfile::SplitReplica,
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::SecretSharing,
+                NonZeroU32::new(7).expect("nonzero key version"),
+                BTreeSet::from([" auditor".to_owned()]),
+            )),
+            ..LaneConfig::default()
+        };
+        assert!(matches!(
+            LaneCatalog::new(lane_count, vec![padded_audience]),
+            Err(LaneCatalogError::InvalidFunctionalPolicy { .. })
+        ));
+
+        let empty_scheduler = LaneConfig {
+            scheduler: Some(LaneSchedulerPolicy::new(None, None)),
+            ..LaneConfig::default()
+        };
+        assert!(matches!(
+            LaneCatalog::new(lane_count, vec![empty_scheduler]),
+            Err(LaneCatalogError::InvalidFunctionalPolicy { .. })
+        ));
+
+        let mut zero_settlement = settlement_buffer_policy();
+        zero_settlement.capacity = XorQuantity::zero();
+        let zero_settlement = LaneConfig {
+            settlement_buffer: Some(zero_settlement),
+            ..LaneConfig::default()
+        };
+        assert!(matches!(
+            LaneCatalog::new(lane_count, vec![zero_settlement]),
+            Err(LaneCatalogError::InvalidFunctionalPolicy { .. })
+        ));
+
+        let confidential = LaneConfig {
+            storage: LaneStorageProfile::SplitReplica,
+            manifest_policy: DaManifestPolicy::Audit,
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::SecretSharing,
+                NonZeroU32::new(7).expect("nonzero key version"),
+                BTreeSet::from(["auditor".to_owned(), "operator".to_owned()]),
+            )),
+            ..LaneConfig::default()
+        };
+        LaneCatalog::new(lane_count, vec![confidential])
+            .expect("complete typed confidential policy must be accepted");
+    }
+    #[test]
     fn lane_catalog_rejects_active_entries_above_consensus_bound() {
         let lanes = (0..MAX_ACTIVE_EXECUTION_LANES)
             .map(|index| LaneConfig {
@@ -1979,9 +2478,9 @@ mod tests {
         );
     }
     #[test]
-    fn lane_config_roundtrip_encodes_storage_profile() {
+    fn lane_config_roundtrips_every_typed_policy_field() {
         let mut metadata = BTreeMap::new();
-        metadata.insert("scheduler.teu_capacity".to_string(), "1024".to_string());
+        metadata.insert("instrumentation.owner".to_string(), "ops".to_string());
         let config = LaneConfig {
             id: LaneId::new(1),
             shard_id: Some(ShardId::new(9)),
@@ -1994,6 +2493,17 @@ mod tests {
             settlement: Some("xor_lane".to_string()),
             storage: LaneStorageProfile::CommitmentOnly,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::Audit,
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::Encryption,
+                NonZeroU32::new(11).expect("non-zero key version"),
+                BTreeSet::from(["auditor".to_owned(), "operator".to_owned()]),
+            )),
+            scheduler: Some(LaneSchedulerPolicy::new(
+                Some(NonZeroU64::new(1024).expect("positive TEU capacity")),
+                Some(NonZeroU64::new(6).expect("positive starvation bound")),
+            )),
+            settlement_buffer: Some(settlement_buffer_policy()),
             metadata,
         };
         let bytes = Encode::encode(&config);
@@ -2005,6 +2515,38 @@ mod tests {
         let decoded_json =
             norito::json::from_str::<LaneConfig>(&json).expect("decode LaneConfig JSON");
         assert_eq!(decoded_json, config);
+    }
+    #[test]
+    fn lane_config_rejects_retired_policy_metadata_after_json_or_norito_decode() {
+        for retired_key in RETIRED_FUNCTIONAL_METADATA_KEYS.into_iter().chain([
+            "confidential_future_policy",
+            "scheduler.future_policy",
+            "settlement.buffer_future_policy",
+        ]) {
+            let mut retired = LaneConfig::default();
+            retired
+                .metadata
+                .insert(retired_key.to_owned(), "retired".to_owned());
+
+            let encoded_json =
+                norito::json::to_string(&retired).expect("encode retired JSON fixture");
+            let json_error = norito::json::from_str::<LaneConfig>(&encoded_json)
+                .expect_err("JSON must reject retired functional metadata");
+            assert!(
+                json_error.to_string().contains(retired_key),
+                "unexpected JSON rejection for `{retired_key}`: {json_error}"
+            );
+
+            let encoded = retired.encode();
+            let mut encoded = encoded.as_slice();
+            let decoded = LaneConfig::decode_all(&mut encoded)
+                .expect("Norito retains the raw value until catalog admission");
+            assert!(matches!(
+                LaneCatalog::new(NonZeroU32::new(1).expect("non-zero"), vec![decoded]),
+                Err(LaneCatalogError::RetiredFunctionalMetadata { lane, key })
+                    if lane == LaneId::SINGLE && key == retired_key
+            ));
+        }
     }
     #[test]
     fn lane_config_shard_defaults_to_lane_identifier() {
@@ -2156,12 +2698,17 @@ mod tests {
             settlement: Some("settlement-v3".into()),
             storage: LaneStorageProfile::SplitReplica,
             proof_scheme: DaProofScheme::MerkleSha256,
+            manifest_policy: DaManifestPolicy::Strict,
+            confidential_compute: None,
+            scheduler: Some(LaneSchedulerPolicy::new(
+                Some(NonZeroU64::new(2400).expect("positive TEU capacity")),
+                None,
+            )),
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         };
         base.metadata
             .insert("security.profile".into(), "strict".into());
-        base.metadata
-            .insert("scheduler.teu_capacity".into(), "2400".into());
         let mut elastic = base.clone();
         elastic.id = LaneId::new(3);
         elastic.alias = "elastic-lane-3".into();
@@ -2226,9 +2773,9 @@ mod tests {
                     .insert("security.profile".into(), "permissive".into());
                 drift
             }),
-            ("missing metadata", {
+            ("missing scheduler policy", {
                 let mut drift = elastic.clone();
-                drift.metadata.remove("scheduler.teu_capacity");
+                drift.scheduler = None;
                 drift
             }),
             ("extra metadata", {
@@ -2274,6 +2821,11 @@ mod tests {
         let trimmed = expanded
             .apply_lifecycle(&retire_plan)
             .expect("retire lifecycle");
+        assert_eq!(
+            trimmed.lane_count().get(),
+            2,
+            "retiring the highest active lane must not shrink the namespace bound"
+        );
         assert_eq!(trimmed.lanes().len(), 1);
         assert!(trimmed.by_alias("beta").is_none());
     }
@@ -2468,6 +3020,22 @@ mod tests {
         assert!(err.to_string().contains("duplicate field `retire`"));
     }
     #[test]
+    fn lane_lifecycle_plan_json_requires_both_current_fields() {
+        for (payload, missing) in [
+            (r#"{"retire":[]}"#, "additions"),
+            (r#"{"additions":[]}"#, "retire"),
+        ] {
+            let err = norito::json::from_str::<LaneLifecyclePlan>(payload)
+                .expect_err("shortened lifecycle plan must fail closed");
+            assert!(
+                err.to_string().contains(&format!(
+                    "missing required lane lifecycle plan field `{missing}`"
+                )),
+                "unexpected missing-field error: {err}"
+            );
+        }
+    }
+    #[test]
     fn lane_config_json_rejects_duplicate_fields() {
         let duplicate_values = [
             (
@@ -2478,6 +3046,10 @@ mod tests {
                 "alias",
                 norito::json::to_string("shadow").expect("serialize lane alias"),
             ),
+            ("manifest_policy", "\"audit\"".to_owned()),
+            ("confidential_compute", "null".to_owned()),
+            ("scheduler", "null".to_owned()),
+            ("settlement_buffer", "null".to_owned()),
             ("metadata", "{}".to_owned()),
         ];
         for (field, value) in duplicate_values {
@@ -2501,8 +3073,56 @@ mod tests {
             .expect_err("canonical V1 lane metadata must include every serialized field");
         assert!(
             err.to_string()
-                .contains("missing required lane metadata field `shard_id`")
+                .contains("missing required lane config field `shard_id`")
         );
+    }
+    #[test]
+    fn lane_config_json_rejects_unknown_nested_confidential_policy_fields() {
+        let lane = LaneConfig {
+            storage: LaneStorageProfile::SplitReplica,
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::Encryption,
+                NonZeroU32::MIN,
+                BTreeSet::new(),
+            )),
+            ..LaneConfig::default()
+        };
+        let encoded = norito::json::to_string(&lane).expect("serialize confidential lane");
+        let injected = encoded.replacen(
+            "\"confidential_compute\":{",
+            "\"confidential_compute\":{\"unexpected\":true,",
+            1,
+        );
+        assert_ne!(
+            injected, encoded,
+            "confidential object marker must be present"
+        );
+        let error = norito::json::from_str::<LaneConfig>(&injected)
+            .expect_err("unknown confidential policy fields must fail closed");
+        assert!(error.to_string().contains("unexpected"));
+    }
+    #[test]
+    fn lane_config_json_rejects_unknown_nested_scheduler_and_settlement_fields() {
+        let lane = LaneConfig {
+            scheduler: Some(LaneSchedulerPolicy::new(Some(NonZeroU64::MIN), None)),
+            settlement_buffer: Some(settlement_buffer_policy()),
+            ..LaneConfig::default()
+        };
+        let encoded = norito::json::to_string(&lane).expect("serialize typed lane policies");
+        for marker in ["\"scheduler\":{", "\"settlement_buffer\":{"] {
+            let injected = encoded.replacen(marker, &format!("{marker}\"unexpected\":true,"), 1);
+            assert_ne!(injected, encoded, "nested policy marker must be present");
+            let error = norito::json::from_str::<LaneConfig>(&injected)
+                .expect_err("unknown nested policy fields must fail closed");
+            assert!(
+                error.to_string().contains("unexpected"),
+                "unexpected nested-policy error: {error}"
+            );
+        }
+        let missing_scheduler_field = encoded.replacen(",\"starvation_bound_slots\":null", "", 1);
+        let error = norito::json::from_str::<LaneConfig>(&missing_scheduler_field)
+            .expect_err("canonical scheduler JSON must carry explicit null override fields");
+        assert!(error.to_string().contains("starvation_bound_slots"));
     }
     #[test]
     fn lane_lifecycle_json_rejects_nested_duplicate_lane_field() {
@@ -2634,10 +3254,11 @@ mod tests {
 /// Prelude re-export for the Nexus module.
 pub mod prelude {
     pub use super::{
-        DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneCatalogError, LaneConfig, LaneId, LaneIdError, LaneLifecycleIncarnationEntry,
-        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusError,
-        LaneLifecycleStatusV1, LaneRelayEmergencyValidatorSet, LaneStorageProfile,
-        LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError, ShardId,
+        DaManifestPolicy, DaManifestPolicyParseError, DataSpaceCatalog, DataSpaceCatalogError,
+        DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
+        LaneIdError, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEmergencyValidatorSet,
+        LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+        ShardId,
     };
 }

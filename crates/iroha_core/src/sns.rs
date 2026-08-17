@@ -803,14 +803,27 @@ pub fn selector_for_namespace_literal(
     }
 }
 /// Decode a SNS record from world state for the supplied selector.
+///
+/// Malformed authoritative state deliberately projects to `None` for legacy
+/// callers whose API cannot return an error. Result-returning security
+/// boundaries must use the fallible selector lookup so corruption cannot be
+/// mistaken for an absent record.
 #[must_use]
 pub fn record_by_selector(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
 ) -> Option<NameRecordV1> {
+    try_record_by_selector(world, selector).ok().flatten()
+}
+fn try_record_by_selector(
+    world: &impl WorldReadOnly,
+    selector: &NameSelectorV1,
+) -> Result<Option<NameRecordV1>, SnsError> {
     let key = record_storage_key(selector);
-    let bytes = world.smart_contract_state().get(&key)?;
-    decode_record_for_selector(bytes, selector).ok()
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(None);
+    };
+    decode_record_for_selector(bytes, selector).map(Some)
 }
 /// Decode a SNS policy from world state for the supplied suffix id.
 #[must_use]
@@ -1807,14 +1820,12 @@ fn record_or_not_found(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
 ) -> Result<NameRecordV1, SnsError> {
-    let key = record_storage_key(selector);
-    let bytes = world.smart_contract_state().get(&key).ok_or_else(|| {
+    try_record_by_selector(world, selector)?.ok_or_else(|| {
         SnsError::NotFound(format!(
             "registration `{}` not found",
             selector.normalized_label()
         ))
-    })?;
-    decode_record_for_selector(bytes, selector)
+    })
 }
 fn policy_or_not_found(
     world: &impl WorldReadOnly,
@@ -1892,7 +1903,7 @@ pub fn quote_account_alias_registration(
         owner,
         now_ms,
     )?;
-    if record_by_selector(world, &selector).is_some() {
+    if try_record_by_selector(world, &selector)?.is_some() {
         return Err(SnsError::Conflict(format!(
             "selector `{}` is already registered",
             selector.normalized_label()
@@ -1925,7 +1936,7 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
         owner,
         now_ms,
     )?;
-    if record_by_selector(world, &selector).is_some() {
+    if try_record_by_selector(world, &selector)?.is_some() {
         return Err(SnsError::Conflict(format!(
             "selector `{}` is already registered",
             selector.normalized_label()
@@ -2026,7 +2037,7 @@ pub fn quote_name_registration(
     let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
     enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, owner, now_ms)?;
-    if record_by_selector(world, &canonical_selector).is_some() {
+    if try_record_by_selector(world, &canonical_selector)?.is_some() {
         return Err(SnsError::Conflict(format!(
             "selector `{}` is already registered",
             canonical_selector.normalized_label()
@@ -2058,7 +2069,7 @@ pub fn quote_resolved_name_registration(
     let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
     enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, owner, now_ms)?;
-    if record_by_selector(world, &canonical_selector).is_some() {
+    if try_record_by_selector(world, &canonical_selector)?.is_some() {
         return Err(SnsError::Conflict(format!(
             "selector `{}` is already registered",
             canonical_selector.normalized_label()
@@ -2684,7 +2695,8 @@ fn resolve_active_dataspace_by_id(
 ///
 /// Returns [`SnsError::NotFound`] when neither directory knows the alias, [`SnsError::BadRequest`]
 /// when the alias is not canonical, and [`SnsError::Conflict`] with
-/// [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the two directories disagree.
+/// [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the two directories disagree. Malformed
+/// authoritative SNS state returns [`SnsError::Internal`].
 pub fn resolve_active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -2697,7 +2709,7 @@ pub fn resolve_active_dataspace_id_by_alias(
     let static_id = catalog
         .by_alias(selector.normalized_label())
         .map(|entry| entry.id);
-    let dynamic_id = record_by_selector(world, &selector)
+    let dynamic_id = try_record_by_selector(world, &selector)?
         .filter(|record| matches!(effective_status(record, now_ms), NameStatus::Active))
         .map(|record| active_dataspace_record_id(&record))
         .transpose()?;
@@ -3459,6 +3471,57 @@ mod tests {
                 .expect("matching explicit mapping"),
             DataSpaceId::new(7)
         );
+    }
+    #[test]
+    fn resolve_active_dataspace_id_by_alias_rejects_malformed_dynamic_only_record() {
+        let catalog = DataSpaceCatalog::default();
+        let selector = selector_for_dataspace_alias("alpha").expect("selector");
+        let storage_key = record_storage_key(&selector);
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), vec![0xFF]);
+
+        let error = resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50)
+            .expect_err("malformed authoritative bytes must not resolve as an absent alias");
+        match error {
+            SnsError::Internal(message) => {
+                assert!(
+                    message.contains("failed to decode an SNS record"),
+                    "{message}"
+                );
+            }
+            other => panic!("malformed authoritative bytes returned the wrong error: {other}"),
+        }
+
+        let other_selector = selector_for_dataspace_alias("beta").expect("other selector");
+        let owner = another_owner();
+        let mismatched_record = NameRecordV1::new(
+            other_selector,
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key, mismatched_record.encode());
+
+        let error = resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50)
+            .expect_err("mismatched authoritative identity must not resolve as absence");
+        match error {
+            SnsError::Internal(message) => {
+                assert!(
+                    message.contains("SNS record identity mismatch"),
+                    "{message}"
+                );
+            }
+            other => panic!("mismatched authoritative identity returned the wrong error: {other}"),
+        }
     }
     #[test]
     fn active_dataspace_id_derives_from_dynamic_sns_alias() {

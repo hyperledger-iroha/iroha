@@ -110,7 +110,6 @@ class _MockState:
         self.sumeragi_status: Dict[str, Any] = {}
         self.sumeragi_diagnostics: Dict[str, Any] = {}
         self.sumeragi_leader: Dict[str, Any] = {}
-        self.sumeragi_telemetry: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
         self.pipeline_preflight: Dict[str, Any] = {}
@@ -230,8 +229,6 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_diagnostics)
         if method == "GET" and path == "/v1/sumeragi/leader":
             return _json_response(HTTPStatus.OK, self.sumeragi_leader)
-        if method == "GET" and path == "/v1/sumeragi/telemetry":
-            return _json_response(HTTPStatus.OK, self.sumeragi_telemetry)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "GET" and path == "/v1/sccp/capabilities":
@@ -1116,7 +1113,7 @@ class _MockState:
             self.pipeline_sequences[hash_value] = sequence
         response_body = {
             "payload": {
-                "tx_hash": hash_value,
+                "entrypoint_hash": hash_value,
                 "submitted_at_ms": 0,
                 "submitted_at_height": 0,
                 "signer": "mock-signer",
@@ -1744,21 +1741,6 @@ class _MockState:
                 "epoch_seed": "feedfacecafebeef",
             },
         }
-        self.sumeragi_telemetry = {
-            "availability": {
-                "total_votes_ingested": 123,
-                "collectors": [1, 2, 3],
-            },
-            "rbc_backlog": {"pending_sessions": 4},
-            "vrf": {
-                "epoch": 5,
-                "finalized": True,
-                "reveals_total": 6,
-                "late_reveals_total": 7,
-                "committed_no_reveal_total": 8,
-                "no_participation_total": 9,
-            },
-        }
 
     def _sumeragi_config(self, body: bytes) -> _Response:
         try:
@@ -1772,7 +1754,6 @@ class _MockState:
         for field, attribute in (
             ("status", "sumeragi_status"),
             ("leader", "sumeragi_leader"),
-            ("telemetry", "sumeragi_telemetry"),
         ):
             value = payload.get(field)
             if value is not None:

@@ -2713,7 +2713,6 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
             assert!(transaction_index.indexed_heights.is_empty());
             assert!(transaction_index.incomplete_merge_heights.is_empty());
             assert!(transaction_index.heights_by_entrypoint.is_empty());
-            assert!(transaction_index.heights_by_transaction.is_empty());
             drop(transaction_index);
             assert_eq!(
                 kura.durable_budget_persisted_count.load(Ordering::Acquire),

@@ -18833,8 +18833,7 @@ public struct ToriiGovernanceUnlockStatsResponse: Decodable, Sendable {
 
 public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     public struct Payload: Decodable, Sendable {
-        public let txHash: String
-        public let entrypointHash: String?
+        public let entrypointHash: String
         public let signedTransactionHash: String?
         public let submittedAtMs: UInt64
         public let submittedAtHeight: UInt64
@@ -18842,7 +18841,6 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         public let signerValue: ToriiJSONValue
 
         private enum CodingKeys: String, CodingKey {
-            case txHash = "tx_hash"
             case entrypointHash = "entrypoint_hash"
             case signedTransactionHash = "signed_transaction_hash"
             case submittedAtMs = "submitted_at_ms"
@@ -18850,14 +18848,12 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
             case signer
         }
 
-        public init(txHash: String,
+        public init(entrypointHash: String,
                     submittedAtMs: UInt64,
                     submittedAtHeight: UInt64,
                     signer: String,
-                    entrypointHash: String? = nil,
                     signedTransactionHash: String? = nil,
                     signerValue: ToriiJSONValue? = nil) {
-            self.txHash = txHash
             self.entrypointHash = entrypointHash
             self.signedTransactionHash = signedTransactionHash
             self.submittedAtMs = submittedAtMs
@@ -18867,13 +18863,16 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         }
 
         public init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            txHash = try ToriiSubmitTransactionResponse.decodeReceiptFieldString(
-                from: container,
-                key: .txHash,
-                field: "payload.tx_hash"
+            try rejectUnknownJSONFields(
+                from: decoder,
+                allowed: [
+                    "entrypoint_hash", "signed_transaction_hash", "submitted_at_ms",
+                    "submitted_at_height", "signer",
+                ],
+                debugName: "transaction submission receipt payload"
             )
-            entrypointHash = try ToriiSubmitTransactionResponse.decodeOptionalReceiptFieldString(
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            entrypointHash = try ToriiSubmitTransactionResponse.decodeReceiptFieldString(
                 from: container,
                 key: .entrypointHash,
                 field: "payload.entrypoint_hash"
@@ -18920,6 +18919,11 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["payload", "signature"],
+            debugName: "transaction submission receipt"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(Payload.self, forKey: .payload)
         signatureValue = try container.decode(ToriiJSONValue.self, forKey: .signature)
@@ -18930,8 +18934,8 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         )
     }
 
-    /// Convenience accessor for transaction hash.
-    public var hash: String { payload.txHash }
+    /// Convenience accessor for the canonical transaction entrypoint hash.
+    public var hash: String { payload.entrypointHash }
 
     private static func decodeReceiptFieldString<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
@@ -18951,7 +18955,16 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         key: K,
         field: String
     ) throws -> String? {
-        guard container.contains(key), try !container.decodeNil(forKey: key) else {
+        guard container.contains(key) else {
+            throw DecodingError.keyNotFound(
+                key,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "\(field) is required even when null"
+                )
+            )
+        }
+        guard try !container.decodeNil(forKey: key) else {
             return nil
         }
         return try decodeReceiptFieldString(from: container, key: key, field: field)
@@ -25701,7 +25714,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         ]
         let requiredFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "fee_payment", "metadata",
+            "time_to_live_ms", "fee_payment", "metadata", "attachments",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {

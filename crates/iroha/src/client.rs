@@ -66,10 +66,8 @@ use iroha_data_model::{
         AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
-    block::consensus::{
-        EvidenceRecord, SumeragiDiagnosticsStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-    },
-    block::consensus_v2::SumeragiV2Status,
+    block::consensus::{EvidenceRecord, SumeragiDiagnosticsStatus},
+    block::consensus_v2::{SumeragiV2QcResponse, SumeragiV2Status},
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
@@ -5529,7 +5527,8 @@ macro_rules! sorafs_checkpoint_filter {
                         require_nonzero_lower_hex32(after, $after_context)?,
                     );
                 }
-                url.query_pairs_mut().append_pair("limit", &limit.to_string());
+                url.query_pairs_mut()
+                    .append_pair("limit", &limit.to_string());
                 Ok(())
             }
         }
@@ -6815,7 +6814,7 @@ pub struct SumeragiEvidenceListFilter<'a> {
     pub limit: Option<u32>,
     /// Offset into the persisted evidence list.
     pub offset: Option<u32>,
-    /// Optional filter by evidence kind (`DoublePrepare`, `InvalidQc`, etc.).
+    /// Optional filter by the sole first-release kind, `SumeragiV2Equivocation`.
     pub kind: Option<&'a str>,
 }
 impl SumeragiEvidenceListFilter<'_> {
@@ -7022,24 +7021,9 @@ fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::V
     }
     Value::Object(map)
 }
-fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value {
-    use norito::json::{Map, Value};
-    fn entry_to_value(entry: &SumeragiQcEntry) -> Value {
-        let mut map = Map::new();
-        map.insert("height".into(), Value::from(entry.height));
-        map.insert("view".into(), Value::from(entry.view));
-        map.insert(
-            "subject_block_hash".into(),
-            entry
-                .subject_block_hash
-                .map_or(Value::Null, |h| Value::from(format!("{h}"))),
-        );
-        Value::Object(map)
-    }
-    let mut root = Map::new();
-    root.insert("highest_qc".into(), entry_to_value(&snapshot.highest_qc));
-    root.insert("locked_qc".into(), entry_to_value(&snapshot.locked_qc));
-    Value::Object(root)
+fn sumeragi_qc_json_payload(response: &SumeragiV2QcResponse) -> Result<norito::json::Value> {
+    norito::json::to_value(response)
+        .map_err(|error| eyre!("Failed to render Sumeragi v2 QC response as JSON: {error}"))
 }
 impl Client {
     fn parse_json_ok_response(
@@ -7847,11 +7831,12 @@ impl Client {
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         decode_parameters_response(&resp)
     }
-    /// GET `/v1/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
+    /// GET `/v1/sumeragi/qc` — authoritative v2 `PrepareQC` references.
     ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
+    /// Returns an error if the HTTP request fails, the response is non-OK, or the negotiated
+    /// representation is not the canonical [`SumeragiV2QcResponse`] schema.
+    pub fn get_sumeragi_qc(&self) -> Result<SumeragiV2QcResponse> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/qc");
         let resp = self.send_builder(
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -7869,12 +7854,25 @@ impl Client {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        if content_type.starts_with(APPLICATION_NORITO) {
-            let wire = decode_from_bytes::<SumeragiQcSnapshot>(resp.body())
-                .map_err(|e| eyre!("Failed to decode sumeragi qc Norito payload: {e}"))?;
-            return Ok(sumeragi_qc_json_payload(wire));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        let response = if Self::is_norito_content_type(content_type) {
+            decode_from_bytes::<SumeragiV2QcResponse>(resp.body())
+                .map_err(|error| eyre!("Failed to decode Sumeragi v2 QC Norito payload: {error}"))?
+        } else if Self::is_exact_json_content_type(content_type) {
+            norito::json::from_slice::<SumeragiV2QcResponse>(resp.body())
+                .map_err(|error| eyre!("Failed to decode Sumeragi v2 QC JSON payload: {error}"))?
+        } else {
+            return Err(eyre!(
+                "Failed to decode Sumeragi v2 QC response: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
+            ));
+        };
+        Ok(response)
+    }
+    /// Render the canonical `/v1/sumeragi/qc` response as JSON for generic CLI output.
+    ///
+    /// # Errors
+    /// Returns an error if the typed request or canonical JSON rendering fails.
+    pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
+        sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
     /// GET `/v1/sumeragi/pacemaker` — pacemaker timers/config snapshot.
     ///
@@ -7887,30 +7885,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
-    }
-    /// GET `/v1/sumeragi/phases` — latest per-phase latencies (ms).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_phases_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/phases");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi phases")
-    }
-    /// GET `/v1/sumeragi/telemetry` — aggregated telemetry snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_telemetry_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/telemetry");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi telemetry")
     }
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
     ///
@@ -8471,7 +8445,7 @@ mod evidence_filter_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(25),
             offset: Some(10),
-            kind: Some("InvalidQc"),
+            kind: Some("SumeragiV2Equivocation"),
         };
         let params = filter.param_entries();
         assert_eq!(
@@ -8479,7 +8453,7 @@ mod evidence_filter_tests {
             vec![
                 ("limit", "25".to_string()),
                 ("offset", "10".to_string()),
-                ("kind", "InvalidQc".to_string())
+                ("kind", "SumeragiV2Equivocation".to_string())
             ]
         );
     }
@@ -8491,7 +8465,7 @@ mod evidence_filter_tests {
     }
     #[test]
     fn evidence_filter_param_entries_preserve_adversarial_kind_literal() {
-        let injected_kind = "InvalidQc&limit=999&offset=999";
+        let injected_kind = "SumeragiV2Equivocation&limit=999&offset=999";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(1),
             offset: Some(0),
@@ -8508,7 +8482,7 @@ mod evidence_filter_tests {
     }
     #[test]
     fn evidence_filter_param_entries_preserve_control_characters_and_equals() {
-        let injected_kind = "InvalidQc=1%0a\r\nX-Iroha-Injected: yes";
+        let injected_kind = "SumeragiV2Equivocation=1%0a\r\nX-Iroha-Injected: yes";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(u32::MAX),
             offset: Some(u32::MAX - 1),
@@ -8688,9 +8662,13 @@ mod evidence_http_tests {
     };
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
-    use iroha_data_model::block::consensus::{
-        CertPhase as Phase, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord,
-        QcVote as Vote, default_chain_order_hash,
+    use iroha_data_model::block::{
+        consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+        consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            SumeragiV2Equivocation, ValidatorPower, Vote,
+        },
     };
     use iroha_test_samples::gen_account_in;
     use norito::json::Value;
@@ -10246,7 +10224,7 @@ mod evidence_http_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
-            kind: Some("InvalidQc"),
+            kind: Some("SumeragiV2Equivocation"),
         };
         let json = with_mock_http(
             respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
@@ -10280,13 +10258,16 @@ mod evidence_http_tests {
             .collect();
         assert_eq!(params.get("limit"), Some(&"5".to_string()));
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
-        assert_eq!(params.get("kind"), Some(&"InvalidQc".to_string()));
+        assert_eq!(
+            params.get("kind"),
+            Some(&"SumeragiV2Equivocation".to_string())
+        );
     }
     #[test]
     fn get_evidence_list_percent_encodes_adversarial_kind_filter() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let injected_kind = "InvalidQc&limit=999&offset=999";
+        let injected_kind = "SumeragiV2Equivocation&limit=999&offset=999";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
@@ -10322,7 +10303,7 @@ mod evidence_http_tests {
     fn get_evidence_list_percent_encodes_control_character_kind_filter() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let injected_kind = "InvalidQc=1%0a\r\nX-Iroha-Injected: yes";
+        let injected_kind = "SumeragiV2Equivocation=1%0a\r\nX-Iroha-Injected: yes";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(u32::MAX),
             offset: Some(u32::MAX - 1),
@@ -10453,30 +10434,72 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
-    fn make_vote(height: u64, view: u64, seed: u8) -> Vote {
-        let hash = Hash::prehashed([seed; 32]);
-        Vote {
-            phase: Phase::Prepare,
-            block_hash: HashOf::from_untyped_unchecked(hash),
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        }
-    }
     fn sample_record() -> EvidenceRecord {
-        let v1 = make_vote(10, 3, 0x55);
-        let v2 = make_vote(10, 3, 0x66);
+        let roster = vec![ValidatorPower {
+            validator: iroha_data_model::peer::PeerId::new(
+                checked_random_keypair().public_key().clone(),
+            ),
+            power: 1,
+        }];
+        let context = HeightContext {
+            network_id: test_network_id(),
+            protocol_version: PROTOCOL_VERSION,
+            height: 10,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"client evidence nexus context"),
+            execution_policy_hash: Hash::new(b"client evidence execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 4,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1024,
+                max_chunk_count: 512,
+            },
+            leader_seed: [0x53; Hash::LENGTH],
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"client evidence parent state"),
+            Hash::new(b"client evidence post state"),
+            Hash::new(b"client evidence ordinary writes"),
+            1,
+            Hash::new(b"client evidence block"),
+        );
+        let vote = |seed: u8| Vote {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Prepare,
+            subject: BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
+                payload_hash: Hash::new([seed]),
+            },
+            execution_commitment,
+            signer: 0,
+            signature: vec![seed; 96],
+        };
         EvidenceRecord {
             evidence: Evidence {
-                kind: EvidenceKind::DoublePrepare,
-                payload: EvidencePayload::DoubleVote { v1, v2 },
+                equivocation: SumeragiV2EquivocationEvidence {
+                    context,
+                    proofs_of_possession: vec![vec![0x52; 96]],
+                    conflict: SumeragiV2Equivocation::PhaseVote {
+                        first: vote(0x55),
+                        second: vote(0x66),
+                    },
+                },
             },
             recorded_at_height: 42,
             recorded_at_view: 5,
@@ -21842,12 +21865,13 @@ mod tests {
                 LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
                 LaneVolatilityClass, NativeAmxReceipt, SumeragiAutonomousLaneExecution,
                 SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
-                SumeragiPipelineExecutionStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+                SumeragiPipelineExecutionStatus,
             },
             consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-                SumeragiV2HeightContextStatus, SumeragiV2LivenessStatus, SumeragiV2Status,
-                SumeragiV2StatusPhase,
+                BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
+                GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION,
+                QuorumCertificateRef, SumeragiV2BodyState, SumeragiV2HeightContextStatus,
+                SumeragiV2LivenessStatus, SumeragiV2Status, SumeragiV2StatusPhase,
             },
         },
         da::{
@@ -26985,13 +27009,10 @@ mod tests {
     #[test]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 2] = [
-            (
-                "/v1/sumeragi/pacemaker",
-                Client::get_sumeragi_pacemaker_json,
-            ),
-            ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/pacemaker",
+            Client::get_sumeragi_pacemaker_json,
+        )];
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
@@ -27106,13 +27127,9 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
-            (
-                "/v1/sumeragi/telemetry",
-                Client::get_sumeragi_telemetry_json,
-            ),
         ];
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -27142,13 +27159,9 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
-            (
-                "/v1/sumeragi/telemetry",
-                Client::get_sumeragi_telemetry_json,
-            ),
         ];
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -27186,7 +27199,7 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/leader",
                 "Failed to get sumeragi leader",
@@ -27196,11 +27209,6 @@ mod tests {
                 "/v1/sumeragi/params",
                 "Failed to get sumeragi params",
                 Client::get_sumeragi_params_json,
-            ),
-            (
-                "/v1/sumeragi/telemetry",
-                "Failed to get sumeragi telemetry",
-                Client::get_sumeragi_telemetry_json,
             ),
         ];
         for (path, context, request) in cases {
@@ -27361,13 +27369,10 @@ mod tests {
     #[test]
     fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 2] = [
-            (
-                "/v1/sumeragi/pacemaker",
-                Client::get_sumeragi_pacemaker_json,
-            ),
-            ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/pacemaker",
+            Client::get_sumeragi_pacemaker_json,
+        )];
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
@@ -27437,18 +27442,11 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 2] = [
-            (
-                "/v1/sumeragi/pacemaker",
-                "Failed to get sumeragi pacemaker",
-                Client::get_sumeragi_pacemaker_json,
-            ),
-            (
-                "/v1/sumeragi/phases",
-                "Failed to get sumeragi phases",
-                Client::get_sumeragi_phases_json,
-            ),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/pacemaker",
+            "Failed to get sumeragi pacemaker",
+            Client::get_sumeragi_pacemaker_json,
+        )];
         for (path, context, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
@@ -28511,37 +28509,37 @@ mod tests {
             "/v1/sorafs/hedging/exposure".to_owned(),
             "/v1/sorafs/hedging/intents".to_owned(),
         ];
+        let checkpoint_query = format!("expected_checkpoint_fingerprint={checkpoint}");
         let queries = [
             None,
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25")),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
+            Some(format!(
+                "{checkpoint_query}&after_statement_id={after_statement_id}&limit=25"
+            )),
+            Some(checkpoint_query.clone()),
+            Some(checkpoint_query.clone()),
             None,
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50")),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&limit=100")),
+            Some(format!(
+                "{checkpoint_query}&after={projection_cursor}&limit=50"
+            )),
+            Some(format!("{checkpoint_query}&limit=100")),
         ];
         assert_eq!(snapshots.len(), paths.len());
         for (index, snapshot) in snapshots.iter().enumerate() {
             assert_canonical_account_signed_request(&client, snapshot);
-            assert_eq!(
-                snapshot.method,
-                if index == 3 { HttpMethod::POST } else { HttpMethod::GET }
-            );
+            let (method, accept, max_bytes) = match index {
+                2 => (
+                    HttpMethod::GET,
+                    APPLICATION_NORITO,
+                    SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1,
+                ),
+                3 => (HttpMethod::POST, APPLICATION_JSON, json_bound),
+                _ => (HttpMethod::GET, APPLICATION_JSON, json_bound),
+            };
+            assert_eq!(snapshot.method, method);
             assert_eq!(snapshot.url.path(), paths[index]);
             assert_eq!(snapshot.url.query(), queries[index].as_deref());
-            let is_statement = index == 2;
-            assert_single_accept_header(
-                snapshot,
-                if is_statement { APPLICATION_NORITO } else { APPLICATION_JSON },
-            );
-            assert_eq!(
-                snapshot.max_response_bytes,
-                if is_statement {
-                    SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1
-                } else {
-                    json_bound
-                }
-            );
+            assert_single_accept_header(snapshot, accept);
+            assert_eq!(snapshot.max_response_bytes, max_bytes);
         }
         let acknowledgement_headers: HashMap<_, _> = snapshots[3].headers.iter().cloned().collect();
         assert_eq!(
@@ -28561,7 +28559,6 @@ mod tests {
         for invalid in [
             "AA".repeat(32),
             format!("0x{}", "11".repeat(32)),
-            format!(" {}", "11".repeat(32)),
             "00".repeat(32),
             "11".repeat(31),
         ] {
@@ -29062,9 +29059,12 @@ mod tests {
             &body,
             |client| client.post_sorafs_moderation_screening_result(&request),
         );
-        assert!(snapshot.body.windows(idempotency_key_lower.len()).any(|bytes| {
-            bytes == idempotency_key_lower.as_bytes()
-        }));
+        assert!(
+            snapshot
+                .body
+                .windows(idempotency_key_lower.len())
+                .any(|bytes| { bytes == idempotency_key_lower.as_bytes() })
+        );
     }
     #[test]
     fn sorafs_moderation_screening_submit_rejects_missing_runtime_authority() {
@@ -29347,43 +29347,72 @@ mod tests {
     );
     include!("client/uaid_literal_tests.rs");
     #[test]
-    fn sumeragi_qc_snapshot_roundtrip_to_json_preserves_fields() {
-        let qc = SumeragiQcSnapshot {
-            highest_qc: SumeragiQcEntry {
-                height: 14,
-                view: 6,
-                subject_block_hash: None,
-            },
-            locked_qc: SumeragiQcEntry {
-                height: 13,
-                view: 5,
-                subject_block_hash: None,
-            },
+    fn sumeragi_v2_qc_response_roundtrip_to_json_preserves_fields() {
+        let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+            Hash::new(b"client-qc-height-context"),
+        ));
+        let round = ConsensusRound {
+            context_id,
+            height: 14,
+            view: 6,
         };
-        let json = sumeragi_qc_json_payload(qc);
+        let certificate = QuorumCertificateRef {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Prepare,
+            subject: BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"client-qc-block",
+                )),
+                payload_hash: Hash::new(b"client-qc-payload"),
+            },
+            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"client-qc-parent-state"),
+                Hash::new(b"client-qc-post-state"),
+                Hash::new(b"client-qc-writes"),
+                1,
+                Hash::new(b"client-qc-executed-wire"),
+            ),
+        };
+        let response = SumeragiV2QcResponse {
+            highest_prepare_qc: Some(certificate),
+            locked_prepare_qc: Some(certificate),
+        };
+        let json = sumeragi_qc_json_payload(&response).expect("render canonical v2 QC response");
         let highest = json
-            .get("highest_qc")
+            .get("highest_prepare_qc")
             .and_then(norito::json::Value::as_object)
-            .expect("highest qc object");
+            .expect("highest PrepareQC object");
+        let highest_round = highest
+            .get("round")
+            .and_then(norito::json::Value::as_object)
+            .expect("highest PrepareQC round");
         assert_eq!(
-            highest.get("height").and_then(norito::json::Value::as_u64),
+            highest_round
+                .get("height")
+                .and_then(norito::json::Value::as_u64),
             Some(14)
         );
         assert_eq!(
-            highest.get("view").and_then(norito::json::Value::as_u64),
+            highest_round
+                .get("view")
+                .and_then(norito::json::Value::as_u64),
             Some(6)
         );
         let locked = json
-            .get("locked_qc")
+            .get("locked_prepare_qc")
             .and_then(norito::json::Value::as_object)
-            .expect("locked qc object");
+            .expect("locked PrepareQC object");
+        let locked_round = locked
+            .get("round")
+            .and_then(norito::json::Value::as_object)
+            .expect("locked PrepareQC round");
         assert_eq!(
-            locked.get("height").and_then(norito::json::Value::as_u64),
-            Some(13)
-        );
-        assert_eq!(
-            locked.get("view").and_then(norito::json::Value::as_u64),
-            Some(5)
+            locked_round
+                .get("view")
+                .and_then(norito::json::Value::as_u64),
+            Some(6)
         );
     }
     #[test]

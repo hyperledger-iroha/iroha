@@ -419,6 +419,14 @@ AXT host flow
 - 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates capability bindings/budgets and records spend intents for later commit checks. Gas: G_axt + bytes.
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
+AXT FastPQ proofs authenticate the exact manifest root, optional DA commitment,
+optional committed amount, and optional expiry in metadata inserted before the
+batch seal. `ProofBlob.expiry_slot` and the envelope fields are outer mirrors;
+hosts reject any mismatch, including `None`/`Some` relabelling. The complete
+canonical metadata map is committed as eight raw Blake2b-256 `u32` trace limbs.
+This is a first-release hard cut: proofs produced without the required metadata
+or with the retired single-field metadata projection must be regenerated.
+
 Native asset escrow
 - 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
 - 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAssetEscrow` for the buyer authority.

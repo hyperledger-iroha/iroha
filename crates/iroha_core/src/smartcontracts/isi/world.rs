@@ -105,8 +105,8 @@ pub mod isi {
             LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
             VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
             VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
-            fee_sponsor_vault_allocation_claim_digest, fee_sponsor_vault_source_state_root,
-            lane_relay_fastpq_claim_digest,
+            fee_sponsor_vault_allocation_claim_digest, fee_sponsor_vault_policy_commitment,
+            fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
         },
         parameter::Parameter,
         prelude::*,
@@ -11444,13 +11444,11 @@ pub mod isi {
                         "an SCCP destination proof for this exact outbound lane and message has already been accepted",
                     ));
                 }
-                // Reserve two passes over the full admitted Taira roster before cryptographically
-                // validating any proof-controlled public keys: one for key validation/hash reconstruction and
-                // one for the worst-case all-signer PoP/aggregate contribution. Canonical parsing
-                // above is bounded by the byte preflight and exposes the durable replay key, so an
-                // exact retained replay does not consume verifier work. The proof-count cap is one
-                // per transaction, so this conservative reservation cannot crowd out another
-                // legitimate proof in the same transaction.
+                // Reserve two full Taira-roster passes before validating proof-controlled keys:
+                // one for key/hash reconstruction, one for worst-case signer PoP/aggregation.
+                // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
+                // The one-proof transaction cap prevents this conservative reservation from
+                // crowding out another legitimate proof.
                 state_transaction.register_sccp_proof(
                     proof_size,
                     crate::state::SccpVerifierWorkV1 {
@@ -15643,10 +15641,7 @@ pub mod isi {
                 } else {
                     Some(DomainCommittee {
                         committee_id: policy.committee_id.clone(),
-                        members: keys
-                            .iter()
-                            .filter_map(|key| PublicKey::from_str(key).ok())
-                            .collect(),
+                        members: keys.iter().cloned().collect(),
                         quorum: state_transaction.nexus.endorsement.quorum,
                         metadata: Metadata::default(),
                     })
@@ -16395,12 +16390,15 @@ pub mod isi {
                 )
                 .into());
             }
-            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("verified lane relay FASTPQ verification failed: {err}").into(),
-                    )
-                })?;
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(
+                &proof_envelope,
+                proof_blob.expiry_slot,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified lane relay FASTPQ verification failed: {err}").into(),
+                )
+            })?;
             let execution_commitment = state_transaction
                 .finalized_lane_relay_execution_commitment(&envelope)
                 .map_err(|err| {
@@ -16614,6 +16612,26 @@ pub mod isi {
                     "verified fee sponsor vault allocation manifest root cannot be zeroed",
                 ));
             }
+            let frozen_policy = state_transaction
+                .axt_execution_policy_snapshot()
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation requires a frozen AXT policy snapshot",
+                    )
+                })?
+                .entries
+                .into_iter()
+                .find(|entry| entry.dsid == *self.source_dataspace_id())
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation source dataspace has no frozen AXT policy",
+                    )
+                })?;
+            if frozen_policy.policy.manifest_root != *self.manifest_root() {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation manifest root does not match the frozen AXT policy",
+                ));
+            }
             let proof_blob = self.proof_blob().clone();
             if proof_blob.payload.is_empty() {
                 return Err(invalid_fee_sponsor_program(
@@ -16627,6 +16645,11 @@ pub mod isi {
                     "verified fee sponsor vault allocation proof expired at slot {expiry_slot}",
                 )));
             }
+            if proof_blob.expiry_slot != Some(*self.expires_at_height()) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof expiry must equal the allocation lease expiry",
+                ));
+            }
             let proof_envelope = norito::decode_canonical::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
                     invalid_fee_sponsor_program(format!(
@@ -16638,6 +16661,11 @@ pub mod isi {
             {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault proof source dataspace or manifest root mismatch",
+                ));
+            }
+            if proof_envelope.da_commitment.is_some() {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof must not carry a DA commitment",
                 ));
             }
             if let Some(committed_amount) = proof_envelope.committed_amount {
@@ -16679,6 +16707,13 @@ pub mod isi {
                     "verified fee sponsor vault proof has the wrong source or effect type",
                 ));
             }
+            let expected_policy_commitment =
+                fee_sponsor_vault_policy_commitment(self.manifest_root());
+            if binding.policy_commitment != hex::encode(expected_policy_commitment.as_ref()) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof policy commitment mismatch",
+                ));
+            }
             let expected_claim_digest = fee_sponsor_vault_allocation_claim_digest(&claim);
             if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
                 return Err(invalid_fee_sponsor_program(
@@ -16695,13 +16730,15 @@ pub mod isi {
                     "verified fee sponsor vault proof asset binding mismatch",
                 ));
             }
-            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("verified fee sponsor vault FASTPQ verification failed: {err}",)
-                            .into(),
-                    )
-                })?;
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(
+                &proof_envelope,
+                proof_blob.expiry_slot,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified fee sponsor vault FASTPQ verification failed: {err}",).into(),
+                )
+            })?;
             let record = VerifiedFeeSponsorVaultAllocation::new(
                 program_id.clone(),
                 *self.program_revision(),
@@ -19340,6 +19377,7 @@ pub mod isi {
                     verifier_version: "v1".to_owned(),
                     target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
                     effect_binding: None,
+                    remote_spend_intent_commitments: Vec::new(),
                 },
             )
         }
@@ -23314,6 +23352,7 @@ seiyaku GovernanceLifecycle {
                 verifier_version: "v1".to_string(),
                 target_dsids: vec![10],
                 effect_binding: None,
+                remote_spend_intent_commitments: Vec::new(),
             };
             let lane_finality_statement_hash = envelope
                 .lane_finality_statement_hash()
@@ -30234,7 +30273,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30301,7 +30340,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30334,7 +30373,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30434,7 +30473,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -35046,7 +35085,8 @@ seiyaku GovernanceLifecycle {
             let mut state = blank_test_state();
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 1;
-            state.nexus.get_mut().endorsement.committee_keys = vec!["noop".to_string()];
+            state.nexus.get_mut().endorsement.committee_keys =
+                BTreeSet::from([checked_keypair().public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(5).unwrap(),
                 None,
@@ -35079,7 +35119,7 @@ seiyaku GovernanceLifecycle {
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 2;
             state.nexus.get_mut().endorsement.committee_keys =
-                vec![kp_a.public_key().to_string(), kp_b.public_key().to_string()];
+                BTreeSet::from([kp_a.public_key().clone(), kp_b.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(7).unwrap(),
                 None,
@@ -35135,7 +35175,8 @@ seiyaku GovernanceLifecycle {
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 1;
-            state.nexus.get_mut().endorsement.committee_keys = vec![kp.public_key().to_string()];
+            state.nexus.get_mut().endorsement.committee_keys =
+                BTreeSet::from([kp.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(9).unwrap(),
                 None,

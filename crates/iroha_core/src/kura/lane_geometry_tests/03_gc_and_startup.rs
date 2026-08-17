@@ -875,15 +875,16 @@ fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
         &payload,
     )
     .expect("certified data sidecar");
-    fs::write(
-        lane_artifacts.join(CERTIFIED_LANE_BLOCKS_INDEX_FILE),
-        SidecarIndexEntry {
+    let mut index = SidecarIndexLayout::base_header(descriptor.lane_block_height).to_vec();
+    index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(payload.len()).expect("payload length"),
         }
         .to_bytes(),
-    )
-    .expect("certified index sidecar");
+    );
+    fs::write(lane_artifacts.join(CERTIFIED_LANE_BLOCKS_INDEX_FILE), index)
+        .expect("certified index sidecar");
     let journal = kura.read_lane_geometry_journal().expect("geometry journal");
     let binding = journal
         .records

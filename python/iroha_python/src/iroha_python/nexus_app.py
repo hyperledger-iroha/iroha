@@ -10,7 +10,16 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Union
 
+from .address import (
+    BASE58_ALPHABET,
+    AccountAddress,
+    AccountAddressError,
+    decode_base_n,
+    encode_base_n,
+    i105_discriminant_from_sentinel,
+)
 from .crypto import NetworkId, _require_network_id, hash_blake2b_32
+from .numeric_v1 import NumericV1Codec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tx import QuantityLike
@@ -18,6 +27,301 @@ else:  # pragma: no cover - postponed annotations only
     QuantityLike = Any
 
 BytesLike = Union[bytes, bytearray, memoryview, str]
+
+_NEXUS_LANE_CONFIG_FIELDS = (
+    "id",
+    "shard_id",
+    "dataspace_id",
+    "alias",
+    "description",
+    "visibility",
+    "lane_type",
+    "governance",
+    "settlement",
+    "storage",
+    "proof_scheme",
+    "manifest_policy",
+    "confidential_compute",
+    "scheduler",
+    "settlement_buffer",
+    "metadata",
+)
+_NEXUS_LANE_VISIBILITIES = frozenset(("public", "restricted"))
+_NEXUS_LANE_STORAGE_PROFILES = frozenset(
+    ("full_replica", "commitment_only", "split_replica")
+)
+_NEXUS_LANE_PROOF_SCHEMES_V1 = frozenset(("merkle_sha256",))
+_NEXUS_DA_MANIFEST_POLICIES = frozenset(("strict", "audit"))
+_NEXUS_CONFIDENTIAL_MECHANISMS = frozenset(("encryption", "secret_sharing"))
+_NEXUS_CONFIDENTIAL_COMPUTE_FIELDS = (
+    "mechanism",
+    "key_version",
+    "allowed_audiences",
+)
+_NEXUS_LANE_SCHEDULER_FIELDS = (
+    "teu_capacity",
+    "starvation_bound_slots",
+)
+_NEXUS_LANE_SETTLEMENT_BUFFER_FIELDS = (
+    "account_id",
+    "asset_definition_id",
+    "capacity",
+)
+_NEXUS_RETIRED_FUNCTIONAL_METADATA_KEYS = frozenset(
+    (
+        "da_manifest_policy",
+        "confidential_compute",
+        "confidential_mechanism",
+        "confidential_key_version",
+        "confidential_access",
+        "scheduler.teu_capacity",
+        "scheduler.starvation_bound_slots",
+        "settlement.buffer_account",
+        "settlement.buffer_asset",
+        "settlement.buffer_capacity",
+    )
+)
+
+
+def _strict_exact_i105_account_id(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value or value.strip() != value or "@" in value:
+        raise ValueError(f"{context} must be an exact canonical I105 account id")
+    try:
+        discriminant = i105_discriminant_from_sentinel(value)
+        if discriminant is None:
+            raise AccountAddressError("missing canonical I105 sentinel")
+        address = AccountAddress.parse_encoded(value, expected_discriminant=discriminant)
+        if address.to_i105(discriminant) != value:
+            raise AccountAddressError("noncanonical I105 spelling")
+    except AccountAddressError as error:
+        raise ValueError(
+            f"{context} must be an exact canonical I105 account id"
+        ) from error
+    return value
+
+
+def _strict_exact_asset_definition_id(value: Any, context: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or any(character.isspace() for character in value)
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    alphabet_index = {character: index for index, character in enumerate(BASE58_ALPHABET)}
+    try:
+        digits = [alphabet_index[character] for character in value]
+        payload = decode_base_n(digits, len(BASE58_ALPHABET))
+    except (KeyError, AccountAddressError) as error:
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        ) from error
+    canonical = "".join(
+        BASE58_ALPHABET[digit]
+        for digit in encode_base_n(payload, len(BASE58_ALPHABET))
+    )
+    # The native typed instruction constructor performs the authoritative BLAKE3 checksum check.
+    # Keep this pure-Python preflight independent of an optional native BLAKE3 wheel while still
+    # rejecting aliases, noncanonical Base58, wrong layouts, and non-UUIDv4 identifiers.
+    if (
+        canonical != value
+        or len(payload) != 21
+        or payload[0] != 1
+        or payload[7] >> 4 != 0b0100
+        or payload[9] & 0b11000000 != 0b10000000
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    return value
+
+
+def _strict_nexus_lane_config(
+    value: Any,
+    context: str,
+    strict_exact_fields: Callable[..., None],
+    strict_uint: Callable[..., int],
+    strict_nonempty_string: Callable[..., str],
+) -> dict[str, Any]:
+    """Validate and copy one canonical V1 ``LaneConfig`` JSON object."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    if any(not isinstance(field, str) for field in value):
+        raise TypeError(f"{context} field names must be strings")
+    strict_exact_fields(value, _NEXUS_LANE_CONFIG_FIELDS, context)
+    lane = dict(value)
+
+    strict_uint(lane, "id", 32, context)
+    shard_id = lane["shard_id"]
+    if shard_id is not None:
+        strict_uint(lane, "shard_id", 32, context)
+    strict_uint(lane, "dataspace_id", 64, context)
+    strict_nonempty_string(lane, "alias", context)
+
+    for field_name in ("description", "lane_type", "governance", "settlement"):
+        field_value = lane[field_name]
+        if field_value is not None and not isinstance(field_value, str):
+            raise TypeError(f"{context} `{field_name}` must be a string or null")
+
+    visibility = lane["visibility"]
+    if not isinstance(visibility, str):
+        raise TypeError(f"{context} `visibility` must be a string")
+    if visibility not in _NEXUS_LANE_VISIBILITIES:
+        raise ValueError(f"{context} `visibility` must be `public` or `restricted`")
+
+    storage = lane["storage"]
+    if not isinstance(storage, str):
+        raise TypeError(f"{context} `storage` must be a string")
+    if storage not in _NEXUS_LANE_STORAGE_PROFILES:
+        raise ValueError(
+            f"{context} `storage` must be `full_replica`, `commitment_only`, "
+            "or `split_replica`"
+        )
+
+    proof_scheme = lane["proof_scheme"]
+    if not isinstance(proof_scheme, str):
+        raise TypeError(f"{context} `proof_scheme` must be a string")
+    if proof_scheme not in _NEXUS_LANE_PROOF_SCHEMES_V1:
+        raise ValueError(f"{context} `proof_scheme` must be `merkle_sha256` in V1")
+
+    manifest_policy = lane["manifest_policy"]
+    if not isinstance(manifest_policy, str):
+        raise TypeError(f"{context} `manifest_policy` must be a string")
+    if manifest_policy not in _NEXUS_DA_MANIFEST_POLICIES:
+        raise ValueError(f"{context} `manifest_policy` must be `strict` or `audit`")
+
+    confidential_compute = lane["confidential_compute"]
+    if confidential_compute is not None:
+        confidential_context = f"{context} `confidential_compute`"
+        if not isinstance(confidential_compute, Mapping):
+            raise TypeError(f"{confidential_context} must be an object or null")
+        strict_exact_fields(
+            confidential_compute,
+            _NEXUS_CONFIDENTIAL_COMPUTE_FIELDS,
+            confidential_context,
+        )
+        confidential = dict(confidential_compute)
+        mechanism = confidential["mechanism"]
+        if not isinstance(mechanism, str):
+            raise TypeError(f"{confidential_context} `mechanism` must be a string")
+        if mechanism not in _NEXUS_CONFIDENTIAL_MECHANISMS:
+            raise ValueError(
+                f"{confidential_context} `mechanism` must be `encryption` or "
+                "`secret_sharing`"
+            )
+        key_version = confidential["key_version"]
+        if type(key_version) is not int or not 0 < key_version <= 0xFFFFFFFF:
+            raise ValueError(
+                f"{confidential_context} `key_version` must be a positive u32"
+            )
+        audiences = confidential["allowed_audiences"]
+        if not isinstance(audiences, list):
+            raise TypeError(
+                f"{confidential_context} `allowed_audiences` must be an array"
+            )
+        normalized_audiences: set[str] = set()
+        for audience in audiences:
+            if not isinstance(audience, str):
+                raise TypeError(
+                    f"{confidential_context} `allowed_audiences` entries must be strings"
+                )
+            if not audience or audience.strip() != audience:
+                raise ValueError(
+                    f"{confidential_context} `allowed_audiences` entries must be "
+                    "non-empty and must not contain surrounding whitespace"
+                )
+            normalized_audiences.add(audience)
+        confidential["allowed_audiences"] = sorted(normalized_audiences)
+        lane["confidential_compute"] = confidential
+        if storage == "full_replica":
+            raise ValueError(
+                f"{context} confidential compute requires `commitment_only` or "
+                "`split_replica` storage"
+            )
+
+    scheduler = lane["scheduler"]
+    if scheduler is not None:
+        scheduler_context = f"{context} `scheduler`"
+        if not isinstance(scheduler, Mapping):
+            raise TypeError(f"{scheduler_context} must be an object or null")
+        strict_exact_fields(scheduler, _NEXUS_LANE_SCHEDULER_FIELDS, scheduler_context)
+        normalized_scheduler = dict(scheduler)
+        if all(normalized_scheduler[field] is None for field in _NEXUS_LANE_SCHEDULER_FIELDS):
+            raise ValueError(f"{scheduler_context} must define at least one override")
+        for field_name in _NEXUS_LANE_SCHEDULER_FIELDS:
+            field_value = normalized_scheduler[field_name]
+            if field_value is not None and (
+                type(field_value) is not int or not 0 < field_value <= 0xFFFFFFFFFFFFFFFF
+            ):
+                raise ValueError(
+                    f"{scheduler_context} `{field_name}` must be a positive u64 or null"
+                )
+        lane["scheduler"] = normalized_scheduler
+
+    settlement_buffer = lane["settlement_buffer"]
+    if settlement_buffer is not None:
+        settlement_context = f"{context} `settlement_buffer`"
+        if not isinstance(settlement_buffer, Mapping):
+            raise TypeError(f"{settlement_context} must be an object or null")
+        strict_exact_fields(
+            settlement_buffer,
+            _NEXUS_LANE_SETTLEMENT_BUFFER_FIELDS,
+            settlement_context,
+        )
+        normalized_settlement = dict(settlement_buffer)
+        normalized_settlement["account_id"] = _strict_exact_i105_account_id(
+            normalized_settlement["account_id"],
+            f"{settlement_context} `account_id`",
+        )
+        normalized_settlement["asset_definition_id"] = (
+            _strict_exact_asset_definition_id(
+                normalized_settlement["asset_definition_id"],
+                f"{settlement_context} `asset_definition_id`",
+            )
+        )
+        capacity = normalized_settlement["capacity"]
+        try:
+            exact_capacity = NumericV1Codec.decode_quantity_json(capacity)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"{settlement_context} `capacity` must be a canonical positive XOR quantity"
+            ) from error
+        if exact_capacity.mantissa <= 0 or exact_capacity.scale > 9:
+            raise ValueError(
+                f"{settlement_context} `capacity` must be a canonical positive XOR quantity "
+                "with at most nine fractional digits"
+            )
+        normalized_settlement["capacity"] = str(exact_capacity)
+        lane["settlement_buffer"] = normalized_settlement
+
+    metadata = lane["metadata"]
+    if not isinstance(metadata, Mapping):
+        raise TypeError(f"{context} `metadata` must be an object of string values")
+    normalized_metadata: dict[str, str] = {}
+    for key, metadata_value in metadata.items():
+        if not isinstance(key, str):
+            raise TypeError(f"{context} `metadata` keys must be strings")
+        if not isinstance(metadata_value, str):
+            raise TypeError(f"{context} `metadata.{key}` must be a string")
+        if key == "da_shard_id":
+            raise ValueError(
+                f"{context} `metadata.da_shard_id` is retired; use the typed `shard_id` field"
+            )
+        if (
+            key in _NEXUS_RETIRED_FUNCTIONAL_METADATA_KEYS
+            or key.startswith("confidential_")
+            or key.startswith("scheduler.")
+            or key.startswith("settlement.buffer_")
+        ):
+            raise ValueError(
+                f"{context} `metadata.{key}` is retired; use the typed lane policy fields"
+            )
+        normalized_metadata[key] = metadata_value
+    lane["metadata"] = normalized_metadata
+    return lane
 
 
 class NexusAppError(RuntimeError):

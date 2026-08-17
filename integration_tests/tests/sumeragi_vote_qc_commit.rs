@@ -10,7 +10,6 @@ use iroha::data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
-use reqwest::Client as HttpClient;
 use std::time::{Duration, Instant};
 #[test]
 fn commits_via_vote_qc_pipeline() -> Result<()> {
@@ -72,44 +71,6 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             qc_json.get("highest_qc").is_some() && qc_json.get("locked_qc").is_some(),
             "qc endpoint should include highest_qc and locked_qc"
         );
-        let phases_json = client.get_sumeragi_phases_json()?;
-        assert!(
-            phases_json.get("commit_ms").is_some(),
-            "phases endpoint should expose commit_ms"
-        );
-        let telemetry_url = client.torii_url.join("v1/sumeragi/telemetry")?;
-        rt.block_on(async {
-            let http = HttpClient::new();
-            let resp = http
-                .get(telemetry_url.clone())
-                .header("Accept", "application/json")
-                .send()
-                .await?;
-            if !resp.status().is_success() {
-                eyre::bail!("telemetry endpoint returned {}", resp.status());
-            }
-            let body = resp.text().await?;
-            let payload: norito::json::Value = norito::json::from_str(&body)?;
-            eyre::ensure!(
-                payload.get("availability").is_some(),
-                "telemetry payload should include availability section"
-            );
-            let vrf = payload
-                .get("vrf")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| eyre::eyre!("telemetry payload missing vrf summary"))?;
-            eyre::ensure!(
-                vrf.get("found")
-                    .and_then(norito::json::Value::as_bool)
-                    .is_some(),
-                "vrf summary should expose found boolean"
-            );
-            eyre::ensure!(
-                vrf.contains_key("reveals_total") && vrf.contains_key("late_reveals_total"),
-                "vrf summary should expose reveal totals"
-            );
-            Ok::<(), eyre::Report>(())
-        })?;
         Ok(())
     })();
     rt.block_on(async { network.shutdown().await });

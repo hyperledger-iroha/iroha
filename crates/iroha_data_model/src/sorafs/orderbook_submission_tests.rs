@@ -74,13 +74,12 @@ macro_rules! reject_wire {
 #[test]
 #[allow(deprecated)]
 #[rustfmt::skip]
-fn all_routes_validate_and_derive_equal_authoritative_identities() {
+fn all_routes_validate_and_derive_canonical_identities() {
     assert_eq!(parse_sorafs_orderbook_decimal_u64_v1("0", "value"), Ok(0)); for value in [" 1", "01", "+1"] { assert!(parse_sorafs_orderbook_decimal_u64_v1(value, "value").is_err()); }
     let _chain = ChainDiscriminantGuard::enter(DISCRIMINANT);
     for route in [Route::SubmitOrder, Route::CancelOrder, Route::RecordReceipt] {
         let transaction = transaction(route, 0x21); let validated = inspect(&transaction, route).unwrap(); assert_eq!(inspect_sorafs_orderbook_submission_v1(&transaction.encode_wire_v1().unwrap(), route, &network(NETWORK_SEED)).unwrap(), validated.identity);
-        assert_eq!(validated.identity.tx_hash.as_ref(), validated.identity.entrypoint_hash.as_ref());
-        assert_eq!(validated.identity.tx_hash, validated.identity.signed_transaction_hash);
+        assert_eq!(validated.identity.entrypoint_hash.as_ref(), validated.identity.signed_transaction_hash.as_ref());
     }
 }
 #[test]
@@ -144,7 +143,7 @@ fn alternate_layout_and_framed_overhead_are_rejected() {
 fn receipt_fixture() -> (SorafsOrderbookSubmissionIdentityV1, KeyPair, TransactionSubmissionReceipt) {
     let identity = inspect(&transaction(Route::SubmitOrder, 0x27), Route::SubmitOrder).unwrap().identity; let signer = keypair(0x61);
     let receipt = TransactionSubmissionReceipt::try_sign(TransactionSubmissionReceiptPayload {
-        tx_hash: identity.tx_hash.clone(), entrypoint_hash: identity.entrypoint_hash.clone(),
+        entrypoint_hash: identity.entrypoint_hash.clone(),
         signed_transaction_hash: Some(identity.signed_transaction_hash.clone()), submitted_at_ms: 7,
         submitted_at_height: 8, signer: signer.public_key().clone(),
     }, &signer).unwrap();
@@ -163,14 +162,14 @@ macro_rules! reject_receipt {
 fn receipt_is_exact_signed_pinned_bounded_and_binds_every_identity() {
     let (identity, signer, receipt) = receipt_fixture(); let wire = norito::to_bytes(&receipt).unwrap();
     assert_eq!(decode_and_verify_sorafs_orderbook_submission_receipt_v1(&wire, &identity, signer.public_key()).unwrap(), receipt);
-    assert_eq!(parse_sorafs_orderbook_submission_identity_v1(&identity.tx_hash.to_string(), &identity.entrypoint_hash.to_string(), &identity.signed_transaction_hash.to_string()), Some(identity.clone()));
+    assert_eq!(parse_sorafs_orderbook_submission_identity_v1(&identity.entrypoint_hash.to_string(), &identity.signed_transaction_hash.to_string()), Some(identity.clone()));
     assert_eq!(parse_sorafs_orderbook_receipt_signer_v1(&signer.public_key().to_string()), Some(signer.public_key().clone()));
     reject_receipt!(&[], &identity, signer.public_key(), Error::EmptyReceipt);
     reject_receipt!(&vec![0; ORDERBOOK_SUBMISSION_RECEIPT_MAX_CANONICAL_BYTES_V1 + 1], &identity, signer.public_key(), Error::ReceiptTooLarge);
     reject_receipt!(&wire, &identity, keypair(0x62).public_key(), Error::ReceiptSignerMismatch);
-    for index in 0_u8..3 {
+    for index in 0_u8..2 {
         let mut altered = identity.clone(); let other = Hash::prehashed([0x80 + index; Hash::LENGTH]);
-        let error = match index { 0 => { altered.tx_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptTransactionHashMismatch }, 1 => { altered.entrypoint_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptEntrypointHashMismatch }, _ => { altered.signed_transaction_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptSignedTransactionHashMismatch } };
+        let error = match index { 0 => { altered.entrypoint_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptEntrypointHashMismatch }, _ => { altered.signed_transaction_hash = HashOf::from_untyped_unchecked(other); Error::ReceiptSignedTransactionHashMismatch } };
         reject_receipt!(&wire, &altered, signer.public_key(), error);
     }
     let mut tampered = receipt.clone(); tampered.payload.submitted_at_ms += 1;

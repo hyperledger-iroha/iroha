@@ -1117,7 +1117,7 @@ operator_protected_url() {
     /v1/sumeragi/bls-keys|/v1/sumeragi/qc|/v1/sumeragi/checkpoints|\
     /v1/sumeragi/commit-certificates|/v1/sumeragi/validator-sets|\
     /v1/sumeragi/validator-sets/*|/v1/sumeragi/consensus-keys|\
-    /v1/sumeragi/key-lifecycle|/v1/sumeragi/telemetry|/v1/sumeragi/params|\
+    /v1/sumeragi/key-lifecycle|/v1/sumeragi/params|\
     /v1/sumeragi/commit-qcs/*|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
     /v1/sumeragi/vrf/penalties/*|/v1/sumeragi/vrf/epoch/*|/v1/peers|\
     /v1/time/status|/v1/pipeline/preflight|/v1/pipeline/policy|\

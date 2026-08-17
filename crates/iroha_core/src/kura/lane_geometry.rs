@@ -22,7 +22,7 @@ use super::{
     LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
     LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
-    LaneHistoryCompactionOutcome, LaneMergeApplicationFrontierV1,
+    LaneBlockExecutionSourceV1, LaneHistoryCompactionOutcome, LaneMergeApplicationFrontierV1,
     MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES, MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
     MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
     NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
@@ -35,7 +35,7 @@ use super::{
     AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
     NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX, NATIVE_AMX_EVIDENCE_FILE_SUFFIX,
     NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
-    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry,
+    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry, SidecarIndexLayout,
     V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
 };
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
@@ -44,7 +44,7 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
-        execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
+        execution_context::ExternalExecutionContext,
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
     nexus::{DataSpaceId, LaneId},
@@ -3902,7 +3902,7 @@ impl Kura {
             entry,
             batch,
             execution,
-            Self::merge_lane_block_artifact(execution),
+            Self::merge_lane_block_execution_source(execution),
             carrier.block_height,
             carrier.block_hash,
         );
@@ -5742,7 +5742,7 @@ impl Kura {
         }
         for (identity, preflight) in &preflights {
             if !inputs.get(identity).is_some_and(|input| {
-                input.proposal == preflight.proposal && input.artifact == preflight.artifact
+                input.proposal == preflight.proposal && input.source == preflight.source
             }) {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
@@ -5751,18 +5751,7 @@ impl Kura {
             }
         }
         for (identity, input) in &inputs {
-            let autonomous_binding = (
-                input.autonomous_network_id,
-                input.autonomous_epoch,
-                input.autonomous_payload_hash,
-            );
-            let (Some(network_id), Some(epoch), Some(payload_hash)) = autonomous_binding else {
-                if autonomous_binding != (None, None, None) {
-                    return Err(self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "lane retirement execution input has a partial autonomous binding",
-                    ));
-                }
+            let Some((network_id, epoch, payload_hash)) = input.source.autonomous_binding() else {
                 continue;
             };
             let (payload, current) = if let Some((artifact, current, _)) = autonomous.get(identity)
@@ -5980,8 +5969,11 @@ impl Kura {
                         LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
                             inputs.get(identity).is_some_and(|input| {
                                 input.proposal == *proposal
-                                    && input.autonomous_payload_hash
-                                        == Some(artifact.executable_payload.payload_hash)
+                                    && input.source.autonomous_binding().is_some_and(
+                                        |(_, _, payload_hash)| {
+                                            payload_hash == artifact.executable_payload.payload_hash
+                                        },
+                                    )
                             })
                         }
                         LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
@@ -6095,7 +6087,10 @@ impl Kura {
                 &input.proposal,
                 certified_retirements,
             );
-            if input.autonomous_payload_hash.is_some() {
+            if matches!(
+                &input.source,
+                LaneBlockExecutionSourceV1::AutonomousLane { .. }
+            ) {
                 let (artifact, _, _) = autonomous.get(identity).ok_or_else(|| {
                     self.geometry_error(
                         ErrorKind::InvalidData,
@@ -6156,6 +6151,9 @@ impl Kura {
         &self,
         receipt: &LaneBlockApplicationReceiptArtifact,
     ) -> bool {
+        let Some(global_artifact) = receipt.source.global_artifact() else {
+            return false;
+        };
         let Ok(height) = usize::try_from(receipt.application_block_height) else {
             return false;
         };
@@ -6170,7 +6168,7 @@ impl Kura {
         };
         if block.hash() != receipt.application_block_hash
             || block.header().height().get() != receipt.application_block_height
-            || block.header().view_change_index() != receipt.artifact.ownership.proposal_view
+            || block.header().view_change_index() != global_artifact.ownership.proposal_view
         {
             return false;
         }
@@ -6181,7 +6179,7 @@ impl Kura {
             || !bundle
                 .lane_payload_ownerships
                 .iter()
-                .any(|ownership| ownership == &receipt.artifact.ownership)
+                .any(|ownership| ownership == &global_artifact.ownership)
         {
             return false;
         }
@@ -6212,10 +6210,7 @@ impl Kura {
         let expected = LaneBlockApplicationReceiptArtifact::new(
             RecoveredLaneBlockPayload {
                 proposal: receipt.proposal.clone(),
-                artifact: receipt.artifact.clone(),
-                autonomous_network_id: None,
-                autonomous_epoch: None,
-                autonomous_payload_hash: None,
+                source: receipt.source.clone(),
                 entrypoints,
                 reservation_keys: Vec::new(),
                 routing_plans: Vec::new(),

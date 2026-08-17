@@ -540,7 +540,10 @@ mod tests {
     }
     fn assert_non_ok_preserved(response: Response<Vec<u8>>) {
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(response.headers()["content-type"], "application/problem+json");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
         assert_eq!(response.headers()["x-repair-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
     }

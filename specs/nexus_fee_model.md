@@ -11,6 +11,15 @@ depend on balances, sponsor revisions, or receipt leases that genesis has not
 created yet. Public fee quotes and every non-genesis transaction retain the
 strict quote-to-sign, admission, and settlement rules described below.
 
+Successful SORA v2 XOR claim mints have one further narrow exemption. Every
+entry in `nexus.fees.successful_claim_fee_exempt_authorities` must be an exact
+canonical I105 universal `AccountId`; empty strings, aliases, whitespace-padded
+literals, and malformed addresses make configuration loading fail. Runtime
+configuration stores a deterministically ordered set of typed account IDs, and
+authorization compares the transaction authority directly against that set.
+It never resolves aliases or other mutable world state while deciding the
+exemption.
+
 The `nexus` charge component uses canonical XOR (`xor#universal`, or its
 canonical asset definition literal). A `pipeline_gas` component may instead
 use one exact asset accepted by the governed gas schedule. A signed intent
@@ -170,8 +179,8 @@ capacity, the transaction is rejected with that sponsor error.
 
 ## Direct and receipt-backed lanes
 
-`nexus.fees.settlement_mode` supports only `direct` and
-`lane_relay_burn`.
+`nexus.fees.settlement_mode` supports only the exact labels `direct` and
+`lane_relay_burn`; case, whitespace, and punctuation aliases are rejected.
 
 In direct mode, settlement debits the authority balance or the exact isolated
 sponsor-program vault in the canonical fee context and records the component
@@ -195,6 +204,11 @@ Every sponsored vault debit in this mode consumes its exact route lease.
 PipelineGas remains directly settled to the technical account, so its lease
 usage is recorded as executed and settled atomically; Nexus receipt usage is
 recorded as executed first and becomes settled only when relay merge commits.
+
+The first-release `NexusFeeReceipt` layout is closed and exact. Its
+`program_revision` and `lease_id` slots are always encoded, using explicit
+`null` when the corresponding binding is absent; omission and unknown fields
+are rejected rather than interpreted as a pre-release receipt shape.
 
 Block status exposes fee receipts and lane settlement commitments for audit and
 reconciliation. Receipt amounts are canonical decimal strings, and fixed byte

@@ -172,7 +172,7 @@ fn debug_print_genesis_transactions() {
         return;
     };
     let genesis = network.genesis();
-    for (tx_idx, tx) in genesis.0.transactions_vec().iter().enumerate() {
+    for (tx_idx, tx) in genesis.0.external_transactions().enumerate() {
         println!("tx #{tx_idx}");
         if let Executable::Instructions(isi) = tx.instructions() {
             for (i, instr) in isi.iter().enumerate() {

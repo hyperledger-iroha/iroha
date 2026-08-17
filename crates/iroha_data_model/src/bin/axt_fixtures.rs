@@ -13,7 +13,7 @@ use iroha_data_model::{
         AxtHandleFragment, AxtHandleIssuerContextV1, AxtProofEnvelope, AxtProofFragment,
         AxtTouchFragment, DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId,
         ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
-        compute_descriptor_binding,
+        compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
     },
     testing::axt::{
         DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
@@ -78,6 +78,7 @@ fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         verifier_version: "v1".to_string(),
         target_dsids: vec![dsid.as_u64()],
         effect_binding: None,
+        remote_spend_intent_commitments: Vec::new(),
     }
 }
 fn seeded_account(seed: u8) -> String {
@@ -135,13 +136,16 @@ fn proof_blob_fixture(
     da_commitment: Option<[u8; 32]>,
     proof: Vec<u8>,
     expiry_slot: u64,
+    remote_spend_intent_commitments: Vec<[u8; 32]>,
 ) -> Result<ProofBlob, Box<dyn Error>> {
+    let mut fastpq_binding = fixture_fastpq_binding(dsid);
+    fastpq_binding.remote_spend_intent_commitments = remote_spend_intent_commitments;
     let payload = to_bytes(&AxtProofEnvelope {
         dsid,
         manifest_root,
         da_commitment,
         proof,
-        fastpq_binding: Some(fixture_fastpq_binding(dsid)),
+        fastpq_binding: Some(fastpq_binding),
         committed_amount: None,
         amount_commitment: None,
     })?;
@@ -266,12 +270,34 @@ fn build_envelope_fixture(
     );
     let manifest_root_one = manifest_root(&manifest_one)?;
     let manifest_root_seven = manifest_root(&manifest_seven)?;
+    let alice = seeded_account(0xA1);
+    let bob = seeded_account(0xB2);
+    let carol = seeded_account(0xC3);
+    let transfer_amount = Quantity::from(2_500_u64);
+    let transfer_commitment = compute_remote_spend_intent_commitment_v1(
+        binding,
+        dsid_one,
+        "transfer",
+        &alice,
+        &bob,
+        &transfer_amount,
+    );
+    let lock_amount = Quantity::from(9_001_u64);
+    let lock_commitment = compute_remote_spend_intent_commitment_v1(
+        binding,
+        dsid_seven,
+        "lock",
+        &bob,
+        &carol,
+        &lock_amount,
+    );
     let proof_one = proof_blob_fixture(
         dsid_one,
         manifest_root_one,
         Some([0x11; 32]),
         vec![0xAA, 0xBB, 0xCC, 0xDD],
         120,
+        vec![transfer_commitment],
     )?;
     let proof_seven = proof_blob_fixture(
         dsid_seven,
@@ -279,6 +305,7 @@ fn build_envelope_fixture(
         None,
         vec![0xFE, 0xED, 0xFA, 0xCE],
         98,
+        vec![lock_commitment],
     )?;
     let proofs = vec![
         AxtProofFragment {
@@ -290,9 +317,6 @@ fn build_envelope_fixture(
             proof: proof_seven.clone(),
         },
     ];
-    let alice = seeded_account(0xA1);
-    let bob = seeded_account(0xB2);
-    let carol = seeded_account(0xC3);
     let happy_handles = vec![
         transfer_handle_fixture(binding, manifest_root_one, proof_one, alice, bob.clone()),
         lock_handle_fixture(binding, manifest_root_seven, proof_seven, bob, carol),

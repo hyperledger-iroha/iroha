@@ -407,7 +407,7 @@ description = "Primary execution lane"
 dataspace = "universal"
 storage = "full_replica"
 visibility = "public"
-metadata = { "scheduler.teu_capacity" = "50000000" }
+scheduler = { teu_capacity = 50000000 }
 
 [[nexus.lane_catalog]]
 index = 1
@@ -435,7 +435,7 @@ description = "Digital payments network traffic"
 dataspace = "dpn"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 4
@@ -444,7 +444,7 @@ description = "External PoC traffic"
 dataspace = "is"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 5
@@ -453,7 +453,7 @@ description = "Bank of Israel mobile-wallet traffic"
 dataspace = "is2"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 6
@@ -462,7 +462,7 @@ description = "Central-bank service integration traffic"
 dataspace = "cbsi"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 # Physical data spaces only. Namespace, governance-module, and workload names
 # must not be promoted into this catalog.

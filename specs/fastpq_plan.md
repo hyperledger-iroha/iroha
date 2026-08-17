@@ -21,7 +21,7 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
   - `key_limbs[i]`: base-256 limbs (7 bytes, little-endian) of the canonical key path.
   - `value_old_limbs[i]`, `value_new_limbs[i]`: same packing for pre/post values.
   - Selector columns: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
-  - Auxiliary columns: `delta = value_new - value_old`, `running_asset_delta`, `metadata_hash`, `supply_counter`.
+  - Auxiliary columns: `delta = value_new - value_old`, `running_asset_delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `supply_counter`.
   - Asset columns: `asset_id_limbs[i]` using 7-byte limbs.
   - SMT columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, plus `neighbour_leaf` for non-membership.
   - Metadata columns: `dsid`, `slot`.
@@ -41,10 +41,20 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 | Main              | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]`                               | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
 | Asset             | `asset_id_limbs[i]`                                                                      | Packed canonical asset identifier (little-endian, 7-byte limbs).                                                      |
 | Selectors         | `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm` | 0/1. Constraint: Σ selectors (including `s_perm`) = `s_active`; `s_perm` mirrors role grant/revoke rows.              |
-| Auxiliary         | `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`                        | State used for constraints, conservation, and audit trails.                                                           |
+| Auxiliary         | `delta`, `running_asset_delta`, `metadata_hash_limb_0..7`, `supply_counter`              | State used for constraints, conservation, and audit trails.                                                           |
 | SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf`                   | Per-level Poseidon2 inputs/outputs plus neighbour witness for non-membership.                                         |
 | Lookup            | `perm_hash`                                                                              | Poseidon2 hash for permission lookup (constrained only when `s_perm = 1`).                                            |
 | Metadata          | `dsid`, `slot`                                                                           | Constant across rows.                                                                                                 |
+
+The metadata map is canonically Norito-encoded and committed with raw
+Blake2b-256 over `u64_le(domain_len) || domain || u64_le(metadata_len) ||
+metadata`, using the domain `fastpq:v1:metadata-commitment:blake2b-256`.
+The 32 digest bytes are injected without field reduction as eight little-endian
+`u32` limbs, and every limb is constrained to remain constant across the trace.
+This replaces the collision-prone single Goldilocks-field projection. Because
+the trace schema and commitments change, this is a first-release hard cut:
+proofs and binary/golden proof artifacts produced with the single
+`metadata_hash` column must be regenerated.
 
 ### Math & Constraints
 - **Field packing:** bytes are chunked into 7-byte limbs (little-endian). Each limb `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; reject limbs ≥ Goldilocks modulus.
@@ -1057,7 +1067,7 @@ The Stage 7 capture tooling already handles CUDA: wrap every `fastpq_cuda_benc
 The hashing pipeline consumes columns in this deterministic order:
 1. Selector flags: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
 2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`.
-3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
+3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
 4. Sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
 
 `trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-stable across releases.【crates/fastpq_prover/src/trace.rs:474】

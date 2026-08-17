@@ -6098,6 +6098,20 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
   );
 });
 
+const CURRENT_DA_STRIPE_LAYOUT = Object.freeze({
+  total_stripes: 1,
+  shards_per_stripe: 14,
+  row_parity_stripes: 0,
+});
+const CURRENT_DA_ZERO_RENT_QUOTE = Object.freeze({
+  base_rent: "0",
+  protocol_reserve: "0",
+  provider_reward: "0",
+  pdp_bonus: "0",
+  potr_bonus: "0",
+  egress_credit_per_gib: "0",
+});
+
 test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
   const digest = Array.from({ length: 32 }, (_, index) => index);
   const receipt = {
@@ -6109,9 +6123,10 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
     manifest_hash: [digest],
     storage_ticket: [digest],
     pdp_commitment: "AAAA====",
+    stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
     queued_at_unix: 1234,
     operator_signature: "aa".repeat(64),
-    rent_quote: null,
+    rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
   };
   const fetchImpl = async () =>
     createResponse({
@@ -6138,6 +6153,62 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
   );
 });
 
+test("submitDaBlob rejects pre-release receipt omissions and unknown fields", async () => {
+  const digest = Array.from({ length: 32 }, (_, index) => index);
+  const canonicalReceipt = {
+    client_blob_id: [digest],
+    lane_id: 1,
+    epoch: 2,
+    blob_hash: [digest],
+    chunk_root: [digest],
+    manifest_hash: [digest],
+    storage_ticket: [digest],
+    pdp_commitment: null,
+    stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+    queued_at_unix: 1234,
+    operator_signature: "aa".repeat(64),
+    rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
+  };
+  const cases = [
+    ["missing pdp_commitment", (receipt) => delete receipt.pdp_commitment, /pdp_commitment/u],
+    ["missing stripe_layout", (receipt) => delete receipt.stripe_layout, /stripe_layout/u],
+    ["missing row parity", (receipt) => delete receipt.stripe_layout.row_parity_stripes, /row_parity_stripes/u],
+    ["missing rent_quote", (receipt) => delete receipt.rent_quote, /rent_quote/u],
+    ["unknown receipt field", (receipt) => { receipt.pre_release_extension = true; }, /unsupported fields.*pre_release_extension/u],
+    ["unknown stripe field", (receipt) => { receipt.stripe_layout.pre_release_extension = true; }, /unsupported fields.*pre_release_extension/u],
+  ];
+
+  for (const [label, mutate, pattern] of cases) {
+    const receipt = structuredClone(canonicalReceipt);
+    mutate(receipt);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 202,
+          jsonData: { status: "accepted", duplicate: false, receipt },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () =>
+        client.submitDaBlob({
+          networkId: VK_SIGNING_NETWORK_ID,
+          owner: SAMPLE_ACCOUNT_OWNER,
+          payload: Buffer.from("car-bytes"),
+          codec: "nexus_lane_sidecar",
+          laneId: 11,
+          epoch: 22,
+          sequence: 33,
+          signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+          signatureHex: "aa".repeat(64),
+          clientBlobId: Buffer.alloc(32, 0x11),
+        }),
+      pattern,
+      label,
+    );
+  }
+});
+
 test("submitDaBlob rejects coercible non-byte digest entries in responses", async () => {
   const validDigest = Array.from({ length: 32 }, (_, index) => index);
   for (const entry of ["1", true, null]) {
@@ -6152,9 +6223,10 @@ test("submitDaBlob rejects coercible non-byte digest entries in responses", asyn
       manifest_hash: [validDigest],
       storage_ticket: [validDigest],
       pdp_commitment: null,
+      stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
       queued_at_unix: 1234,
       operator_signature: "aa".repeat(64),
-      rent_quote: null,
+      rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
     };
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
@@ -6195,6 +6267,7 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     manifest_hash: [digest.map((value) => (value + 3) & 0xff)],
     storage_ticket: [digest.map((value) => (value + 4) & 0xff)],
     pdp_commitment: Buffer.from("commitment").toString("base64"),
+    stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
     queued_at_unix: 1234,
     operator_signature: "aa".repeat(64),
     rent_quote: {
@@ -6240,6 +6313,8 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
   const submitted = JSON.parse(captured?.init?.body ?? "{}");
   assert.equal(submitted.blob_class.class, "TaikaiSegment");
   assert.equal(submitted.codec[0], "nexus_lane_sidecar");
+  assert.equal(submitted.compression, "Identity");
+  assert.equal(submitted.norito_manifest, null);
   assert.equal(submitted.metadata.items[0].key, "content-type");
   assert.equal(
     Buffer.from(submitted.metadata.items[0].value, "base64").toString("utf8"),
@@ -6281,9 +6356,10 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
     manifest_hash: [digest.map((value) => (value + 3) & 0xff)],
     storage_ticket: [digest.map((value) => (value + 4) & 0xff)],
     pdp_commitment: Buffer.from("commitment").toString("base64"),
+    stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
     queued_at_unix: 1234,
     operator_signature: "aa".repeat(64),
-    rent_quote: null,
+    rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
   };
   const fetchImpl = async () =>
     createResponse({
@@ -7791,7 +7867,8 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
   const payload = new Uint8Array([0xde, 0xad]);
   const receiptJson = JSON.stringify({
     payload: {
-      tx_hash: "aa".repeat(32),
+      entrypoint_hash: "aa".repeat(32),
+      signed_transaction_hash: "aa".repeat(32),
       submitted_at_ms: 1,
       submitted_at_height: 2,
       signer: "ed0120" + "bb".repeat(32),
@@ -11716,29 +11793,25 @@ test("getSumeragiStatusTyped rejects malformed liveness diagnostics", async () =
   );
 });
 
-test("retired global Sumeragi RBC and collector helpers are absent", async () => {
-  for (const method of [
-    "getSumeragiCollectors",
-    "getSumeragiRbc",
-    "getSumeragiRbcSessions",
-    "findRbcSamplingCandidate",
-    "getSumeragiRbcDelivered",
-    "sampleRbcChunks",
-  ]) {
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(ToriiClient.prototype, method),
-      false,
-      `${method} must not remain on the public client`,
-    );
-  }
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(ToriiClient, "buildRbcSampleRequest"),
-    false,
+test("retired aggregate Sumeragi telemetry, RBC, and collector helpers are absent", async () => {
+  const present = (owner, names) => names.filter((name) => Object.hasOwn(owner, name));
+  assert.deepEqual(
+    present(ToriiClient.prototype, [
+      "getSumeragiTelemetry", "getSumeragiTelemetryTyped",
+      "getSumeragiCollectors", "getSumeragiRbc", "getSumeragiRbcSessions",
+      "findRbcSamplingCandidate", "getSumeragiRbcDelivered", "sampleRbcChunks",
+    ]),
+    [],
   );
+  assert.deepEqual(present(ToriiClient, ["buildRbcSampleRequest"]), []);
   const publicApi = await import("../src/index.js");
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(publicApi, "buildRbcSampleRequest"),
-    false,
+  assert.deepEqual(
+    present(publicApi, [
+      "buildRbcSampleRequest",
+      "captureSumeragiTelemetrySnapshot",
+      "appendSumeragiTelemetrySnapshot",
+    ]),
+    [],
   );
 });
 
@@ -12397,11 +12470,6 @@ test("Sumeragi snapshot endpoints reject unsupported option fields", async () =>
       "unexpected",
     ],
     [
-      "getSumeragiPhases",
-      () => client.getSumeragiPhases({ note: "bad" }),
-      "note",
-    ],
-    [
       "getSumeragiBlsKeys",
       () => client.getSumeragiBlsKeys({ window: 1 }),
       "window",
@@ -12425,25 +12493,64 @@ test("Sumeragi snapshot endpoints reject unsupported option fields", async () =>
   }
 });
 
-test("getSumeragiQc fetches QC snapshot", async () => {
+test("getSumeragiQc fetches canonical v2 PrepareQC references", async () => {
+  const prepareQc = structuredClone(
+    createSumeragiV2StatusPayload().last_commit_qc.certificate,
+  );
+  prepareQc.phase = { phase: "prepare", details: null };
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/qc`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
       jsonData: {
-        highest_qc: { height: "10", view: "2", subject_block_hash: "abc" },
-        locked_qc: { height: "9", view: "1", subject_block_hash: null },
+        highest_prepare_qc: prepareQc,
+        locked_prepare_qc: structuredClone(prepareQc),
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const qc = await client.getSumeragiQc();
-  assert.deepEqual(qc, {
-    highest_qc: { height: 10, view: 2, subject_block_hash: "abc" },
-    locked_qc: { height: 9, view: 1, subject_block_hash: null },
+  assert.equal(qc.highest_prepare_qc.round.height, 9);
+  assert.equal(qc.highest_prepare_qc.phase.phase, "prepare");
+  assert.equal(
+    qc.locked_prepare_qc.subject.block_hash,
+    createSumeragiV2Subject().block_hash,
+  );
+});
+
+test("getSumeragiQc rejects the pre-release snapshot shape", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        highest_qc: { height: 10, view: 2, subject_block_hash: "abc" },
+        locked_qc: { height: 9, view: 1, subject_block_hash: null },
+      },
+      headers: { "content-type": "application/json" },
+    }),
   });
+
+  await assert.rejects(
+    () => client.getSumeragiQc(),
+    /sumeragi qc response contains unknown field highest_qc/u,
+  );
+});
+
+test("getSumeragiQc requires both nullable v2 slots", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: { highest_prepare_qc: null },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  await assert.rejects(
+    () => client.getSumeragiQc(),
+    /sumeragi qc response\.locked_prepare_qc is required/u,
+  );
 });
 
 test("getSumeragiCommitQc fetches commit QC record", async () => {
@@ -12478,43 +12585,6 @@ test("getSumeragiCommitQc fetches commit QC record", async () => {
   assert.equal(record.subject_block_hash, hashHex);
   assert.equal(record.commit_qc?.parent_state_root, "bb".repeat(32));
   assert.equal(record.commit_qc?.validator_set.length, 2);
-});
-
-test("getSumeragiPhases fetches latency metrics", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/phases`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        propose_ms: "5",
-        collect_da_ms: "6",
-        collect_prevote_ms: "7",
-        collect_precommit_ms: "8",
-        collect_aggregator_ms: "9",
-        commit_ms: "12",
-        pipeline_total_ms: "58",
-        collect_aggregator_gossip_total: "3",
-        block_created_dropped_by_lock_total: "1",
-        block_created_hint_mismatch_total: "2",
-        block_created_proposal_mismatch_total: "0",
-        ema_ms: {
-          propose_ms: "4",
-          collect_da_ms: "5",
-          collect_prevote_ms: "6",
-          collect_precommit_ms: "7",
-          collect_aggregator_ms: "8",
-          commit_ms: "11",
-          pipeline_total_ms: "50",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const phases = await client.getSumeragiPhases();
-  assert.equal(phases.collect_aggregator_ms, 9);
-  assert.equal(phases.ema_ms.pipeline_total_ms, 50);
 });
 
 test("getSumeragiBlsKeys returns network map", async () => {
@@ -12596,7 +12666,7 @@ test("getSumeragiParams fetches on-chain parameters", async () => {
   assert.equal(params.da_enabled, false);
 });
 
-test("Sumeragi params/telemetry reject unsupported options", async () => {
+test("Sumeragi params reject unsupported options", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
       throw new Error("fetch should not be called for validation failures");
@@ -12605,78 +12675,6 @@ test("Sumeragi params/telemetry reject unsupported options", async () => {
   await assert.rejects(
     client.getSumeragiParams({ unexpected: true }),
     /getSumeragiParams options contains unsupported fields: unexpected/,
-  );
-  await assert.rejects(
-    client.getSumeragiTelemetry({ extra: "value" }),
-    /getSumeragiTelemetry options contains unsupported fields: extra/,
-  );
-});
-
-test("getSumeragiTelemetryTyped normalizes availability, latency, backlog, and VRF data", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/telemetry`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        availability: {
-          total_votes_ingested: "42",
-          collectors: [
-            { collector_idx: "0", peer_id: "alice@test", votes_ingested: "20" },
-            { collector_idx: "1", peer_id: "bob@test", votes_ingested: "22" },
-          ],
-        },
-        qc_latency_ms: [{ kind: "CollectPrepare", last_ms: "15" }],
-        rbc_backlog: {
-          pending_sessions: "2",
-          total_missing_chunks: "8",
-          max_missing_chunks: "5",
-        },
-        vrf: {
-          found: true,
-          epoch: "12",
-          finalized: false,
-          seed_hex: "cafebabe",
-          epoch_length: "16",
-          commit_deadline_offset: "3",
-          reveal_deadline_offset: "4",
-          roster_len: "7",
-          updated_at_height: "1024",
-          participants_total: "9",
-          commitments_total: "8",
-          reveals_total: "7",
-          late_reveals_total: "1",
-          committed_no_reveal: ["1", "2"],
-          no_participation: ["3"],
-          late_reveals: [{ signer: "carol@test", noted_at_height: "1025" }],
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const snapshot = await client.getSumeragiTelemetryTyped();
-  assert.equal(snapshot.availability.total_votes_ingested, 42);
-  assert.equal(snapshot.availability.collectors[1].peer_id, "bob@test");
-  assert.equal(snapshot.qc_latency_ms[0].last_ms, 15);
-  assert.equal(snapshot.rbc_backlog.max_missing_chunks, 5);
-  assert.equal(snapshot.vrf.seed_hex, "cafebabe");
-  assert.deepEqual(snapshot.vrf.committed_no_reveal, [1, 2]);
-  assert.equal(snapshot.vrf.late_reveals[0].noted_at_height, 1025);
-});
-
-test("getSumeragiTelemetryTyped rejects malformed telemetry payloads", async () => {
-  const fetchImpl = async () => {
-    return createResponse({
-      status: 200,
-      jsonData: { availability: null },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getSumeragiTelemetryTyped(),
-    /sumeragi telemetry\.availability/,
   );
 });
 

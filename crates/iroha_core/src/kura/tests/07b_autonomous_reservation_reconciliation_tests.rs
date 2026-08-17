@@ -408,7 +408,6 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
         "strict reservation conflicting certification fixture",
         FsyncMode::Always,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
@@ -468,11 +467,18 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
-    let index_len = (MAX_AUTONOMOUS_RESERVATION_CERTIFIED_INDEX_ENTRIES + 1)
+    let entries_len = (MAX_AUTONOMOUS_RESERVATION_CERTIFIED_INDEX_ENTRIES + 1)
         .checked_mul(PIPELINE_INDEX_ENTRY_SIZE)
         .expect("oversized certified index length");
+    let mut index_bytes = SidecarIndexLayout::base_header(1).to_vec();
+    index_bytes.resize(
+        INDEXED_SIDECAR_BASE_HEADER_SIZE
+            .checked_add(entries_len)
+            .expect("oversized certified V1 index length"),
+        0,
+    );
     fs::write(&data_path, b"").expect("write empty certified data");
-    fs::write(&index_path, vec![0_u8; index_len]).expect("write oversized certified index");
+    fs::write(&index_path, &index_bytes).expect("write oversized certified index");
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
@@ -481,7 +487,7 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
         fs::metadata(&index_path)
             .expect("oversized index remains")
             .len(),
-        u64::try_from(index_len).expect("index length fits u64"),
+        u64::try_from(index_bytes.len()).expect("index length fits u64"),
         "read-only classification must not truncate the oversized index",
     );
 }
@@ -687,12 +693,12 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         "the final leg deliberately exercises an incarnation-hash ABA replay",
     );
     assert_eq!(
-        first_b.reservation_keys[0].signed_transaction_hash,
-        incarnation_a_payload.reservation_keys[0].signed_transaction_hash,
+        first_b.reservation_keys[0].entrypoint_hash,
+        incarnation_a_payload.reservation_keys[0].entrypoint_hash,
     );
     assert_eq!(
-        first_b.reservation_keys[0].signed_transaction_hash,
-        recreated_b.reservation_keys[0].signed_transaction_hash,
+        first_b.reservation_keys[0].entrypoint_hash,
+        recreated_b.reservation_keys[0].entrypoint_hash,
         "all three generations contend for the exact same FIFO transaction",
     );
     let first_b_record =

@@ -7,6 +7,23 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
+- Regenerate the FastPQ proof/trace binary fixtures and pinned trace
+  commitments under the eight-limb raw Blake2b-256 metadata schema, then run
+  the focused AXT/FastPQ/Core suites and the release-wide test matrix. Retired
+  single-field metadata proofs and snapshots are intentionally incompatible
+  with the first-release format and must not be accepted or migrated by
+  relabelling.
+
+- TODO: add an authenticated cancellation/rebind protocol for an exact pending
+  QueuePlan whose fresh dataspace/role topology changes (for example after an
+  SNS lease transition). Candidate assembly now defers such work without
+  poisoning proposals, but the immutable obligation otherwise remains pending
+  until canonical application.
+- TODO: extend `RemoteSpendIntent` with an exact `AssetDefinitionId`, then bind
+  each `tx_predicate`/`value_conservation` intent one-to-one to its canonical
+  `TransferDeltaTranscript`. The current proof-bound descriptor/dataspace/
+  operation/account/amount commitment closes post-proof intent substitution,
+  but cannot distinguish multiple asset definitions routed to one dataspace.
 - Validate the bounded high-view pacemaker and corrected selected-Serve
   late-Fetch regression in the four-validator loss/hold/heal corridor. The
   promotion canary must submit real work, observe it commit within the finite
@@ -1046,31 +1063,68 @@ narrow-field Poseidon, dense vector/Pedersen, and direct verification—is a har
 `NO` under the combined k17, 5 GiB processed-key, 384 KiB proof-pair, and
 128 MiB device ceilings. Exact public transport remains an unreviewed schema
 redesign whose fit depends on the guarded inventory; it is not production-ready.
-Any replacement binding requires independent cryptographic review. The guarded
-pre-graph `S/E/T/P` inventory completed at a 1,636,745,216-byte evidence peak
-with zero populated Step circuits. Both parities have 2,025 sources, eight
-equations, 2,680 terms, 636 protocol points, and 5,364 non-native Poseidon
-permutations; raw/compressed combined bindings require 69/51 k17 lanes, so
-neither fits the reviewed five-lane bridge. Do not run a populated graph, bind
-release hashes, or describe `[220]` / `[25, 0, 0]` as a candidate until a
-reviewed replacement satisfies every cap.
+The simplest exact field transport already needs
+`2 * (2,025 + 2,680) * 32 = 301,120` bytes before indices or framing. Adding
+the two old projected 93,120-byte proofs yields 487,360 bytes, 94,144 above the
+393,216-byte proof-pair cap. This rejects that exact transport, not every
+possible redesign; any replacement still requires independent cryptographic
+review. The guarded pre-graph `S/E/T/P` inventory completed at a
+1,636,745,216-byte evidence peak with zero populated Step circuits. Both
+parities have 2,025 sources, eight equations, 2,680 terms, 636 protocol points,
+and 5,364 non-native Poseidon permutations; raw/compressed combined bindings
+require 69/51 k17 lanes, so neither fits the reviewed five-lane bridge. Do not
+run a populated graph, bind release hashes, or describe `[220]` / `[25, 0, 0]`
+as a candidate until a reviewed replacement satisfies every cap.
 
-The production-readiness audit closed the local false-green and
-resource-amplification gaps: candidate success is now explicitly static and
-rejects unresolved index state, the complete lightweight release-tool and SDK
-boundary suites are workflow-owned, and Core/Kagami share bounded governed
-device-policy validation. Those controls do not discharge release evidence.
-The authenticated source-seal projection still needs a pinned producer (or an
-equivalently reviewed external-controller protocol) with end-to-end
-generate/seal/reconstruct tests. Production hardware qualification must also
-use a production-policy identifier and hash distinct from the
-`taira-testnet-physical-ios-xcode-paired-v1` candidate lab schema; promotion
-now rejects the latter's `app_attest_used:false` receipt. Replace that explicit
-blocker only after an independently reviewed production App Attest/Secure
-Enclave evidence schema and validator are available.
+The production-readiness audit closed the local false-green and bounded-tooling
+gaps: candidate success is explicitly static and rejects unresolved index
+state, the lightweight release-tool and SDK boundary suites are workflow-owned,
+and Core/Kagami share governed device-policy validation. Production signer and
+Kagami execution now require a distinct digest-pinned
+`iroha.authenticated-tool-os-isolation.v1` controller instead of directly
+running the authenticated tool. The repository defines and mutation-tests that
+contract, seals the controller path/digest as one trusted executable input, and
+wires both protected reset workflows. It does not implement or independently
+qualify the native controller, install its root trust record/environment, or
+exercise it on a protected host. Those controls do not discharge release evidence. The
+authenticated source-seal projection now has a signed request/produce/verify
+protocol that binds the exact Cargo/rustc executables, execution policy, and raw
+plus normalized unit graphs. The repository still has no controller-captured
+real graph or receipt, and cannot prove that an external normalizer faithfully
+transformed Cargo's unstable output; the checked-in synthetic graph is test
+material only. Production iOS validation now authenticates bounded X.509 v3
+chains, P-256/P-384 signatures, certificate time/static revocation, the exact
+Apple nonce extension, App ID/key/authenticator fields, assertion signature and
+counter, and a separately pinned signed freshness/consumption receipt. Missing,
+stale, substituted, or untrusted receipts fail closed. Only the root fixture is
+real; physical Apple leaf/intermediate/authenticator capture and the stateful
+online authority remain unprovisioned and unqualified.
 
 Remaining work stays ordered and fail-closed:
 
+- Implement and independently qualify the native
+  `iroha.authenticated-tool-os-isolation.v1` controller, including kernel-backed
+  cumulative/live storage quota accounting for open-unlinked files, write and
+  network denial, child/job lifetime enforcement, forced-controller-death
+  cleanup, exact diagnostics, and hostile qualification. Add its exact options
+  are already in the sealed-controller allowlist and protected reset workflows;
+  provision their independently pinned path/digest and root trust record on the
+  actual controller hosts, then exercise the complete signer and promotion
+  paths. Production paths now fail closed instead of substituting local
+  process-group or per-file bounds.
+- Capture and validate a real production App Attest leaf/intermediate chain,
+  authenticator data, assertion, and Apple receipt on the physical target. Then
+  provision and independently audit the online authority that issues the
+  one-time challenge, persists key/counter/consumption state, obtains current
+  Apple revocation/fraud status, and signs the bounded freshness receipt. The
+  synthetic accepted fixture and root-only real certificate test are not
+  operational qualification.
+- Reconcile the concurrent `TransactionEntrypoint` and `iroha_config`
+  integer-width migrations, then rerun the workflow-owned receiver-snapshot,
+  compact-registration, active-receiver-routing, Kagami activation, and Taira
+  backing suites from a clean locked source tree. Only the five-test data-model
+  receiver-snapshot suite has a current local Rust pass; no Core/Kagami or
+  full-workspace green result is release evidence yet.
 - Bind the completed guarded pre-graph `S/E/T/P`, V6/V2 element and
   permutation counts, and legacy SHA lower bounds into the independent review
   input. Use those measurements to select and independently review a
@@ -1160,10 +1214,10 @@ On the current mutable tree, the independent static release inventory contract
 passes with 88 legs, 860/860 production tests across 40 modules, 527/527 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
-The grouped SDK closure is 1,399 paths at
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`,
-and diagnostics is 1,401 paths at
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
+The grouped SDK closure is 1,398 paths at
+`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`,
+and diagnostics is 1,400 paths at
+`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`.
 These are mutable-tree source inventories, not a sealed receipt.
 
 Both reproduced clean-`d24` consensus root causes are closed in source and
@@ -1249,9 +1303,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 50 parents and 317
+source check. The reviewed Rust include topology contains 50 parents and 319
 direct entries; its canonical payload SHA-256 is
-`7eee4e44535cee07db90ff756c4b54786fcef23ea3dc7f0ada6c663a454c72d7`.
+`19d48aebf0d49e1d774aaf50f9dbd764a4e9b8758a51e23ad90952f1850f3058`.
 The release-inventory contract is statically reconciled at 88/860/527, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
@@ -1262,11 +1316,11 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
-its staged grouped and diagnostics suite-source manifests contain 1,399 and
-1,401 records respectively and hash to
-`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+its staged grouped and diagnostics suite-source manifests contain 1,398 and
+1,400 records respectively and hash to
+`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
 and
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`;
+`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -1361,11 +1415,11 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
   `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
+  staged grouped/diagnostics suite-source manifests at exactly 1,398 and 1,400
   records with SHA-256 values
-  `8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
+  `c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
   and
-  `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`,
+  `0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -20494,7 +20548,7 @@ operator-provided rollout bundles.
   of bypassing it through an elastic route, and proposal-refresh coverage proves
   stale elastic vectors are recomputed back to the default lane before consensus
   proposal execution. Multilane router integration coverage now also pins the
-  public `ConfigLaneRouter::route_with_view` boundary so stale autoscale-managed
+  fallible `LaneRouter::try_route_with_view` boundary so stale autoscale-managed
   catalog lanes are ignored when either autoscale or Nexus is disabled, while
   enabled autoscale still shards default traffic over valid elastic lanes. Block
   validation coverage now also proves stale elastic execution contexts are

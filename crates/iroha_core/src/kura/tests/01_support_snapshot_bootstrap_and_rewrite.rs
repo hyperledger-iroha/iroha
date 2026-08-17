@@ -680,12 +680,11 @@ fn merge_entry_with_indexed_reservation(
     salt: u8,
 ) -> (
     MergeLedgerEntry,
-    HashOf<SignedTransaction>,
+    HashOf<TransactionEntrypoint>,
     LaneQueueReservationKeyV2,
 ) {
     let entrypoint = offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-    let transaction_hash = accepted.hash();
+    let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
     entry.epoch_id = epoch;
     let execution = entry
@@ -700,7 +699,6 @@ fn merge_entry_with_indexed_reservation(
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: transaction_hash,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura-queue-plan-admission-binding",
@@ -721,20 +719,20 @@ fn merge_entry_with_indexed_reservation(
         vec![norito::to_bytes(&reservation).expect("encode canonical indexed reservation fixture")];
     execution.routing_plans =
         vec![norito::to_bytes(&routing_plan).expect("encode canonical routing fixture")];
-    (entry, transaction_hash, reservation)
+    (entry, entrypoint_hash, reservation)
 }
 fn store_indexed_reservation_carrier(
     kura: &Kura,
     salt: u8,
 ) -> (
-    HashOf<SignedTransaction>,
+    HashOf<TransactionEntrypoint>,
     LaneQueueReservationKeyV2,
     MergeLedgerFrameIndex,
 ) {
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next();
     let raw_carrier = blocks.next();
-    let (mut entry, transaction_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
+    let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
         .as_mut()
@@ -781,7 +779,7 @@ fn store_indexed_reservation_carrier(
         .expect("store reservation merge carrier");
     let _ = persist_v2_finality_chain_through(kura, nonzero!(2_usize));
     let frame = kura.merge_log.lock().frames_by_epoch[&1];
-    (transaction_hash, reservation, frame)
+    (entrypoint_hash, reservation, frame)
 }
 fn v2_finality_fixture_keys() -> Vec<KeyPair> {
     let mut keypairs = (0_u8..4)

@@ -18,12 +18,12 @@ fn guard_return_capacity_invariant_is_batch_atomic() {
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2_usize));
     let guarded_hashes = guards
         .iter()
-        .map(|guard| guard.tx.hash())
+        .map(|guard| guard.tx.hash_as_entrypoint())
         .collect::<BTreeSet<_>>();
     // Corrupt the private index with a tracked foreign entry to exercise the fail-closed
     // capacity preflight. No returned guard may be partially released or appended.
     let foreign = accepted_tx_by_someone(&time_source);
-    let foreign_hash = foreign.as_ref().hash();
+    let foreign_hash = foreign.as_ref().hash_as_entrypoint();
     queue.txs.insert(
         foreign_hash,
         Arc::new(CheckedTransaction::new_unchecked(foreign)),
@@ -75,7 +75,7 @@ fn guard_return_missing_transaction_is_explicit_and_does_not_release_batch() {
         .push(accepted_tx_by_someone(&time_source), state.view())
         .expect("push tx");
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
-    let hash = guards[0].tx.hash();
+    let hash = guards[0].tx.hash_as_entrypoint();
     let (_, tracked) = queue.txs.remove(&hash).expect("remove tracked entry");
     let err = queue
         .return_transaction_guards(&mut guards, &state)
@@ -103,7 +103,7 @@ fn queue_metadata_cleared_on_commit_and_clear_all() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push tx");
     let _ = queue.gossip_batch(1, &state.view());
     let removed = queue.remove_committed_hashes(std::iter::once(hash), None);
@@ -149,7 +149,7 @@ fn queue_reuses_gossip_payload_without_side_cache() {
         &crypto_cfg,
     )
     .expect("accept gossip entrypoint with cached payload");
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     assert!(
         Arc::ptr_eq(&tx.entrypoint_bytes(), &payload),
         "accepted gossip transaction should reuse inbound entrypoint bytes"
@@ -322,7 +322,7 @@ fn push_with_lane_with_state_rejects_committed_transaction() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let tx_hash = tx.as_ref().hash();
+    let tx_hash = tx.as_ref().hash_as_entrypoint();
     {
         let mut transactions = state.transactions.block();
         transactions.insert_block_with_single_tx(tx_hash, nonzero!(1_usize));
@@ -334,14 +334,17 @@ fn push_with_lane_with_state_rejects_committed_transaction() {
         .push_with_lane_with_state(tx, &state)
         .expect_err("committed transaction must be rejected");
     assert!(matches!(err.err, Error::InBlockchain));
-    assert_eq!(err.tx.as_ref().as_ref().hash(), tx_hash);
+    assert_eq!(err.tx.as_ref().as_ref().hash_as_entrypoint(), tx_hash);
 }
 #[test]
 fn push_with_lane_with_state_rejects_unresolved_route() {
     struct UnresolvedRouter;
     impl LaneRouter for UnresolvedRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-            RoutingDecision::new(LaneId::new(99), DataSpaceId::new(77))
+        fn try_route(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(LaneId::new(99), DataSpaceId::new(77)))
         }
     }
     let kura = Kura::blank_kura_for_testing();
@@ -369,7 +372,7 @@ fn contains_pending_hash_ignores_committed_entries() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push tx");
     assert!(queue.contains_pending_hash(hash, &state));
     {
@@ -389,7 +392,7 @@ fn gossip_batch_with_state_removes_committed_entries() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push tx");
     {
         let mut transactions = state.transactions.block();

@@ -1088,7 +1088,11 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
     kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
     let mut drifted = LaneBlockExecutionInputArtifact::new(recovered);
-    drifted.autonomous_payload_hash = Some(Hash::new(b"drifted autonomous input hash"));
+    drifted.source = LaneBlockExecutionSourceV1::autonomous_lane(
+        network_id,
+        epoch,
+        Hash::new(b"drifted autonomous input hash"),
+    );
     let drifted_bytes = drifted.encode_framed().expect("encode drifted input");
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
@@ -1100,7 +1104,6 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
         "lane block execution input",
         FsyncMode::Always,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(
         kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
@@ -1162,15 +1165,15 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     let (data_path, index_path) =
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
     fs::write(&data_path, &drifted_bytes).expect("write divergent canonical bundle data");
-    fs::write(
-        &index_path,
-        SidecarIndexEntry {
+    let mut index = SidecarIndexLayout::base_header(1).to_vec();
+    index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(drifted_bytes.len()).expect("bundle length fits u64"),
         }
         .to_bytes(),
-    )
-    .expect("write divergent canonical bundle index");
+    );
+    fs::write(&index_path, index).expect("write divergent canonical bundle index");
     assert_eq!(
         kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
         Err("persisted autonomous merge bundle differs from exact durable components"),

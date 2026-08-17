@@ -426,7 +426,7 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
         .as_ref()
         .and_then(|batch| batch.lanes.first())
         .expect("merge-applied retirement lane execution");
-    let artifact = Kura::merge_lane_block_artifact(execution);
+    let artifact = crate::kura::LaneBlockArtifact::new(work.carrier.hash(), work.ownership.clone());
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(retiring_entry, &root);
     let payload = artifact
         .encode_framed()
@@ -440,7 +440,6 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
             "lane block artifact",
             FsyncMode::Always,
             None,
-            crate::kura::SidecarIndexOrigin::FirstWrite,
         ),
         "persist retiring lane artifact history",
     );
@@ -941,15 +940,15 @@ fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
     let temp_index_path = index_path.with_extension("index.tmp");
     let payload: &[u8] = b"retryable ownership rewrite";
     fs::write(&temp_data_path, payload).expect("stage retryable ownership payload");
-    fs::write(
-        &temp_index_path,
-        SidecarIndexEntry {
+    let mut temp_index = SidecarIndexLayout::base_header(1).to_vec();
+    temp_index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(payload.len()).expect("test payload length"),
         }
         .to_bytes(),
-    )
-    .expect("stage retryable ownership index");
+    );
+    fs::write(&temp_index_path, temp_index).expect("stage retryable ownership index");
     ProgressSidecarDurabilityFault::Data.inject();
     let error = kura
         .first_release_lane_retirement_admissible_for_test(

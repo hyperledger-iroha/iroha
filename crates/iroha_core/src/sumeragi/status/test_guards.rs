@@ -178,43 +178,9 @@ pub fn settlement_status_reset_for_tests() {
         SettlementStatusState::default();
 }
 #[cfg(test)]
-/// Reset process-local telemetry compatibility and lane-adapter diagnostics.
+/// Reset process-local lane-adapter diagnostics.
 pub(crate) fn reset_rbc_backlog_stats_for_tests() {
     let _guard = rbc_status_test_guard();
-    for counter in [
-        &LAST_PROPOSE_MS,
-        &LAST_COLLECT_DA_MS,
-        &LAST_COLLECT_PREVOTE_MS,
-        &LAST_COLLECT_PRECOMMIT_MS,
-        &LAST_COLLECT_AGG_MS,
-        &LAST_COMMIT_MS,
-        &MAX_PROPOSE_MS,
-        &MAX_COLLECT_DA_MS,
-        &MAX_COLLECT_PREVOTE_MS,
-        &MAX_COLLECT_PRECOMMIT_MS,
-        &MAX_COLLECT_AGG_MS,
-        &MAX_COMMIT_MS,
-        &LAST_PROPOSE_EMA_MS,
-        &LAST_COLLECT_DA_EMA_MS,
-        &LAST_COLLECT_PREVOTE_EMA_MS,
-        &LAST_COLLECT_PRECOMMIT_EMA_MS,
-        &LAST_COLLECT_AGG_EMA_MS,
-        &LAST_COMMIT_EMA_MS,
-        &LAST_PIPELINE_TOTAL_EMA_MS,
-        &GOSSIP_FALLBACK_TOTAL,
-        &BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL,
-        &BLOCK_CREATED_HINT_MISMATCH_TOTAL,
-        &BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL,
-    ] {
-        counter.store(0, Ordering::Relaxed);
-    }
-    *lock_operator_status_slot(availability_slot(), "availability vote stats") =
-        AvailabilityStats::default();
-    lock_operator_status_slot(qc_latency_slot(), "QC latency stats").clear();
-    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot") =
-        RbcBacklogSnapshot::default();
-    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") =
-        PendingRbcSnapshot::default();
     lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot").clear();
     lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clear();
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") =

@@ -203,7 +203,6 @@ def _finalized_event() -> dict[str, Any]:
 def _submission_receipt() -> dict[str, Any]:
     return {
         "payload": {
-            "tx_hash": "hash:TX",
             "entrypoint_hash": "hash:ENTRYPOINT",
             "signed_transaction_hash": "hash:SIGNED",
             "submitted_at_ms": 1_700_000_200_000,

@@ -81,21 +81,18 @@ export function buildDaIngestRequest(options = {}) {
     chunk_size: chunkSize,
     total_size: payloadBuffer.length,
     payload_hash: tupleWrap(encodeFixedBytes(payloadHash, 32)),
+    compression: normalizeEnumLiteral(
+      options.compression ?? "Identity",
+      "compression",
+      ["Identity", "Gzip", "Deflate", "Zstd"],
+    ),
+    norito_manifest:
+      options.noritoManifest === undefined || options.noritoManifest === null
+        ? null
+        : toBuffer(options.noritoManifest, "noritoManifest").toString("base64"),
     payload: payloadBuffer.toString("base64"),
     metadata,
   };
-
-  if (options.compression !== undefined) {
-    request.compression = normalizeEnumLiteral(
-      options.compression,
-      "compression",
-      ["Identity", "Gzip", "Deflate", "Zstd"],
-    );
-  }
-
-  if (options.noritoManifest !== undefined && options.noritoManifest !== null) {
-    request.norito_manifest = toBuffer(options.noritoManifest, "noritoManifest").toString("base64");
-  }
 
   const signingDigest = computeDaIngestSigningDigest(request);
   const signatureInfo = resolveSignature(options, signingDigest);
@@ -149,7 +146,7 @@ export function computeDaIngestSigningDigest(requestInput) {
   contentParts.push(
     encodeUnsignedLe(erasure.data_shards, 2, "erasure_profile.data_shards"),
     encodeUnsignedLe(erasure.parity_shards, 2, "erasure_profile.parity_shards"),
-    encodeUnsignedLe(erasure.row_parity_stripes ?? 0, 2, "erasure_profile.row_parity_stripes"),
+    encodeUnsignedLe(erasure.row_parity_stripes, 2, "erasure_profile.row_parity_stripes"),
     encodeUnsignedLe(erasure.chunk_alignment, 2, "erasure_profile.chunk_alignment"),
   );
   const fec = ensureRecord(erasure.fec_scheme, "erasure_profile.fec_scheme");
@@ -181,13 +178,16 @@ export function computeDaIngestSigningDigest(requestInput) {
 
   const compressionTags = { Identity: 0, Gzip: 1, Deflate: 2, Zstd: 3 };
   const compressionName = requireEnumKey(
-    request.compression ?? "Identity",
+    request.compression,
     compressionTags,
     "compression",
   );
   contentParts.push(Buffer.of(compressionTags[compressionName]));
 
-  if (request.norito_manifest === undefined || request.norito_manifest === null) {
+  if (!Object.prototype.hasOwnProperty.call(request, "norito_manifest")) {
+    throw new TypeError("norito_manifest is required and must be null or a base64 string");
+  }
+  if (request.norito_manifest === null) {
     contentParts.push(Buffer.of(0));
   } else {
     contentParts.push(

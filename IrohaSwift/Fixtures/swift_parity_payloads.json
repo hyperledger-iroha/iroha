@@ -23,7 +23,8 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
       },
       "metadata": {}
@@ -53,7 +54,8 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
       },
       "metadata": {}
@@ -83,7 +85,8 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
       },
       "metadata": {}

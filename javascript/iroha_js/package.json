@@ -199,7 +199,6 @@
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
-    "telemetry:capture": "node ./scripts/capture_sumeragi_telemetry.mjs",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
   },
   "keywords": [

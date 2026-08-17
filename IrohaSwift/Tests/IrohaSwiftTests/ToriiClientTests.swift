@@ -542,6 +542,7 @@ final class ToriiClientTests: XCTestCase {
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
             "metadata": .object([:]),
+            "attachments": .null,
         ]
     }
 
@@ -4612,7 +4613,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                {"payload":{"entrypoint_hash":"abc","signed_transaction_hash":null,"submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
                 """.data(using: .utf8)!
                 return (response, body)
             default:
@@ -4634,7 +4635,6 @@ final class ToriiClientTests: XCTestCase {
         let body = """
         {
           "payload": {
-            "tx_hash": "abc",
             "entrypoint_hash": "entry",
             "signed_transaction_hash": "signed",
             "submitted_at_ms": "1",
@@ -4653,7 +4653,7 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try JSONDecoder().decode(ToriiSubmitTransactionResponse.self, from: body)
 
-        XCTAssertEqual(receipt.hash, "abc")
+        XCTAssertEqual(receipt.hash, "entry")
         XCTAssertEqual(receipt.payload.entrypointHash, "entry")
         XCTAssertEqual(receipt.payload.signedTransactionHash, "signed")
         XCTAssertEqual(receipt.payload.signerValue["algorithm"], .string("ed25519"))
@@ -4662,6 +4662,20 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(receipt.signatureValue["payload"], .string("receipt-signature"))
         XCTAssertEqual(receipt.payload.signer, #"{"algorithm":"ed25519","payload":"node-key"}"#)
         XCTAssertEqual(receipt.signature, #"{"algorithm":"ed25519","payload":"receipt-signature"}"#)
+
+        let missingNullableHash = """
+        {"payload":{"entrypoint_hash":"entry","submitted_at_ms":1,"submitted_at_height":2,"signer":"node"},"signature":"sig"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSubmitTransactionResponse.self, from: missingNullableHash)
+        )
+
+        let unknownPayloadField = """
+        {"payload":{"entrypoint_hash":"entry","signed_transaction_hash":null,"submitted_at_ms":1,"submitted_at_height":2,"signer":"node","legacy":null},"signature":"sig"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSubmitTransactionResponse.self, from: unknownPayloadField)
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4684,7 +4698,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"payload":{"tx_hash":"json","submitted_at_ms":1,"submitted_at_height":2,"signer":"json-signer"},"signature":"cafe"}
+                {"payload":{"entrypoint_hash":"json","signed_transaction_hash":null,"submitted_at_ms":1,"submitted_at_height":2,"signer":"json-signer"},"signature":"cafe"}
                 """.data(using: .utf8)!
                 return (response, body)
             default:
@@ -5291,7 +5305,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"payload":{"tx_hash":"entry","submitted_at_ms":3,"submitted_at_height":4,"signer":"entry-signer"},"signature":"feedface"}
+                {"payload":{"entrypoint_hash":"entry","signed_transaction_hash":null,"submitted_at_ms":3,"submitted_at_height":4,"signer":"entry-signer"},"signature":"feedface"}
                 """.data(using: .utf8)!
                 return (response, body)
             default:
@@ -12990,7 +13004,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             let responseBody = Data(
                 """
                 {
-                  "intent":{"payer":"authority","value":{"charge_limits":[]}},
+                  "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
                   "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
                   "components":[],
                   "capacities":[],
@@ -13048,6 +13062,14 @@ final class ToriiClientHeaderTests: XCTestCase {
                     canonicalAuth: canonicalReadAuth
                 )
             }
+        }
+        var missingAttachments = try canonicalUnsignedFeePayload()
+        missingAttachments.removeValue(forKey: "attachments")
+        await assertToriiInvalidPayload(contains: "exact TransactionPayload field set") {
+            _ = try await makeClient().quoteFees(
+                unsignedPayload: missingAttachments,
+                canonicalAuth: canonicalReadAuth
+            )
         }
     }
 
@@ -19259,7 +19281,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                {"payload":{"entrypoint_hash":"abc","signed_transaction_hash":null,"submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
                 """.data(using: .utf8)!
                 return (response, body)
             default:

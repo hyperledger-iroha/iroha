@@ -1,0 +1,871 @@
+# iroha-telemetry-metric-catalog-v2
+txs	txs	Transactions committed	registered
+isi	isi	Iroha special instructions handled by this peer	registered
+isi_times	isi_times	Time to handle isi in this peer	registered
+tx_amounts	tx_amount	average amount involved in a transaction on this peer	registered
+block_height	block_height	Current block height	registered
+block_height_non_empty	block_height_non_empty	Current count of non-empty blocks	registered
+last_commit_time_ms	last_commit_time_ms	Time (since block creation) it took for the latest block to be committed by this peer	registered
+last_block_committed_at_ms	last_block_committed_at_ms	Millisecond UNIX timestamp when this peer last processed a committed block	registered
+last_non_empty_block_committed_at_ms	last_non_empty_block_committed_at_ms	Millisecond UNIX timestamp when this peer last processed a committed non-empty block	registered
+commit_time_ms	commit_time_ms	Average block commit time on this peer	registered
+slot_duration_ms	iroha_slot_duration_ms	Slot duration distribution in milliseconds (NX-18 finality SLO).	registered
+slot_duration_ms_latest	iroha_slot_duration_ms_latest	Latest observed slot duration (ms) for NX-18 finality tracking.	registered
+da_quorum_ratio	iroha_da_quorum_ratio	Rolling fraction of slots that satisfied the DA quorum (0-1).	registered
+sm_syscall_total	iroha_sm_syscall_total	SM helper syscalls observed (labels: kind, mode)	registered
+sm_openssl_preview	iroha_sm_openssl_preview	Whether the OpenSSL-backed SM preview helpers are enabled (0/1).	registered
+zk_halo2_enabled	iroha_zk_halo2_enabled	Whether Halo2 verification is enabled for the host (0/1).	registered
+zk_halo2_curve_id	iroha_zk_halo2_curve_id	Active Halo2 curve identifier (0=Pallas, 1=Pasta, 2=Goldilocks, 3=Bn254).	registered
+zk_halo2_backend_id	iroha_zk_halo2_backend_id	Active Halo2 backend identifier (0=IPA, 1=Unsupported).	registered
+zk_halo2_max_k	iroha_zk_halo2_max_k	Maximum supported Halo2 circuit exponent (k).	registered
+zk_halo2_verifier_budget_ms	iroha_zk_halo2_verifier_budget_ms	Halo2 verifier soft budget in milliseconds.	registered
+zk_halo2_verifier_max_batch	iroha_zk_halo2_verifier_max_batch	Maximum proofs allowed in a Halo2 batch verification.	registered
+zk_halo2_verifier_worker_threads	iroha_zk_halo2_verifier_worker_threads	Number of worker threads serving ZK lane verification.	registered
+zk_halo2_verifier_queue_cap	iroha_zk_halo2_verifier_queue_cap	Effective ZK lane queue capacity.	registered
+zk_lane_enqueue_wait_total	iroha_zk_lane_enqueue_wait_total	Count of ZK lane admissions that required a bounded wait.	registered
+zk_lane_enqueue_timeout_total	iroha_zk_lane_enqueue_timeout_total	Count of ZK lane admissions that timed out under saturation.	registered
+zk_lane_drop_total	iroha_zk_lane_drop_total	Terminal ZK lane drops grouped by reason.	registered
+zk_lane_retry_enqueued_total	iroha_zk_lane_retry_enqueued_total	Count of important tasks enqueued into the ZK lane retry ring.	registered
+zk_lane_retry_replayed_total	iroha_zk_lane_retry_replayed_total	Count of tasks replayed from the ZK lane retry ring.	registered
+zk_lane_retry_exhausted_total	iroha_zk_lane_retry_exhausted_total	Count of tasks dropped after exhausting ZK lane retry attempts.	registered
+zk_lane_pending_depth	iroha_zk_lane_pending_depth	Current number of tasks buffered in ZK lane dispatch backlog.	registered
+zk_lane_retry_ring_depth	iroha_zk_lane_retry_ring_depth	Current number of tasks buffered in the ZK lane retry ring.	registered
+zk_verifier_cache_events_total	iroha_zk_verifier_cache_events_total	Verifier cache events grouped by cache name and event (hit|miss|insert|evict).	registered
+confidential_gas_base_verify	iroha_confidential_gas_base_verify	Base gas charged when verifying a confidential proof.	registered
+confidential_gas_per_public_input	iroha_confidential_gas_per_public_input	Gas multiplier per confidential proof public input.	registered
+confidential_gas_per_proof_byte	iroha_confidential_gas_per_proof_byte	Gas multiplier per confidential proof byte.	registered
+confidential_gas_per_nullifier	iroha_confidential_gas_per_nullifier	Gas multiplier per confidential nullifier.	registered
+confidential_gas_per_commitment	iroha_confidential_gas_per_commitment	Gas multiplier per confidential commitment.	registered
+ivm_gas_schedule_hash_lo	iroha_ivm_gas_schedule_hash_lo	Lower 64 bits of the canonical IVM gas schedule hash.	registered
+ivm_gas_schedule_hash_hi	iroha_ivm_gas_schedule_hash_hi	Upper 64 bits of the canonical IVM gas schedule hash.	registered
+confidential_tree_commitments	iroha_confidential_tree_commitments	Current number of confidential commitments per asset.	registered
+confidential_tree_depth	iroha_confidential_tree_depth	Current Merkle depth for the confidential tree per asset.	registered
+confidential_root_history_entries	iroha_confidential_root_history_entries	Root history entries retained for the confidential tree per asset.	registered
+confidential_frontier_checkpoints	iroha_confidential_frontier_checkpoints	Frontier checkpoints tracked for the confidential tree per asset.	registered
+confidential_frontier_last_height	iroha_confidential_frontier_last_checkpoint_height	Height of the most recent frontier checkpoint per asset.	registered
+confidential_frontier_last_commitments	iroha_confidential_frontier_last_checkpoint_commitments	Commitment count captured at the latest frontier checkpoint per asset.	registered
+confidential_root_evictions_total	iroha_confidential_root_evictions_total	Confidential root history eviction counter per asset.	registered
+confidential_frontier_evictions_total	iroha_confidential_frontier_evictions_total	Confidential frontier eviction counter per asset.	registered
+oracle_price_local_per_xor	iroha_oracle_price_local_per_xor	Latest oracle TWAP quoted as local tokens per XOR.	registered
+oracle_twap_window_seconds	iroha_oracle_twap_window_seconds	TWAP window length used by the oracle in seconds.	registered
+oracle_haircut_basis_points	iroha_oracle_haircut_basis_points	Effective haircut applied by the oracle (basis points).	registered
+oracle_staleness_seconds	iroha_oracle_staleness_seconds	Oracle staleness in seconds at the time of the last settlement.	registered
+oracle_observations_total	iroha_oracle_observations_total	Number of oracle observations aggregated per feed slot.	registered
+oracle_aggregation_duration_ms	iroha_oracle_aggregation_duration_ms	Oracle aggregation wall-clock duration in milliseconds.	registered
+oracle_rewards_total	iroha_oracle_rewards_total	Total mantissa units rewarded to oracle providers per feed.	registered
+oracle_penalties_total	iroha_oracle_penalties_total	Total mantissa units slashed from oracle providers per feed.	registered
+oracle_feed_events_total	iroha_oracle_feed_events_total	Total oracle feed events aggregated per feed.	registered
+oracle_feed_events_with_evidence_total	iroha_oracle_feed_events_with_evidence_total	Oracle feed events that carried at least one evidence hash.	registered
+oracle_evidence_hashes_total	iroha_oracle_evidence_hashes_total	Total oracle evidence hashes attached to feed events per feed.	registered
+fastpq_execution_mode_total	fastpq_execution_mode_total	FASTPQ execution mode resolutions grouped by requested/resolved/backend and per-device labels.	registered
+fastpq_poseidon_pipeline_total	fastpq_poseidon_pipeline_total	FASTPQ Poseidon pipeline resolutions grouped by requested/resolved/path and per-device labels.	registered
+fastpq_gpu_disable_total	fastpq_gpu_disable_total	FASTPQ GPU accelerator disable events grouped by accelerator/reason and per-device labels.	registered
+fastpq_gpu_parity_failure_total	fastpq_gpu_parity_failure_total	FASTPQ sampled GPU parity failures grouped by accelerator/reason and per-device labels.	registered
+fastpq_proof_sidecar_queue_depth	fastpq_proof_sidecar_queue_depth	FASTPQ proof sidecar queue depth.	registered
+fastpq_proof_sidecar_events_total	fastpq_proof_sidecar_events_total	FASTPQ proof sidecar persistence events grouped by event.	registered
+fastpq_metal_queue_ratio	fastpq_metal_queue_ratio	FASTPQ Metal queue duty-cycle ratios (labels: device_class, chip_family, gpu_kind, queue, metric=busy|overlap).	registered
+fastpq_metal_queue_depth	fastpq_metal_queue_depth	FASTPQ Metal queue depth snapshot (labels: device_class, chip_family, gpu_kind, metric=limit|max_in_flight|dispatch_count|window_seconds).	registered
+fastpq_zero_fill_duration_ms	fastpq_zero_fill_duration_ms	FASTPQ host zero-fill duration samples in milliseconds (labels: device_class, chip_family, gpu_kind).	registered
+fastpq_zero_fill_bandwidth_gbps	fastpq_zero_fill_bandwidth_gbps	FASTPQ host zero-fill bandwidth derived from runtime telemetry (labels: device_class, chip_family, gpu_kind).	registered
+sm_syscall_failures_total	iroha_sm_syscall_failures_total	SM helper syscall failures (labels: kind, mode, reason)	registered
+settlement_events_total	iroha_settlement_events_total	Settlement events grouped by kind/outcome/reason	registered
+settlement_finality_events_total	iroha_settlement_finality_events_total	Settlement finality outcomes grouped by kind/outcome/final_state	registered
+settlement_fx_window_ms	iroha_settlement_fx_window_ms	PvP FX window observations (milliseconds between committed legs)	registered
+settlement_buffer_xor	iroha_settlement_buffer_xor	Per-lane/dataspace settlement buffer debits recorded in micro XOR.	registered
+settlement_buffer_capacity_xor	iroha_settlement_buffer_capacity_xor	Configured settlement buffer capacity in micro XOR per lane/dataspace.	registered
+settlement_buffer_status	iroha_settlement_buffer_status	Settlement buffer status code per lane/dataspace (0 = normal, 1 = alert, 2 = throttle, 3 = XOR-only, 4 = halt).	registered
+settlement_pnl_xor	iroha_settlement_pnl_xor	Per-lane/dataspace realised haircut variance recorded in micro XOR.	registered
+settlement_haircut_bp	iroha_settlement_haircut_bp	Effective haircut basis points applied per lane/dataspace for the latest block.	registered
+settlement_swapline_utilisation	iroha_settlement_swapline_utilisation	Swap-line utilisation snapshots (micro XOR) grouped by lane, dataspace, and liquidity profile.	registered
+settlement_conversion_total	settlement_router_conversion_total	Settlement conversion counter grouped by lane, dataspace, and source token.	registered
+settlement_haircut_total	settlement_router_haircut_total	Cumulative settlement haircut totals (in XOR units) grouped by lane and dataspace.	registered
+subscription_billing_attempts_total	iroha_subscription_billing_attempts_total	Subscription billing attempts grouped by pricing kind.	registered
+subscription_billing_outcomes_total	iroha_subscription_billing_outcomes_total	Subscription billing outcomes grouped by pricing kind and result.	registered
+social_events_total	iroha_social_events_total	Viral incentive lifecycle events grouped by event kind	registered
+social_budget_spent	iroha_social_budget_spent	Latest viral reward budget spend for the active day	registered
+social_campaign_spent	iroha_social_campaign_spent	Cumulative viral promotion spend across the full campaign window	registered
+social_campaign_cap	iroha_social_campaign_cap	Configured viral campaign cap (0 = unlimited)	registered
+social_campaign_remaining	iroha_social_campaign_remaining	Remaining viral campaign budget (0 when cap is unlimited)	registered
+social_campaign_active	iroha_social_campaign_active	Whether the viral promotion window is active (1 = active, 0 = inactive)	registered
+social_halted	iroha_social_halted	Whether viral incentives are currently halted (1 = halted, 0 = flowing)	registered
+social_rejections_total	iroha_social_rejections_total	Viral incentive rejections grouped by reason	registered
+multisig_direct_sign_reject_total	multisig_direct_sign_reject_total	Transactions rejected for direct multisig signatures	registered
+social_open_escrows	iroha_social_open_escrows	Open viral escrows currently tracked on-ledger	registered
+connected_peers	connected_peers	Total number of currently connected peers	registered
+p2p_peer_churn_total	p2p_peer_churn_total	Peer churn events observed by this node	registered
+uptime_since_genesis_ms	uptime_since_genesis_ms	Network up-time, from creation of the genesis block	registered
+domains	domains	Total number of domains	registered
+accounts	accounts	User accounts registered at this time	registered
+view_changes	view_changes	Number of view changes in the current round	registered
+queue_size	queue_size	Transactions tracked by the queue (queued + in-flight)	registered
+queue_queued	queue_queued	Transactions still queued for selection	registered
+queue_inflight	queue_inflight	Transactions in-flight after selection	registered
+kura_fsync_enabled	kura_fsync_enabled	Kura fsync policy state (1=always, 2=batched).	registered
+kura_fsync_failures_total	kura_fsync_failures_total	Kura fsync failures grouped by target (data/index/hashes).	registered
+kura_fsync_latency_ms	kura_fsync_latency_ms	Kura fsync latency (milliseconds) grouped by target.	registered
+amx_prepare_ms	iroha_amx_prepare_ms	AMX prepare phase latency in milliseconds grouped by lane id.	registered
+amx_commit_ms	iroha_amx_commit_ms	AMX commit/merge phase latency in milliseconds grouped by lane id.	registered
+amx_abort_total	iroha_amx_abort_total	AMX abort counter grouped by lane id and abort stage.	registered
+axt_policy_reject_total	iroha_axt_policy_reject_total	AXT policy validation failures grouped by lane id and reason.	registered
+axt_policy_snapshot_version	iroha_axt_policy_snapshot_version	Stable hash-derived version of the active AXT policy snapshot (u64 truncated).	registered
+axt_policy_snapshot_cache_events_total	iroha_axt_policy_snapshot_cache_events_total	AXT policy snapshot hydration events grouped by cache outcome.	registered
+axt_proof_cache_events_total	iroha_axt_proof_cache_events_total	Dataspace proof cache events grouped by event label.	registered
+axt_proof_cache_state	iroha_axt_proof_cache_state	Dataspace proof cache state (value=expiry_slot_with_skew) grouped by dsid/status/manifest_root_hex/verified_slot.	registered
+ivm_exec_ms	iroha_ivm_exec_ms	IVM execution latency in milliseconds grouped by lane id.	registered
+ivm_stack_bytes	iroha_ivm_stack_bytes	Requested/applied stack sizes for scheduler/prover/guest (bytes).	registered
+ivm_stack_clamped	iroha_ivm_stack_clamped	Stack clamp flags for scheduler/prover/guest (0 = no clamp, 1 = clamped).	registered
+ivm_stack_gas_multiplier	iroha_ivm_stack_gas_multiplier	Gas→stack multiplier currently in effect for guest stack limits.	registered
+ivm_stack_pool_fallback_total	iroha_ivm_stack_pool_fallback_total	Number of times a pre-existing global Rayon pool forced a stack-size fallback.	registered
+ivm_stack_budget_hit_total	iroha_ivm_stack_budget_hit_total	VM constructions that hit the guest stack budget clamp.	registered
+sumeragi_tx_queue_depth	sumeragi_tx_queue_depth	Transactions currently queued as observed by consensus	registered
+sumeragi_tx_queue_capacity	sumeragi_tx_queue_capacity	Transaction queue capacity observed by consensus	registered
+sumeragi_tx_queue_retained_bytes	sumeragi_tx_queue_retained_bytes	Estimated retained transaction queue bytes observed by consensus	registered
+sumeragi_tx_queue_max_retained_bytes	sumeragi_tx_queue_max_retained_bytes	Retained transaction queue byte budget observed by consensus	registered
+sumeragi_tx_queue_saturated	sumeragi_tx_queue_saturated	Transaction queue saturation flag observed by consensus (0 = healthy, 1 = saturated)	registered
+sumeragi_tx_queue_saturated_by_count	sumeragi_tx_queue_saturated_by_count	Transaction count saturation flag observed by consensus (0 = inactive, 1 = active)	registered
+sumeragi_tx_queue_saturated_by_bytes	sumeragi_tx_queue_saturated_by_bytes	Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active)	registered
+sumeragi_tx_queue_saturated_by_age	sumeragi_tx_queue_saturated_by_age	Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active)	registered
+sumeragi_tx_queue_oldest_queued_age_ms	sumeragi_tx_queue_oldest_queued_age_ms	Oldest queued transaction age in milliseconds observed by consensus	registered
+sumeragi_pending_blocks_total	sumeragi_pending_blocks_total	Total pending blocks tracked by consensus	registered
+sumeragi_pending_blocks_blocking	sumeragi_pending_blocks_blocking	Pending blocks currently gating proposals/view changes	registered
+sumeragi_commit_inflight_queue_depth	sumeragi_commit_inflight_queue_depth	Commit inflight queue depth (inflight + queued commit work)	registered
+sumeragi_missing_block_requests	sumeragi_missing_block_requests	Outstanding missing-block requests observed locally	registered
+sumeragi_missing_block_oldest_ms	sumeragi_missing_block_oldest_ms	Age in milliseconds of the oldest missing-block request	registered
+sumeragi_missing_block_retry_window_ms	sumeragi_missing_block_retry_window_ms	Retry window for missing-block fetches in milliseconds	registered
+sumeragi_missing_block_dwell_ms	sumeragi_missing_block_dwell_ms	Dwell time from first QC arrival until block payload observation (milliseconds)	registered
+sumeragi_epoch_length_blocks	sumeragi_epoch_length_blocks	Epoch length in blocks for NPoS scheduling (0 when not applicable)	registered
+sumeragi_epoch_commit_deadline_offset	sumeragi_epoch_commit_deadline_offset	Commit window deadline offset from epoch start (blocks)	registered
+sumeragi_epoch_reveal_deadline_offset	sumeragi_epoch_reveal_deadline_offset	Reveal window deadline offset from epoch start (blocks)	registered
+state_tiered_hot_entries	state_tiered_hot_entries	Entries retained in the tiered-state hot tier after the latest snapshot	registered
+state_tiered_hot_bytes	state_tiered_hot_bytes	Bytes retained in the tiered-state hot tier after the latest snapshot	registered
+state_tiered_cold_entries	state_tiered_cold_entries	Entries spilled to the tiered-state cold tier after the latest snapshot	registered
+state_tiered_cold_bytes	state_tiered_cold_bytes	Total bytes written to the tiered-state cold tier in the latest snapshot	registered
+state_tiered_cold_reused_entries	state_tiered_cold_reused_entries	Cold entries reused without re-encoding in the latest tiered-state snapshot	registered
+state_tiered_cold_reused_bytes	state_tiered_cold_reused_bytes	Total bytes reused from cold payloads in the latest tiered-state snapshot	registered
+state_tiered_hot_promotions	state_tiered_hot_promotions	Entries promoted into the tiered-state hot tier in the latest snapshot	registered
+state_tiered_hot_demotions	state_tiered_hot_demotions	Entries demoted into the tiered-state cold tier in the latest snapshot	registered
+state_tiered_hot_grace_overflow_keys	state_tiered_hot_grace_overflow_keys	Hot-tier key budget overflow caused by grace retention in the latest snapshot	registered
+state_tiered_hot_grace_overflow_bytes	state_tiered_hot_grace_overflow_bytes	Hot-tier byte budget overflow caused by grace retention in the latest snapshot	registered
+state_tiered_last_snapshot_index	state_tiered_last_snapshot_index	Latest tiered-state snapshot index recorded by this peer	registered
+storage_budget_bytes_used	storage_budget_bytes_used	Storage budget bytes used per component	registered
+storage_budget_bytes_limit	storage_budget_bytes_limit	Storage budget limit bytes per component	registered
+storage_budget_exceeded_total	storage_budget_exceeded_total	Storage budget exceed events per component	registered
+storage_da_cache_total	storage_da_cache_total	DA storage cache outcomes per component	registered
+storage_da_churn_bytes_total	storage_da_churn_bytes_total	DA storage churn bytes per component and direction	registered
+governance_proposals_status	governance_proposals_status	Governance proposals grouped by status	registered
+governance_council_members	governance_council_members	Latest persisted council member count	registered
+governance_council_alternates	governance_council_alternates	Latest persisted council alternate count	registered
+governance_council_candidates	governance_council_candidates	Total candidates considered in the latest council draw	registered
+governance_council_epoch	governance_council_epoch	Epoch index for the latest persisted council draw	registered
+governance_citizens_total	governance_citizens_total	Total registered citizens bonded for governance	registered
+governance_citizen_service_events_total	governance_citizen_service_events_total	Citizen service discipline events grouped by outcome	registered
+governance_protected_namespace_total	governance_protected_namespace_total	Protected namespace enforcement outcomes	registered
+governance_manifest_admission_total	governance_manifest_admission_total	Governance manifest admission outcomes (allowed, rejected by reason)	registered
+governance_manifest_quorum_total	governance_manifest_quorum_total	Manifest validator quorum enforcement outcomes	registered
+governance_manifest_hook_total	governance_manifest_hook_total	Governance manifest hook enforcement outcomes	registered
+governance_manifest_activations_total	governance_manifest_activations_total	Manifest activation events emitted by governance enactment	registered
+governance_bond_events_total	governance_bond_events_total	Governance bond lifecycle events (lock_created|lock_extended|lock_unlocked)	registered
+alias_usage_total	alias_usage_total	Alias service events grouped by lane and event kind	registered
+iso_reference_status	iso_reference_status	ISO bridge reference-data status (-1 failed, 0 missing, 1 loaded)	registered
+iso_reference_age_seconds	iso_reference_age_seconds	ISO bridge reference-data age (seconds)	registered
+iso_reference_records	iso_reference_records	ISO bridge reference-data record counts	registered
+iso_reference_refresh_interval_secs	iso_reference_refresh_interval_secs	ISO bridge reference-data refresh interval (seconds)	registered
+fraud_psp_assessments_total	fraud_psp_assessments_total	PSP fraud assessments accepted by the host	registered
+fraud_psp_missing_assessment_total	fraud_psp_missing_assessment_total	Transactions missing PSP fraud assessment metadata	registered
+fraud_psp_invalid_metadata_total	fraud_psp_invalid_metadata_total	Invalid PSP fraud assessment metadata fields	registered
+fraud_psp_attestation_total	fraud_psp_attestation_total	Fraud assessment attestation verification outcomes	registered
+fraud_psp_latency_ms	fraud_psp_latency_ms	Latency reported by PSP fraud scoring (milliseconds)	registered
+fraud_psp_score_bps	fraud_psp_score_bps	Fraud risk score distribution (basis points)	registered
+fraud_psp_outcome_mismatch_total	fraud_psp_outcome_mismatch_total	Mismatch between PSP disposition and fraud scoring	registered
+streaming_hpke_rekeys_total	streaming_hpke_rekeys_total	Streaming HPKE rekeys accepted grouped by suite	registered
+streaming_gck_rotations_total	streaming_gck_rotations_total	Streaming content key rotations processed	registered
+streaming_quic_datagrams_sent_total	streaming_quic_datagrams_sent_total	Streaming QUIC datagrams sent	registered
+streaming_quic_datagrams_dropped_total	streaming_quic_datagrams_dropped_total	Streaming QUIC datagrams dropped	registered
+streaming_fec_parity_current	streaming_fec_parity_current	Streaming parity bucket occupancy (active sessions per bucket)	registered
+streaming_feedback_timeout_total	streaming_feedback_timeout_total	Streaming feedback timeout events	registered
+streaming_soranet_provision_fail_total	streaming_soranet_provision_fail_total	Streaming SoraNet privacy-route provisioning failures	registered
+streaming_soranet_provision_queue_drop_total	streaming_soranet_provision_queue_drop_total	Streaming SoraNet provisioning queue drops grouped by reason	registered
+telemetry_redaction_total	telemetry_redaction_total	Telemetry redaction events grouped by reason	registered
+telemetry_redaction_skipped_total	telemetry_redaction_skipped_total	Telemetry redaction skips grouped by reason	registered
+telemetry_truncation_total	telemetry_truncation_total	Telemetry field truncations	registered
+streaming_privacy_redaction_fail_total	streaming_privacy_redaction_fail_total	Streaming telemetry redaction failures	registered
+streaming_encode_latency_ms	streaming_encode_latency_ms	Streaming encode latency in milliseconds	registered
+streaming_encode_audio_jitter_ms	streaming_encode_audio_jitter_ms	Streaming audio jitter (EWMA) in milliseconds	registered
+streaming_encode_audio_max_jitter_ms	streaming_encode_audio_max_jitter_ms	Streaming maximum audio jitter observed in milliseconds	registered
+streaming_encode_dropped_layers_total	streaming_encode_dropped_layers_total	Streaming encode dropped layers	registered
+streaming_decode_buffer_ms	streaming_decode_buffer_ms	Streaming decode buffer depth in milliseconds	registered
+streaming_decode_dropped_frames_total	streaming_decode_dropped_frames_total	Streaming decode dropped frames	registered
+streaming_decode_max_queue_ms	streaming_decode_max_queue_ms	Maximum streaming decode queue depth in milliseconds	registered
+streaming_decode_av_drift_ms	streaming_decode_av_drift_ms	Streaming audio/video drift (absolute average, milliseconds)	registered
+streaming_decode_max_drift_ms	streaming_decode_max_drift_ms	Streaming maximum audio/video drift observed in milliseconds	registered
+streaming_audio_jitter_ms	streaming_audio_jitter_ms	Viewer-reported audio jitter in milliseconds	registered
+streaming_audio_max_jitter_ms	streaming_audio_max_jitter_ms	Viewer maximum audio jitter observed in milliseconds	registered
+streaming_av_drift_ms	streaming_av_drift_ms	Viewer-reported audio/video drift (absolute average, milliseconds)	registered
+streaming_av_max_drift_ms	streaming_av_max_drift_ms	Viewer maximum audio/video drift observed in milliseconds	registered
+streaming_av_drift_ewma_ms	streaming_av_drift_ewma_ms	Viewer-reported EWMA audio/video drift in milliseconds (signed)	registered
+streaming_av_sync_window_ms	streaming_av_sync_window_ms	Viewer sync diagnostics aggregation window in milliseconds	registered
+streaming_av_sync_violation_total	streaming_av_sync_violation_total	Viewer sync violations observed	registered
+streaming_network_rtt_ms	streaming_network_rtt_ms	Streaming network RTT in milliseconds	registered
+streaming_network_loss_percent_x100	streaming_network_loss_percent_x100	Streaming network packet loss (basis points)	registered
+streaming_network_fec_repairs_total	streaming_network_fec_repairs_total	Streaming network FEC repairs performed	registered
+streaming_network_fec_failures_total	streaming_network_fec_failures_total	Streaming network FEC failures encountered	registered
+streaming_network_datagram_reinjects_total	streaming_network_datagram_reinjects_total	Streaming network datagram reinjects issued	registered
+streaming_energy_encoder_mw	streaming_energy_encoder_mw	Streaming encoder energy consumption (milliwatts)	registered
+streaming_energy_decoder_mw	streaming_energy_decoder_mw	Streaming decoder energy consumption (milliwatts)	registered
+nexus_audit_outcome_total	nexus_audit_outcome_total	Routed-trace audit outcomes grouped by trace identifier and status	registered
+nexus_audit_outcome_last_timestamp	nexus_audit_outcome_last_timestamp_seconds	Unix timestamp of the most recent routed-trace audit outcome per trace	registered
+nexus_space_directory_revision_total	nexus_space_directory_revision_total	Space Directory manifest revisions observed per dataspace	registered
+nexus_space_directory_active_manifests	nexus_space_directory_active_manifests	Active UAID capability manifests per dataspace/profile	registered
+nexus_space_directory_revocations_total	nexus_space_directory_revocations_total	Capability manifest revocations grouped by dataspace and reason	registered
+kaigi_relay_registered_total	kaigi_relay_registered_total	Kaigi relay registrations grouped by domain	registered
+kaigi_relay_registration_bandwidth	kaigi_relay_registration_bandwidth_class	Kaigi relay registration bandwidth class distribution	registered
+kaigi_relay_manifest_updates_total	kaigi_relay_manifest_updates_total	Kaigi relay manifest updates grouped by domain and action	registered
+kaigi_relay_manifest_hop_count	kaigi_relay_manifest_hop_count	Kaigi relay manifest hop-count distribution	registered
+kaigi_relay_failover_total	kaigi_relay_failover_total	Kaigi relay failovers grouped by domain and call	registered
+kaigi_relay_failover_hop_count	kaigi_relay_failover_hop_count	Kaigi relay failover hop-count distribution	registered
+kaigi_relay_health_reports_total	kaigi_relay_health_reports_total	Kaigi relay health reports grouped by domain and status	registered
+kaigi_relay_health_state	kaigi_relay_health_state	Kaigi relay health status (0=healthy,1=degraded,2=unavailable)	registered
+dropped_messages	dropped_messages	Sumeragi dropped messages	registered
+sumeragi_dropped_block_messages_total	sumeragi_dropped_block_messages_total	Dropped Sumeragi block messages due to full channel	registered
+sumeragi_dropped_control_messages_total	sumeragi_dropped_control_messages_total	Dropped Sumeragi control messages due to full channel	registered
+sumeragi_vrf_commits_emitted_total	sumeragi_vrf_commits_emitted_total	VRF commit messages broadcast by this validator	registered
+sumeragi_vrf_reveals_emitted_total	sumeragi_vrf_reveals_emitted_total	VRF reveal messages broadcast by this validator	registered
+sumeragi_vrf_reveals_late_total	sumeragi_vrf_reveals_late_total	VRF reveals accepted after the reveal window	registered
+sumeragi_vrf_non_reveal_penalties_total	sumeragi_vrf_non_reveal_penalties_total	VRF non-reveal penalties applied	registered
+sumeragi_vrf_non_reveal_by_signer	sumeragi_vrf_non_reveal_by_signer	VRF non-reveal penalties by signer index	registered
+sumeragi_vrf_no_participation_total	sumeragi_vrf_no_participation_total	VRF no-participation penalties applied	registered
+sumeragi_vrf_no_participation_by_signer	sumeragi_vrf_no_participation_by_signer	VRF no-participation penalties by signer index	registered
+sumeragi_vrf_rejects_total_by_reason	sumeragi_vrf_rejects_total_by_reason	VRF commit/reveal rejects by reason	registered
+p2p_dropped_posts	p2p_dropped_posts	Number of p2p post messages dropped due to backpressure	registered
+p2p_dropped_broadcasts	p2p_dropped_broadcasts	Number of p2p broadcast messages dropped due to backpressure	registered
+p2p_subscriber_queue_full_total	p2p_subscriber_queue_full_total	Number of inbound messages dropped because subscriber queues were full	registered
+p2p_subscriber_queue_full_by_topic_total	p2p_subscriber_queue_full_by_topic_total	Per-topic inbound drops caused by full subscriber queues	registered
+p2p_subscriber_unrouted_total	p2p_subscriber_unrouted_total	Number of inbound messages dropped because no subscriber matches the topic	registered
+p2p_subscriber_unrouted_by_topic_total	p2p_subscriber_unrouted_by_topic_total	Per-topic inbound drops caused by no matching subscriber	registered
+p2p_handshake_failures	p2p_handshake_failures	Number of p2p handshake failures	registered
+p2p_low_post_throttled_total	p2p_low_post_throttled_total	Number of low-priority post messages throttled	registered
+p2p_low_broadcast_throttled_total	p2p_low_broadcast_throttled_total	Number of low-priority broadcast deliveries throttled	registered
+p2p_post_overflow_total	p2p_post_overflow_total	Number of per-peer post channel overflows (bounded per-topic)	registered
+p2p_post_overflow_by_topic	p2p_post_overflow_by_topic	Per-topic per-peer post channel overflows (bounded per-topic)	registered
+consensus_ingress_drop_total	consensus_ingress_drop_total	Consensus ingress drops grouped by topic and reason	registered
+p2p_dns_refresh_total	p2p_dns_refresh_total	Number of DNS interval-based refresh cycles performed	registered
+p2p_dns_ttl_refresh_total	p2p_dns_ttl_refresh_total	Number of DNS TTL-based refresh cycles performed	registered
+p2p_dns_resolution_fail_total	p2p_dns_resolution_fail_total	Number of DNS resolution/connection failures for hostname peers	registered
+p2p_dns_reconnect_success_total	p2p_dns_reconnect_success_total	Number of DNS reconnect successes after refresh cycles	registered
+p2p_backoff_scheduled_total	p2p_backoff_scheduled_total	Number of per-address connect backoffs scheduled	registered
+p2p_deferred_send_enqueued_total	p2p_deferred_send_enqueued_total	Number of deferred outbound frames enqueued while peer sessions were unavailable	registered
+p2p_deferred_send_dropped_total	p2p_deferred_send_dropped_total	Number of deferred outbound frames dropped (expiry, overflow, stale generation)	registered
+p2p_session_reconnect_total	p2p_session_reconnect_total	Number of reconnect attempts triggered while deferring outbound frames	registered
+p2p_connect_retry_seconds	p2p_connect_retry_seconds	Cumulative reconnect retry delay in seconds (rounded up from milliseconds)	registered
+p2p_accept_throttled_total	p2p_accept_throttled_total	Number of incoming connections rejected by per-IP throttle	registered
+p2p_accept_bucket_evictions_total	p2p_accept_bucket_evictions_total	Number of accept throttle bucket evictions (idle or capacity)	registered
+p2p_accept_buckets_current	p2p_accept_buckets_current	Current number of active accept throttle buckets (prefix + per-IP)	registered
+p2p_accept_prefix_cache_total	p2p_accept_prefix_cache_total	Prefix bucket cache hits/misses for accept throttle (label `result` = hit|miss)	registered
+p2p_accept_throttle_decisions_total	p2p_accept_throttle_decisions_total	Accept throttle decisions (label `scope` = prefix|ip, `decision` = allowed|throttled)	registered
+p2p_incoming_cap_reject_total	p2p_incoming_cap_reject_total	Number of incoming connections rejected due to incoming cap	registered
+p2p_total_cap_reject_total	p2p_total_cap_reject_total	Number of incoming connections rejected due to total cap	registered
+p2p_trust_score	p2p_trust_score	Per-peer trust score maintained by the gossip layer (decays toward zero)	registered
+p2p_trust_penalties_total	p2p_trust_penalties_total	Applied trust penalties labeled by reason	registered
+p2p_trust_decay_ticks_total	p2p_trust_decay_ticks_total	Half-life decay ticks applied to peer trust scores (label `peer_id`)	registered
+p2p_trust_gossip_skipped_total	p2p_trust_gossip_skipped_total	Trust gossip frames skipped grouped by direction and reason	registered
+p2p_ws_inbound_total	p2p_ws_inbound_total	Accepted inbound WebSocket P2P connections	registered
+p2p_ws_outbound_total	p2p_ws_outbound_total	Successful outbound WebSocket P2P connections	registered
+p2p_scion_inbound_total	p2p_scion_inbound_total	Accepted inbound SCION P2P connections	registered
+p2p_scion_outbound_total	p2p_scion_outbound_total	Successful outbound SCION P2P connections	registered
+tx_gossip_sent_total	tx_gossip_sent_total	Transaction gossip batches sent grouped by plane and dataspace	registered
+tx_gossip_dropped_total	tx_gossip_dropped_total	Transaction gossip batches dropped grouped by plane, dataspace, and reason	registered
+tx_gossip_targets	tx_gossip_targets	Latest transaction gossip target count grouped by plane and dataspace	registered
+tx_gossip_fallback_total	tx_gossip_fallback_total	Restricted transaction gossip fallback attempts grouped by plane, dataspace, and surface	registered
+tx_gossip_frame_cap_bytes	tx_gossip_frame_cap_bytes	Configured maximum frame size for transaction gossip payloads (bytes)	registered
+tx_gossip_public_target_cap	tx_gossip_public_target_cap	Configured cap on public transaction gossip targets (0 = broadcast)	registered
+tx_gossip_restricted_target_cap	tx_gossip_restricted_target_cap	Configured cap on restricted transaction gossip targets (0 = commit topology)	registered
+tx_gossip_public_target_reshuffle_ms	tx_gossip_public_target_reshuffle_ms	Public-plane target reshuffle interval in milliseconds	registered
+tx_gossip_restricted_target_reshuffle_ms	tx_gossip_restricted_target_reshuffle_ms	Restricted-plane target reshuffle interval in milliseconds	registered
+tx_gossip_drop_unknown_dataspace	tx_gossip_drop_unknown_dataspace	Whether transaction gossip drops unknown dataspaces (1 = drop, 0 = route via restricted plane)	registered
+tx_gossip_restricted_fallback	tx_gossip_restricted_fallback	Restricted gossip fallback policy (0 = drop, 1 = public overlay)	registered
+tx_gossip_restricted_public_policy	tx_gossip_restricted_public_policy	Policy for restricted gossip when only the public overlay is available (0 = refuse, 1 = forward)	registered
+sumeragi_new_view_receipts_by_hv	sumeragi_new_view_receipts_by_hv	NEW_VIEW receipt counts labeled by (height, view)	registered
+sumeragi_post_to_peer_total	sumeragi_post_to_peer_total	Sumeragi post attempts to peers (collector routing; cumulative)	registered
+sumeragi_bg_post_enqueued_total	sumeragi_bg_post_enqueued_total	Sumeragi background-post enqueued tasks (cumulative)	registered
+sumeragi_bg_post_overflow_total	sumeragi_bg_post_overflow_total	Sumeragi background-post queue full events (backpressure applied)	registered
+sumeragi_bg_post_drop_total	sumeragi_bg_post_drop_total	Sumeragi background-post drops when the worker queue is unavailable	registered
+sumeragi_bg_post_queue_depth	sumeragi_bg_post_queue_depth	Sumeragi background-post queue depth (global)	registered
+sumeragi_bg_post_queue_depth_by_peer	sumeragi_bg_post_queue_depth_by_peer	Sumeragi background-post queue depth by peer id	registered
+sumeragi_bg_post_age_ms	sumeragi_bg_post_age_ms	Sumeragi background-post age in milliseconds by kind	registered
+sumeragi_new_view_publish_total	sumeragi_new_view_publish_total	Sumeragi NEW_VIEW messages published (cumulative)	registered
+sumeragi_new_view_recv_total	sumeragi_new_view_recv_total	Sumeragi NEW_VIEW messages received and accepted (cumulative)	registered
+sumeragi_new_view_dropped_by_lock_total	sumeragi_new_view_dropped_by_lock_total	Sumeragi NEW_VIEW messages rejected because HighestQC is behind the locked QC	registered
+sumeragi_commit_conflict_detected_total	sumeragi_commit_conflict_detected_total	Sumeragi commit-conflict detections (cumulative)	registered
+sumeragi_missing_block_fetch_total	sumeragi_missing_block_fetch_total	Sumeragi missing-block fetch planning outcomes (requested|backoff|no_targets)	registered
+sumeragi_missing_block_fetch_target_total	sumeragi_missing_block_fetch_target_total	Sumeragi missing-block fetch target kind (signers|topology|none)	registered
+sumeragi_missing_block_fetch_dwell_ms	sumeragi_missing_block_fetch_dwell_ms	Elapsed milliseconds between first-seen certificate and missing-block fetch request	registered
+sumeragi_missing_block_fetch_targets	sumeragi_missing_block_fetch_targets	Target peers selected when requesting a missing block payload	registered
+blocksync_qc_quarantine_total	blocksync_qc_quarantine_total	Block-sync QCs quarantined while missing context is unresolved (cumulative)	registered
+blocksync_qc_revalidated_total	blocksync_qc_revalidated_total	Quarantined block-sync QCs revalidated successfully (cumulative)	registered
+blocksync_qc_final_drop_total	blocksync_qc_final_drop_total	Block-sync QCs dropped permanently after bounded quarantine (labeled by reason)	registered
+qc_deferred_missing_payload_total	qc_deferred_missing_payload_total	QCs deferred because payload was not available locally (cumulative)	registered
+qc_deferred_resolved_total	qc_deferred_resolved_total	Deferred QCs resolved after payload arrival (cumulative)	registered
+qc_deferred_expired_total	qc_deferred_expired_total	Deferred QCs expired after bounded retries/escalation (cumulative)	registered
+consensus_empty_commit_topology_defer_total	consensus_empty_commit_topology_defer_total	Consensus deferrals caused by empty commit topology (cumulative)	registered
+consensus_empty_commit_topology_escalation_total	consensus_empty_commit_topology_escalation_total	Empty-topology recoveries escalated to forced view changes (cumulative)	registered
+consensus_recovery_state_transitions_total	consensus_recovery_state_transitions_total	Consensus recovery state transitions (labeled by state)	registered
+consensus_missing_block_height_escalation_total	consensus_missing_block_height_escalation_total	Height-scoped missing-block recoveries escalated via deterministic hard cap (cumulative)	registered
+consensus_sidecar_quarantine_total	consensus_sidecar_quarantine_total	Sidecar mismatches quarantined in fail-closed mode (cumulative)	registered
+consensus_sidecar_final_drop_total	consensus_sidecar_final_drop_total	Sidecar mismatch entries final-dropped after retry/TTL bounds (cumulative)	registered
+blocksync_range_pull_escalation_total	blocksync_range_pull_escalation_total	Block-sync range-pull escalations requested by recovery logic (cumulative)	registered
+blocksync_range_pull_success_total	blocksync_range_pull_success_total	Block-sync range-pull recoveries that succeeded (cumulative)	registered
+blocksync_range_pull_failure_total	blocksync_range_pull_failure_total	Block-sync range-pull recoveries that expired without progress (cumulative)	registered
+consensus_recovery_stuck_round_seconds	consensus_recovery_stuck_round_seconds	Observed seconds spent in empty-topology/missing-dependency recovery rounds	registered
+sumeragi_da_gate_block_total	sumeragi_da_gate_block_total	Sumeragi commits gated by missing data-availability artifacts (missing_local_data|manifest_*)	registered
+sumeragi_da_gate_last_reason	sumeragi_da_gate_last_reason	Sumeragi DA availability last reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)	registered
+sumeragi_da_gate_last_satisfied	sumeragi_da_gate_last_satisfied	Sumeragi DA availability last satisfaction code (0=none,1=missing_data_recovered)	registered
+sumeragi_da_gate_satisfied_total	sumeragi_da_gate_satisfied_total	Sumeragi DA availability satisfactions (missing_data_recovered)	registered
+sumeragi_da_manifest_guard_total	sumeragi_da_manifest_guard_total	Sumeragi DA manifest guard outcomes (allowed|rejected by reason)	registered
+sumeragi_da_manifest_cache_total	sumeragi_da_manifest_cache_total	Sumeragi DA manifest cache outcomes (hit|miss)	registered
+sumeragi_da_spool_cache_total	sumeragi_da_spool_cache_total	Sumeragi DA spool cache outcomes (hit|miss by kind)	registered
+sumeragi_da_pin_intent_spool_total	sumeragi_da_pin_intent_spool_total	Sumeragi DA pin intent spool handling outcomes (kept|dropped by reason)	registered
+sumeragi_rbc_sessions_active	sumeragi_rbc_sessions_active	Sumeragi RBC active sessions (gauge)	registered
+sumeragi_rbc_sessions_pruned_total	sumeragi_rbc_sessions_pruned_total	Sumeragi RBC sessions pruned due to TTL	registered
+sumeragi_rbc_init_requests_total	sumeragi_rbc_init_requests_total	Sumeragi RBC targeted INIT repair requests sent	registered
+sumeragi_rbc_chunk_requests_total	sumeragi_rbc_chunk_requests_total	Sumeragi RBC targeted chunk repair requests sent	registered
+sumeragi_rbc_requested_chunks_total	sumeragi_rbc_requested_chunks_total	Sumeragi RBC encoded chunk indices requested via targeted repair	registered
+sumeragi_rbc_initial_chunk_targets_total	sumeragi_rbc_initial_chunk_targets_total	Sumeragi RBC initial chunk target outcomes by encoding and fanout policy	registered
+sumeragi_rbc_repair_fallback_total	sumeragi_rbc_repair_fallback_total	Sumeragi RBC targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)	registered
+sumeragi_rbc_ready_broadcasts_total	sumeragi_rbc_ready_broadcasts_total	Sumeragi RBC READY broadcasts sent	registered
+sumeragi_rbc_rebroadcast_skipped_total	sumeragi_rbc_rebroadcast_skipped_total	Sumeragi RBC rebroadcasts skipped (kind=payload|ready)	registered
+sumeragi_rbc_deliver_broadcasts_total	sumeragi_rbc_deliver_broadcasts_total	Sumeragi RBC DELIVER broadcasts sent	registered
+sumeragi_rbc_payload_bytes_delivered_total	sumeragi_rbc_payload_bytes_delivered_total	Sumeragi RBC payload bytes delivered and cached (cumulative)	registered
+sumeragi_rbc_reconstructed_stripes_total	sumeragi_rbc_reconstructed_stripes_total	Sumeragi RBC RS16 stripes reconstructed from parity	registered
+sumeragi_rbc_seed_latency_ms	sumeragi_rbc_seed_latency_ms	Sumeragi RBC seed/preprocessing latency in milliseconds	registered
+sumeragi_rbc_lane_tx_count	sumeragi_rbc_lane_tx_count	Sumeragi RBC backlog transactions served per lane	registered
+sumeragi_rbc_lane_total_chunks	sumeragi_rbc_lane_total_chunks	Sumeragi RBC total chunks attributed to a lane	registered
+sumeragi_rbc_lane_pending_chunks	sumeragi_rbc_lane_pending_chunks	Sumeragi RBC pending chunks attributed to a lane	registered
+sumeragi_rbc_lane_bytes_total	sumeragi_rbc_lane_bytes_total	Sumeragi RBC payload bytes attributed to a lane	registered
+sumeragi_rbc_dataspace_tx_count	sumeragi_rbc_dataspace_tx_count	Sumeragi RBC backlog transactions served per dataspace	registered
+sumeragi_rbc_dataspace_total_chunks	sumeragi_rbc_dataspace_total_chunks	Sumeragi RBC total chunks attributed to a dataspace	registered
+sumeragi_rbc_dataspace_pending_chunks	sumeragi_rbc_dataspace_pending_chunks	Sumeragi RBC pending chunks attributed to a dataspace	registered
+sumeragi_rbc_dataspace_bytes_total	sumeragi_rbc_dataspace_bytes_total	Sumeragi RBC payload bytes attributed to a dataspace	registered
+sumeragi_da_votes_ingested_total	sumeragi_da_votes_ingested_total	Availability votes ingested by this validator (cumulative)	registered
+sumeragi_qc_assembly_latency_ms	sumeragi_qc_assembly_latency_ms	Latency from first vote to QC assembly (ms) labeled by kind	registered
+sumeragi_qc_last_latency_ms	sumeragi_qc_last_latency_ms	Last observed QC assembly latency (ms) labeled by kind	registered
+sumeragi_rbc_store_sessions	sumeragi_rbc_store_sessions	Sumeragi RBC persisted store sessions (gauge)	registered
+sumeragi_rbc_store_bytes	sumeragi_rbc_store_bytes	Sumeragi RBC persisted store payload bytes (gauge)	registered
+sumeragi_rbc_store_pressure	sumeragi_rbc_store_pressure	Sumeragi RBC store pressure level (0=normal,1=soft,2=hard)	registered
+sumeragi_rbc_store_evictions_total	sumeragi_rbc_store_evictions_total	Sumeragi RBC persisted sessions evicted due to TTL or capacity limits	registered
+sumeragi_rbc_persist_drops_total	sumeragi_rbc_persist_drops_total	Sumeragi RBC persist requests dropped due to full async queue	registered
+sumeragi_rbc_status_persistence_disabled	sumeragi_rbc_status_persistence_disabled	Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)	registered
+sumeragi_rbc_status_persist_failures_total	sumeragi_rbc_status_persist_failures_total	Sumeragi RBC status snapshot fatal persist failures	registered
+sumeragi_rbc_backpressure_deferrals_total	sumeragi_rbc_backpressure_deferrals_total	Sumeragi RBC proposal deferrals due to store back-pressure	registered
+sumeragi_rbc_deliver_defer_ready_total	sumeragi_rbc_deliver_defer_ready_total	Sumeragi RBC DELIVER deferrals waiting on READY quorum	registered
+sumeragi_rbc_deliver_defer_chunks_total	sumeragi_rbc_deliver_defer_chunks_total	Sumeragi RBC DELIVER deferrals waiting on missing chunks	registered
+sumeragi_rbc_da_reschedule_total	sumeragi_rbc_da_reschedule_total	Sumeragi RBC DA deadline reschedules triggered	registered
+sumeragi_rbc_da_reschedule_by_mode_total	sumeragi_rbc_da_reschedule_by_mode_total	Sumeragi RBC DA deadline reschedules triggered (labeled by consensus mode)	registered
+sumeragi_rbc_abort_total	sumeragi_rbc_abort_total	Sumeragi pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)	registered
+sumeragi_rbc_mismatch_total	sumeragi_rbc_mismatch_total	Sumeragi RBC payload mismatches attributed to peers (labeled by peer, kind)	registered
+sumeragi_kura_store_failures_total	sumeragi_kura_store_failures_total	Sumeragi kura persistence failures (outcome=retry|abort)	registered
+sumeragi_kura_store_last_retry_attempt	sumeragi_kura_store_last_retry_attempt	Most recent kura persistence retry attempt (gauge)	registered
+sumeragi_kura_store_last_retry_backoff_ms	sumeragi_kura_store_last_retry_backoff_ms	Most recent kura persistence retry backoff in milliseconds (gauge)	registered
+sumeragi_pacemaker_backpressure_deferrals_total	sumeragi_pacemaker_backpressure_deferrals_total	Sumeragi pacemaker proposal deferrals due to transaction-queue back-pressure	registered
+sumeragi_pacemaker_backpressure_deferrals_by_reason_total	sumeragi_pacemaker_backpressure_deferrals_by_reason_total	Sumeragi pacemaker backpressure deferrals grouped by reason	registered
+sumeragi_pacemaker_backpressure_deferral_duration_ms	sumeragi_pacemaker_backpressure_deferral_duration_ms	Sumeragi pacemaker backpressure deferral duration histogram (ms) grouped by reason	registered
+sumeragi_pacemaker_backpressure_deferral_active	sumeragi_pacemaker_backpressure_deferral_active	Sumeragi pacemaker backpressure deferral active state (0/1) grouped by reason	registered
+sumeragi_pacemaker_backpressure_deferral_age_ms	sumeragi_pacemaker_backpressure_deferral_age_ms	Sumeragi pacemaker backpressure deferral age in milliseconds grouped by reason	registered
+sumeragi_pacemaker_eval_ms	sumeragi_pacemaker_eval_ms	Sumeragi pacemaker evaluation duration histogram (ms)	registered
+sumeragi_pacemaker_propose_ms	sumeragi_pacemaker_propose_ms	Sumeragi pacemaker proposal attempt duration histogram (ms)	registered
+sumeragi_commit_stage_ms	sumeragi_commit_stage_ms	Sumeragi commit pipeline stage duration histogram (ms) labeled by stage	registered
+state_commit_view_lock_wait_ms	state_commit_view_lock_wait_ms	Legacy state commit view_lock wait duration histogram (ms)	registered
+state_commit_view_lock_hold_ms	state_commit_view_lock_hold_ms	Legacy state commit view_lock hold duration histogram (ms)	registered
+state_commit_write_lock_wait_ms	state_commit_write_lock_wait_ms	State commit state_write_lock wait duration histogram (ms)	registered
+state_commit_write_lock_hold_ms	state_commit_write_lock_hold_ms	State commit state_write_lock hold duration histogram (ms)	registered
+sumeragi_commit_pipeline_tick_total	sumeragi_commit_pipeline_tick_total	Sumeragi commit pipeline executions triggered by the pacemaker tick loop	registered
+sumeragi_prevote_timeout_total	sumeragi_prevote_timeout_total	Sumeragi prevote-quorum timeouts that triggered rebroadcast + view change	registered
+sumeragi_rbc_backlog_chunks_total	sumeragi_rbc_backlog_chunks_total	Total missing RBC chunks across active sessions	registered
+sumeragi_rbc_backlog_chunks_max	sumeragi_rbc_backlog_chunks_max	Maximum missing RBC chunks within a single session	registered
+sumeragi_rbc_backlog_sessions_pending	sumeragi_rbc_backlog_sessions_pending	Number of RBC sessions pending delivery	registered
+sumeragi_rbc_pending_sessions	sumeragi_rbc_pending_sessions	Pending RBC stashes awaiting INIT (count)	registered
+sumeragi_rbc_pending_chunks	sumeragi_rbc_pending_chunks	Pending RBC chunk frames buffered before INIT	registered
+sumeragi_rbc_pending_bytes	sumeragi_rbc_pending_bytes	Pending RBC payload/signature bytes buffered before INIT	registered
+sumeragi_rbc_pending_drops_total	sumeragi_rbc_pending_drops_total	Pending RBC frames dropped before INIT (labeled by reason)	registered
+sumeragi_rbc_pending_dropped_bytes_total	sumeragi_rbc_pending_dropped_bytes_total	Pending RBC bytes dropped before INIT (labeled by reason)	registered
+sumeragi_rbc_pending_evicted_total	sumeragi_rbc_pending_evicted_total	Pending RBC stashes evicted due to TTL or stash cap (sessions)	registered
+sumeragi_membership_mismatch_total	sumeragi_membership_mismatch_total	Sumeragi consensus membership mismatches detected	registered
+sumeragi_membership_mismatch_active	sumeragi_membership_mismatch_active	Peers currently flagged for consensus membership mismatches	registered
+sumeragi_highest_qc_height	sumeragi_highest_qc_height	Sumeragi highest QC height (gauge)	registered
+sumeragi_locked_qc_height	sumeragi_locked_qc_height	Sumeragi locked QC height (gauge)	registered
+sumeragi_locked_qc_view	sumeragi_locked_qc_view	Sumeragi locked QC view (gauge)	registered
+sumeragi_pacemaker_backoff_ms	sumeragi_pacemaker_backoff_ms	Pacemaker current backoff window (ms) for view-change timeout	registered
+sumeragi_pacemaker_rtt_floor_ms	sumeragi_pacemaker_rtt_floor_ms	Pacemaker RTT-based floor (ms) for backoff window	registered
+sumeragi_pacemaker_backoff_multiplier	sumeragi_pacemaker_backoff_multiplier	Pacemaker backoff multiplier (dimensionless)	registered
+sumeragi_pacemaker_rtt_floor_multiplier	sumeragi_pacemaker_rtt_floor_multiplier	Pacemaker RTT floor multiplier (dimensionless)	registered
+sumeragi_pacemaker_max_backoff_ms	sumeragi_pacemaker_max_backoff_ms	Pacemaker maximum backoff cap (ms)	registered
+sumeragi_pacemaker_jitter_ms	sumeragi_pacemaker_jitter_ms	Pacemaker jitter offset magnitude (ms) applied to window	registered
+sumeragi_pacemaker_jitter_frac_permille	sumeragi_pacemaker_jitter_frac_permille	Pacemaker jitter band config (permille of window)	registered
+sumeragi_pacemaker_round_elapsed_ms	sumeragi_pacemaker_round_elapsed_ms	Elapsed time in the current consensus round (ms)	registered
+sumeragi_pacemaker_view_timeout_target_ms	sumeragi_pacemaker_view_timeout_target_ms	Current view timeout target window (ms) before backoff/jitter adjustments	registered
+sumeragi_pacemaker_view_timeout_remaining_ms	sumeragi_pacemaker_view_timeout_remaining_ms	Remaining time until current view timeout elapses (ms)	registered
+sumeragi_phase_latency_ms	sumeragi_phase_latency_ms	Sumeragi per-phase latency histogram (ms) labeled by phase	registered
+sumeragi_phase_latency_ema_ms	sumeragi_phase_latency_ema_ms	Sumeragi per-phase EMA latency (ms) labeled by phase	registered
+sumeragi_phase_total_ema_ms	sumeragi_phase_total_ema_ms	Sumeragi aggregate pipeline EMA latency (ms) across pacemaker-controlled phases	unregistered
+p2p_queue_depth	p2p_queue_depth	Network message queue depth by priority (High/Low)	registered
+p2p_queue_dropped_total	p2p_queue_dropped_total	Network message queue drops by priority (High/Low) and kind (Post/Broadcast)	registered
+p2p_handshake_ms_bucket	p2p_handshake_ms_bucket	P2P handshake latency histogram buckets (ms)	registered
+p2p_handshake_ms_sum	p2p_handshake_ms_sum	Sum of handshake latencies in milliseconds	registered
+p2p_handshake_ms_count	p2p_handshake_ms_count	Count of observed handshakes	registered
+p2p_handshake_error_total	p2p_handshake_error_total	Handshake error counts by kind	registered
+p2p_frame_cap_violations_total	p2p_frame_cap_violations_total	Inbound per-topic frame-cap violations (dropped oversized messages)	registered
+runtime_upgrade_events_total	runtime_upgrade_events_total	Runtime upgrade lifecycle events total labeled by kind	registered
+runtime_upgrade_provenance_rejections_total	runtime_upgrade_provenance_rejections_total	Runtime upgrade provenance rejections total labeled by reason	registered
+runtime_abi_version	runtime_abi_version	ABI version allowed by runtime	registered
+sumeragi_tail_votes_total	sumeragi_tail_votes_total	Votes accepted at proxy tail	registered
+sumeragi_votes_sent_total	sumeragi_votes_sent_total	Consensus votes sent grouped by phase	registered
+sumeragi_votes_received_total	sumeragi_votes_received_total	Consensus votes received grouped by phase	registered
+sumeragi_qc_sent_total	sumeragi_qc_sent_total	Quorum certificates sent grouped by kind	registered
+sumeragi_qc_received_total	sumeragi_qc_received_total	Quorum certificates received grouped by kind	registered
+sumeragi_qc_validation_errors_total	sumeragi_qc_validation_errors_total	QC validation errors grouped by reason	registered
+sumeragi_qc_signer_counts	sumeragi_qc_signer_counts	QC signer tallies grouped by phase (prevote/precommit/available) and kind (present|counted)	registered
+sumeragi_invalid_signature_total	sumeragi_invalid_signature_total	Invalid signatures dropped grouped by message kind and throttle outcome	registered
+sumeragi_validation_reject_total	sumeragi_validation_reject_total	Blocks rejected by validation gate before voting, grouped by reason	registered
+sumeragi_validation_reject_last_reason	sumeragi_validation_reject_last_reason	Sumeragi validation gate last reject reason code (0=none,1=stateless,2=execution,3=prev_hash,4=prev_height,5=topology)	registered
+sumeragi_validation_reject_last_height	sumeragi_validation_reject_last_height	Sumeragi validation gate last reject block height (0 when unset)	registered
+sumeragi_validation_reject_last_view	sumeragi_validation_reject_last_view	Sumeragi validation gate last reject block view (0 when unset)	registered
+sumeragi_validation_reject_last_timestamp_ms	sumeragi_validation_reject_last_timestamp_ms	Sumeragi validation gate last reject timestamp in milliseconds since unix epoch (0 when unset)	registered
+sumeragi_block_sync_roster_source_total	sumeragi_block_sync_roster_source_total	Block-sync roster selection grouped by source	registered
+sumeragi_block_sync_roster_drop_total	sumeragi_block_sync_roster_drop_total	Block-sync drops grouped by roster validation reason	registered
+sumeragi_block_sync_share_blocks_unsolicited_total	sumeragi_block_sync_share_blocks_unsolicited_total	Block-sync ShareBlocks dropped because no matching request was tracked	registered
+sumeragi_consensus_message_handling_total	sumeragi_consensus_message_handling_total	Consensus message drops/deferrals grouped by kind, outcome, and reason	registered
+sumeragi_view_change_cause_total	sumeragi_view_change_cause_total	View-change triggers grouped by cause	registered
+sumeragi_view_change_cause_last_timestamp_ms	sumeragi_view_change_cause_last_timestamp_ms	Unix timestamp (ms) of the last view-change trigger grouped by cause	registered
+sumeragi_widen_before_rotate_total	sumeragi_widen_before_rotate_total	Widen-before-rotate events	registered
+sumeragi_view_change_suggest_total	sumeragi_view_change_suggest_total	View-change suggestions emitted	registered
+sumeragi_view_change_install_total	sumeragi_view_change_install_total	View-change installs observed	registered
+sumeragi_proposal_gap_total	sumeragi_proposal_gap_total	View-change rotations after no proposal observed before cutoff	registered
+sumeragi_view_change_proof_total	sumeragi_view_change_proof_total	View-change proof outcomes observed locally	registered
+sumeragi_wa_qc_assembled_total	sumeragi_wa_qc_assembled_total	Witness-availability QC assembled (cumulative)	unregistered
+sumeragi_cert_size	sumeragi_cert_size	Certificate size (signatures) per committed block	registered
+sumeragi_commit_signatures_present	sumeragi_commit_signatures_present	Block signatures observed during commit validation (all roles)	registered
+sumeragi_commit_signatures_counted	sumeragi_commit_signatures_counted	Commit-quorum signatures counted toward the threshold	registered
+sumeragi_commit_signatures_set_b	sumeragi_commit_signatures_set_b	Set B validator signatures present during commit validation	registered
+sumeragi_commit_signatures_required	sumeragi_commit_signatures_required	Commit-quorum size required by the active topology	registered
+sumeragi_commit_qc_height	sumeragi_commit_qc_height	Latest commit certificate height (best-effort)	registered
+sumeragi_commit_qc_view	sumeragi_commit_qc_view	Latest commit certificate view (best-effort)	registered
+sumeragi_commit_qc_epoch	sumeragi_commit_qc_epoch	Latest commit certificate epoch (best-effort)	registered
+sumeragi_commit_qc_signatures_total	sumeragi_commit_qc_signatures_total	Signatures attached to the latest commit certificate	registered
+sumeragi_commit_qc_validator_set_len	sumeragi_commit_qc_validator_set_len	Validator-set size for the latest commit certificate	registered
+sumeragi_gossip_fallback_total	sumeragi_gossip_fallback_total	Gossip fallback broadcasts triggered after redundant collectors exhausted	unregistered
+sumeragi_block_created_dropped_by_lock_total	sumeragi_block_created_dropped_by_lock_total	BlockCreated messages dropped because they violate the locked QC gate	unregistered
+sumeragi_block_created_hint_mismatch_total	sumeragi_block_created_hint_mismatch_total	BlockCreated messages rejected due to hint mismatch (height/view/parent)	unregistered
+sumeragi_block_created_proposal_mismatch_total	sumeragi_block_created_proposal_mismatch_total	BlockCreated messages rejected due to proposal mismatch (header/payload)	unregistered
+lane_relay_invalid_total	lane_relay_invalid_total	Lane relay envelopes rejected during validation (labeled by error kind)	registered
+lane_relay_emergency_override_total	lane_relay_emergency_override_total	Lane relay emergency validator override usage (labeled by lane, dataspace, outcome)	registered
+sumeragi_prf_height	sumeragi_prf_height	Height associated with the PRF context	unregistered
+sumeragi_prf_view	sumeragi_prf_view	View associated with the PRF context	unregistered
+sumeragi_membership_view_hash	sumeragi_membership_view_hash	Deterministic membership view hash (truncated to u64)	unregistered
+sumeragi_membership_height	sumeragi_membership_height	Height associated with the latest membership view hash snapshot	unregistered
+sumeragi_membership_view	sumeragi_membership_view	View associated with the latest membership view hash snapshot	unregistered
+sumeragi_membership_epoch	sumeragi_membership_epoch	Epoch associated with the latest membership view hash snapshot	unregistered
+sumeragi_leader_index	sumeragi_leader_index	Current leader index	registered
+ivm_cache_hits	ivm_cache_hits	IVM opcode pre-decode cache hits (cumulative)	registered
+ivm_cache_misses	ivm_cache_misses	IVM opcode pre-decode cache misses (cumulative)	registered
+ivm_cache_evictions	ivm_cache_evictions	IVM opcode pre-decode cache evictions (cumulative)	registered
+ivm_cache_decoded_streams	ivm_cache_decoded_streams	IVM opcode pre-decode decoded streams (cumulative)	registered
+ivm_cache_decoded_ops_total	ivm_cache_decoded_ops_total	IVM opcode pre-decode decoded operations (cumulative)	registered
+ivm_cache_decode_failures	ivm_cache_decode_failures	IVM opcode pre-decode decode failures (cumulative)	registered
+ivm_cache_decode_time_ns_total	ivm_cache_decode_time_ns_total	IVM opcode pre-decode total decode time in nanoseconds (cumulative)	registered
+ivm_register_max_index	ivm_register_max_index	Maximum general-purpose register index touched per VM execution	registered
+ivm_register_unique_count	ivm_register_unique_count	Unique general-purpose registers touched per VM execution	registered
+merkle_root_gpu_total	merkle_root_gpu_total	Merkle root computations using GPU acceleration (cumulative)	registered
+merkle_root_cpu_total	merkle_root_cpu_total	Merkle root computations using CPU (cumulative)	registered
+ivm_memory_commit_ms	ivm_memory_commit_ms	IVM memory commit duration in milliseconds by commit path	registered
+ivm_memory_commit_dirty_chunks	ivm_memory_commit_dirty_chunks	IVM memory commit dirty chunk count by commit path	registered
+ivm_merkle_rebuild_total	ivm_merkle_rebuild_total	IVM Merkle cache full rebuilds	registered
+ivm_merkle_incremental_leaf_updates_total	ivm_merkle_incremental_leaf_updates_total	IVM Merkle cache incremental leaf updates	registered
+pipeline_dag_vertices	pipeline_dag_vertices	DAG vertices (transactions) in the latest validated block	registered
+pipeline_dag_edges	pipeline_dag_edges	DAG edges (conflicts) in the latest validated block	registered
+pipeline_conflict_rate_bps	pipeline_conflict_rate_bps	DAG conflict rate (basis points) for the latest validated block	registered
+pipeline_access_set_source_total	pipeline_access_set_source_total	Cumulative access-set source counts used by the scheduler	registered
+pipeline_comp_count	pipeline_comp_count	Number of independent components (DSF partitions) in the latest validated block	unregistered
+pipeline_comp_max	pipeline_comp_max	Size of the largest independent component in the latest validated block	unregistered
+pipeline_comp_hist_bucket	pipeline_comp_hist_bucket	Component-size histogram buckets (component count per bucket)	unregistered
+pipeline_peak_layer_width	pipeline_peak_layer_width	Peak layer width (max txs in any layer) for the latest validated block	registered
+pipeline_layer_avg_width	pipeline_layer_avg_width	Average layer width (rounded) for the latest validated block	registered
+pipeline_layer_median_width	pipeline_layer_median_width	Median layer width for the latest validated block	registered
+nexus_lane_id_placeholder	nexus_lane_id_placeholder	Latest Nexus lane identifier recorded for legacy lane-context gauges	registered
+nexus_dataspace_id_placeholder	nexus_dataspace_id_placeholder	Latest Nexus dataspace identifier recorded for legacy lane-context gauges	registered
+nexus_config_diff_total	nexus_config_diff_total	Cumulative count of Nexus config diffs applied, grouped by knob/profile	registered
+nexus_lane_configured_total	nexus_lane_configured_total	Number of Nexus lane catalog entries configured on this node	registered
+nexus_lane_governance_sealed	nexus_lane_governance_sealed	Per-lane governance seal status (1 = sealed, 0 = ready)	registered
+nexus_lane_governance_sealed_total	nexus_lane_governance_sealed_total	Total number of lanes still sealed (missing manifest)	registered
+nexus_lane_lifecycle_applied_total	nexus_lane_lifecycle_applied_total	Lifecycle plan applications grouped by outcome	registered
+nexus_lane_block_height	nexus_lane_block_height	Latest block height recorded per lane/dataspace pair	registered
+nexus_lane_finality_lag_slots	nexus_lane_finality_lag_slots	Finality lag (in slots) between the global head height and each lane	registered
+nexus_lane_settlement_backlog_xor	nexus_lane_settlement_backlog_xor	Settlement backlog per lane/dataspace pair expressed in XOR	registered
+nexus_public_lane_validator_total	nexus_public_lane_validator_total	Public-lane validator counts grouped by lifecycle status	registered
+nexus_public_lane_validator_activation_total	nexus_public_lane_validator_activation_total	Public-lane validator activations grouped by lane	registered
+nexus_public_lane_validator_reject_total	nexus_public_lane_validator_reject_total	Rejected public-lane validator registrations grouped by reason	registered
+nexus_public_lane_stake_bonded	nexus_public_lane_stake_bonded	Total bonded stake per public lane (Quantity rendered as float)	registered
+nexus_public_lane_unbond_pending	nexus_public_lane_unbond_pending	Pending unbond amount per public lane	registered
+nexus_public_lane_reward_total	nexus_public_lane_reward_total	Cumulative rewards recorded per public lane	registered
+nexus_public_lane_slash_total	nexus_public_lane_slash_total	Slash events recorded per public lane	registered
+nexus_scheduler_lane_teu_capacity	nexus_scheduler_lane_teu_capacity	Configured TEU capacity for the current slot per lane	registered
+nexus_scheduler_lane_teu_slot_committed	nexus_scheduler_lane_teu_slot_committed	TEU committed in the current slot per lane	registered
+nexus_scheduler_lane_trigger_level	nexus_scheduler_lane_trigger_level	Active circuit-breaker trigger level (0 = normal) per lane	registered
+nexus_scheduler_starvation_bound_slots	nexus_scheduler_starvation_bound_slots	Starvation bound in slots per lane	registered
+nexus_scheduler_lane_teu_slot_breakdown	nexus_scheduler_lane_teu_slot_breakdown	Committed TEU bucket breakdown per lane	registered
+nexus_scheduler_lane_teu_deferral_total	nexus_scheduler_lane_teu_deferral_total	Cumulative TEU deferrals by reason per lane	registered
+nexus_scheduler_lane_headroom_events_total	nexus_scheduler_lane_headroom_events_total	Structured headroom telemetry events per lane	registered
+nexus_scheduler_must_serve_truncations_total	nexus_scheduler_must_serve_truncations_total	Cumulative must-serve truncations per lane	registered
+nexus_scheduler_dataspace_teu_backlog	nexus_scheduler_dataspace_teu_backlog	Pending TEU backlog per dataspace (labeled by lane)	registered
+nexus_scheduler_dataspace_age_slots	nexus_scheduler_dataspace_age_slots	Slots since dataspace was last served (labeled by lane)	registered
+nexus_scheduler_dataspace_virtual_finish	nexus_scheduler_dataspace_virtual_finish	SFQ virtual finish tag per dataspace (labeled by lane)	registered
+pipeline_layer_count	pipeline_layer_count	Number of scheduler layers in the latest validated block	registered
+pipeline_scheduler_utilization_pct	pipeline_scheduler_utilization_pct	Average parallelism utilization in percent (0..100) for the latest validated block	registered
+pipeline_layer_width_hist_bucket	pipeline_layer_width_hist_bucket	Layer-width histogram buckets (layer count per bucket)	registered
+pipeline_overlay_count	pipeline_overlay_count	Number of overlays built in the latest validated block	registered
+pipeline_overlay_instructions	pipeline_overlay_instructions	Total instruction count across overlays in the latest validated block	registered
+pipeline_overlay_bytes	pipeline_overlay_bytes	Total Norito-encoded byte size across overlays in the latest validated block	registered
+pipeline_quarantine_classified	pipeline_quarantine_classified	Transactions classified into quarantine lane in the latest validated block	registered
+pipeline_quarantine_overflow	pipeline_quarantine_overflow	Transactions rejected due to quarantine overflow in the latest validated block	registered
+pipeline_quarantine_executed	pipeline_quarantine_executed	Transactions successfully executed in quarantine lane in the latest validated block	registered
+pipeline_stage_ms	pipeline_stage_ms	Pipeline stage duration (milliseconds) by lane and stage	registered
+pipeline_detached_prepared	pipeline_detached_prepared	Detached pipeline: prepared tx deltas in the latest validated block	registered
+pipeline_detached_merged	pipeline_detached_merged	Detached pipeline: successfully merged tx deltas in the latest validated block	registered
+pipeline_detached_fallback	pipeline_detached_fallback	Detached pipeline: txs that fell back to direct apply in the latest validated block	registered
+pipeline_detached_fallback_reason	pipeline_detached_fallback_reason	Detached pipeline: fallback count by reason in the latest validated block	registered
+merge_ledger_entries_total	merge_ledger_entries_total	Total merge-ledger entries appended on this node	registered
+merge_ledger_latest_epoch	merge_ledger_latest_epoch	Latest merge-ledger epoch committed on this node	registered
+torii_filter_depth	torii_filter_depth	Torii filter expression depth by endpoint	registered
+torii_filter_match_count	torii_filter_match_count	Torii filter match count (items) by endpoint	registered
+torii_scan_ms	torii_scan_ms	Torii scan time in milliseconds by endpoint	registered
+torii_stream_rows	torii_stream_rows	Torii stream row count by endpoint	registered
+torii_lane_admission_latency_seconds	torii_lane_admission_latency_seconds	Torii transaction admission latency (seconds) by lane and endpoint	registered
+torii_route_stage_latency_seconds	torii_route_stage_latency_seconds	Torii route-stage latency (seconds) by route kind, stage, and outcome	registered
+torii_attachment_reject_total	torii_attachment_reject_total	Torii attachment rejects grouped by reason	registered
+torii_attachment_sanitize_ms	torii_attachment_sanitize_ms	Torii attachment sanitization latency in milliseconds	registered
+torii_zk_prover_attachment_bytes	torii_zk_prover_attachment_bytes	Background prover attachment size (bytes) grouped by status and content type	registered
+torii_zk_prover_latency_ms	torii_zk_prover_latency_ms	Background prover processing latency (milliseconds) grouped by status	registered
+torii_zk_prover_gc_total	torii_zk_prover_gc_total	Background prover reports deleted by TTL	registered
+torii_zk_prover_inflight	torii_zk_prover_inflight	Background prover attachments currently being processed	registered
+torii_zk_prover_pending	torii_zk_prover_pending	Background prover attachments pending processing	registered
+torii_zk_ivm_prove_inflight	torii_zk_ivm_prove_inflight	Torii IVM prove helper jobs currently proving	registered
+torii_zk_ivm_prove_queued	torii_zk_ivm_prove_queued	Torii IVM prove helper jobs queued (waiting for inflight slot)	registered
+torii_zk_prover_last_scan_bytes	torii_zk_prover_last_scan_bytes	Background prover bytes processed during the most recent scan	registered
+torii_zk_prover_last_scan_ms	torii_zk_prover_last_scan_ms	Background prover wall-clock duration (ms) of the most recent scan	registered
+torii_zk_prover_budget_exhausted_total	torii_zk_prover_budget_exhausted_total	Background prover budget exhaustion events, labelled by reason	registered
+torii_query_snapshot_requests	torii_query_snapshot_requests_total	Torii snapshot-lane query requests total by mode	unregistered
+torii_query_snapshot_first_batch_ms	torii_query_snapshot_first_batch_ms	Torii snapshot-lane first-batch latency in milliseconds by mode	unregistered
+torii_query_snapshot_gas_consumed_units_total	torii_query_snapshot_gas_consumed_units_total	Torii snapshot-lane gas units consumed by mode	unregistered
+query_snapshot_lane_first_batch_ms	query_snapshot_lane_first_batch_ms	Snapshot query lane first-batch latency in milliseconds by mode	unregistered
+query_snapshot_lane_first_batch_items	query_snapshot_lane_first_batch_items	Snapshot query lane first-batch item count by mode	unregistered
+query_snapshot_lane_remaining_items	query_snapshot_lane_remaining_items	Snapshot query lane remaining items by mode	unregistered
+query_snapshot_lane_cursors_total	query_snapshot_lane_cursors_total	Snapshot query lane cursors emitted by mode	unregistered
+torii_connect_sessions_total	torii_connect_sessions_total	Torii Connect total WS sessions	registered
+torii_connect_sessions_active	torii_connect_sessions_active	Torii Connect active session objects	registered
+torii_pre_auth_reject_total	torii_pre_auth_reject_total	Torii pre-auth rejected connections	registered
+torii_operator_auth_total	torii_operator_auth_total	Torii operator auth events by action, result, and reason	registered
+torii_operator_auth_lockout_total	torii_operator_auth_lockout_total	Torii operator auth lockouts by action and reason	registered
+torii_signature_limit_total	torii_signature_limit_total	Transactions rejected during admission for exceeding the configured signature limit	registered
+torii_signature_limit_by_authority_total	torii_signature_limit_by_authority_total	Transactions rejected during admission for exceeding the signature limit, labeled by authority type	registered
+torii_signature_limit_last_count	torii_signature_limit_last_count	Last observed transaction signature count during signature-limit enforcement	registered
+torii_signature_limit_max	torii_signature_limit_max	Configured transaction signature cap recorded during signature-limit enforcement	registered
+torii_nts_unhealthy_reject_total	torii_nts_unhealthy_reject_total	Transactions rejected during admission due to unhealthy network time service	registered
+torii_multisig_direct_sign_reject_total	torii_multisig_direct_sign_reject_total	Transactions rejected during admission for being signed directly by a multisig account	registered
+torii_sorafs_admission_total	torii_sorafs_admission_total	Torii SoraFS provider admission results by outcome and reason	registered
+torii_sorafs_capacity_telemetry_rejections_total	torii_sorafs_capacity_telemetry_rejections_total	Rejected SoraFS capacity telemetry windows grouped by provider and reason	registered
+torii_sorafs_capacity_declared_gib	torii_sorafs_capacity_declared_gib	Declared SoraFS capacity (GiB) per provider	registered
+torii_sorafs_capacity_effective_gib	torii_sorafs_capacity_effective_gib	Effective SoraFS capacity (GiB) per provider	registered
+torii_sorafs_capacity_utilised_gib	torii_sorafs_capacity_utilised_gib	Utilised SoraFS capacity (GiB) per provider	registered
+torii_sorafs_capacity_outstanding_gib	torii_sorafs_capacity_outstanding_gib	Outstanding SoraFS capacity reservations (GiB) per provider	registered
+torii_sorafs_capacity_gibhours_total	torii_sorafs_capacity_gibhours_total	Accumulated SoraFS provider GiB-hours	registered
+torii_sorafs_egress_bytes	torii_sorafs_egress_bytes	SoraFS egress bytes reported per provider and source	registered
+torii_sorafs_egress_drift_ratio	torii_sorafs_egress_drift_ratio	Absolute SoraFS egress counter drift ratio against billing bytes per provider and source	registered
+sorafs_governance_dag_publish_total	sorafs_governance_dag_publish_total	SoraFS Governance DAG publication attempts grouped by payload kind, result, and sink	registered
+sorafs_governance_dag_published_bytes_total	sorafs_governance_dag_published_bytes_total	SoraFS Governance DAG bytes successfully published grouped by payload kind and sink	registered
+sorafs_governance_dag_last_publish_timestamp_seconds	sorafs_governance_dag_last_publish_timestamp_seconds	Unix timestamp of the last successful SoraFS Governance DAG publication	registered
+sorafs_governance_dag_backlog	sorafs_governance_dag_backlog	SoraFS Governance DAG publication backlog grouped by sink	registered
+sorafs_governance_dag_head_age_seconds	sorafs_governance_dag_head_age_seconds	SoraFS Governance DAG head age in seconds grouped by sink	registered
+torii_sorafs_orderbook_finalized_events_total	torii_sorafs_orderbook_finalized_events_total	Committed SoraFS orderbook transitions grouped by event kind	registered
+torii_sorafs_orderbook_open_depth_gib	torii_sorafs_orderbook_open_depth_gib	Authoritative open SoraFS orderbook depth in GiB grouped by tier and side	registered
+torii_sorafs_orderbook_matcher_lag_seconds	torii_sorafs_orderbook_matcher_lag_seconds	Lag in seconds between the latest authoritative book mutation and bounded matcher scan	registered
+torii_sorafs_orderbook_settlement_backlog	torii_sorafs_orderbook_settlement_backlog	Authoritative count of open SoraFS orderbook settlement channels	registered
+torii_sorafs_orderbook_oldest_settlement_age_seconds	torii_sorafs_orderbook_oldest_settlement_age_seconds	Age in seconds of the oldest authoritative open SoraFS orderbook channel	registered
+torii_sorafs_orderbook_escrow_runway_seconds	torii_sorafs_orderbook_escrow_runway_seconds	Seconds until the earliest authoritative open SoraFS orderbook channel expires	registered
+torii_sorafs_orderbook_finalized_projection_ready	torii_sorafs_orderbook_finalized_projection_ready	Whether the latest SoraFS orderbook telemetry projection is complete and finalized	registered
+torii_sorafs_orderbook_finalized_projection_height	torii_sorafs_orderbook_finalized_projection_height	Finalized block height of the latest complete SoraFS orderbook telemetry projection	registered
+torii_sorafs_orderbook_finalized_projection_timestamp_seconds	torii_sorafs_orderbook_finalized_projection_timestamp_seconds	Finalized block timestamp of the latest complete SoraFS orderbook telemetry projection	registered
+torii_sorafs_orderbook_finalized_projection_failures_total	torii_sorafs_orderbook_finalized_projection_failures_total	Fail-closed finalized SoraFS orderbook projection failures grouped by reason	registered
+torii_sorafs_orderbook_book_revision	torii_sorafs_orderbook_book_revision	Authoritative SoraFS orderbook revision in the latest complete projection	registered
+torii_sorafs_orderbook_matcher_scan_book_revision	torii_sorafs_orderbook_matcher_scan_book_revision	Latest exhaustively scanned authoritative SoraFS orderbook revision	registered
+torii_sorafs_orderbook_api_requests_total	torii_sorafs_orderbook_api_requests_total	SoraFS orderbook API requests grouped by closed route and outcome labels	registered
+torii_sorafs_gateway_compliance_requests_total	torii_sorafs_gateway_compliance_requests_total	SoraFS gateway compliance control requests grouped by closed operation and outcome labels	registered
+torii_sorafs_gateway_compliance_serving_decisions_total	torii_sorafs_gateway_compliance_serving_decisions_total	SoraFS gateway compliance serving decisions grouped by closed subject-kind, disposition, and decision-source labels	registered
+torii_sorafs_gateway_compliance_failures_total	torii_sorafs_gateway_compliance_failures_total	SoraFS gateway compliance failures grouped by closed surface and class labels	registered
+torii_sorafs_gateway_compliance_serving_catalog_sequence	torii_sorafs_gateway_compliance_serving_catalog_sequence	Sequence of the verified SoraFS gateway compliance catalog used by the serving path	registered
+torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds	torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds	Expiry Unix second of the verified SoraFS gateway compliance catalog used by the serving path	registered
+torii_sorafs_gateway_compliance_ready	torii_sorafs_gateway_compliance_ready	Whether a fresh verified SoraFS gateway compliance catalog is available to the serving path	registered
+torii_sorafs_hedging_xor_usd_reference_price_micro_usd	torii_sorafs_hedging_xor_usd_reference_price_micro_usd	SoraFS hedging XOR/USD reference price in micro-USD grouped by cluster	registered
+torii_sorafs_hedging_feed_lag_seconds	torii_sorafs_hedging_feed_lag_seconds	SoraFS hedging feed lag in seconds grouped by cluster and source	registered
+torii_sorafs_hedging_feed_divergence_bps	torii_sorafs_hedging_feed_divergence_bps	SoraFS hedging feed divergence in basis points grouped by cluster and source	registered
+torii_sorafs_hedging_exposure_drift_bps	torii_sorafs_hedging_exposure_drift_bps	SoraFS hedging exposure drift in basis points grouped by cluster and asset	registered
+torii_sorafs_billing_statement_generation_total	torii_sorafs_billing_statement_generation_total	SoraFS billing statement generation attempts grouped by cluster and account type	registered
+torii_sorafs_billing_statement_failure_total	torii_sorafs_billing_statement_failure_total	SoraFS billing statement generation failures grouped by cluster and account type	registered
+torii_sorafs_billing_statement_ack_backlog	torii_sorafs_billing_statement_ack_backlog	SoraFS billing statement acknowledgement backlog grouped by cluster	registered
+torii_sorafs_billing_escrow_runway_seconds	torii_sorafs_billing_escrow_runway_seconds	SoraFS billing escrow runway in seconds grouped by cluster and account type	registered
+torii_sorafs_reserve_lifecycle_stage_providers	torii_sorafs_reserve_lifecycle_stage_providers	SoraFS reserve providers grouped by lifecycle stage	registered
+torii_sorafs_reserve_credit_draw_micro_xor	torii_sorafs_reserve_credit_draw_micro_xor	SoraFS outstanding reserve credit principal in micro-XOR grouped by lifecycle stage	registered
+torii_sorafs_reserve_credit_shortfall_micro_xor	torii_sorafs_reserve_credit_shortfall_micro_xor	SoraFS reserve credit shortfall in micro-XOR grouped by lifecycle stage	registered
+torii_sorafs_reserve_accrued_interest_micro_xor	torii_sorafs_reserve_accrued_interest_micro_xor	SoraFS reserve accrued interest in micro-XOR grouped by lifecycle stage	registered
+torii_sorafs_reserve_defaulted_providers	torii_sorafs_reserve_defaulted_providers	SoraFS reserve providers currently in default	registered
+torii_sorafs_reserve_appeal_backlog	torii_sorafs_reserve_appeal_backlog	Open SoraFS reserve appeals awaiting decision	registered
+torii_sorafs_reserve_custody_movements	torii_sorafs_reserve_custody_movements	SoraFS reserve movements grouped by custody status	registered
+torii_sorafs_reserve_chain_reconciled_movements	torii_sorafs_reserve_chain_reconciled_movements	SoraFS reserve movements reconciled with terminal chain custody evidence	registered
+torii_sorafs_reserve_finalized_projection_ready	torii_sorafs_reserve_finalized_projection_ready	Whether the SoraFS reserve telemetry projection is caught up and reconciled at one finalized view	registered
+torii_sorafs_reserve_finalized_projection_height	torii_sorafs_reserve_finalized_projection_height	Finalized block height represented by the latest complete SoraFS reserve telemetry projection	registered
+torii_sorafs_reserve_finalized_projection_failure_total	torii_sorafs_reserve_finalized_projection_failure_total	Failed SoraFS reserve finalized-projection refresh attempts	registered
+torii_sorafs_reserve_service_requests_total	torii_sorafs_reserve_service_requests_total	SoraFS reserve service requests grouped by route and result	registered
+torii_sorafs_reserve_service_rate_limit_total	torii_sorafs_reserve_service_rate_limit_total	SoraFS reserve service rate-limit events grouped by route and reason	registered
+sorafs_reputation_ingest_lag_seconds	sorafs_reputation_ingest_lag_seconds	SoraFS reputation ingest lag observed when a snapshot is accepted	registered
+sorafs_reputation_snapshot_age_seconds	sorafs_reputation_snapshot_age_seconds	SoraFS reputation snapshot age observed when a snapshot is accepted	registered
+sorafs_reputation_snapshot_generated_at_unix	sorafs_reputation_snapshot_generated_at_unix	SoraFS reputation snapshot generation time as a Unix timestamp	registered
+sorafs_reputation_provider_count	sorafs_reputation_provider_count	Provider count in the latest accepted SoraFS reputation snapshot	registered
+sorafs_reputation_low_score_providers	sorafs_reputation_low_score_providers	Providers below the low-score threshold in the latest SoraFS reputation snapshot	registered
+sorafs_reputation_score	sorafs_reputation_score	SoraFS reputation provider score in basis points for the bounded top-N set	registered
+sorafs_reputation_threshold_crossings_total	sorafs_reputation_threshold_crossings_total	SoraFS reputation low-score threshold crossings by level	registered
+sorafs_reputation_runtime_live	sorafs_reputation_runtime_live	Whether the committed SoraFS reputation runtime completed a successful poll	registered
+sorafs_reputation_runtime_ready	sorafs_reputation_runtime_ready	Whether every required committed SoraFS reputation runtime path is ready	registered
+sorafs_reputation_runtime_dependencies_ready	sorafs_reputation_runtime_dependencies_ready	Whether all identity-pinned external SoraFS reputation adapters are healthy	registered
+sorafs_reputation_journal_transaction_submitter_ready	sorafs_reputation_journal_transaction_submitter_ready	Whether the native reputation-journal transaction submitter is healthy	registered
+sorafs_reputation_runtime_finalized_height	sorafs_reputation_runtime_finalized_height	Latest finalized height represented by the committed SoraFS reputation runtime	registered
+sorafs_reputation_runtime_consecutive_failures	sorafs_reputation_runtime_consecutive_failures	Consecutive failed committed SoraFS reputation reconciliation attempts	registered
+sorafs_reputation_runtime_material_acknowledged	sorafs_reputation_runtime_material_acknowledged	Whether exact SoraFS reputation signing material has a durable acknowledgement	registered
+sorafs_reputation_runtime_provider_count	sorafs_reputation_runtime_provider_count	Provider accumulators retained by the committed SoraFS reputation projector	registered
+sorafs_reputation_runtime_ticks_total	sorafs_reputation_runtime_ticks_total	Supervised committed SoraFS reputation reconciliation ticks by result	registered
+sorafs_hedging_billing_runtime_live	sorafs_hedging_billing_runtime_live	Whether the committed SoraFS hedging/billing runtime completed a successful tick	registered
+sorafs_hedging_billing_runtime_ready	sorafs_hedging_billing_runtime_ready	Whether every required committed SoraFS hedging/billing runtime path is ready	registered
+sorafs_hedging_billing_runtime_dependencies_ready	sorafs_hedging_billing_runtime_dependencies_ready	Whether all identity-pinned SoraFS hedging/billing adapters are healthy	registered
+sorafs_hedging_billing_automatic_execution_enabled	sorafs_hedging_billing_automatic_execution_enabled	Whether automatic SoraFS hedge execution is enabled (always zero in V1)	registered
+sorafs_hedging_billing_last_tick_fresh	sorafs_hedging_billing_last_tick_fresh	Whether the most recent successful SoraFS hedging/billing runtime tick is fresh	registered
+sorafs_hedging_billing_finalized_projection_ready	sorafs_hedging_billing_finalized_projection_ready	Whether the SoraFS billing projection is anchored to an admissibly recent finalized head	registered
+sorafs_hedging_billing_finalized_height	sorafs_hedging_billing_finalized_height	Latest finalized height represented by the committed SoraFS billing projector	registered
+sorafs_hedging_billing_finalized_head_height	sorafs_hedging_billing_finalized_head_height	Latest finalized ledger head observed by the SoraFS hedging/billing runtime	registered
+sorafs_hedging_billing_finalized_lag_blocks	sorafs_hedging_billing_finalized_lag_blocks	Finalized blocks between the observed ledger head and SoraFS billing projection	registered
+sorafs_hedging_billing_next_event_sequence	sorafs_hedging_billing_next_event_sequence	First finalized SoraFS billing journal sequence not yet projected	registered
+sorafs_hedging_billing_ready_for_signing	sorafs_hedging_billing_ready_for_signing	SoraFS billing statements waiting for external software signing	registered
+sorafs_hedging_billing_ready_for_publication	sorafs_hedging_billing_ready_for_publication	Signed SoraFS billing statements waiting for immutable publication	registered
+sorafs_hedging_billing_publication_ambiguous	sorafs_hedging_billing_publication_ambiguous	SoraFS billing publications awaiting authoritative reconciliation	registered
+sorafs_hedging_billing_published	sorafs_hedging_billing_published	Published SoraFS billing statements waiting for acknowledgement	registered
+sorafs_hedging_billing_acknowledged	sorafs_hedging_billing_acknowledged	Durably acknowledged SoraFS billing statements	registered
+sorafs_hedging_billing_dead_letter	sorafs_hedging_billing_dead_letter	Terminal SoraFS billing statement delivery dead letters	registered
+sorafs_hedging_billing_hedge_intents	sorafs_hedging_billing_hedge_intents	Generated SoraFS hedge intents retained without automatic execution	registered
+sorafs_hedging_billing_runtime_ticks_total	sorafs_hedging_billing_runtime_ticks_total	Supervised committed SoraFS hedging/billing ticks by result	registered
+torii_sorafs_fee_projection_nanos	torii_sorafs_fee_projection_nanos	SoraFS fee projection (nano units) per provider	registered
+torii_sorafs_disputes_total	torii_sorafs_disputes_total	Total SoraFS capacity disputes submitted via Torii	registered
+torii_sorafs_orders_issued_total	torii_sorafs_orders_issued_total	SoraFS replication orders issued per provider	registered
+torii_sorafs_orders_completed_total	torii_sorafs_orders_completed_total	SoraFS replication orders completed per provider	registered
+torii_sorafs_orders_failed_total	torii_sorafs_orders_failed_total	SoraFS replication orders failed per provider	registered
+torii_sorafs_outstanding_orders	torii_sorafs_outstanding_orders	Outstanding SoraFS replication orders per provider	registered
+torii_sorafs_uptime_bps	torii_sorafs_uptime_bps	SoraFS uptime success rate (basis points) per provider	registered
+torii_sorafs_por_bps	torii_sorafs_por_bps	SoraFS PoR success rate (basis points) per provider	registered
+torii_sorafs_por_challenges_total	torii_sorafs_por_challenges_total	SoraFS PoR scheduler challenges grouped by result	registered
+torii_sorafs_por_forced_challenges_total	torii_sorafs_por_forced_challenges_total	SoraFS PoR forced challenges emitted by the scheduler	registered
+torii_sorafs_por_sampling_duplicates_total	torii_sorafs_por_sampling_duplicates_total	Duplicate SoraFS PoR samples emitted by the scheduler	registered
+torii_sorafs_por_ingest_backlog	torii_sorafs_por_ingest_backlog	SoraFS PoR ingestion backlog per manifest/provider pair	registered
+torii_sorafs_por_ingest_failures_total	torii_sorafs_por_ingest_failures_total	Total SoraFS PoR ingestion failures per manifest/provider pair	registered
+torii_sorafs_repair_tasks_total	torii_sorafs_repair_tasks_total	SoraFS repair task transitions grouped by status	registered
+torii_sorafs_repair_latency_minutes	torii_sorafs_repair_latency_minutes	SoraFS repair lifecycle latency distribution (minutes)	registered
+torii_sorafs_repair_queue_depth	torii_sorafs_repair_queue_depth	SoraFS repair queue depth per provider	registered
+torii_sorafs_repair_backlog_oldest_age_seconds	torii_sorafs_repair_backlog_oldest_age_seconds	Age of the oldest queued SoraFS repair task (seconds)	registered
+torii_sorafs_repair_lease_expired_total	torii_sorafs_repair_lease_expired_total	SoraFS repair lease expirations grouped by outcome	registered
+torii_sorafs_slash_proposals_total	torii_sorafs_slash_proposals_total	SoraFS repair slash proposals grouped by outcome	registered
+torii_sorafs_reconciliation_runs_total	torii_sorafs_reconciliation_runs_total	SoraFS reconciliation runs grouped by result	registered
+torii_sorafs_reconciliation_divergence_count	torii_sorafs_reconciliation_divergence_count	SoraFS reconciliation divergence count for the latest snapshot	registered
+torii_sorafs_gc_runs_total	torii_sorafs_gc_runs_total	SoraFS GC runs grouped by result	unregistered
+torii_sorafs_gc_evictions_total	torii_sorafs_gc_evictions_total	SoraFS GC evictions grouped by reason	unregistered
+torii_sorafs_gc_bytes_freed_total	torii_sorafs_gc_bytes_freed_total	Total SoraFS GC bytes freed grouped by reason	unregistered
+torii_sorafs_gc_blocked_total	torii_sorafs_gc_blocked_total	SoraFS GC evictions blocked grouped by reason	unregistered
+torii_sorafs_gc_expired_manifests	torii_sorafs_gc_expired_manifests	Expired manifests observed by SoraFS GC sweeps	unregistered
+torii_sorafs_gc_oldest_expired_age_seconds	torii_sorafs_gc_oldest_expired_age_seconds	Age of the oldest expired manifest observed by SoraFS GC (seconds)	unregistered
+torii_sorafs_storage_bytes_used	torii_sorafs_storage_bytes_used	SoraFS storage bytes used per provider	unregistered
+torii_sorafs_storage_bytes_capacity	torii_sorafs_storage_bytes_capacity	SoraFS storage capacity bytes per provider	unregistered
+sorafs_provider_ingest_inflight	sorafs_provider_ingest_inflight	Finalized-ledger SoraFS provider ingests holding storage-write admission	unregistered
+torii_sorafs_storage_fetch_inflight	torii_sorafs_storage_fetch_inflight	SoraFS fetch workers in flight per provider	unregistered
+torii_sorafs_storage_fetch_bytes_per_sec	torii_sorafs_storage_fetch_bytes_per_sec	SoraFS fetch throughput (bytes/sec) per provider	unregistered
+torii_sorafs_storage_por_inflight	torii_sorafs_storage_por_inflight	SoraFS PoR workers in flight per provider	unregistered
+torii_sorafs_storage_por_samples_success_total	torii_sorafs_storage_por_samples_success_total	SoraFS PoR samples marked successful per provider	unregistered
+torii_sorafs_storage_por_samples_failed_total	torii_sorafs_storage_por_samples_failed_total	SoraFS PoR samples marked failed per provider	unregistered
+sorafs_gateway_active	sorafs_gateway_active	Active SoraFS gateway requests grouped by canonical request dimensions	registered
+sorafs_gateway_responses_total	sorafs_gateway_responses_total	Completed SoraFS gateway responses grouped by bounded outcome dimensions	registered
+sorafs_gateway_ttfb_ms	sorafs_gateway_ttfb_ms	SoraFS gateway time to first byte in milliseconds	registered
+sorafs_gateway_proof_verifications_total	sorafs_gateway_proof_verifications_total	SoraFS proof verification outcomes grouped by profile and bounded error code	registered
+sorafs_gateway_proof_duration_ms	sorafs_gateway_proof_duration_ms	SoraFS proof verification duration in milliseconds	registered
+torii_sorafs_chunk_range_requests_total	torii_sorafs_chunk_range_requests_total	SoraFS chunk-range requests grouped by endpoint and status	registered
+torii_sorafs_chunk_range_bytes_total	torii_sorafs_chunk_range_bytes_total	Total bytes served by SoraFS chunk-range endpoints	registered
+torii_sorafs_provider_range_capability_total	torii_sorafs_provider_range_capability_total	Providers advertising SoraFS range capability grouped by feature	registered
+torii_sorafs_routing_authority_cache_total	torii_sorafs_routing_authority_cache_total	SoraFS committed routing-authority cache events grouped by outcome	registered
+torii_sorafs_range_fetch_throttle_events_total	torii_sorafs_range_fetch_throttle_events_total	SoraFS range fetch throttle events grouped by reason	registered
+torii_sorafs_range_fetch_concurrency_current	torii_sorafs_range_fetch_concurrency_current	Active SoraFS range fetch streams guarded by stream tokens	registered
+torii_sorafs_proof_stream_inflight	torii_sorafs_proof_stream_inflight	Active SoraFS proof streams grouped by proof kind	registered
+torii_sorafs_proof_stream_events_total	torii_sorafs_proof_stream_events_total	SoraFS proof stream outcomes grouped by kind, result, and reason	registered
+torii_sorafs_proof_stream_latency_ms	torii_sorafs_proof_stream_latency_ms	Latency in milliseconds for SoraFS proof stream items	registered
+torii_sorafs_proof_health_alerts_total	torii_sorafs_proof_health_alerts_total	Proof-health alerts grouped by provider, trigger, and penalty outcome	registered
+torii_sorafs_proof_health_pdp_failures	torii_sorafs_proof_health_pdp_failures	PDP failures recorded on the latest proof-health alert per provider	registered
+torii_sorafs_proof_health_potr_breaches	torii_sorafs_proof_health_potr_breaches	PoTR breaches recorded on the latest proof-health alert per provider	registered
+torii_sorafs_proof_health_penalty_nano	torii_sorafs_proof_health_penalty_nano	Penalty amount applied (nano-XOR) on the latest proof-health alert per provider	registered
+torii_sorafs_proof_health_window_end_epoch	torii_sorafs_proof_health_window_end_epoch	Telemetry window end epoch recorded on the latest proof-health alert per provider	registered
+torii_sorafs_proof_health_cooldown	torii_sorafs_proof_health_cooldown	Cooldown flag captured on the latest proof-health alert per provider (0 = inactive, 1 = active)	registered
+torii_sorafs_gar_violations_total	torii_sorafs_gar_violations_total	GAR policy violations grouped by reason and detail	registered
+torii_sorafs_gateway_refusals_total	torii_sorafs_gateway_refusals_total	Gateway refusals grouped by reason, profile, provider, and scope	registered
+torii_sorafs_gateway_fixture_info	torii_sorafs_gateway_fixture_info	Canonical SoraFS gateway fixture metadata (value = release timestamp)	registered
+torii_sorafs_registry_manifests_total	torii_sorafs_registry_manifests_total	SoraFS pin registry manifests grouped by status	registered
+torii_sorafs_registry_aliases_total	torii_sorafs_registry_aliases_total	Total manifest aliases recorded in the SoraFS pin registry	registered
+torii_sorafs_pin_retained_manifests	torii_sorafs_pin_retained_manifests	Consensus-maintained retained SoraFS pin lifecycle record count	registered
+torii_sorafs_pin_live_content_bytes	torii_sorafs_pin_live_content_bytes	Consensus-maintained aggregate content bytes represented by live SoraFS pins	registered
+torii_sorafs_alias_cache_refresh_total	torii_sorafs_alias_cache_refresh_total	Alias cache refresh outcomes grouped by result and reason	unregistered
+torii_sorafs_alias_cache_age_seconds	torii_sorafs_alias_cache_age_seconds	Observed age of alias proofs when served (seconds)	unregistered
+torii_sorafs_tls_cert_expiry_seconds	torii_sorafs_tls_cert_expiry_seconds	Seconds remaining until the active gateway TLS certificate expires	registered
+torii_sorafs_tls_renewal_total	torii_sorafs_tls_renewal_total	Gateway TLS renewal attempts grouped by outcome	registered
+torii_sorafs_tls_ech_enabled	torii_sorafs_tls_ech_enabled	Whether ECH is enabled for the gateway (0 disabled, 1 enabled)	registered
+torii_sorafs_gateway_fixture_version	torii_sorafs_gateway_fixture_version	Active SoraFS gateway fixture version	registered
+torii_sorafs_registry_orders_total	torii_sorafs_registry_orders_total	SoraFS replication orders grouped by status	registered
+torii_sorafs_replication_sla_total	torii_sorafs_replication_sla_total	SoraFS replication SLA outcomes (met, missed, pending)	registered
+torii_sorafs_replication_backlog_total	torii_sorafs_replication_backlog_total	Outstanding SoraFS replication backlog (pending orders)	registered
+torii_sorafs_replication_completion_latency_epochs	torii_sorafs_replication_completion_latency_epochs	Completion latency aggregates for SoraFS replication orders (epochs)	registered
+torii_sorafs_replication_deadline_slack_epochs	torii_sorafs_replication_deadline_slack_epochs	Deadline slack aggregates for pending SoraFS replication orders (epochs)	registered
+soranet_privacy_circuit_events_total	soranet_privacy_circuit_events_total	Aggregated SoraNet circuit outcomes keyed by relay mode and bucket start	registered
+soranet_privacy_ingest_reject_total	soranet_privacy_ingest_reject_total	Rejected SoraNet privacy ingest attempts grouped by endpoint/reason	registered
+soranet_privacy_pow_rejects_total	soranet_privacy_pow_rejects_total	PoW validation failures grouped by relay mode, bucket start, and reason	registered
+soranet_pow_revocation_store_total	soranet_pow_revocation_store_total	SoraNet PoW revocation store fallbacks grouped by reason	registered
+soranet_privacy_throttles_total	soranet_privacy_throttles_total	Aggregated SoraNet throttling events keyed by relay mode and bucket start	registered
+soranet_privacy_verified_bytes_total	soranet_privacy_verified_bytes_total	Aggregated verified byte totals emitted per relay mode and bucket start	registered
+soranet_privacy_active_circuits_avg	soranet_privacy_active_circuits_avg	Average concurrent SoraNet circuits per bucket	registered
+soranet_privacy_active_circuits_max	soranet_privacy_active_circuits_max	Maximum concurrent SoraNet circuits per bucket	registered
+soranet_privacy_open_buckets	soranet_privacy_open_buckets	Open SoraNet privacy buckets still accumulating contributors	registered
+soranet_privacy_pending_collectors	soranet_privacy_pending_collectors	Pending SoraNet privacy collector share accumulators per mode	registered
+soranet_privacy_snapshot_suppressed	soranet_privacy_snapshot_suppressed	Suppressed SoraNet privacy buckets observed in the latest drain (per reason)	registered
+soranet_privacy_snapshot_suppressed_by_mode	soranet_privacy_snapshot_suppressed_by_mode	Suppressed SoraNet privacy buckets observed in the latest drain (per mode and reason)	registered
+soranet_privacy_snapshot_drained	soranet_privacy_snapshot_drained	Buckets drained during the latest privacy collector flush	registered
+soranet_privacy_snapshot_suppression_ratio	soranet_privacy_snapshot_suppression_ratio	Ratio of suppressed to drained buckets observed in the latest privacy flush	registered
+soranet_privacy_evicted_buckets_total	soranet_privacy_evicted_buckets_total	Completed SoraNet privacy buckets evicted due to retention limits	registered
+soranet_privacy_bucket_suppressed	soranet_privacy_bucket_suppressed	Buckets withheld due to insufficient contributors	registered
+soranet_privacy_suppression_total	soranet_privacy_suppression_total	Suppressed bucket counts grouped by mode and reason	registered
+soranet_privacy_rtt_millis	soranet_privacy_rtt_millis	SoraNet RTT percentile estimates per bucket	registered
+soranet_privacy_gar_reports_total	soranet_privacy_gar_reports_total	Aggregated SoraNet GAR abuse reports keyed by hashed category	registered
+soranet_privacy_last_poll_unixtime	soranet_privacy_last_poll_unixtime	Unix timestamp of the last successful SoraNet privacy poll	registered
+soranet_privacy_poll_errors_total	soranet_privacy_poll_errors_total	Privacy polling failures grouped by provider alias	registered
+soranet_privacy_collector_enabled	soranet_privacy_collector_enabled	Flag indicating whether the privacy collector is active (1) or disabled (0)	registered
+sorafs_orchestrator_active_fetches	sorafs_orchestrator_active_fetches	Active multi-source orchestrator fetches grouped by manifest and region	registered
+sorafs_orchestrator_fetch_duration_ms	sorafs_orchestrator_fetch_duration_ms	Multi-source orchestrator fetch duration (milliseconds)	registered
+sorafs_orchestrator_fetch_failures_total	sorafs_orchestrator_fetch_failures_total	Multi-source orchestrator fetch failures grouped by manifest, region, and reason	registered
+sorafs_orchestrator_retries_total	sorafs_orchestrator_retries_total	Multi-source orchestrator retries grouped by manifest, provider, and reason	registered
+sorafs_orchestrator_provider_failures_total	sorafs_orchestrator_provider_failures_total	Multi-source orchestrator provider failures grouped by manifest, provider, and reason	registered
+sorafs_orchestrator_chunk_latency_ms	sorafs_orchestrator_chunk_latency_ms	Latency per chunk fetch served by the orchestrator (milliseconds)	registered
+sorafs_orchestrator_bytes_total	sorafs_orchestrator_bytes_total	Total bytes delivered by the orchestrator grouped by manifest and provider	registered
+sorafs_orchestrator_stalls_total	sorafs_orchestrator_stalls_total	Count of orchestrator chunks exceeding the configured latency cap	registered
+sorafs_orchestrator_transport_events_total	sorafs_orchestrator_transport_events_total	Transport events emitted by the orchestrator grouped by region, protocol, event, and reason	registered
+sorafs_orchestrator_policy_events_total	sorafs_orchestrator_policy_events_total	SoraFS anonymity policy outcomes grouped by region, stage, outcome, and reason	registered
+sorafs_orchestrator_pq_ratio	sorafs_orchestrator_pq_ratio	Distribution of PQ-capable relay selection ratios per region and stage	registered
+sorafs_orchestrator_pq_candidate_ratio	sorafs_orchestrator_pq_candidate_ratio	Distribution of PQ-capable relay supply ratios per region and stage	registered
+sorafs_orchestrator_pq_deficit_ratio	sorafs_orchestrator_pq_deficit_ratio	Distribution of PQ policy shortfall ratios per region and stage	registered
+sorafs_orchestrator_classical_ratio	sorafs_orchestrator_classical_ratio	Distribution of classical relay selection ratios per region and stage	registered
+sorafs_orchestrator_classical_selected	sorafs_orchestrator_classical_selected	Distribution of classical relay counts selected per region and stage	registered
+torii_da_rent_gib_months_total	torii_da_rent_gib_months_total	Aggregate GiB-month usage quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_rent_base_micro_total	torii_da_rent_base_micro_total	Aggregate base rent (micro XOR) quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_protocol_reserve_micro_total	torii_da_protocol_reserve_micro_total	Aggregate protocol reserve (micro XOR) quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_provider_reward_micro_total	torii_da_provider_reward_micro_total	Aggregate provider rewards (micro XOR) quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_pdp_bonus_micro_total	torii_da_pdp_bonus_micro_total	Aggregate PDP bonuses (micro XOR) quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_potr_bonus_micro_total	torii_da_potr_bonus_micro_total	Aggregate PoTR bonuses (micro XOR) quoted by DA ingest grouped by cluster and storage class	registered
+torii_da_receipts_total	torii_da_receipts_total	DA receipt ingest outcomes grouped by bounded outcome and lane labels	registered
+torii_da_receipt_epoch	torii_da_receipt_epoch	Current DA receipt epoch observed per lane	registered
+torii_da_receipt_highest_sequence	torii_da_receipt_highest_sequence	Highest DA receipt sequence observed in the current epoch per lane	registered
+torii_da_chunking_seconds	torii_da_chunking_seconds	DA chunking and erasure coding duration (seconds)	registered
+torii_da_spool_batches_total	torii_da_spool_batches_total	DA spool worker batch outcomes	registered
+torii_da_spool_artifacts_total	torii_da_spool_artifacts_total	DA spool worker artifact outcomes by artifact kind	registered
+torii_da_spool_queue_depth	torii_da_spool_queue_depth	Current number of DA spool batches waiting for disk persistence	registered
+torii_da_spool_batch_write_ms	torii_da_spool_batch_write_ms	DA spool worker batch disk-write duration in milliseconds	registered
+da_shard_cursor_events_total	da_shard_cursor_events_total	DA shard cursor events grouped by outcome, lane, and shard	registered
+da_shard_cursor_height	da_shard_cursor_height	Latest block height recorded per DA shard cursor entry	registered
+da_shard_cursor_lag_blocks	da_shard_cursor_lag_blocks	Lag in blocks between the validated height and the last DA shard cursor advance	registered
+taikai_ingest_segment_latency_ms	taikai_ingest_segment_latency_ms	Encoder-to-ingest latency per Taikai stream (milliseconds)	registered
+taikai_ingest_live_edge_drift_ms	taikai_ingest_live_edge_drift_ms	Absolute live-edge drift per Taikai stream (milliseconds)	registered
+taikai_ingest_live_edge_drift_signed_ms	taikai_ingest_live_edge_drift_signed_ms	Signed live-edge drift per Taikai stream (milliseconds; negative = ahead)	registered
+taikai_ingest_errors_total	taikai_ingest_errors_total	Taikai ingest failures grouped by reason	registered
+taikai_trm_alias_rotations_total	taikai_trm_alias_rotations_total	Taikai routing manifest alias rotations grouped by cluster/event/stream/alias	registered
+taikai_viewer_rebuffer_events_total	taikai_viewer_rebuffer_events_total	Taikai viewer rebuffer events grouped by cluster and stream	registered
+taikai_viewer_playback_segments_total	taikai_viewer_playback_segments_total	Taikai viewer playback segments grouped by cluster and stream	registered
+taikai_viewer_cek_fetch_duration_ms	taikai_viewer_cek_fetch_duration_ms	CEK fetch duration per cluster and lane (milliseconds)	registered
+taikai_viewer_pq_circuit_health	taikai_viewer_pq_circuit_health	PQ circuit health percentage per cluster	registered
+taikai_viewer_cek_rotation_seconds_ago	taikai_viewer_cek_rotation_seconds_ago	Seconds since last CEK rotation per lane	registered
+taikai_viewer_alerts_firing_total	taikai_viewer_alerts_firing_total	Counts of Taikai viewer alerts firing grouped by cluster/alert name	registered
+sorafs_taikai_cache_query_total	sorafs_taikai_cache_query_total	Taikai cache query outcomes grouped by result and tier	registered
+sorafs_taikai_cache_insert_total	sorafs_taikai_cache_insert_total	Taikai cache insert events grouped by tier	registered
+sorafs_taikai_cache_evictions_total	sorafs_taikai_cache_evictions_total	Taikai cache evictions grouped by tier and reason	registered
+sorafs_taikai_cache_promotions_total	sorafs_taikai_cache_promotions_total	Taikai cache promotions grouped by source and target tiers	registered
+sorafs_taikai_cache_bytes_total	sorafs_taikai_cache_bytes_total	Bytes processed by the Taikai cache grouped by event and tier	registered
+sorafs_taikai_qos_denied_total	sorafs_taikai_qos_denied_total	Taikai QoS denials grouped by class	registered
+sorafs_taikai_queue_events_total	sorafs_taikai_queue_events_total	Taikai queue events grouped by event/class	registered
+sorafs_taikai_queue_depth	sorafs_taikai_queue_depth	Current Taikai queue depth grouped by state	registered
+sorafs_taikai_shard_failovers_total	sorafs_taikai_shard_failovers_total	Taikai shard failovers grouped by preferred and selected shard	registered
+sorafs_taikai_shard_circuits_open	sorafs_taikai_shard_circuits_open	Open circuit breakers per Taikai shard in the Taikai pull queue	registered
+sorafs_orchestrator_brownouts_total	sorafs_orchestrator_brownouts_total	Anonymity policy brownout events grouped by region, stage, and reason	registered
+soranet_reward_base_payout_nanos	soranet_reward_base_payout_nanos	Configured SoraNet base payout (nano XOR) applied per epoch	registered
+soranet_reward_events_total	soranet_reward_events_total	SoraNet relay reward events grouped by relay and result	registered
+soranet_reward_payout_nanos_total	soranet_reward_payout_nanos_total	Aggregated SoraNet payout volume (nano XOR) grouped by relay and result	registered
+soranet_reward_skips_total	soranet_reward_skips_total	SoraNet relay reward skips grouped by relay and reason	registered
+soranet_reward_adjustment_nanos_total	soranet_reward_adjustment_nanos_total	Aggregated SoraNet dispute adjustments (nano XOR) grouped by relay and kind	registered
+soranet_reward_disputes_total	soranet_reward_disputes_total	SoraNet reward dispute lifecycle counters grouped by action	registered
+torii_http_requests_total	torii_http_requests_total	Torii HTTP requests grouped by stable route metadata, representation, method, and outcome	registered
+torii_http_request_duration_seconds	torii_http_request_duration_seconds	Torii HTTP request latency (seconds) grouped by stable route metadata and representation	registered
+torii_http_request_bytes_total	torii_http_request_bytes_total	Torii HTTP request payload size (bytes) grouped by stable route metadata and representation	registered
+torii_http_response_bytes_total	torii_http_response_bytes_total	Torii HTTP response payload size (bytes) grouped by stable route metadata, representation, method, and outcome	registered
+torii_api_token_hits_total	torii_api_token_hits_total	Torii API-token-gated endpoint hits grouped by endpoint and bounded token state	registered
+torii_content_requests_total	torii_content_requests_total	Content gateway requests grouped by outcome	registered
+torii_content_request_duration_seconds	torii_content_request_duration_seconds	Content gateway latency (seconds) grouped by outcome	registered
+torii_content_response_bytes_total	torii_content_response_bytes_total	Content gateway response payload size (bytes) grouped by outcome	registered
+torii_proof_requests_total	torii_proof_requests_total	Proof endpoint requests grouped by endpoint and outcome	registered
+torii_proof_request_duration_seconds	torii_proof_request_duration_seconds	Proof endpoint latency (seconds) grouped by endpoint and outcome	registered
+torii_proof_response_bytes_total	torii_proof_response_bytes_total	Proof endpoint response payload size (bytes) grouped by endpoint and outcome	registered
+torii_proof_cache_hits_total	torii_proof_cache_hits_total	Proof endpoint cache hits grouped by endpoint	registered
+torii_request_duration_seconds	torii_request_duration_seconds	Torii request latency (seconds) grouped by connection scheme	registered
+torii_request_failures_total	torii_request_failures_total	Torii request failures grouped by connection scheme and status code	registered
+torii_explorer_requests_total	torii_explorer_requests_total	Explorer endpoint requests grouped by endpoint and outcome	registered
+torii_explorer_request_duration_seconds	torii_explorer_request_duration_seconds	Explorer endpoint latency (seconds) grouped by endpoint and outcome	registered
+torii_norito_rpc_gate_total	torii_norito_rpc_gate_total	Torii Norito-RPC gate decisions grouped by rollout stage and outcome	registered
+torii_address_invalid_total	torii_address_invalid_total	Torii account identifier rejects grouped by endpoint and reason	registered
+torii_address_domain_total	torii_address_domain_total	Torii account domain kinds grouped by endpoint and selector type	registered
+torii_address_collision_total	torii_address_collision_total	Torii Local-12 selector collisions grouped by endpoint and kind	registered
+torii_address_collision_domain_total	torii_address_collision_domain_total	Torii Local-12 selector collisions grouped by endpoint and domain label	registered
+torii_account_literal_total	torii_account_literal_total	Torii account literal selections grouped by endpoint and format	registered
+torii_norito_decode_failures_total	torii_norito_decode_failures_total	Torii Norito RPC decode failures grouped by payload kind and reason	registered
+torii_proof_throttled_total	torii_proof_throttled_total	Torii proof endpoints throttled by rate limiter	registered
+torii_contract_throttled_total	torii_contract_throttled_total	Torii contract endpoints throttled by rate limiter	registered
+torii_contract_errors_total	torii_contract_errors_total	Torii contract endpoints returning errors	registered
+sns_registrar_status_total	sns_registrar_status_total	SNS registrar operation outcomes grouped by result and suffix	registered
+torii_active_connections_total	torii_active_connections_total	Torii active connections by scheme	unregistered
+torii_connect_buffered_sessions	torii_connect_buffered_sessions	Torii Connect sessions with buffered frames	unregistered
+torii_connect_total_buffer_bytes	torii_connect_total_buffer_bytes	Torii Connect total buffered bytes across sessions	unregistered
+torii_connect_dedupe_size	torii_connect_dedupe_size	Torii Connect dedupe cache size	unregistered
+torii_connect_per_ip_sessions	torii_connect_per_ip_sessions	Torii Connect per-IP session counts (gauge)	unregistered
+zk_verify_latency_ms	zk_verify_latency_ms	Proof verification latency (milliseconds) grouped by backend and status	unregistered
+zk_verify_proof_bytes	zk_verify_proof_bytes	Proof payload size (bytes) grouped by backend and status	unregistered
+block_gas_used	block_gas_used	Total gas used by the latest validated block	registered
+confidential_gas_tx_used	iroha_confidential_gas_tx_used	Confidential gas used by the most recent transaction	registered
+confidential_gas_block_used	iroha_confidential_gas_block_used	Confidential gas used by transactions in the current block	registered
+confidential_gas_total	iroha_confidential_gas_total	Total confidential gas consumed since the node started	registered
+block_fee_total_units	block_fee_total_units	Total fee units charged in the latest validated block	registered
+block_fee_total_scale	block_fee_total_scale	Scale for block_fee_total_units so the exact latest-block fee amount can be reconstructed	registered
+nts_offset_ms	nts_offset_ms	Network time offset vs local system time (ms, signed)	registered
+nts_confidence_ms	nts_confidence_ms	Network time confidence bound (MAD) in ms	registered
+nts_peers_sampled	nts_peers_sampled	Number of peers contributing NTS samples	registered
+nts_samples_used	nts_samples_used	Number of samples used in NTS aggregation after filtering	registered
+nts_healthy	nts_healthy	NTS health status (1 = healthy, 0 = unhealthy)	registered
+nts_fallback	nts_fallback	NTS fallback indicator (1 = local time fallback, 0 = network time)	registered
+nts_min_samples_ok	nts_min_samples_ok	NTS minimum-sample health check (1 = ok, 0 = fail)	registered
+nts_offset_ok	nts_offset_ok	NTS offset bound health check (1 = ok, 0 = fail)	registered
+nts_confidence_ok	nts_confidence_ok	NTS confidence bound health check (1 = ok, 0 = fail)	registered
+nts_rtt_ms_bucket	nts_rtt_ms_bucket	NTS RTT histogram bucket counts labeled by le (ms)	registered
+nts_rtt_ms_sum	nts_rtt_ms_sum	NTS RTT histogram sum of milliseconds	registered
+nts_rtt_ms_count	nts_rtt_ms_count	NTS RTT histogram count of observations	registered
+pipeline_sig_bls_agg_same	pipeline_sig_bls_agg_same	BLS signature micro-batches verified via aggregate (same-message) in latest block	registered
+pipeline_sig_bls_agg_multi	pipeline_sig_bls_agg_multi	BLS signature micro-batches verified via aggregate (multi-message) in latest block	registered
+pipeline_sig_bls_deterministic	pipeline_sig_bls_deterministic	BLS signature micro-batches verified via deterministic per-signature path in latest block	registered
+pipeline_sig_bls_agg_same_total	pipeline_sig_bls_agg_same_total	Cumulative BLS same-message aggregate verification attempts labeled by lane and result	registered
+pipeline_sig_bls_agg_multi_total	pipeline_sig_bls_agg_multi_total	Cumulative BLS multi-message aggregate verification attempts labeled by lane and result	registered

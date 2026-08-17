@@ -29,7 +29,7 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
     );
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     let payload = tx.entrypoint_bytes();
     queue
@@ -113,7 +113,7 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
         .expect("install journal");
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     queue
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
@@ -200,7 +200,7 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
         .expect("install journal");
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     queue
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
@@ -297,8 +297,8 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
     let live = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &terminal);
     register_accepted_tx_authority_for_queue_test(&mut state, &live);
-    let terminal_hash = terminal.hash();
-    let live_hash = live.hash();
+    let terminal_hash = terminal.hash_as_entrypoint();
+    let live_hash = live.hash_as_entrypoint();
     let terminal_plan = queue
         .route_plan_with_state(&terminal, &state)
         .expect("route terminal transaction");

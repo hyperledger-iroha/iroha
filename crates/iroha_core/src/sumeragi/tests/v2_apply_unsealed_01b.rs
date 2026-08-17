@@ -416,7 +416,7 @@ v2_apply_test!(
                 .expect("reserve restored FIFO head under a fresh owner");
             assert_eq!(replacement.len(), 1);
             assert_eq!(
-                replacement[0].key().signed_transaction_hash,
+                replacement[0].key().entrypoint_hash,
                 expected_fifo[0],
                 "{boundary}: restored work must not be overtaken"
             );
@@ -448,14 +448,14 @@ v2_apply_test!(
             );
             let remaining_hashes = remaining
                 .iter()
-                .map(|transaction| transaction.as_ref().hash())
+                .map(|transaction| transaction.as_ref().hash_as_entrypoint())
                 .collect::<Vec<_>>();
             assert_eq!(
                 remaining_hashes,
                 expected_fifo[1..],
                 "{boundary}: release replay must preserve FIFO order behind the new owner"
             );
-            let observed = std::iter::once(replacement[0].key().signed_transaction_hash)
+            let observed = std::iter::once(replacement[0].key().entrypoint_hash)
                 .chain(remaining_hashes)
                 .collect::<BTreeSet<_>>();
             assert_eq!(observed.len(), 4);
@@ -556,7 +556,7 @@ v2_apply_test!(
         assert_eq!(
             observed_fifo
                 .iter()
-                .map(|transaction| transaction.as_ref().hash())
+                .map(|transaction| transaction.as_ref().hash_as_entrypoint())
                 .collect::<Vec<_>>(),
             expected_fifo,
             "failed cross-store authorization must not reorder ordinary FIFO ownership"
@@ -1113,6 +1113,8 @@ v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
         fixture.task.certificate().clone(),
         fixture.service.validator_set_pops.clone(),
     );
+    let verified_artifact = VerifiedV2FinalityArtifact::verify(artifact)
+        .expect("fixture finality artifact must verify");
     fixture
         .service
         .validate_and_apply(
@@ -1120,7 +1122,7 @@ v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
             fixture.body.clone(),
             false,
             fixture.task.validated_receipt().execution_commitment(),
-            &artifact,
+            verified_artifact,
             CheckedCarrierApplications::for_block(&fixture.body),
         )
         .expect("model corrupted WSV-ahead crash image");

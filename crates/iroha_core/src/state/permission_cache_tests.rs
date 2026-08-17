@@ -384,18 +384,20 @@ fn permission_cache_rebuilds_after_restart_impl() {
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
     {
-        let mut state_block = state.block(genesis_block.0.header());
         let time_source = TimeSource::new_system();
-        let valid_genesis = crate::block::ValidBlock::validate_with_events(
-            genesis_block.0.clone(),
-            &topology,
-            &genesis_id,
-            &time_source,
-            &mut state_block,
-            |_| {},
-        )
-        .unpack(|_| {})
-        .expect("valid genesis");
+        let mut voting_block = None;
+        let (valid_genesis, mut state_block) =
+            crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                genesis_block.0.clone(),
+                &topology,
+                &genesis_id,
+                &time_source,
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {})
+            .expect("valid genesis");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
         let _ =
             state_block.apply_without_execution(&committed_genesis, topology.as_ref().to_owned());

@@ -466,20 +466,17 @@ pub struct HeightContext {
     /// Complete transition selected from the committed pre-state when this is
     /// the last height of an epoch. The `CommitQC` authenticates these bytes
     /// through [`Self::id`]; non-boundary contexts must carry `None`.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     /// Consensus mode that selected the equal-vote committee.
     pub mode: ConsensusMode,
     /// Commit certificate for the parent block, absent only at genesis or an audited snapshot
     /// bootstrap boundary.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub parent_commit_qc: Option<QuorumCertificate>,
     /// Explicit authenticated snapshot boundary used when the parent block body and v2 `CommitQC`
     /// predate the first-release v2 ledger. Mutually exclusive with `parent_commit_qc`.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
     /// Deterministically ordered voting roster; observers are excluded.
     pub roster: Vec<ValidatorPower>,
@@ -754,8 +751,7 @@ impl IntoSchema for GlobalPhase {
 #[norito(deny_unknown_fields)]
 pub struct BlockSubject {
     /// Parent block hash, absent only for the genesis block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub parent_block_hash: Option<HashOf<BlockHeader>>,
     /// Proposed block hash.
     pub block_hash: HashOf<BlockHeader>,
@@ -800,6 +796,7 @@ pub struct NativeAmxApplicationManifestLeafV1 {
     /// Exact predecessor participant-local height.
     pub predecessor_height: u64,
     /// Descriptor hash of the predecessor, absent only at the incarnation genesis.
+    #[norito(required)]
     pub predecessor_descriptor_hash: Option<Hash>,
     /// Exact certified participant descriptor hash.
     pub descriptor_hash: Hash,
@@ -934,8 +931,7 @@ pub struct ExecutionCommitment {
     /// Root of all canonical last-write-wins writes other than Kagemusha top-up anchors.
     pub ordinary_writes_root: Hash,
     /// Root of the canonical balanced Kagemusha top-up tree, when the block has top-ups.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub topup_anchor_root: Option<Hash>,
     /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
     pub topup_anchor_count: u32,
@@ -1396,12 +1392,12 @@ impl QuorumCertificate {
 /// One durable timeout vote for a view.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutVote {
     /// Round whose timer expired.
     pub round: ConsensusRound,
     /// Highest `PrepareQC` known to the signer, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificate>,
     /// Signer index in the height context roster.
     pub signer: ValidatorIndex,
@@ -1455,23 +1451,23 @@ impl TimeoutVote {
 /// Canonical same-message fields authenticated by one timeout-vote group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutVoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
     /// Timed-out round.
     pub round: ConsensusRound,
     /// Highest `PrepareQC` reported by every signer in this group.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
 }
 /// Aggregate timeout signatures that reported the same highest `PrepareQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutVoteGroup {
     /// Highest `PrepareQC` reported by this group, or none when no lock exists.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificate>,
     /// Strictly increasing signer indices in this group.
     pub signers: Vec<ValidatorIndex>,
@@ -1602,8 +1598,7 @@ pub struct TimeoutCertificateRef {
     /// Timed-out round certified by the TC.
     pub round: ConsensusRound,
     /// Highest `PrepareQC` selected from the grouped timeout votes.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
     /// Norito hash of the full timeout certificate.
     pub certificate_hash: HashOf<TimeoutCertificate>,
@@ -1611,7 +1606,12 @@ pub struct TimeoutCertificateRef {
 /// Justification carried by a proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "justification", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "justification",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ProposalJustification {
     /// View-zero justification from the parent `CommitQC`.
     ParentCommit(ParentCommitJustification),
@@ -1621,15 +1621,16 @@ pub enum ProposalJustification {
 /// View-zero proposal justification from the parent `CommitQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct ParentCommitJustification {
     /// Parent `CommitQC`; absent only for the genesis block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub certificate: Option<QuorumCertificate>,
 }
 /// Later-view proposal justification from a timeout certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutJustification {
     /// Certificate authorizing the new view.
     pub timeout_certificate: TimeoutCertificate,
@@ -1639,8 +1640,7 @@ pub struct TimeoutJustification {
     /// subject. The value is repeated outside the grouped timeout votes so a
     /// proposal authenticates the complete `PrepareQC` used by its safe-value
     /// rule without requiring a receiver to reconstruct a signer subset.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificate>,
 }
 /// Manifest committing to a complete encoded block payload.
@@ -1917,6 +1917,7 @@ impl PayloadChunk {
 /// Canonical fields authenticated by a v2 payload-chunk signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct PayloadChunkSignaturePayload {
     /// Sumeragi protocol version.
     pub protocol_version: u16,
@@ -1946,6 +1947,7 @@ pub struct PayloadChunkSignaturePayload {
 /// Signed proposal for one round.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct Proposal {
     /// Proposed round.
     pub round: ConsensusRound,
@@ -2055,7 +2057,12 @@ impl Proposal {
 )]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "artifacts", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "artifacts",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SumeragiV2Equivocation {
     /// Two different leader proposals for one round.
     Proposal {
@@ -2287,6 +2294,7 @@ impl CertifiedBodyResponse {
 /// Canonical fields authenticated by a certified-body response signature.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CertifiedBodyResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2439,6 +2447,7 @@ impl CommitCertificateResponse {
 /// Canonical fields authenticated by a commit-certificate response.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CommitCertificateResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2990,6 +2999,21 @@ pub struct SumeragiV2LivenessStatus {
     pub blocker: Option<SumeragiV2LivenessBlocker>,
     /// Per-height counters for every observed reducer ignore reason.
     pub ignore_counts: Vec<SumeragiV2IgnoreCount>,
+}
+/// Canonical response returned by `GET /v1/sumeragi/qc`.
+///
+/// Both nullable slots are required on the wire so peers never infer missing
+/// fields as `None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2QcResponse {
+    /// Highest verified `PrepareQC` known to the reducer.
+    #[norito(required)]
+    pub highest_prepare_qc: Option<QuorumCertificateRef>,
+    /// Persisted `PrepareQC` lock, if any.
+    #[norito(required)]
+    pub locked_prepare_qc: Option<QuorumCertificateRef>,
 }
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
