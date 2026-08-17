@@ -1,16 +1,5 @@
 // Shared governance publication fixtures and request-ingress regressions.
-use std::{
-    collections::BTreeMap,
-    fs, io,
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use super::*;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -56,9 +45,20 @@ use sorafs_manifest::{
     SoraFsModerationVoteCountsV1, SorafsReconciliationReportV1, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
+use std::{
+    collections::BTreeMap,
+    fs, io,
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use super::*;
 fn request_ingress_test_public_key() -> [u8; 32] {
     KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
         .expect("derive request-ingress test key")
@@ -601,10 +601,10 @@ fn only_published_source_paths(root: &Path, payload_kind: &str) -> (PathBuf, Pat
 fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
     assert_eq!(
         runtime_dag_decode_allocation_limit(1),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+        DAG_DECODE_MIN_BYTES_V1
     );
-    let last_scaled_input = (GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1 - 1)
-        / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1;
+    let last_scaled_input =
+        (DAG_DECODE_MAX_BYTES_V1 - 1) / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1;
     assert_eq!(
         runtime_dag_decode_allocation_limit(last_scaled_input),
         last_scaled_input * GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1
@@ -612,11 +612,11 @@ fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
     let first_capped_input = last_scaled_input.saturating_add(1);
     assert_eq!(
         runtime_dag_decode_allocation_limit(first_capped_input),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+        DAG_DECODE_MAX_BYTES_V1
     );
     assert_eq!(
         runtime_dag_decode_allocation_limit(usize::MAX),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+        DAG_DECODE_MAX_BYTES_V1
     );
 }
 #[test]
@@ -632,7 +632,7 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
     assert_eq!(bytes.len(), 48, "production empty-state canonical width");
     assert_eq!(
         runtime_dag_decode_allocation_limit(bytes.len()),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+        DAG_DECODE_MIN_BYTES_V1
     );
     let decoded: FencedPrivacyStateV1 =
         decode_canonical_runtime_dag(&bytes, "empty fenced privacy state")
@@ -644,13 +644,12 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
             .expect("encode two empty fenced privacy states");
     assert!(
         composite_bytes.len()
-            <= GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
-                / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1,
+            <= DAG_DECODE_MIN_BYTES_V1 / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1,
         "negative fixture must remain inside the bounded allocation-floor interval"
     );
     assert_eq!(
         runtime_dag_decode_allocation_limit(composite_bytes.len()),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+        DAG_DECODE_MIN_BYTES_V1
     );
     let error = decode_canonical_runtime_dag::<(FencedPrivacyStateV1, FencedPrivacyStateV1)>(
         &composite_bytes,

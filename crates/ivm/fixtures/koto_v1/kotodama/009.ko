@@ -1,0 +1,7 @@
+
+        seiyaku PermissionDemo {
+            kotoage fn add() {
+                ledger::peer::register(Json::parse("{\"address\":\"127.0.0.1:1337\"}"));
+            }
+        }
+    

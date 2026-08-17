@@ -83,9 +83,8 @@ kagami = ""
 # alias = "universal"
 # id = 0
 
-[sumeragi.da]
-# Enable/disable data availability gating (RBC + availability QC).
-# DA/RBC is always enabled in first-release Iroha 3 profiles.
+# Sumeragi mode, committee geometry, DA layout, and timing are signed-chain
+# context. The bundle does not expose node-local overrides for them.
 
 # Torii DA ingest replay and manifest roots are immutable per-generation
 # managed paths. Bundle overrides for those paths are rejected.

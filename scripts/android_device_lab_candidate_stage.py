@@ -380,6 +380,19 @@ def validate_candidate_stage_manifest_v2(
     for key, expected in exact_validation.items():
         if validation_report.get(key) != expected:
             raise ValueError(f"candidate validation report {key} is not exact")
+    for key in (
+        "reviewed_source_closure_descriptor_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
+    ):
+        value = validation_report.get(key)
+        if (
+            not isinstance(value, str)
+            or not _SHA256_HEX_RE.fullmatch(value)
+            or value == "0" * 64
+        ):
+            raise ValueError(f"candidate validation report {key} is invalid")
     if not isinstance(validation_report.get("source_repo_dirty"), bool):
         raise ValueError("candidate validation report source_repo_dirty must be boolean")
     generation = validation_report.get("generation")

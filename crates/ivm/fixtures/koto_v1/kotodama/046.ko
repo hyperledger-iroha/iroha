@@ -1,0 +1,10 @@
+
+        seiyaku DynamicTake {
+        state StateMap<int, int> values;
+        fn bounded_take_sum(int n) -> int {
+            var acc = 0;
+            for (key, value) in values.take(n) { acc = acc + value; }
+            return acc;
+        }
+        }
+    

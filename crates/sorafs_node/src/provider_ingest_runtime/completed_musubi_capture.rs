@@ -801,6 +801,7 @@ pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
 pub struct ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     state: ProviderIngestCompletedMusubiCaptureCoordinatorStateV1,
 }
+#[expect(clippy::large_enum_variant, reason = "by-value take-once state")]
 enum ProviderIngestCompletedMusubiCaptureCoordinatorStateV1 {
     Pending(ProviderIngestCompletedMusubiCapturePendingV1),
     Active(

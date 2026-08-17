@@ -374,6 +374,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     ".",
     "./address",
     "./blake2b",
+    "./bootle-lantern-issuance",
     "./browser",
     "./canonical-request",
     "./connect-browser",
@@ -388,10 +389,19 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./sccp",
     "./smart-contract-deployment",
     "./sorafs",
+    "./sumeragi-typed",
     "./torii",
     "./torii-browser",
     "./transaction-codec",
   ]);
+});
+
+test("package publishes the typed Sumeragi parser through its lazy subpath", () => {
+  assert.deepEqual(packageJson.exports["./sumeragi-typed"], {
+    browser: "./dist/sumeragiTyped.js",
+    import: "./dist/sumeragiTyped.js",
+    types: "./sumeragi-typed.d.ts",
+  });
 });
 
 test("package privacy capability policy is isolated behind its explicit subpath", () => {
@@ -401,11 +411,20 @@ test("package privacy capability policy is isolated behind its explicit subpath"
     types: "./privacy-capabilities.d.ts",
   });
   const optionalExports = [
+    "compiledProfileCatalogV1",
+    "decodePrivacyExact12CapabilityManifestV1",
     "getPrivacyCapabilitiesV1",
+    "getPrivacyExact12CapabilityManifestV1",
     "parsePrivacyCapabilitySnapshotV1",
     "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
     "PrivacyCapabilitySnapshotError",
+    "PrivacyExact12CapabilityManifestError",
+    "PrivacyExact12CapabilityManifestV1",
+    "requirePrivacyExact12CapabilityAdmissionV1",
+    "requirePrivacyExact12CapabilityTupleV1",
   ];
   assert.deepEqual(
     Object.keys(packagePrivacyCapabilitiesExports).sort(),
@@ -547,21 +566,31 @@ test("package Nexus browser export has an enforced browser-only dependency graph
     [
       "dist/address.js",
       "dist/blake2b.js",
+      "dist/blockProofVerification.js",
+      "dist/commonLiterals.js",
       "dist/connect.browser.js",
       "dist/contractAddress.js",
-      "dist/crypto.browser.js",
+      "dist/crc64Xz.js",
       "dist/curveRegistry.js",
       "dist/ed25519Strict.js",
       "dist/entrypointSchema.js",
+      "dist/governanceSelector.js",
+      "dist/hashLiteralCrc.js",
+      "dist/idnaBidi.js",
       "dist/kotodamaIdentifiers.js",
       "dist/multisig.js",
       "dist/native.browser.js",
+      "dist/networkId.js",
       "dist/nexusApp.js",
       "dist/norito.js",
+      "dist/noritoContractCodecs.js",
+      "dist/noritoGovernanceBoundary.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
       "dist/ordering.js",
+      "dist/privacyExact12Network.js",
       "dist/proofAttachment.js",
+      "dist/strictLosslessJson.js",
       "dist/transactionCodec.js",
       "dist/validationError.js",
     ],
@@ -583,6 +612,19 @@ test("package Nexus browser source and dist must remain exact", () => {
     readFileSync(new URL("../src/nexusApp.js", import.meta.url), "utf8"),
     "Nexus browser source and dist must remain exact",
   );
+});
+
+test("package lazy browser chunks ship with exact source and dist parity", () => {
+  for (const fileName of [
+    "smartContractDeploymentSubmit.js",
+    "sumeragiTyped.js",
+  ]) {
+    assert.equal(
+      readFileSync(new URL(`../dist/${fileName}`, import.meta.url), "utf8"),
+      readFileSync(new URL(`../src/${fileName}`, import.meta.url), "utf8"),
+      `${fileName} source and dist must remain exact`,
+    );
+  }
 });
 
 test("package Nexus browser defaults build, finalize, and submit the shared canonical transfer", async () => {

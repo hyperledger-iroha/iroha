@@ -1421,11 +1421,6 @@ def _direct_serve_predecessor_production_source_fidelity_errors(
         ("V2IoCommandQueue", "try_send_as", "ordinary worker command admission"),
         (
             "V2IoCommandQueue",
-            "capture_recovered_decision_apply_capacity",
-            "recovered Apply capacity admission",
-        ),
-        (
-            "V2IoCommandQueue",
             "capture_recovered_lifecycle_sign_capacity",
             "recovered Sign capacity admission",
         ),

@@ -6,6 +6,11 @@ import copy
 import importlib.util
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_workspace_target_inventory.py"
@@ -28,6 +33,50 @@ def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
     assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 114
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
+def test_external_software_signer_is_declared_but_never_default() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    target = ("irohad", "sorafs_external_software_signer")
+
+    assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
+def test_external_software_signer_requires_explicit_release_opt_in() -> None:
+    manifest = tomllib.loads(
+        (ROOT / "crates" / "irohad" / "Cargo.toml").read_text(encoding="utf-8")
+    )
+    marker = "external-software-signer-bin"
+    signer = next(
+        target
+        for target in manifest["bin"]
+        if target["name"] == "sorafs_external_software_signer"
+    )
+
+    assert manifest["features"][marker] == ["daemon"]
+    assert marker not in manifest["features"]["default"]
+    assert signer["required-features"] == [marker]
+
+    caller_markers = {
+        "scripts/build_line.sh": "--features external-software-signer-bin",
+        "ci/check_sorafs_cli_release.sh": "--features external-software-signer-bin",
+        ".github/workflows/sorafs-cli-release.yml": (
+            "--features external-software-signer-bin"
+        ),
+        ".github/workflows/publish_taira_validator.yml": (
+            "embedded-soracloud-runtime,external-software-signer-bin,zk-stark"
+        ),
+        "scripts/build_release_bundle.sh": (
+            "--features irohad/external-software-signer-bin"
+        ),
+        "configs/soranexus/taira/build_taira_rollout_bundle.sh": (
+            "embedded-soracloud-runtime,external-software-signer-bin,zk-stark"
+        ),
+        "Dockerfile": 'ARG FEATURES="external-software-signer-bin"',
+    }
+    for relative, expected in caller_markers.items():
+        assert expected in (ROOT / relative).read_text(encoding="utf-8")
 
 
 def test_rejects_default_tool_and_retired_alias() -> None:

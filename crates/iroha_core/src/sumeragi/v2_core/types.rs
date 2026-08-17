@@ -828,12 +828,12 @@ impl QuorumCertificate {
     pub fn signatures(&self) -> &[SignatureShare] {
         &self.signatures
     }
-    /// Validates the context, height, signer order, and both quorum thresholds.
+    /// Validates the context, height, signer order, and exact canonical quorum.
     ///
     /// # Errors
     ///
     /// Returns an error if the certificate targets another context or height,
-    /// has malformed signers, or fails either quorum threshold.
+    /// has malformed signers, or does not carry the exact canonical signer count.
     pub fn validate(&self, context: &HeightContext) -> Result<Quorum, QuorumError> {
         if self.reference.context_id != context.id {
             return Err(QuorumError::ContextMismatch);
@@ -1180,12 +1180,12 @@ impl TimeoutCertificate {
             .max_by_key(|certificate| (certificate.round().view(), certificate.subject()))
     }
     /// Validates nested `PrepareQC`s, canonical group ordering, signer
-    /// disjointness, and the union's equal-vote quorum.
+    /// disjointness, and the union's exact equal-vote certificate quorum.
     ///
     /// # Errors
     ///
     /// Returns an error for invalid nested certificates, unordered or
-    /// overlapping groups, conflicting maxima, or an insufficient signer union.
+    /// overlapping groups, conflicting maxima, or a noncanonical signer union.
     pub fn validate(&self, context: &HeightContext) -> Result<Quorum, QuorumError> {
         use std::collections::BTreeSet;
         if self.context_id != context.id() {

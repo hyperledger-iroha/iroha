@@ -1,11 +1,10 @@
 use getset::CopyGetters;
-use itertools::Itertools;
 
 use crate::{
+    Context,
     gates::{circuit::CircuitBuilderStage, flex_gate::FlexGateConfigParams},
     utils::ScalarField,
     virtual_region::copy_constraints::SharedCopyConstraintManager,
-    Context,
 };
 
 use super::SinglePhaseCoreManager;
@@ -34,9 +33,16 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
     ///         * These values are fixed for the circuit at key generation time, and they do not need to be re-computed by the prover in the actual proving phase.
     pub fn new(witness_gen_only: bool) -> Self {
         let copy_manager = SharedCopyConstraintManager::default();
-        let phase_manager =
-            vec![SinglePhaseCoreManager::new(witness_gen_only, copy_manager.clone())];
-        Self { phase_manager, witness_gen_only, use_unknown: false, copy_manager }
+        let phase_manager = vec![SinglePhaseCoreManager::new(
+            witness_gen_only,
+            copy_manager.clone(),
+        )];
+        Self {
+            phase_manager,
+            witness_gen_only,
+            use_unknown: false,
+            copy_manager,
+        }
     }
 
     /// Creates a new [MultiPhaseCoreManager] depending on the stage of circuit building. If the stage is [CircuitBuilderStage::Prover], the [MultiPhaseCoreManager] is used for witness generation only.
@@ -107,21 +113,18 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
 
     /// Returns some statistics about the virtual region.
     pub fn statistics(&self) -> GateStatistics {
-        let total_advice_per_phase =
-            self.phase_manager.iter().map(|pm| pm.total_advice()).collect::<Vec<_>>();
-
-        let total_fixed: usize = self
-            .copy_manager
-            .lock()
-            .unwrap()
-            .constant_equalities
+        let total_advice_per_phase = self
+            .phase_manager
             .iter()
-            .map(|(c, _)| *c)
-            .sorted()
-            .dedup()
-            .count();
+            .map(|pm| pm.total_advice())
+            .collect::<Vec<_>>();
 
-        GateStatistics { total_advice_per_phase, total_fixed }
+        let total_fixed = self.copy_manager.lock().unwrap().num_distinct_constants();
+
+        GateStatistics {
+            total_advice_per_phase,
+            total_fixed,
+        }
     }
 
     /// Auto-calculates configuration parameters for the circuit
@@ -140,7 +143,11 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
             .collect::<Vec<_>>();
         let num_fixed = (stats.total_fixed + (1 << k) - 1) >> k;
 
-        let params = FlexGateConfigParams { num_advice_per_phase, num_fixed, k };
+        let params = FlexGateConfigParams {
+            num_advice_per_phase,
+            num_fixed,
+            k,
+        };
         #[cfg(feature = "display")]
         {
             for (phase, num_advice) in stats.total_advice_per_phase.iter().enumerate() {
@@ -159,4 +166,44 @@ pub struct GateStatistics {
     pub total_advice_per_phase: Vec<usize>,
     /// Total distinct constants used
     pub total_fixed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::halo2_proofs::halo2curves::bn256::Fr;
+
+    #[test]
+    fn statistics_counts_distinct_constants_without_mutating_the_graph() {
+        let mut manager = MultiPhaseCoreManager::<Fr>::new(false);
+        let ctx = manager.main(0);
+        ctx.load_constant(Fr::from(7));
+        ctx.load_constant(Fr::from(3));
+        ctx.load_constant(Fr::from(7));
+        let before = manager
+            .copy_manager
+            .lock()
+            .unwrap()
+            .constant_equalities
+            .iter()
+            .map(|(constant, cell)| (*constant, *cell))
+            .collect::<Vec<_>>();
+
+        let statistics = manager.statistics();
+        assert_eq!(statistics.total_advice_per_phase, [3]);
+        assert_eq!(statistics.total_fixed, 2);
+        assert_eq!(
+            manager
+                .copy_manager
+                .lock()
+                .unwrap()
+                .constant_equalities
+                .iter()
+                .map(|(constant, cell)| (*constant, *cell))
+                .collect::<Vec<_>>(),
+            before
+        );
+
+        manager.clear();
+    }
 }

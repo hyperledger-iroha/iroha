@@ -1,0 +1,7 @@
+
+        seiyaku RemovedPointerCodec {
+            view fn main(bytes value) {
+                let _encoded = pointer_to_norito(value);
+            }
+        }
+    

@@ -4,13 +4,7 @@
 //! never fabricates ledger pages, signatures, DAG acknowledgements, or native
 //! journal transactions: those operations remain behind deployment-injected,
 //! identity-pinned runtime adapters.
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlV1;
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
@@ -48,7 +42,13 @@ use sorafs_node::reputation::{
         StreamTokenReputationAdmissionOutcomeV1, reputation_journal_submitter_policy_digest_v1,
     },
 };
-use crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlV1;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const MIN_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONCILIATION_TIMEOUT_POLL_MULTIPLIER: u32 = 3;
@@ -280,6 +280,10 @@ impl ReputationRuntimeHandleV1 {
     }
     /// Return whether deferred runtime assembly has installed the active
     /// deployment-owned dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime slot is poisoned or its active binding is invalid.
     pub fn activation_state(
         &self,
     ) -> Result<
@@ -1281,7 +1285,7 @@ fn record_tick_metric(result: &str) {
 fn record_tick_metric(_result: &str) {}
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use super::*;
     use iroha_config::base::util::Bytes;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1322,8 +1326,8 @@ mod tests {
         ReputationThresholdSigningRequestV1, reputation_governance_dag_policy_digest_v1,
         reputation_journal_submitter_policy_digest_v1,
     };
+    use std::path::PathBuf;
     use tempfile::TempDir;
-    use super::*;
     fn network_id(label: &str) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1464,21 +1468,37 @@ mod tests {
                 "{case}: configured qualification rejection must precede every external provider call"
             );
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "test providers share the same optional counter slot"
+        )]
         fn record_handle(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.handles.fetch_add(1, Ordering::AcqRel);
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "test providers share the same optional counter slot"
+        )]
         fn record_qualification(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.qualifications.fetch_add(1, Ordering::AcqRel);
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "test providers share the same optional counter slot"
+        )]
         fn record_readiness(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.readiness.fetch_add(1, Ordering::AcqRel);
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "test providers share the same optional counter slot"
+        )]
         fn record_operation(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.operations.fetch_add(1, Ordering::AcqRel);
@@ -2169,6 +2189,10 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test validates one complete idempotent native-outcome protocol"
+    )]
     fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
         let temp = TempDir::new().expect("tempdir");
         let network_id = network_id("reputation-runtime-native-admission");

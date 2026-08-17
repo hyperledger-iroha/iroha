@@ -29,7 +29,7 @@
 mod api;
 /// Standard deployment-owned broker assembly without credential discovery.
 mod launcher;
-pub(crate) use api::StockRuntimeProviderBrokerRegistryV1;
+pub use api::StockRuntimeProviderBrokerRegistryV1;
 pub use api::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
@@ -77,6 +77,13 @@ mod protocol {
         },
         time::Duration,
     };
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "this module rejects non-64-bit targets before projecting fixed u64 bounds"
+    )]
+    const fn fixed_u64_bound(value: u64) -> usize {
+        value as usize
+    }
     const BROKER_MAGIC_V1: [u8; 8] = *b"IRPBRK01";
     const BROKER_VERSION_V1: u16 = 1;
     const FRAME_KIND_HANDSHAKE_REQUEST_V1: u8 = 1;
@@ -98,8 +105,10 @@ mod protocol {
     const MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize = 512 * 1024 * 1024;
     const MAX_APPEAL_FINANCE_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1
-            + sorafs_node::appeal_finance_transaction_forwarder::
-                APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize;
+            + fixed_u64_bound(
+                sorafs_node::appeal_finance_transaction_forwarder::
+                    APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1,
+            );
     const MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1: usize =
         MAX_APPEAL_FINANCE_CHECKPOINT_RECORD_BYTES_V1 + 128 * 1024;
     const MAX_BROKER_FRAME_ENVELOPE_BYTES_V1: usize = 128 * 1024;
@@ -107,15 +116,19 @@ mod protocol {
     const MAX_BROKER_UNARY_FRAME_BYTES_V1: usize = 33 * 1024 * 1024;
     const MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1: usize = 65 * 1024 * 1024;
     const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize =
-        iroha_config::parameters::defaults::torii::
-            SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES as usize;
+        fixed_u64_bound(
+            iroha_config::parameters::defaults::torii::
+                SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
+        );
     const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1: usize =
         MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1
-            + sorafs_node::appeal_finance_transaction_forwarder::
-                APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize
+            + fixed_u64_bound(
+                sorafs_node::appeal_finance_transaction_forwarder::
+                    APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1,
+            )
             + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     const MAX_BROKER_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize =
-        provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT as usize;
+        fixed_u64_bound(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
     const MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1: usize = MAX_EVIDENCE_VIEWER_ARCHIVE_BYTES_V1;
     const MAX_BROKER_SHARED_DECODE_BYTES_V1: usize = if PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1
         .max_composed_bytes
@@ -168,13 +181,14 @@ mod protocol {
         iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_REQUEST_BYTES_V1;
     const BOOTLE_LANTERN_RESPONSE_BYTES_V1: usize =
         iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
-    const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
-        provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1 as usize;
+    const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize = fixed_u64_bound(
+        provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1,
+    );
     const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
     const MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize =
-        provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT as usize;
+        fixed_u64_bound(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
     const MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1: usize =
-        provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT as usize;
+        fixed_u64_bound(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
     const MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1: usize = 64 * 1024;
     const MAX_PROVIDER_INGEST_CONTROL_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1: usize =
@@ -194,8 +208,10 @@ mod protocol {
         };
     const MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1
-            + sorafs_node::provider_ingest_outbox::
-                PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize;
+            + fixed_u64_bound(
+                sorafs_node::provider_ingest_outbox::
+                    PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1,
+            );
     const MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1: usize =
         MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     const MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1: usize = 128 * 1024;
@@ -203,23 +219,25 @@ mod protocol {
     const MAX_REPUTATION_RETENTION_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1: usize = 16 * 1024 * 1024;
     const MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1: usize = 128 * 1024 * 1024;
-    const MAX_REPUTATION_JOURNAL_CHECKPOINT_BYTES_V1: usize =
-        sorafs_node::reputation::runtime::REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1
-            as usize;
+    const MAX_REPUTATION_JOURNAL_CHECKPOINT_BYTES_V1: usize = fixed_u64_bound(
+        sorafs_node::reputation::runtime::REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+    );
     const MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_REPUTATION_JOURNAL_CHECKPOINT_BYTES_V1
-            + sorafs_node::reputation::runtime::
-                REPUTATION_JOURNAL_SEALED_CHECKPOINT_MAX_OVERHEAD_BYTES_V1 as usize;
+            + fixed_u64_bound(
+                sorafs_node::reputation::runtime::
+                    REPUTATION_JOURNAL_SEALED_CHECKPOINT_MAX_OVERHEAD_BYTES_V1,
+            );
     const MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1: usize =
         MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     // The largest billing payload is a canonical 128 MiB checkpoint in its
     // bounded epoch-witness wrapper. Keep independent framing overhead without
     // inheriting appeal finance's 512 MiB operation ceiling.
-    const MAX_BILLING_RUNTIME_FRAME_BYTES_V1: usize =
-        sorafs_node::hedging_billing_service::HEDGING_BILLING_MAX_CHECKPOINT_BYTES_V1 as usize
-            + sorafs_node::hedging_billing_service::
-                HEDGING_BILLING_EPOCH_WITNESS_WRAPPER_MAX_BYTES_V1 as usize
-            + 128 * 1024;
+    const MAX_BILLING_RUNTIME_FRAME_BYTES_V1: usize = fixed_u64_bound(
+        sorafs_node::hedging_billing_service::HEDGING_BILLING_MAX_CHECKPOINT_BYTES_V1,
+    ) + fixed_u64_bound(
+        sorafs_node::hedging_billing_service::HEDGING_BILLING_EPOCH_WITNESS_WRAPPER_MAX_BYTES_V1,
+    ) + 128 * 1024;
     const MAX_BILLING_CONTROL_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1: usize = 64 * 1024;
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1: usize =
@@ -249,7 +267,7 @@ mod protocol {
     const MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1: usize = 4 * 1024;
     const MAX_EVIDENCE_VIEWER_RECEIPT_MESSAGE_BYTES_V1: usize = 1024;
     const MAX_EVIDENCE_VIEWER_CHECKPOINT_BYTES_V1: usize =
-        sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_CHECKPOINT_BYTES_V1 as usize;
+        fixed_u64_bound(sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_CHECKPOINT_BYTES_V1);
     const MAX_EVIDENCE_VIEWER_ARCHIVE_BYTES_V1: usize =
         MAX_EVIDENCE_VIEWER_CHECKPOINT_BYTES_V1 + 16 * 1024;
     const MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1: usize =
@@ -937,6 +955,10 @@ mod protocol {
         .map_err(|_| BrokerError::BindingMismatch)
     }
     impl ProviderBindingWireV1 {
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed V1 binding projection is exhaustive"
+        )]
         fn try_from_binding(
             binding: &IrohaRuntimeProviderBindingV1,
         ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -1162,7 +1184,7 @@ mod protocol {
         .map_err(|_| BrokerError::BindingMismatch)?;
         if runtime.gateway_handle == runtime.provider_handle
             || runtime.gateway_signer_id == runtime.provider_signer_id
-            || runtime.provider_revision != admission.policy_sequence
+            || runtime.provider_revision.ne(&admission.policy_sequence)
             || runtime.provider_policy_digest != admission.policy_digest
             || runtime.gateway_public_key == [0; 32]
             || iroha_crypto::ed25519_parse_public_key(&runtime.gateway_public_key).is_err()
@@ -1190,6 +1212,10 @@ mod protocol {
         }
         Ok(())
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixed V1 binding matrix is exhaustive"
+    )]
     fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerError> {
         let runtime_slot = binding.runtime_slot()?;
         let governance_signer = runtime_slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
@@ -3031,11 +3057,11 @@ mod protocol {
         bytes: &[u8],
         admission: &DecodeResourceAdmissionV1,
     ) -> Result<sorafs_manifest::ModerationLedgerCyclePublicationV1, BrokerError> {
+        const NORITO_V1_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
         validate_fenced_privacy_publication_payload_len(bytes.len())?;
         // Canonical V1 payloads are never compressed. Inspect the fixed header
         // before invoking any decoder so a tiny compressed frame cannot expand
         // ahead of the broker's byte-derived allocation reservation.
-        const NORITO_V1_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
         if bytes.get(NORITO_V1_COMPRESSION_OFFSET).copied() != Some(norito::Compression::None as u8)
         {
             return Err(BrokerError::Rejected);
@@ -3379,10 +3405,10 @@ mod protocol {
     ) -> Result<(), BrokerError> {
         grant.validate().map_err(|_| BrokerError::Rejected)?;
         if grant.scope() != request.scope()
-            || grant.issued_at_unix() != request.acquire_at_unix()
+            || grant.issued_at_unix().ne(&request.acquire_at_unix())
             || grant.expires_at_unix() != request.expires_at_unix()
             || grant.provider_binding() != configured_binding
-            || grant.fencing_token() <= request.fencing_floor()
+            || grant.fencing_token().le(&request.fencing_floor())
         {
             return Err(BrokerError::Rejected);
         }
@@ -3397,10 +3423,10 @@ mod protocol {
         let current = request.current_grant();
         if grant.lease_id() != current.lease_id()
             || grant.scope() != current.scope()
-            || grant.issued_at_unix() != request.renew_at_unix()
+            || grant.issued_at_unix().ne(&request.renew_at_unix())
             || grant.expires_at_unix() != request.expires_at_unix()
             || grant.provider_binding() != configured_binding
-            || grant.fencing_token() <= request.fencing_floor()
+            || grant.fencing_token().le(&request.fencing_floor())
             || grant.fencing_token() <= current.fencing_token()
         {
             return Err(BrokerError::Rejected);
@@ -3416,7 +3442,7 @@ mod protocol {
         if receipt.lease_id() != current.lease_id()
             || receipt.scope() != current.scope()
             || receipt.fencing_token() != current.fencing_token()
-            || receipt.released_at_unix() != request.release_at_unix()
+            || receipt.released_at_unix().ne(&request.release_at_unix())
             || receipt.provider_binding() != configured_binding
         {
             return Err(BrokerError::Rejected);
@@ -5363,6 +5389,7 @@ mod protocol {
             policy: DecodeResourcePolicyV1,
         ) -> Result<Arc<Self>, BrokerError> {
             let permit = pool.try_acquire(policy.max_composed_bytes)?;
+            drop(pool);
             Ok(Arc::new(Self {
                 operation,
                 policy,
@@ -6036,7 +6063,7 @@ mod protocol {
             .try_reserve_exact(length)
             .map_err(|_| BrokerError::Protocol)?;
         let mut remaining = length;
-        let mut chunk = ScrubbedReadChunk([0_u8; 64 * 1024]);
+        let mut chunk = ScrubbedReadChunk(vec![0_u8; 64 * 1024].into_boxed_slice());
         while remaining != 0 {
             let read_len = remaining.min(chunk.len());
             reader
@@ -6162,6 +6189,11 @@ mod protocol {
             &[&BROKER_MAGIC_V1, &BROKER_VERSION_V1.to_be_bytes(), &bytes],
         ))
     }
+    #[expect(
+        clippy::ref_option,
+        clippy::too_many_arguments,
+        reason = "arguments mirror the fixed V1 metadata transcript fields"
+    )]
     fn provider_metadata_digest(
         signer_metadata: &Option<SignerMetadataWireV1>,
         governance_request_ingress_qualification: &Option<
@@ -6301,6 +6333,10 @@ mod protocol {
             server_transcript_digest: server_transcript_digest(&transcript)?,
         })
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixed V1 observation matrix is exhaustive"
+    )]
     fn validate_observation(
         requested: &ProviderBindingWireV1,
         observed: &ProviderObservationWireV1,
@@ -6574,8 +6610,7 @@ mod protocol {
                     || observed.provider_ingest_source_provider_ids.len() > max_sources
                     || observed
                         .provider_ingest_source_provider_ids
-                        .iter()
-                        .any(|provider_id| *provider_id == [0; 32])
+                        .contains(&[0; 32])
                     || observed
                         .provider_ingest_source_provider_ids
                         .windows(2)
@@ -6692,6 +6727,7 @@ mod protocol {
         request: &HandshakeRequestV1,
         response: &HandshakeResponseV1,
     ) -> Result<(), BrokerError> {
+        let catalog_len_matches = response.observations.len() == request.requested_catalog.len();
         if response.chain_id != request.chain_id
             || response.network_id != request.network_id
             || response.requested_catalog != request.requested_catalog
@@ -6699,7 +6735,7 @@ mod protocol {
             || response.catalog_digest != request.catalog_digest
             || response.client_transcript_digest != request.client_transcript_digest
             || response.session_id == [0; 32]
-            || response.observations.len() != request.requested_catalog.len()
+            || !catalog_len_matches
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -7308,16 +7344,16 @@ mod protocol {
         } else {
             hostname
         };
+        let restricted_suffix = hostname.rsplit_once('.').is_some_and(|(_, suffix)| {
+            matches!(suffix, "localhost" | "local" | "internal" | "onion")
+        });
         if hostname.is_empty()
             || hostname.len() > MAX_GATEWAY_ACME_HOSTNAME_BYTES_V1
             || !hostname.is_ascii()
             || !hostname.contains('.')
             || hostname.ends_with('.')
             || hostname == "localhost"
-            || hostname.ends_with(".localhost")
-            || hostname.ends_with(".local")
-            || hostname.ends_with(".internal")
-            || hostname.ends_with(".onion")
+            || restricted_suffix
             || hostname.parse::<std::net::IpAddr>().is_ok()
             || hostname.bytes().any(|byte| byte.is_ascii_uppercase())
             || !hostname.split('.').all(|label| {
@@ -7552,7 +7588,7 @@ mod protocol {
         ))
     }
     fn gateway_compliance_error_wire(
-        error: iroha_torii::sorafs::gateway::GatewayComplianceError,
+        error: &iroha_torii::sorafs::gateway::GatewayComplianceError,
     ) -> (u8, u64, u64) {
         use iroha_torii::sorafs::gateway::GatewayComplianceError as Error;
         match error {
@@ -7561,14 +7597,14 @@ mod protocol {
             Error::NonPublicAddress => (3, 0, 0),
             Error::UnsafeAddressSet { found, maximum } => (
                 4,
-                u64::try_from(found).unwrap_or(u64::MAX),
-                u64::try_from(maximum).unwrap_or(u64::MAX),
+                u64::try_from(*found).unwrap_or(u64::MAX),
+                u64::try_from(*maximum).unwrap_or(u64::MAX),
             ),
             Error::TrustPinMismatch => (5, 0, 0),
             Error::ResourceLimit { found, maximum, .. } => (
                 6,
-                u64::try_from(found).unwrap_or(u64::MAX),
-                u64::try_from(maximum).unwrap_or(u64::MAX),
+                u64::try_from(*found).unwrap_or(u64::MAX),
+                u64::try_from(*maximum).unwrap_or(u64::MAX),
             ),
             _ => (7, 0, 0),
         }
@@ -7788,7 +7824,7 @@ mod protocol {
         ];
         if collections.iter().any(|values| {
             values.len() > sorafs_node::pop_credentials::POP_SERVICE_COLLECTION_MAX_V1
-                || values.iter().any(|digest| *digest == [0; 32])
+                || values.contains(&[0; 32])
                 || values.windows(2).any(|pair| pair[0] >= pair[1])
         }) || projection.committed_operation_digests.iter().any(|digest| {
             projection
@@ -7978,7 +8014,7 @@ mod protocol {
         encode_canonical(record, MAX_POR_REPLAY_ARCHIVE_RECORD_BYTES_V1)
     }
     fn validate_por_replay_archive_receipt(
-        receipt: sorafs_node::PorFinalizedReplayArchiveReceiptV1,
+        receipt: &sorafs_node::PorFinalizedReplayArchiveReceiptV1,
         exact: sorafs_node::PorFinalizedReplayArchiveBindingV1,
     ) -> Result<(), BrokerError> {
         receipt.validate().map_err(|_| BrokerError::Rejected)?;
@@ -8009,7 +8045,7 @@ mod protocol {
         {
             return Err(BrokerError::Rejected);
         }
-        validate_por_replay_archive_receipt(request.expected_checkpoint_head, exact)?;
+        validate_por_replay_archive_receipt(&request.expected_checkpoint_head, exact)?;
         sorafs_node::PorFinalizedReplayArchiveProofBoundsV1::try_new(
             request.max_successor_receipts,
             request.max_successor_proof_bytes,
@@ -8401,7 +8437,7 @@ mod protocol {
         reputation_threshold_request_to_wire(&request)?;
         Ok(request)
     }
-    fn validate_reputation_signed_result(
+    fn validate_reputation_signature(
         request: &sorafs_node::reputation::runtime::ReputationThresholdSigningRequestV1,
         signed: &sorafs_manifest::reputation::signed::SignedReputationSnapshotV1,
     ) -> Result<Vec<u8>, BrokerError> {
@@ -8582,22 +8618,28 @@ mod protocol {
             _ => STANDARD_DECODE_POLICY_V1,
         }
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixed V1 operation limits remain explicit"
+    )]
     const fn operation_semantic_frame_limit(operation: u16) -> usize {
         match operation {
             OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
             OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1 => {
                 MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1
             }
-            OPERATION_NATIVE_TRANSACTION_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
-            OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+            OPERATION_NATIVE_TRANSACTION_SIGN_V1 | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => {
+                MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1
+            }
             OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
                 MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
             }
-            OPERATION_STREAM_TOKEN_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
+            OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => {
+                MAX_STREAM_TOKEN_FRAME_BYTES_V1
+            }
             OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
                 MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1
             }
-            OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
             OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
                 MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1
@@ -8798,6 +8840,10 @@ mod protocol {
             broker_limit
         }
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixed V1 operation allowlist remains explicit"
+    )]
     const fn operation_is_known(operation: u16) -> bool {
         matches!(
             operation,
@@ -9251,21 +9297,21 @@ mod protocol {
         if current.map(|record| record.revision) != expected_revision {
             return Err(BrokerError::Conflict);
         }
-        let monotonic = match current {
-            None => {
+        let monotonic = current.map_or_else(
+            || {
                 next.generation == 1
                     && next.predecessor_revision.is_none()
                     && next.predecessor_checkpoint_digest.is_none()
-            }
-            Some(previous) => {
+            },
+            |previous| {
                 previous
                     .generation
                     .checked_add(1)
                     .is_some_and(|generation| generation == next.generation)
                     && next.predecessor_revision == Some(previous.revision)
                     && next.predecessor_checkpoint_digest == Some(previous.checkpoint_digest)
-            }
-        };
+            },
+        );
         if !monotonic {
             return Err(BrokerError::Rejected);
         }
@@ -9316,13 +9362,13 @@ mod protocol {
         if current.map(|record| record.revision) != expected_revision {
             return Err(BrokerError::Conflict);
         }
-        let monotonic = match current {
-            None => {
+        let monotonic = current.map_or_else(
+            || {
                 next.checkpoint_generation == 0
                     && next.predecessor_revision.is_none()
                     && next.predecessor_checkpoint_digest.is_none()
-            }
-            Some(previous) => {
+            },
+            |previous| {
                 previous
                     .checkpoint_generation
                     .checked_add(1)
@@ -9330,8 +9376,8 @@ mod protocol {
                     && next.namespace_digest == previous.namespace_digest
                     && next.predecessor_revision == Some(previous.revision)
                     && next.predecessor_checkpoint_digest == Some(previous.checkpoint_digest)
-            }
-        };
+            },
+        );
         if !monotonic {
             return Err(BrokerError::Rejected);
         }
@@ -9600,7 +9646,7 @@ mod protocol {
         if response.session_id != request.session_id
             || response.request_id != request.request_id
             || response.request_digest != request.request_digest
-            || response.observed_binding != request.binding
+            || response.observed_binding.ne(&request.binding)
             || response.provider_metadata_digest != request.provider_metadata_digest
             || response.operation != request.operation
             || response.payload_digest != request.payload_digest
@@ -9636,6 +9682,11 @@ mod protocol {
         }
         Ok(())
     }
+    #[expect(
+        clippy::if_not_else,
+        clippy::too_many_lines,
+        reason = "the fail-closed branch and fixed V1 result matrix remain explicit"
+    )]
     fn validate_operation_result(
         request: &OperationRequestV1,
         status: u8,
@@ -9768,10 +9819,11 @@ mod protocol {
                         result,
                         MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                     )?;
+                    let is_live = principal.expires_at_height >= authenticate.committed_height;
                     if principal.principal_digest == [0; 32]
                         || principal.issued_at_height == 0
                         || principal.issued_at_height > authenticate.committed_height
-                        || principal.expires_at_height < authenticate.committed_height
+                        || !is_live
                         || principal.expires_at_height < principal.issued_at_height
                     {
                         return Err(BrokerError::Protocol);
@@ -10129,7 +10181,7 @@ mod protocol {
                             let signed = sorafs_manifest::reputation::signed::
                                 decode_signed_reputation_snapshot(&outcome.canonical_result)
                                 .map_err(|_| BrokerError::Protocol)?;
-                            let canonical = validate_reputation_signed_result(&request, &signed)
+                            let canonical = validate_reputation_signature(&request, &signed)
                                 .map_err(|_| BrokerError::Protocol)?;
                             if canonical != outcome.canonical_result {
                                 return Err(BrokerError::Protocol);
@@ -10807,7 +10859,7 @@ mod protocol {
                         result, MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1
                     )?;
                     if let Some(head) = head {
-                        validate_por_replay_archive_receipt(head, exact)
+                        validate_por_replay_archive_receipt(&head, exact)
                             .map_err(|_| BrokerError::Protocol)?;
                     }
                 }
@@ -11381,9 +11433,6 @@ mod protocol {
         wrap_may_have_dispatched: bool,
     ) -> BrokerError {
         match error {
-            sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable => {
-                BrokerError::Unavailable
-            }
             sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected => BrokerError::Rejected,
             sorafs_node::ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked => {
                 BrokerError::StaleOrRevoked
@@ -11393,7 +11442,8 @@ mod protocol {
             {
                 BrokerError::Ambiguous
             }
-            sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous => {
+            sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable
+            | sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous => {
                 BrokerError::Unavailable
             }
         }
@@ -11456,9 +11506,6 @@ mod protocol {
             mutating: bool,
         ) -> BrokerError {
             match error {
-                sorafs_node::hedging_billing_service::HedgingBillingExternalError::Unavailable => {
-                    BrokerError::Unavailable
-                }
                 sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected => {
                     BrokerError::Rejected
                 }
@@ -11467,7 +11514,8 @@ mod protocol {
                 {
                     BrokerError::Ambiguous
                 }
-                sorafs_node::hedging_billing_service::HedgingBillingExternalError::Ambiguous => {
+                sorafs_node::hedging_billing_service::HedgingBillingExternalError::Unavailable
+                | sorafs_node::hedging_billing_service::HedgingBillingExternalError::Ambiguous => {
                     BrokerError::Unavailable
                 }
             }
@@ -11633,6 +11681,10 @@ mod protocol {
             )
             .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed V1 observation projection is exhaustive"
+        )]
         fn make_server_observation(
             binding: &ProviderBindingWireV1,
             backends: &RuntimeProviderBrokerBackendsV1,
@@ -12971,6 +13023,10 @@ mod protocol {
             validate_observation(binding, &observation).map_err(server_error)?;
             Ok(observation)
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed V1 backend inventory is exhaustive"
+        )]
         fn validate_exact_backend_set(
             catalog: &[ProviderBindingWireV1],
             backends: &RuntimeProviderBrokerBackendsV1,
@@ -13025,10 +13081,9 @@ mod protocol {
             if let (Some(gateway), Some(provider)) = (
                 backends.potr_gateway_signer.as_ref(),
                 backends.potr_provider_signer.as_ref(),
-            ) {
-                if Arc::as_ptr(gateway).cast::<()>() == Arc::as_ptr(provider).cast::<()>() {
-                    return Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch);
-                }
+            ) && Arc::as_ptr(gateway).cast::<()>() == Arc::as_ptr(provider).cast::<()>()
+            {
+                return Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch);
             }
             let exact_backend_set =
                 requested(IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry)
@@ -13553,14 +13608,14 @@ mod protocol {
         }
         fn sign_moderation_transaction(
             state: &BrokerServerStateV1,
-            payload: iroha_data_model::transaction::TransactionPayload,
+            payload: &iroha_data_model::transaction::TransactionPayload,
         ) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
-            let signer = state
+            let backend = state
                 .backends
                 .moderation_transaction_signer
                 .as_ref()
                 .ok_or(BrokerError::BindingMismatch)?;
-            let signed = signer.sign(payload.clone()).map_err(|error| match error {
+            let transaction = backend.sign(payload.clone()).map_err(|error| match error {
                 iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Unavailable
                 | iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Backpressure => {
                     BrokerError::Unavailable
@@ -13569,14 +13624,18 @@ mod protocol {
                     BrokerError::Rejected
                 }
             })?;
-            if signed.payload() != &payload
-                || signed.authority() != payload.authority()
-                || signed.verify_signature().is_err()
+            if transaction.payload() != payload
+                || transaction.authority() != payload.authority()
+                || transaction.verify_signature().is_err()
             {
                 return Err(BrokerError::StaleOrRevoked);
             }
-            Ok(signed)
+            Ok(transaction)
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed native signer role matrix is exhaustive"
+        )]
         fn sign_native_transaction(
             state: &BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -13701,6 +13760,10 @@ mod protocol {
                 }
             }
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed V1 operation dispatch matrix is exhaustive"
+        )]
         fn dispatch_server_operation_with_session(
             state: &BrokerServerStateV1,
             pop_session: &mut PopBrokerServerSessionV1,
@@ -14446,21 +14509,21 @@ mod protocol {
                         &signing.material.network_id,
                         &state.network_id,
                     )?;
-                    let signer = state
+                    let threshold_signer = state
                         .backends
                         .reputation_threshold_signer
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let reconciled = signer.reconcile_signature(&signing);
+                    let reconciled = threshold_signer.reconcile_signature(&signing);
                     let result = match reconciled {
                         Ok(None) => ReputationReconcileResultWireV1 {
                             outcome: 0,
                             canonical_result: Vec::new(),
                             failure_receipt: [0; 32],
                         },
-                        Ok(Some(signed)) => ReputationReconcileResultWireV1 {
+                        Ok(Some(signature)) => ReputationReconcileResultWireV1 {
                             outcome: 1,
-                            canonical_result: validate_reputation_signed_result(&signing, &signed)?,
+                            canonical_result: validate_reputation_signature(&signing, &signature)?,
                             failure_receipt: [0; 32],
                         },
                         Err(error) => ReputationReconcileResultWireV1 {
@@ -15284,7 +15347,7 @@ mod protocol {
                         .lookup(lookup.record_id)
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(acknowledgement) = acknowledgement.as_ref()
-                        && (acknowledgement.statement_id != lookup.record_id
+                        && (acknowledgement.statement_id.ne(&lookup.record_id)
                             || acknowledgement.network_id != state.network_id)
                     {
                         return Err(BrokerError::Rejected);
@@ -15820,10 +15883,11 @@ mod protocol {
                     )?;
                     encode_canonical(&pending, MAX_BROKER_UNARY_FRAME_BYTES_V1)
                 }
-                (slot, OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1)
-                | (slot, OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1)
-                    if slot == stream_token_gateway_admission_slot =>
-                {
+                (
+                    slot,
+                    OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
+                    | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1,
+                ) if slot == stream_token_gateway_admission_slot => {
                     let record = decode_canonical::<
                         iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
                     >(
@@ -15873,10 +15937,10 @@ mod protocol {
                     if payload.authority() != &exact.authority {
                         return Err(BrokerError::Rejected);
                     }
-                    let signer =
+                    let backend =
                         appeal_finance_signer_backend(&state.backends, &request.binding.handle)
                             .map_err(|_| BrokerError::BindingMismatch)?;
-                    let signed = signer.sign(payload).map_err(|error| match error {
+                    let transaction = backend.sign(payload).map_err(|error| match error {
                         iroha_torii::SoraFsAppealFinanceSigningError::Unavailable => {
                             BrokerError::Unavailable
                         }
@@ -15887,9 +15951,9 @@ mod protocol {
                             BrokerError::StaleOrRevoked
                         }
                     })?;
-                    if signed.payload() != &expected
-                        || signed.authority() != &exact.authority
-                        || signed.verify_signature().is_err()
+                    if transaction.payload() != &expected
+                        || transaction.authority() != &exact.authority
+                        || transaction.verify_signature().is_err()
                     {
                         return Err(BrokerError::Rejected);
                     }
@@ -15899,7 +15963,7 @@ mod protocol {
                         request.provider_metadata_digest,
                     )
                     .map_err(|_| BrokerError::StaleOrRevoked)?;
-                    encode_canonical(&signed, MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1)
+                    encode_canonical(&transaction, MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)
                 }
                 (slot, OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1)
@@ -15919,17 +15983,17 @@ mod protocol {
                         .ok_or(BrokerError::BindingMismatch)?;
                     let signature = checkpoint.sign_digest(digest).map_err(|error| {
                         match error {
-                        sorafs_node::appeal_finance_transaction_forwarder::
-                            AppealFinanceCheckpointExternalError::Unavailable => {
-                                BrokerError::Unavailable
+                            sorafs_node::appeal_finance_transaction_forwarder::
+                                AppealFinanceCheckpointExternalError::Unavailable
+                            | sorafs_node::appeal_finance_transaction_forwarder::
+                                AppealFinanceCheckpointExternalError::Ambiguous => {
+                                    BrokerError::Unavailable
+                                }
+                            sorafs_node::appeal_finance_transaction_forwarder::
+                                AppealFinanceCheckpointExternalError::Rejected => {
+                                    BrokerError::Rejected
+                                }
                             }
-                        sorafs_node::appeal_finance_transaction_forwarder::
-                            AppealFinanceCheckpointExternalError::Rejected => BrokerError::Rejected,
-                        sorafs_node::appeal_finance_transaction_forwarder::
-                            AppealFinanceCheckpointExternalError::Ambiguous => {
-                                BrokerError::Unavailable
-                            }
-                    }
                     })?;
                     let public_key = exact_ed25519_public_key_bytes(
                         &request
@@ -15967,19 +16031,17 @@ mod protocol {
                         .load_latest()
                         .map_err(|error| {
                             match error {
-                            sorafs_node::appeal_finance_transaction_forwarder::
-                                AppealFinanceCheckpointExternalError::Unavailable => {
-                                    BrokerError::Unavailable
+                                sorafs_node::appeal_finance_transaction_forwarder::
+                                    AppealFinanceCheckpointExternalError::Unavailable
+                                | sorafs_node::appeal_finance_transaction_forwarder::
+                                    AppealFinanceCheckpointExternalError::Ambiguous => {
+                                        BrokerError::Unavailable
+                                    }
+                                sorafs_node::appeal_finance_transaction_forwarder::
+                                    AppealFinanceCheckpointExternalError::Rejected => {
+                                        BrokerError::Rejected
+                                    }
                                 }
-                            sorafs_node::appeal_finance_transaction_forwarder::
-                                AppealFinanceCheckpointExternalError::Rejected => {
-                                    BrokerError::Rejected
-                                }
-                            sorafs_node::appeal_finance_transaction_forwarder::
-                                AppealFinanceCheckpointExternalError::Ambiguous => {
-                                    BrokerError::Unavailable
-                                }
-                        }
                         })?;
                     if let Some(record) = record.as_ref() {
                         record
@@ -16256,7 +16318,7 @@ mod protocol {
                             outcome
                         }
                         Err(error) => {
-                            let (outcome, found, maximum) = gateway_compliance_error_wire(error);
+                            let (outcome, found, maximum) = gateway_compliance_error_wire(&error);
                             GatewayComplianceResolveOutcomeWireV1 {
                                 outcome,
                                 addresses: Vec::new(),
@@ -16318,7 +16380,7 @@ mod protocol {
                         },
                         Err(error) => {
                             let (outcome, found, maximum) =
-                                gateway_compliance_error_wire(error);
+                                gateway_compliance_error_wire(&error);
                             GatewayComplianceFetchOutcomeWireV1 {
                                 outcome,
                                 status: 0,
@@ -16854,7 +16916,7 @@ mod protocol {
                             }
                         })?;
                     if let Some(head) = head {
-                        validate_por_replay_archive_receipt(head, exact)?;
+                        validate_por_replay_archive_receipt(&head, exact)?;
                     }
                     qualify_server_binding(
                         state,
@@ -16902,7 +16964,7 @@ mod protocol {
                         .current_head()
                         .map_err(|_| BrokerError::Ambiguous)?
                         .ok_or(BrokerError::Ambiguous)?;
-                    validate_por_replay_archive_receipt(head, exact)
+                    validate_por_replay_archive_receipt(&head, exact)
                         .map_err(|_| BrokerError::Ambiguous)?;
                     if head != receipt {
                         if head.reputation_sequence() <= receipt.reputation_sequence() {
@@ -16972,7 +17034,7 @@ mod protocol {
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
                     ensure_transaction_session_network(&payload, &state.network_id)?;
-                    let signed = sign_moderation_transaction(state, payload)?;
+                    let signed = sign_moderation_transaction(state, &payload)?;
                     qualify_server_binding(
                         state,
                         &request.binding,
@@ -17219,8 +17281,8 @@ mod protocol {
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
                     ensure_transaction_session_network(&payload, &state.network_id)?;
-                    let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
-                    let signed = signer
+                    let backend = qualified_soracloud_runtime_signer(state, &request.binding)?;
+                    let transaction = backend
                         .sign_transaction(payload)
                         .map_err(map_soracloud_runtime_signing_error)?;
                     qualify_server_binding(
@@ -17229,7 +17291,7 @@ mod protocol {
                         request.provider_metadata_digest,
                     )
                     .map_err(|_| BrokerError::Ambiguous)?;
-                    encode_canonical(&signed, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
+                    encode_canonical(&transaction, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
                 (slot, OPERATION_SORACLOUD_PROVENANCE_SIGN_V1)
@@ -17566,33 +17628,32 @@ mod protocol {
                         &context,
                         &state.network_id,
                     )?;
-                    let signer = resolved_provider_signer(state, context.clone())?
+                    let backend = resolved_provider_signer(state, context.clone())?
                         .ok_or(BrokerError::Rejected)?;
                     validate_resolved_provider_signer(
-                        signer.as_ref(),
+                        backend.as_ref(),
                         &expected,
                         &context.provider_owner,
                     )?;
-                    let signed = block_on_provider_future(signer.sign(payload.clone()))?.map_err(
-                        |error| match error {
+                    let transaction = block_on_provider_future(backend.sign(payload.clone()))?
+                        .map_err(|error| match error {
                             sorafs_node::ProviderIngestCompletionSignerErrorV1::Unavailable => {
                                 BrokerError::Unavailable
                             }
                             sorafs_node::ProviderIngestCompletionSignerErrorV1::Rejected => {
                                 BrokerError::Rejected
                             }
-                        },
-                    )?;
+                        })?;
                     validate_resolved_provider_signer(
-                        signer.as_ref(),
+                        backend.as_ref(),
                         &expected,
                         &context.provider_owner,
                     )?;
-                    if signed.payload() != &payload {
+                    if transaction.payload() != &payload {
                         return Err(BrokerError::Rejected);
                     }
                     ensure_provider_ingest_completion_transaction(
-                        &signed,
+                        &transaction,
                         &context,
                         &state.network_id,
                     )?;
@@ -17601,7 +17662,7 @@ mod protocol {
                         &request.binding,
                         request.provider_metadata_digest,
                     )?;
-                    let signed_transaction = encode_canonical(&signed, max_signed)?;
+                    let signed_transaction = encode_canonical(&transaction, max_signed)?;
                     encode_canonical(
                         &ProviderIngestSignResultWireV1 { signed_transaction },
                         MAX_OPERATION_FRAME_BYTES_V1,
@@ -18285,19 +18346,17 @@ mod protocol {
                         .ok_or(BrokerError::BindingMismatch)?;
                     let record = store.load_latest().map_err(|error| {
                         match error {
-                        sorafs_node::evidence_viewer::
-                            EvidenceViewerCheckpointStoreExternalErrorV1::Unavailable => {
-                            BrokerError::Unavailable
+                            sorafs_node::evidence_viewer::
+                                EvidenceViewerCheckpointStoreExternalErrorV1::Unavailable
+                            | sorafs_node::evidence_viewer::
+                                EvidenceViewerCheckpointStoreExternalErrorV1::Ambiguous => {
+                                    BrokerError::Unavailable
+                                }
+                            sorafs_node::evidence_viewer::
+                                EvidenceViewerCheckpointStoreExternalErrorV1::Rejected => {
+                                    BrokerError::Rejected
+                                }
                         }
-                        sorafs_node::evidence_viewer::
-                            EvidenceViewerCheckpointStoreExternalErrorV1::Rejected => {
-                            BrokerError::Rejected
-                        }
-                        sorafs_node::evidence_viewer::
-                            EvidenceViewerCheckpointStoreExternalErrorV1::Ambiguous => {
-                            BrokerError::Unavailable
-                        }
-                    }
                     })?;
                     let record = record
                         .map(|record| {
@@ -18996,6 +19055,10 @@ mod protocol {
                 deadline,
             );
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the authenticated source stream is one ordered transcript"
+        )]
         fn serve_provider_ingest_source_fetch(
             mut stream: UnixStream,
             state: &BrokerServerStateV1,
@@ -19184,6 +19247,11 @@ mod protocol {
                 deadline,
             )
         }
+        #[expect(
+            clippy::needless_pass_by_value,
+            clippy::too_many_lines,
+            reason = "each blocking session owns its shared permits and ordered transcript"
+        )]
         fn serve_client(
             mut stream: UnixStream,
             state: &BrokerServerStateV1,
@@ -19252,7 +19320,7 @@ mod protocol {
                         &mut stream,
                         Arc::clone(&inbound_operation_budget),
                     )?;
-                let _decode_scope = decode_admission.enter();
+                let decode_scope = decode_admission.enter();
                 let request = decode_operation_frame::<OperationRequestV1>(
                     &request_frame,
                     FRAME_KIND_OPERATION_REQUEST_V1,
@@ -19328,7 +19396,7 @@ mod protocol {
                     // the unary session and the full initial-frame admission
                     // before entering the payload stream.
                     drop(session_permit.take());
-                    drop(_decode_scope);
+                    drop(decode_scope);
                     drop(decode_admission);
                     drop(request_frame);
                     let _source_stream_permit = source_stream_permit;
@@ -19388,7 +19456,7 @@ mod protocol {
                     &metadata,
                     self.expected_service_uid,
                     self.socket_mode,
-                ) || socket_identity_from_stat(&metadata)? != self.identity
+                ) || socket_identity_from_stat(&metadata) != self.identity
                 {
                     return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
                 }
@@ -19446,6 +19514,10 @@ mod protocol {
             device
         }
         #[cfg(target_os = "macos")]
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "the filesystem identity preserves MetadataExt's signed dev_t bit pattern"
+        )]
         const fn socket_device_identity_from_raw(device: rustix::fs::Dev) -> u64 {
             // `MetadataExt::dev()` exposes `dev_t` through Rust's unsigned
             // `u64` identity. On macOS `dev_t` is signed, so `as` preserves
@@ -19454,13 +19526,11 @@ mod protocol {
             // filesystem identity.
             device as u64
         }
-        fn socket_identity_from_stat(
-            metadata: &rustix::fs::Stat,
-        ) -> Result<SocketIdentity, RuntimeProviderBrokerServerErrorV1> {
-            Ok(SocketIdentity {
+        fn socket_identity_from_stat(metadata: &rustix::fs::Stat) -> SocketIdentity {
+            SocketIdentity {
                 device: socket_device_identity_from_raw(metadata.st_dev),
                 inode: metadata.st_ino,
-            })
+            }
         }
         fn finish_startup_failure<T>(
             listener: UnixListener,
@@ -19473,6 +19543,10 @@ mod protocol {
                 Err(cleanup_error) => Err(cleanup_error),
             }
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "socket creation and identity pinning form one audit sequence"
+        )]
         fn bind_server_listener(
             policy: &EndpointPolicy,
         ) -> Result<(tokio::net::UnixListener, BoundSocketGuard), RuntimeProviderBrokerServerErrorV1>
@@ -19522,31 +19596,20 @@ mod protocol {
             let staging_path = parent.join(&staging_name);
             let listener = UnixListener::bind(&staging_path)
                 .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-            let bound_metadata = match rustix::fs::statat(
+            let Ok(bound_metadata) = rustix::fs::statat(
                 &parent_directory,
                 staging_name.as_os_str(),
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            ) {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    drop(listener);
-                    // V1 cleanup is identity-conservative: without an observed
-                    // device/inode identity, this pathname is never unlinked.
-                    // Closing the listener, failing startup, and retaining the
-                    // unpredictable staging entry for operator inspection is
-                    // safer than removing a same-UID substituted entry.
-                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
-                }
+            ) else {
+                drop(listener);
+                // V1 cleanup is identity-conservative: without an observed
+                // device/inode identity, this pathname is never unlinked.
+                // Closing the listener, failing startup, and retaining the
+                // unpredictable staging entry for operator inspection is
+                // safer than removing a same-UID substituted entry.
+                return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
             };
-            let bound_identity = match socket_identity_from_stat(&bound_metadata) {
-                Ok(identity) => identity,
-                Err(_) => {
-                    drop(listener);
-                    // The same fail-safe rule applies when a platform identity
-                    // cannot be represented by the V1 guard.
-                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
-                }
-            };
+            let bound_identity = socket_identity_from_stat(&bound_metadata);
             let mut guard = BoundSocketGuard {
                 parent_directory,
                 instance_lock,
@@ -19660,8 +19723,8 @@ mod protocol {
                     "session tokens are monotonically allocated and never reused"
                 );
             }
-            fn remove(&mut self, session_token: &u64) {
-                let _ = self.controls.remove(session_token);
+            fn remove(&mut self, session_token: u64) {
+                let _ = self.controls.remove(&session_token);
             }
             fn shutdown_all(&self) {
                 for control in self.controls.values() {
@@ -19678,6 +19741,10 @@ mod protocol {
                 self.shutdown_all();
             }
         }
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the serving lifecycle is one ordered shutdown protocol"
+        )]
         fn serve_with_policy_and_fallible_readiness<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -19790,7 +19857,7 @@ mod protocol {
                     while let Some(joined) = sessions.try_join_next() {
                         match joined {
                             Ok((session_token, _session_result)) => {
-                                session_controls.remove(&session_token);
+                                session_controls.remove(session_token);
                             }
                             Err(_) => {
                                 break 'serve Err(RuntimeProviderBrokerServerErrorV1::Protocol);
@@ -19902,7 +19969,7 @@ mod protocol {
                 while let Some(joined) = sessions.join_next().await {
                     match joined {
                         Ok((session_token, _session_result)) => {
-                            session_controls.remove(&session_token);
+                            session_controls.remove(session_token);
                         }
                         Err(_) if serve_result.is_ok() => {
                             serve_result = Err(RuntimeProviderBrokerServerErrorV1::Protocol);
@@ -20107,6 +20174,10 @@ mod protocol {
                     self.poison();
                 })
             }
+            #[expect(
+                clippy::too_many_lines,
+                reason = "one request owns its full authenticated exchange"
+            )]
             fn call(
                 &self,
                 binding: &ProviderBindingWireV1,
@@ -20159,35 +20230,29 @@ mod protocol {
                     });
                 }
                 drop(request_frame);
-                let response_frame = match read_length_prefixed_with_decode_admission(
+                let Ok(response_frame) = read_length_prefixed_with_decode_admission(
                     &mut connection.stream,
                     frame_limit,
                     &decode_admission,
-                ) {
-                    Ok(frame) => frame,
-                    Err(_) => {
-                        connection.poisoned = true;
-                        return Err(if mutating {
-                            BrokerError::Ambiguous
-                        } else {
-                            BrokerError::Unavailable
-                        });
-                    }
+                ) else {
+                    connection.poisoned = true;
+                    return Err(if mutating {
+                        BrokerError::Ambiguous
+                    } else {
+                        BrokerError::Unavailable
+                    });
                 };
-                let mut response = match decode_operation_frame::<OperationResponseV1>(
+                let Ok(mut response) = decode_operation_frame::<OperationResponseV1>(
                     &response_frame,
                     FRAME_KIND_OPERATION_RESPONSE_V1,
                     operation,
-                ) {
-                    Ok(response) => response,
-                    Err(_) => {
-                        connection.poisoned = true;
-                        return Err(if mutating {
-                            BrokerError::Ambiguous
-                        } else {
-                            BrokerError::Protocol
-                        });
-                    }
+                ) else {
+                    connection.poisoned = true;
+                    return Err(if mutating {
+                        BrokerError::Ambiguous
+                    } else {
+                        BrokerError::Protocol
+                    });
                 };
                 if let Err(error) =
                     validate_operation_response_for_client(&request, &response, &self.network_id)
@@ -20528,7 +20593,7 @@ mod protocol {
                 iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
             >{
                 let request = BootleLanternPrepareAuthorizationRequestWireV1 {
-                    context: context.clone(),
+                    context: *context,
                     canonical_genesis_hash,
                     policy: policy.clone(),
                     requester_authorization_digest,
@@ -20629,7 +20694,7 @@ mod protocol {
                 })?;
                 let payload = encode_sensitive_canonical(
                     &BootleLanternIssueRequestWireV1 {
-                        context: context.clone(),
+                        context: *context,
                         canonical_genesis_hash,
                         policy: policy.clone(),
                         authorization: authorization_bytes,
@@ -20694,7 +20759,7 @@ mod protocol {
                 })?;
                 let payload = encode_sensitive_canonical(
                     &BootleLanternIssueRequestWireV1 {
-                        context: context.clone(),
+                        context: *context,
                         canonical_genesis_hash,
                         policy: policy.clone(),
                         authorization: authorization_bytes,
@@ -20986,6 +21051,12 @@ mod protocol {
                     ),
                 )
             }
+            #[expect(
+                clippy::needless_pass_by_value,
+                clippy::too_many_arguments,
+                clippy::too_many_lines,
+                reason = "the blocking stream owns all authenticated connection inputs"
+            )]
             fn open_stream(
                 endpoint: EndpointPolicy,
                 chain_id: String,
@@ -21126,11 +21197,11 @@ mod protocol {
             for ProviderIngestBrokerAuthenticatedSource
         {
             type Fetched = crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1;
-            fn fetch<'a>(
-                &'a self,
+            fn fetch(
+                &self,
                 request: sorafs_node::ProviderIngestSourceRequestV1,
             ) -> sorafs_node::ProviderIngestFutureV1<
-                'a,
+                '_,
                 Result<Self::Fetched, sorafs_node::ProviderIngestSourceFetchErrorV1>,
             > {
                 let endpoint = self.endpoint.clone();
@@ -21285,16 +21356,13 @@ mod protocol {
                 wrap_may_have_dispatched: bool,
             ) -> sorafs_node::ModerationQuarantineKeyOperationErrorV1 {
                 match error {
-                    BrokerError::Unavailable => {
-                        sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable
-                    }
                     BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
                         sorafs_node::ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked
                     }
                     BrokerError::Ambiguous if wrap_may_have_dispatched => {
                         sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous
                     }
-                    BrokerError::Ambiguous => {
+                    BrokerError::Unavailable | BrokerError::Ambiguous => {
                         sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable
                     }
                     BrokerError::Protocol | BrokerError::Rejected | BrokerError::Conflict => {
@@ -21846,13 +21914,15 @@ mod protocol {
                             AppealFinanceCheckpointExternalError::Rejected,
                     );
                 }
-                let monotonic = match current.as_ref() {
-                    None => expected_revision.is_none() && next.checkpoint_sequence == 1,
-                    Some(record) => record
-                        .checkpoint_sequence
-                        .checked_add(1)
-                        .is_some_and(|sequence| sequence == next.checkpoint_sequence),
-                };
+                let monotonic = current.as_ref().map_or_else(
+                    || expected_revision.is_none() && next.checkpoint_sequence == 1,
+                    |record| {
+                        record
+                            .checkpoint_sequence
+                            .checked_add(1)
+                            .is_some_and(|sequence| sequence == next.checkpoint_sequence)
+                    },
+                );
                 if !monotonic {
                     return Err(
                         sorafs_node::appeal_finance_transaction_forwarder::
@@ -23460,7 +23530,7 @@ mod protocol {
                     )
                     .map_err(por_replay_archive_external_error)?;
                 if let Some(head) = head {
-                    validate_por_replay_archive_receipt(head, exact)
+                    validate_por_replay_archive_receipt(&head, exact)
                         .map_err(por_replay_archive_external_error)?;
                 }
                 Ok(head)
@@ -24407,13 +24477,13 @@ mod protocol {
             }
             fn sign_raw(
                 &self,
-                payload: iroha_data_model::transaction::TransactionPayload,
+                payload: &iroha_data_model::transaction::TransactionPayload,
             ) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
                 if payload.authority() != self.exact_binding.authority() {
                     return Err(BrokerError::Rejected);
                 }
-                ensure_transaction_session_network(&payload, &self.session.network_id)?;
-                let payload = encode_native_transaction_payload(&payload)?;
+                ensure_transaction_session_network(payload, &self.session.network_id)?;
+                let payload = encode_native_transaction_payload(payload)?;
                 let result = self.session.call(
                     &self.binding,
                     self.metadata_digest,
@@ -24493,7 +24563,7 @@ mod protocol {
                         iroha_data_model::transaction::SignedTransaction,
                         iroha_torii::$error,
                     > {
-                        self.core.sign_raw(payload).map_err(|error| match error {
+                        self.core.sign_raw(&payload).map_err(|error| match error {
                             BrokerError::Unavailable => iroha_torii::$error::Unavailable,
                             BrokerError::Rejected => iroha_torii::$error::Refused,
                             BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
@@ -24649,10 +24719,9 @@ mod protocol {
                     )
                     .inspect_err(|_| self.session.poison())?;
                 let expected = self.exact_binding.qualification();
-                let projected =
-                    soracloud_runtime_signer_binding_from_wire(&self.binding).map_err(|error| {
+                let projected = soracloud_runtime_signer_binding_from_wire(&self.binding)
+                    .inspect_err(|_| {
                         self.session.poison();
-                        error
                     })?;
                 if qualification.revision != expected.revision()
                     || qualification.policy_digest != expected.policy_digest()
@@ -24840,10 +24909,9 @@ mod protocol {
                 )
                 .inspect_err(|_| self.session.poison())?;
                 let expected = self.exact_binding.qualification();
-                let projected =
-                    soracloud_hf_credential_binding_from_wire(&self.binding).map_err(|error| {
+                let projected = soracloud_hf_credential_binding_from_wire(&self.binding)
+                    .inspect_err(|_| {
                         self.session.poison();
-                        error
                     })?;
                 if qualification.revision != expected.revision()
                     || qualification.policy_digest != expected.policy_digest()
@@ -26740,13 +26808,13 @@ mod protocol {
             }
             fn sign_blocking(
                 &self,
-                transaction_payload: iroha_data_model::transaction::TransactionPayload,
+                transaction_payload: &iroha_data_model::transaction::TransactionPayload,
             ) -> Result<
                 iroha_data_model::transaction::SignedTransaction,
                 sorafs_node::ProviderIngestCompletionSignerErrorV1,
             > {
                 ensure_provider_ingest_completion_payload(
-                    &transaction_payload,
+                    transaction_payload,
                     &self.resolution_context,
                     &self.session.network_id,
                 )
@@ -26759,7 +26827,7 @@ mod protocol {
                         .ok_or(sorafs_node::ProviderIngestCompletionSignerErrorV1::Rejected)?,
                 )
                 .map_err(|_| sorafs_node::ProviderIngestCompletionSignerErrorV1::Rejected)?;
-                let transaction_payload_bytes = encode_canonical(&transaction_payload, max_signed)
+                let transaction_payload_bytes = encode_canonical(transaction_payload, max_signed)
                     .map_err(provider_ingest_signer_error)?;
                 let context = provider_ingest_signer_context_to_wire(&self.resolution_context)
                     .map_err(provider_ingest_signer_error)?;
@@ -26792,7 +26860,7 @@ mod protocol {
                 .map_err(provider_ingest_signer_error)?;
                 self.live_resolver_state()
                     .map_err(provider_ingest_signer_error)?;
-                if signed.payload() != &transaction_payload {
+                if signed.payload() != transaction_payload {
                     self.session.poison();
                     return Err(sorafs_node::ProviderIngestCompletionSignerErrorV1::Rejected);
                 }
@@ -26853,7 +26921,7 @@ mod protocol {
             > {
                 let signer = self.clone();
                 Box::pin(async move {
-                    tokio::task::spawn_blocking(move || signer.sign_blocking(payload))
+                    tokio::task::spawn_blocking(move || signer.sign_blocking(&payload))
                         .await
                         .unwrap_or(Err(
                             sorafs_node::ProviderIngestCompletionSignerErrorV1::Unavailable,
@@ -26983,14 +27051,14 @@ mod protocol {
                 let current = self
                     .load_latest_raw()
                     .map_err(provider_ingest_checkpoint_error)?;
-                let monotonic = match &current {
-                    None => {
+                let monotonic = current.as_ref().map_or_else(
+                    || {
                         expected_revision.is_none()
                             && next.checkpoint_sequence == 1
                             && next.predecessor_revision.is_none()
                             && next.predecessor_checkpoint_digest.is_none()
-                    }
-                    Some(previous) => {
+                    },
+                    |previous| {
                         expected_revision == Some(previous.revision)
                             && previous
                                 .checkpoint_sequence
@@ -26999,8 +27067,8 @@ mod protocol {
                             && next.predecessor_revision == Some(previous.revision)
                             && next.predecessor_checkpoint_digest
                                 == Some(previous.checkpoint_digest)
-                    }
-                };
+                    },
+                );
                 if !monotonic {
                     return Err(sorafs_node::ProviderIngestCheckpointExternalErrorV1::Rejected);
                 }
@@ -27232,14 +27300,14 @@ mod protocol {
                 let current = self
                     .load_latest_raw(network_id)
                     .map_err(provider_ingest_retention_error)?;
-                let monotonic = match &current {
-                    None => {
+                let monotonic = current.as_ref().map_or_else(
+                    || {
                         expected_revision.is_none()
                             && next.sequence() == 1
                             && next.predecessor_revision().is_none()
                             && next.predecessor_checkpoint_digest().is_none()
-                    }
-                    Some(previous) => {
+                    },
+                    |previous| {
                         previous.revision() == expected_revision.unwrap_or([0; 32])
                             && previous
                                 .sequence()
@@ -27248,8 +27316,8 @@ mod protocol {
                             && next.predecessor_revision() == Some(previous.revision())
                             && next.predecessor_checkpoint_digest()
                                 == Some(previous.proposal().checkpoint_digest())
-                    }
-                };
+                    },
+                );
                 if !monotonic {
                     return Err(Error::Rejected);
                 }
@@ -27487,16 +27555,18 @@ mod protocol {
                 let current = self
                     .load_latest_raw(network_id)
                     .map_err(reputation_retention_error)?;
-                let monotonic = match &current {
-                    None => {
+                let monotonic = current.as_ref().map_or_else(
+                    || {
                         expected_revision.is_none()
                             && next.sequence() == 1
                             && next.predecessor_revision().is_none()
                             && next.predecessor_checkpoint_digest().is_none()
-                    }
-                    Some(previous) => {
+                    },
+                    |previous| {
                         previous.authority_qualification() == next.authority_qualification()
-                            && previous.revision() == expected_revision.unwrap_or([0; 32])
+                            && previous
+                                .revision()
+                                .eq(&expected_revision.unwrap_or_default())
                             && previous
                                 .sequence()
                                 .checked_add(1)
@@ -27504,8 +27574,8 @@ mod protocol {
                             && next.predecessor_revision() == Some(previous.revision())
                             && next.predecessor_checkpoint_digest()
                                 == Some(previous.proposal().checkpoint_digest())
-                    }
-                };
+                    },
+                );
                 if !monotonic {
                     return Err(Error::Rejected);
                 }
@@ -27770,13 +27840,13 @@ mod protocol {
                 let current = self
                     .load_latest_raw()
                     .map_err(reputation_journal_checkpoint_error)?;
-                let monotonic = match &current {
-                    None => {
+                let monotonic = current.as_ref().map_or_else(
+                    || {
                         expected_revision.is_none()
                             && next.checkpoint_sequence() == 1
                             && next.predecessor_checkpoint_digest().is_none()
-                    }
-                    Some(previous) => {
+                    },
+                    |previous| {
                         expected_revision == Some(previous.revision())
                             && previous
                                 .checkpoint_sequence()
@@ -27784,8 +27854,8 @@ mod protocol {
                                 .is_some_and(|sequence| sequence == next.checkpoint_sequence())
                             && next.predecessor_checkpoint_digest()
                                 == Some(previous.checkpoint_digest())
-                    }
-                };
+                    },
+                );
                 if !monotonic {
                     return Err(Error::Rejected);
                 }
@@ -28020,7 +28090,7 @@ mod protocol {
                                 self.provider.session.poison();
                                 ReputationBrokerProvider::request_failure(request.idempotency_key)
                             })?;
-                        validate_reputation_signed_result(request, &signed).map_err(|_| {
+                        validate_reputation_signature(request, &signed).map_err(|_| {
                             self.provider.session.poison();
                             ReputationBrokerProvider::request_failure(request.idempotency_key)
                         })?;
@@ -28545,11 +28615,13 @@ mod protocol {
                         &result,
                         OPERATION_BILLING_QUERY_CAPABILITIES_V1,
                     )
-                    .map(|capabilities| capabilities.supplies_period_closes)
-                    .unwrap_or_else(|_| {
-                        self.session.poison();
-                        false
-                    })
+                    .map_or_else(
+                        |_| {
+                            self.session.poison();
+                            false
+                        },
+                        |capabilities| capabilities.supplies_period_closes,
+                    )
             }
             fn finalized_head(
                 &self,
@@ -29274,16 +29346,16 @@ mod protocol {
                 let current = self
                     .load_epoch_record(OPERATION_BILLING_LOAD_LATEST_EPOCH_V1, None, false)
                     .map_err(billing_client_external_error)?;
-                let monotonic = match current.as_ref() {
-                    None => expected_revision.is_none() && next.epoch_sequence == 1,
-                    Some(current) => {
+                let monotonic = current.as_ref().map_or_else(
+                    || expected_revision.is_none() && next.epoch_sequence == 1,
+                    |current| {
                         Some(current.revision) == expected_revision
                             && current
                                 .epoch_sequence
                                 .checked_add(1)
                                 .is_some_and(|sequence| sequence == next.epoch_sequence)
-                    }
-                };
+                    },
+                );
                 if !monotonic {
                     return Err(
                         sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
@@ -29461,6 +29533,10 @@ mod protocol {
             }
         }
         /// Resolve supported bindings through an explicitly selected endpoint.
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the fixed V1 provider-resolution matrix is exhaustive"
+        )]
         pub(super) fn resolve(
             bindings: &IrohaRuntimeProviderBindingsV1,
             endpoint: &EndpointPolicy,
@@ -30636,6 +30712,10 @@ mod protocol {
             )
         }
         #[cfg(test)]
+        #[expect(
+            clippy::too_many_lines,
+            reason = "broker scenario tests keep each ordered protocol transcript together"
+        )]
         mod tests {
             use super::*;
             use iroha_core::query::reputation_finalized as test_reputation_query;
@@ -30654,16 +30734,15 @@ mod protocol {
                 pop_api as test_pop,
             };
             use sorafs_manifest::reputation::signed as test_reputation_signed;
-            use sorafs_node as node;
-            use sorafs_node::evidence_viewer::transparency_producer as test_evidence_transparency;
             use sorafs_node::{
+                self as node, evidence_viewer::transparency_producer as test_evidence_transparency,
                 hedging_billing_service as test_billing,
                 moderation_orchestrator as test_moderation, reputation::runtime as test_reputation,
             };
             use std::{
                 io::Cursor,
                 os::unix::{
-                    fs::{MetadataExt as _, PermissionsExt as _, symlink},
+                    fs::{PermissionsExt as _, symlink},
                     net::UnixListener,
                 },
                 sync::{
@@ -31113,9 +31192,10 @@ mod protocol {
                     ),
                     Err(BrokerError::Rejected)
                 );
-                assert!(MAX_OPERATION_FRAME_BYTES_V1 <= u32::MAX as usize);
+                assert!(u32::try_from(MAX_OPERATION_FRAME_BYTES_V1).is_ok());
                 assert!(
-                    MAX_BROKER_PROCESS_OPERATION_BYTES_V1 <= tokio::sync::Semaphore::MAX_PERMITS
+                    std::hint::black_box(MAX_BROKER_PROCESS_OPERATION_BYTES_V1)
+                        <= tokio::sync::Semaphore::MAX_PERMITS
                 );
                 assert_eq!(
                     decode_resource_budget(usize::MAX, usize::MAX, BILLING_DECODE_POLICY_V1),
@@ -31315,15 +31395,20 @@ mod protocol {
                     MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
                 )
                 .expect("encode compact request frame");
-                let max_blob = 64 * 1024;
-                let max_allocation = 64 * 1024;
+                // Deliberately compact maxima keep every concrete SIGN phase
+                // admissible while making cumulative and live caps distinct.
+                let max_blob = 32_usize * 1024;
+                let max_allocation = 32_usize * 1024;
+                let max_composed = max_blob
+                    .checked_add(max_allocation)
+                    .expect("compact live cap sums");
                 let compact_policy = DecodeResourcePolicyV1::new(
                     (max_blob, max_blob),
                     (128 * 1024, max_allocation),
                     (8 * 1024, 16 * 1024),
                     32,
                     (
-                        128 * 1024,
+                        max_composed,
                         cumulative_decode_cap(
                             max_blob,
                             max_allocation,
@@ -31372,7 +31457,8 @@ mod protocol {
                     .consumed_bytes;
                 assert!(
                     consumed > compact_policy.max_composed_bytes,
-                    "the end-to-end server sequence must exercise cumulative, not live, accounting"
+                    "the end-to-end server sequence must exercise cumulative, not live, accounting: consumed {consumed}, live cap {}",
+                    compact_policy.max_composed_bytes
                 );
                 assert!(consumed <= compact_policy.max_cumulative_bytes);
             }
@@ -31461,7 +31547,7 @@ mod protocol {
                     STATUS_OK_V1,
                     encode_canonical(
                         &SignResultWireV1 {
-                            signature: [0x44; 64],
+                            signature: test_governance_operation_signature(&request),
                         },
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )
@@ -32230,9 +32316,9 @@ mod protocol {
                 fn sign(
                     &self,
                     _purpose: node::GovernanceDagSigningPurposeV1,
-                    _payload: &[u8],
+                    payload: &[u8],
                 ) -> Result<[u8; 64], String> {
-                    Ok([0xA5; 64])
+                    Ok(test_governance_signature(payload))
                 }
             }
             #[derive(Debug)]
@@ -32245,7 +32331,7 @@ mod protocol {
                         sign_calls: AtomicU64::new(0),
                     }
                 }
-                fn keypair(&self) -> KeyPair {
+                fn keypair() -> KeyPair {
                     KeyPair::try_from_seed(vec![0x96; 32], Algorithm::Ed25519)
                         .expect("derive appeal-finance transaction signer test key")
                 }
@@ -32258,7 +32344,7 @@ mod protocol {
                     &self,
                 ) -> Result<iroha_crypto::PublicKey, iroha_torii::SoraFsAppealFinanceSigningError>
                 {
-                    Ok(self.keypair().public_key().clone())
+                    Ok(Self::keypair().public_key().clone())
                 }
                 fn qualification(
                     &self,
@@ -32283,7 +32369,7 @@ mod protocol {
                     self.sign_calls.fetch_add(1, Ordering::Relaxed);
                     TransactionBuilder::from_payload(payload)
                         .map_err(|_| iroha_torii::SoraFsAppealFinanceSigningError::Refused)?
-                        .try_sign(self.keypair().private_key())
+                        .try_sign(Self::keypair().private_key())
                         .map_err(|_| iroha_torii::SoraFsAppealFinanceSigningError::Refused)
                 }
             }
@@ -32295,7 +32381,7 @@ mod protocol {
                 let keypair = test_auth_keypair();
                 let public_key = keypair.public_key().to_bytes().1;
                 let mut bytes = [0_u8; 32];
-                bytes.copy_from_slice(&public_key);
+                bytes.copy_from_slice(public_key);
                 bytes
             }
             fn ingress_fixture(public_key: [u8; 32]) -> node::GovernanceDagRequestIngressBindingV1 {
@@ -32628,7 +32714,7 @@ mod protocol {
                     self.mode = mode;
                     self
                 }
-                fn keypair(&self) -> KeyPair {
+                fn keypair() -> KeyPair {
                     KeyPair::try_from_seed(vec![0x95; 32], Algorithm::Ed25519)
                         .expect("derive moderation transaction signer test key")
                 }
@@ -32655,7 +32741,7 @@ mod protocol {
                         ) && self.signed.load(Ordering::Acquire));
                     Ok(
                         test_moderation::ModerationRuntimeProviderQualificationV1::new(
-                            self.revision.load(Ordering::Acquire) + if drifted { 1 } else { 0 },
+                            self.revision.load(Ordering::Acquire) + u64::from(drifted),
                             TEST_POLICY_DIGEST,
                         ),
                     )
@@ -32678,7 +32764,7 @@ mod protocol {
                                 .map_err(|_| {
                                     test_moderation_runtime::ModerationSigningFailureV1::Refused
                                 })?
-                                .try_sign(self.keypair().private_key())
+                                .try_sign(Self::keypair().private_key())
                                 .map_err(|_| {
                                     test_moderation_runtime::ModerationSigningFailureV1::Refused
                                 })?
@@ -32713,7 +32799,7 @@ mod protocol {
                                 .map_err(|_| {
                                     test_moderation_runtime::ModerationSigningFailureV1::Refused
                                 })?
-                                .try_sign(self.keypair().private_key())
+                                .try_sign(Self::keypair().private_key())
                                 .map_err(|_| {
                                     test_moderation_runtime::ModerationSigningFailureV1::Refused
                                 })?
@@ -33164,6 +33250,11 @@ mod protocol {
                         .cloned())
                 }
             }
+            type RetainedPanelDeliveryV1 = (
+                [u8; 32],
+                Vec<u8>,
+                test_moderation::ModerationPanelNotificationDeliveryReceiptV1,
+            );
             #[derive(Debug)]
             struct ServerTestModerationPanelBoundary {
                 handle: String,
@@ -33171,13 +33262,7 @@ mod protocol {
                 qualification_calls: AtomicU64,
                 delivery_calls: AtomicU64,
                 delivered: AtomicBool,
-                retained: Mutex<
-                    Vec<(
-                        [u8; 32],
-                        Vec<u8>,
-                        test_moderation::ModerationPanelNotificationDeliveryReceiptV1,
-                    )>,
-                >,
+                retained: Mutex<Vec<RetainedPanelDeliveryV1>>,
             }
             impl ServerTestModerationPanelBoundary {
                 fn exact() -> Self {
@@ -33635,11 +33720,11 @@ mod protocol {
             impl node::ProviderIngestAuthenticatedSourceFetchV1 for ServerTestProviderSource {
                 type Fetched =
                     crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1;
-                fn fetch<'a>(
-                    &'a self,
+                fn fetch(
+                    &self,
                     request: node::ProviderIngestSourceRequestV1,
                 ) -> node::ProviderIngestFutureV1<
-                    'a,
+                    '_,
                     Result<Self::Fetched, node::ProviderIngestSourceFetchErrorV1>,
                 > {
                     let payload = self.payload.clone();
@@ -33697,15 +33782,15 @@ mod protocol {
                 }
             }
             fn test_source_material(
-                payload: Vec<u8>,
+                payload: &[u8],
             ) -> (
                 node::FinalizedProviderIngestAuthorizationV1,
                 sorafs_manifest::ManifestV1,
                 sorafs_car::CarBuildPlan,
             ) {
                 let plan =
-                    sorafs_car::CarBuildPlan::single_file(&payload).expect("build source plan");
-                let car_stats = sorafs_car::CarWriter::new(&plan, &payload)
+                    sorafs_car::CarBuildPlan::single_file(payload).expect("build source plan");
+                let car_stats = sorafs_car::CarWriter::new(&plan, payload)
                     .expect("prepare source CAR")
                     .write_to(std::io::sink())
                     .expect("compute source CAR");
@@ -33723,7 +33808,7 @@ mod protocol {
                     )
                     .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
                     .por_root(
-                        sorafs_car::compute_por_root(&payload, &plan)
+                        sorafs_car::compute_por_root(payload, &plan)
                             .expect("derive source PoR root"),
                     )
                     .content_length(plan.content_length)
@@ -34072,8 +34157,7 @@ mod protocol {
                 .with_network_id_for_test(network_id())
             }
             fn moderation_transaction_signer_test_payload() -> TransactionPayload {
-                let public_key = ServerTestModerationTransactionSigner::exact()
-                    .keypair()
+                let public_key = ServerTestModerationTransactionSigner::keypair()
                     .public_key()
                     .clone();
                 native_signer_test_payload(AccountId::new(public_key))
@@ -34307,13 +34391,7 @@ mod protocol {
                     TEST_POLICY_DIGEST,
                 )
             }
-            fn reputation_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBindingWireV1 {
-                let catalog = reputation_catalog(slot);
-                ProviderBindingWireV1::try_from_binding(
-                    catalog.iter().next().expect("one reputation binding"),
-                )
-                .expect("project reputation test binding")
-            }
+            include!("runtime_provider_broker/shared_fixture_support.rs");
             include!("runtime_provider_broker/hedging_billing_domain_tests.rs");
             #[derive(Debug)]
             struct ServerTestBillingProvider {
@@ -35609,7 +35687,9 @@ mod protocol {
             fn appeal_finance_signer_test_state(
                 signer: Arc<ServerTestAppealFinanceSigner>,
             ) -> BrokerServerStateV1 {
-                let public_key = signer.keypair().public_key().clone();
+                let public_key = ServerTestAppealFinanceSigner::keypair()
+                    .public_key()
+                    .clone();
                 let authority = AccountId::new(public_key.clone());
                 let mut binding = runtime_binding(
                     IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner,
@@ -35674,133 +35754,6 @@ mod protocol {
                     .payload()
                     .try_into()
                     .expect("Ed25519 signatures are exactly 64 bytes")
-            }
-            fn por_replay_archive_record_fixture() -> node::PorFinalizedReplayArchiveRecordV1 {
-                use iroha_data_model::sorafs::reputation::{
-                    PorTerminalOutcomeV1, PorTerminalStatusV1,
-                };
-                use sorafs_manifest::{
-                    por::{
-                        AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1,
-                        POR_CHALLENGE_VERSION_V1, PorChallengeV1, derive_challenge_id,
-                        derive_challenge_seed,
-                    },
-                    provider_advert::{AdvertSignature, SignatureAlgorithm},
-                };
-                const ISSUED_AT: u64 = 1_700_000_000;
-                const SUBMITTED_AT: u64 = 1_700_000_100;
-                const DECIDED_AT: u64 = 1_700_000_300;
-                const DEADLINE_AT: u64 = 1_700_000_600;
-                let manifest_digest = [0x22; 32];
-                let provider_id = [0x33; 32];
-                let epoch_id = 123;
-                let drand_round = 456;
-                let drand_randomness = [0x41; 32];
-                let seed =
-                    derive_challenge_seed(&drand_randomness, None, &manifest_digest, epoch_id);
-                let challenge_id = derive_challenge_id(
-                    &seed,
-                    &manifest_digest,
-                    &provider_id,
-                    epoch_id,
-                    drand_round,
-                );
-                let challenge = PorChallengeV1 {
-                    version: POR_CHALLENGE_VERSION_V1,
-                    challenge_id,
-                    manifest_digest,
-                    provider_id,
-                    epoch_id,
-                    drand_round,
-                    drand_randomness,
-                    drand_signature: [0x61; 48],
-                    vrf_output: None,
-                    vrf_proof: None,
-                    forced: true,
-                    chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
-                    seed,
-                    sample_tier: 1,
-                    sample_count: 1,
-                    sample_indices: vec![0],
-                    issued_at: ISSUED_AT,
-                    deadline_at: DEADLINE_AT,
-                };
-                challenge
-                    .validate()
-                    .expect("valid replay-archive challenge");
-                let proof_digest = [0x52; 32];
-                let mut verdict = AuditVerdictV1 {
-                    version: AUDIT_VERDICT_VERSION_V1,
-                    manifest_digest,
-                    provider_id,
-                    challenge_id,
-                    proof_digest: Some(proof_digest),
-                    outcome: AuditOutcomeV1::Success,
-                    failure_reason: None,
-                    decided_at: DECIDED_AT,
-                    auditor_signatures: vec![AdvertSignature {
-                        algorithm: SignatureAlgorithm::Ed25519,
-                        public_key: Vec::new(),
-                        signature: Vec::new(),
-                    }],
-                    metadata: Vec::new(),
-                };
-                let auditor = KeyPair::try_from_seed(vec![0x13; 32], Algorithm::Ed25519)
-                    .expect("replay-archive auditor keypair");
-                let verdict_payload = verdict
-                    .signature_payload_bytes()
-                    .expect("encode replay-archive verdict signature payload");
-                verdict.auditor_signatures[0].public_key =
-                    auditor.public_key().to_bytes().1.to_vec();
-                verdict.auditor_signatures[0].signature =
-                    Signature::try_new(auditor.private_key(), &verdict_payload)
-                        .expect("sign replay-archive verdict")
-                        .payload()
-                        .to_vec();
-                verdict.validate().expect("valid replay-archive verdict");
-                verdict
-                    .verify_signatures()
-                    .expect("authenticated replay-archive verdict");
-                let fixture = PorReplayArchiveRecordFixtureV1 {
-                    finalized: PorReplayArchiveFinalizedStateFixtureV1 {
-                        state: PorReplayArchiveChallengeStateFixtureV1 {
-                            challenge,
-                            proof_digest: Some(proof_digest),
-                            proof_submitted_at: Some(SUBMITTED_AT),
-                        },
-                        verdict,
-                        stats: node::PorVerdictStats {
-                            success_samples: 1,
-                            failed_samples: 0,
-                        },
-                        repair_task_id: None,
-                        reputation_sequence: 1,
-                        reputation_terminal: PorTerminalOutcomeV1 {
-                            challenge_id,
-                            manifest_digest,
-                            epoch_id,
-                            drand_round,
-                            forced: true,
-                            sample_count: 1,
-                            failed_samples: 0,
-                            issued_at_unix_ms: ISSUED_AT * 1_000,
-                            deadline_at_unix_ms: DEADLINE_AT * 1_000,
-                            responded_at_unix_ms: Some(SUBMITTED_AT * 1_000),
-                            decided_at_unix_ms: DECIDED_AT * 1_000,
-                            proof_digest: Some(proof_digest),
-                            repair_task_id: None,
-                            verifier_latency_ms: Some(
-                                u32::try_from((DECIDED_AT - SUBMITTED_AT) * 1_000)
-                                    .expect("test verifier latency fits u32"),
-                            ),
-                            status: PorTerminalStatusV1::Verified,
-                        },
-                    },
-                };
-                let canonical = encode_canonical(&fixture, MAX_POR_REPLAY_ARCHIVE_RECORD_BYTES_V1)
-                    .expect("encode replay-archive record fixture");
-                decode_por_replay_archive_record(&canonical)
-                    .expect("fixture is the canonical production record layout")
             }
             fn privacy_prf_binding() -> ProviderBindingWireV1 {
                 runtime_binding(
@@ -37179,7 +37132,11 @@ mod protocol {
                     ));
                 }
                 assert_eq!(maximum.len(), MAX_CATALOG_ENTRIES_V1);
-                assert_eq!(MAX_CATALOG_ENTRIES_V1, 182);
+                assert_eq!(
+                    MAX_CATALOG_ENTRIES_V1,
+                    IrohaRuntimeProviderSlotV1::ALL.len() - 1
+                        + iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+                );
                 assert_eq!(validate_catalog_slot_ids(maximum.iter().copied()), Ok(()));
                 let mut oversized = maximum;
                 oversized
@@ -37196,8 +37153,14 @@ mod protocol {
                     Err(BrokerError::BindingMismatch),
                     "a singular role must reject duplicate wire IDs"
                 );
+                let first_unknown_slot = IrohaRuntimeProviderSlotV1::ALL
+                    .last()
+                    .expect("catalog has at least one slot")
+                    .wire_id()
+                    .checked_add(1)
+                    .expect("catalog wire ID increments");
                 assert_eq!(
-                    validate_catalog_slot_ids([56]),
+                    validate_catalog_slot_ids([first_unknown_slot]),
                     Err(BrokerError::BindingMismatch),
                     "an unknown role must fail closed"
                 );
@@ -37214,7 +37177,7 @@ mod protocol {
                     sorafs_manifest::GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1
                 );
                 assert!(
-                    MAX_SIGNING_PAYLOAD_BYTES_V1
+                    std::hint::black_box(MAX_SIGNING_PAYLOAD_BYTES_V1)
                         > test_reputation_signed::MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES,
                     "the signer must admit the largest bounded embedded envelope plus its Governance wrapper"
                 );
@@ -38964,7 +38927,7 @@ mod protocol {
                     "one retained clone and both decode-plus-canonical-encode phases are charged"
                 );
                 assert!(
-                    OPERATION_CUMULATIVE_PHASES_V1.retained_values
+                    std::hint::black_box(OPERATION_CUMULATIVE_PHASES_V1.retained_values)
                         >= FENCED_PRIVACY_SERVER_PHASES_V1.retained_values
                         && OPERATION_CUMULATIVE_PHASES_V1.decoded_values
                             >= FENCED_PRIVACY_SERVER_PHASES_V1.decoded_values,
@@ -39146,6 +39109,17 @@ mod protocol {
             }
             #[test]
             fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
+                thread::Builder::new()
+                    .name("fenced-privacy-head-reader-operation".to_owned())
+                    .stack_size(8 * 1024 * 1024)
+                    .spawn(
+                        fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact_inner,
+                    )
+                    .expect("spawn fenced privacy head-reader test thread")
+                    .join()
+                    .expect("join fenced privacy head-reader test thread");
+            }
+            fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact_inner() {
                 assert!(operation_is_known(
                     OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1
                 ));
@@ -40025,6 +39999,8 @@ mod protocol {
             }
             #[test]
             fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
+                use test_reputation::ReputationJournalTransactionSubmitOutcomeV1;
+
                 assert_eq!(OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1, 16);
                 assert_eq!(OPERATION_REPUTATION_JOURNAL_SUBMIT_V1, 17);
                 assert_eq!(OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1, 18);
@@ -40142,7 +40118,6 @@ mod protocol {
                     validate_operation_request(&malformed_submit),
                     Err(BrokerError::Rejected)
                 );
-                use test_reputation::ReputationJournalTransactionSubmitOutcomeV1;
                 for outcome in [
                     ReputationJournalTransactionSubmitOutcomeV1::Queued {
                         receipt: [0x71; 32],

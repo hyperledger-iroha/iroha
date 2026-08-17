@@ -12,6 +12,8 @@ pub use crate::block::consensus::{
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::{Ident, IntoSchema};
@@ -29,10 +31,7 @@ pub const MAX_LANE_CONSENSUS_VALIDATORS: usize = 128;
 // QC types are defined in `block::consensus` and re-exported above.
 /// Signed validator set checkpoint used for bootstrap and audit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidatorSetCheckpoint {
     /// Block height covered by the checkpoint.
     pub height: u64,
@@ -130,10 +129,7 @@ impl ValidatorSetCheckpoint {
 }
 /// Stake snapshot entry for a single validator in a commit roster.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CommitStakeSnapshotEntry {
     /// Peer identifier for the validator.
     pub peer_id: crate::peer::PeerId,
@@ -142,10 +138,7 @@ pub struct CommitStakeSnapshotEntry {
 }
 /// Stake snapshot aligned to the validator set used for commit proof validation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CommitStakeSnapshot {
     /// Stable hash of the validator set the snapshot applies to.
     pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
@@ -172,10 +165,7 @@ impl CommitStakeSnapshot {
 }
 /// Canonical previous-height roster evidence embedded in block payloads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PreviousRosterEvidence {
     /// Height of the block this evidence applies to.
     pub height: u64,
@@ -193,10 +183,7 @@ pub struct PreviousRosterEvidence {
 /// These effects are applied as part of the committed block transition so every
 /// peer replays the same VRF epoch records and penalty state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposConsensusEffects {
     /// VRF epoch records sealed by this block.
     #[norito(default)]
@@ -233,10 +220,7 @@ impl PartialOrd for NposConsensusEffects {
 }
 /// A deterministic VRF jail action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposVrfJailAction {
     /// Epoch that produced the penalty.
     pub epoch: u64,
@@ -253,10 +237,7 @@ pub struct NposVrfJailAction {
 }
 /// A deterministic consensus-evidence slash action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposConsensusSlashAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
@@ -275,10 +256,7 @@ pub struct NposConsensusSlashAction {
 }
 /// Marker that a VRF epoch's penalties were applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposMarkVrfPenaltiesAppliedAction {
     /// Epoch to mark.
     pub epoch: u64,
@@ -287,10 +265,7 @@ pub struct NposMarkVrfPenaltiesAppliedAction {
 }
 /// Marker that a consensus evidence record's penalty was applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposMarkConsensusEvidenceAppliedAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
@@ -300,10 +275,7 @@ pub struct NposMarkConsensusEvidenceAppliedAction {
 /// Penalty or marker action applied by a committed `NPoS` effects bundle.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub enum NposPenaltyAction {
     /// Jail a validator for missing VRF participation requirements.
     VrfJail(NposVrfJailAction),
@@ -316,10 +288,7 @@ pub enum NposPenaltyAction {
 }
 /// Snapshot of the election parameters used when selecting validators for an epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidatorElectionParameters {
     /// Maximum number of validators allowed in the elected set (0 = unlimited).
     pub max_validators: u32,
@@ -338,10 +307,7 @@ pub struct ValidatorElectionParameters {
 }
 /// Deterministic tie-break record used when ordering candidates.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidatorTieBreak {
     /// Candidate peer identifier.
     pub peer_id: crate::peer::PeerId,
@@ -350,10 +316,7 @@ pub struct ValidatorTieBreak {
 }
 /// Election outcome for an epoch along with audit metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidatorElectionOutcome {
     /// Epoch index the elected set will service.
     pub epoch: u64,
@@ -435,10 +398,7 @@ pub enum ConsensusKeyRole {
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, derive_more::Display,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[display("{role}:{name}")]
 pub struct ConsensusKeyId {
     /// Logical role served by this key.
@@ -458,10 +418,7 @@ impl ConsensusKeyId {
 }
 /// HSM/keystore binding for a consensus key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct HsmBinding {
     /// Provider identifier (e.g., `pkcs11`, `yubihsm`, `softkey` for tests).
     pub provider: String,
@@ -502,10 +459,7 @@ pub enum ConsensusKeyStatus {
 }
 /// Recorded consensus/committee key with lifecycle metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ConsensusKeyRecord {
     /// Identifier of the key (role + name).
     pub id: ConsensusKeyId,
@@ -580,10 +534,7 @@ impl ConsensusKeyRecord {
 /// validator roster. The observation height is unsigned admission metadata: validators must compare
 /// it with committed pre-state and the block which first introduces the proof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfCommitProof {
     /// Epoch index authenticated by the signature.
     pub epoch: u64,
@@ -602,10 +553,7 @@ pub struct VrfCommitProof {
 /// proof. The complete signed fields are deliberately retained instead of reconstructing evidence
 /// from unauthenticated participant summaries.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfRevealProof {
     /// Epoch index authenticated by the signature.
     pub epoch: u64,
@@ -622,10 +570,7 @@ pub struct VrfRevealProof {
 }
 /// Participation record for a validator within a VRF epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfParticipantRecord {
     /// Validator index in the topology snapshot for the epoch.
     pub signer: u32,
@@ -654,10 +599,7 @@ pub struct VrfParticipantRecord {
 }
 /// Late reveal emitted after the epoch reveal window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfLateRevealRecord {
     /// Validator index in the topology snapshot for the epoch.
     pub signer: u32,
@@ -675,10 +617,7 @@ pub struct VrfLateRevealRecord {
 }
 /// Snapshot of VRF randomness state for a particular epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfEpochRecord {
     /// Epoch index.
     pub epoch: u64,

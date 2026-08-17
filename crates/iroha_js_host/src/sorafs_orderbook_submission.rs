@@ -1,4 +1,4 @@
-//! Strict native inspection for JavaScript SoraFS orderbook submission.
+//! Strict native inspection for JavaScript `SoraFS` orderbook submission.
 #[rustfmt::skip]
 use iroha_data_model::{sorafs::orderbook_submission::{SorafsOrderbookSubmissionRouteV1, decode_and_verify_sorafs_orderbook_submission_receipt_v1, inspect_sorafs_orderbook_submission_for_discriminant_v1 as inspect_submission, parse_sorafs_orderbook_receipt_signer_v1, parse_sorafs_orderbook_submission_identity_v1}, transaction::TransactionSubmissionReceipt};
 use napi::bindgen_prelude::Uint8Array;
@@ -8,6 +8,10 @@ fn invalid(message: impl Into<String>) -> napi::Error {
 }
 /// Exact identities derived from one authenticated orderbook transaction.
 #[napi(object)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the published JavaScript identity object uses explicit hash field names"
+)]
 pub struct JsSorafsOrderbookSubmissionIdentityV1 {
     /// Legacy transaction identity.
     pub tx_hash: String,

@@ -330,8 +330,7 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
     let error = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
-        .err()
-        .expect("second supervisor must not share a live runtime root");
+        .expect_err("second supervisor must not share a live runtime root");
     assert!(matches!(error, SupervisorError::SupervisorLocked { .. }));
     assert_eq!(
         current_generation_id(current.paths().root()).expect("read preserved selection"),
@@ -1345,7 +1344,9 @@ fn supervisor_exposes_config_overrides() {
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut sumeragi = toml::Table::new();
-    sumeragi.insert("msg_channel_cap_votes".into(), toml::Value::Integer(16));
+    let mut queues = toml::Table::new();
+    queues.insert("commands".into(), toml::Value::Integer(1024));
+    sumeragi.insert("queues".into(), toml::Value::Table(queues));
     let mut torii = toml::Table::new();
     torii.insert(
         "address".into(),
@@ -1369,9 +1370,11 @@ fn supervisor_exposes_config_overrides() {
     assert_eq!(
         supervisor
             .sumeragi_config_overrides()
-            .and_then(|table| table.get("msg_channel_cap_votes"))
+            .and_then(|table| table.get("queues"))
+            .and_then(toml::Value::as_table)
+            .and_then(|queues| queues.get("commands"))
             .and_then(toml::Value::as_integer),
-        Some(16)
+        Some(1024)
     );
     let torii = supervisor
         .torii_config_overrides()

@@ -887,9 +887,9 @@ mod tests {
     }
     const ALICE_ACCOUNT_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     fn query_with_default_params(
-        query: QueryBox<query_mod::QueryOutputBatchBox>,
+        query: &QueryBox<query_mod::QueryOutputBatchBox>,
     ) -> QueryWithParams {
-        QueryWithParams::new(&query, QueryParams::default())
+        QueryWithParams::new(query, QueryParams::default())
     }
     #[test]
     fn visit_find_parameters_dispatches() {
@@ -928,7 +928,7 @@ mod tests {
                 SelectorTuple::<crate::domain::Domain>::default(),
                 norito::codec::Encode::encode(&FindDomains),
             ));
-        let query = AnyQueryBox::Iterable(query_with_default_params(boxed));
+        let query = AnyQueryBox::Iterable(query_with_default_params(&boxed));
         visit_query(&mut visitor, &query);
         assert_eq!(visitor.domains, 1);
     }
@@ -948,20 +948,20 @@ mod tests {
             norito::codec::Encode::encode(&query_mod::account::FindAccountsWithAsset {
                 asset_definition,
             });
-        let roles = AnyQueryBox::Iterable(query_with_default_params(Box::new(
-            query_mod::ErasedIterQuery::<crate::role::RoleId>::new(
+        let roles_boxed: QueryBox<query_mod::QueryOutputBatchBox> =
+            Box::new(query_mod::ErasedIterQuery::<crate::role::RoleId>::new(
                 CompoundPredicate::PASS,
                 SelectorTuple::default(),
                 roles_payload,
-            ),
-        )));
-        let accounts = AnyQueryBox::Iterable(query_with_default_params(Box::new(
-            query_mod::ErasedIterQuery::<crate::account::Account>::new(
+            ));
+        let accounts_boxed: QueryBox<query_mod::QueryOutputBatchBox> =
+            Box::new(query_mod::ErasedIterQuery::<crate::account::Account>::new(
                 CompoundPredicate::PASS,
                 SelectorTuple::default(),
                 accounts_payload,
-            ),
-        )));
+            ));
+        let roles = AnyQueryBox::Iterable(query_with_default_params(&roles_boxed));
+        let accounts = AnyQueryBox::Iterable(query_with_default_params(&accounts_boxed));
         let mut visitor = CountingVisitor {
             params: 0,
             domains: 0,

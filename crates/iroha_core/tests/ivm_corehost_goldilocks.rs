@@ -65,12 +65,19 @@ mod goldilocks {
         }
     }
     #[test]
-    fn core_host_goldilocks_verification_succeeds() {
+    fn core_host_rejects_non_binding_goldilocks_commitments() {
         let authority: AccountId = ALICE_ID.clone();
         let mut host =
             CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
         host.set_halo2_config(&base_config());
         let env = make_goldilocks_envelope();
+        let raw = norito::to_bytes(&env).expect("encode Goldilocks envelope");
+        assert!(matches!(
+            ivm::zk_verify::verify_open_envelope(&raw),
+            Err(iroha_zkp_halo2::Error::UnsupportedBackend {
+                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks
+            })
+        ));
         let tlv = tlv_from_env(&env);
         let mut vm = ivm::IVM::new(1_000_000);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
@@ -79,8 +86,8 @@ mod goldilocks {
             .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");
         assert!(gas > 0);
-        assert_eq!(vm.register(10), 1);
-        assert_eq!(vm.register(11), 0);
+        assert_eq!(vm.register(10), 0);
+        assert_ne!(vm.register(11), 0);
     }
     #[test]
     fn core_host_goldilocks_rejected_when_curve_disabled() {

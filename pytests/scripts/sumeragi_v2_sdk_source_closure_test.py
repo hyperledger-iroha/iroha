@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_397
+    assert len(grouped_record_lines) == 1_399
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_397
+    assert len(diagnostics_records.stdout.splitlines()) == 1_401
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -698,6 +698,9 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
             "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"
         ),
         module.PurePosixPath(
+            "IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift"
+        ),
+        module.PurePosixPath(
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
             "SumeragiV2WireFixtureTest.kt"
         ),
@@ -707,6 +710,9 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         ),
         module.PurePosixPath(
             "python/iroha_torii_client/tests/sumeragi_exact_json_test_support.py"
+        ),
+        module.PurePosixPath(
+            "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py"
         ),
         module.PurePosixPath(
             "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
@@ -1283,10 +1289,58 @@ def test_release_runner_keeps_sdk_sources_private_and_budgets_before_build() -> 
     assert 'IROHA_RELEASE_SDK_WORK_PARENT="$release_invocation_root"' in child
     assert 'IROHA_RELEASE_SDK_WORK_HELPER="$release_child_runtime/copy-release-runtime.py"' in child
     assert 'IROHA_RELEASE_SDK_WORK_HELPER_SHA256=' in child
+    assert source.index(
+        'release_gate_boundary "build-efficiency-provenance:before"'
+    ) < source.index('release_gate_boundary "source-file-budget:before"')
     assert source.index('release_gate_boundary "source-file-budget:before"') \
         < source.index('release_gate_boundary "release-prebuilt-publication:before"')
     assert (
-        '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py'
+        '"$IROHA_RELEASE_PYTHON_BIN" -I -S '
+        "scripts/check_build_efficiency_provenance.py \\\n"
+        '    2>&1 | tee "$build_efficiency_provenance_log"'
+        in source
+    )
+    assert (
+        'readonly build_efficiency_provenance_log="${release_source_bound_root}/'
+        'build-efficiency-provenance.log"'
+        in source
+    )
+    assert (
+        'verify_release_identity "before build-efficiency provenance guard"'
+        in source
+    )
+    assert 'chmod 0400 "$build_efficiency_provenance_log"' in source
+    assert (
+        'verify_release_identity "after build-efficiency provenance guard"'
+        in source
+    )
+    provenance_markers = (
+        'verify_release_identity "before build-efficiency provenance guard"',
+        'release_gate_boundary "build-efficiency-provenance:before"',
+        '"$IROHA_RELEASE_PYTHON_BIN" -I -S '
+        "scripts/check_build_efficiency_provenance.py",
+        'release_gate_boundary "build-efficiency-provenance:after-natural-completion"',
+        'chmod 0400 "$build_efficiency_provenance_log"',
+        'verify_release_identity "after build-efficiency provenance guard"',
+        'release_gate_boundary "source-file-budget:before"',
+    )
+    assert all(source.count(marker) == 1 for marker in provenance_markers)
+    assert [source.index(marker) for marker in provenance_markers] == sorted(
+        source.index(marker) for marker in provenance_markers
+    )
+    assert (
+        'if [[ "$profile" == "--release" ]]; then\n'
+        '  readonly build_efficiency_provenance_log=' in source
+    )
+    assert (
+        "build_efficiency_provenance_pipeline_status=(\"${PIPESTATUS[@]}\")"
+        in source
+    )
+    assert "build_efficiency_provenance_pipeline_status[0] != 0" in source
+    assert "build_efficiency_provenance_pipeline_status[1] != 0" in source
+    assert (
+        '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py '
+        "\\\n    --require-objective"
         in source
     )
     assert (

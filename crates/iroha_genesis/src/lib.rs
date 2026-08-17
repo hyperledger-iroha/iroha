@@ -3638,7 +3638,7 @@ impl RawGenesisTransaction {
         let mut aggregated_parameters = Parameters::default();
         let mut ivm_bytecode_total = 0_usize;
         if let Some(executor_path) = executor {
-            let executor = load_genesis_ivm_bytecode(executor_path, &mut ivm_bytecode_total)?;
+            let executor = load_genesis_ivm_bytecode(&executor_path, &mut ivm_bytecode_total)?;
             let upgrade_executor = Upgrade::new(Executor::new(executor)).into();
             instructions_list.push(vec![upgrade_executor]);
         }
@@ -4219,7 +4219,7 @@ impl TryFrom<IvmPath> for IvmBytecode {
     type Error = eyre::Report;
     fn try_from(value: IvmPath) -> Result<Self, Self::Error> {
         let mut total = 0;
-        load_genesis_ivm_bytecode(value, &mut total)
+        load_genesis_ivm_bytecode(&value, &mut total)
     }
 }
 fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usize> {
@@ -4234,7 +4234,7 @@ fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usi
     }
     Ok(total)
 }
-fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmBytecode> {
+fn load_genesis_ivm_bytecode(value: &IvmPath, total: &mut usize) -> Result<IvmBytecode> {
     let remaining = GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
         .checked_sub(*total)
         .ok_or_else(|| {
@@ -4307,7 +4307,7 @@ impl GenesisIvmAction {
     }
     fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Action> {
         Action::new(
-            load_genesis_ivm_bytecode(self.executable, total)?,
+            load_genesis_ivm_bytecode(&self.executable, total)?,
             self.repeats,
             self.authority,
             self.filter,

@@ -3,6 +3,8 @@
 //! The local moderation runtime remains useful for orchestration, but these
 //! records define the consensus-owned first-release source of truth for ballot
 //! policy, lifecycle transitions, challenges, outcomes, and no-show penalties.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
@@ -69,10 +71,7 @@ pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] = b"sorafs.moderation.sort
 pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-record.v1";
 /// Governance-controlled limits and no-show penalties for authoritative ballots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationLedgerPolicyV1 {
     /// Schema version; must equal [`MODERATION_LEDGER_POLICY_VERSION_V1`].
     pub version: u16,
@@ -243,10 +242,7 @@ pub enum ModerationLedgerPolicyError {
 }
 /// Activated moderation policy with consensus provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationLedgerPolicyRecord {
     /// Policy body.
     pub policy: ModerationLedgerPolicyV1,
@@ -260,10 +256,7 @@ pub struct ModerationLedgerPolicyRecord {
 }
 /// Immutable active `PoP` registry anchors captured when an appeal is admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationPoPRegistrySnapshotV1 {
     /// Issuer policy digest used to admit both active publications.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -342,10 +335,7 @@ pub enum ModerationPoPRegistrySnapshotError {
 }
 /// Authoritative, pre-sortition appeal intake submitted by the appellant.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationAppealIntakeV1 {
     /// Schema version; must equal [`MODERATION_APPEAL_INTAKE_VERSION_V1`].
     pub version: u16,
@@ -614,10 +604,7 @@ pub enum ModerationAppealIntakeError {
 }
 /// Public eligibility class retained without credential or attribute disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "class", content = "value", rename_all = "snake_case")
@@ -636,10 +623,7 @@ pub enum ModerationJurorEligibilityClassV1 {
 }
 /// Payload-free result of one verified private `PoP` membership proof.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationJurorEligibilityRecordV1 {
     /// Appeal case identifier.
     pub case_id: String,
@@ -665,10 +649,7 @@ pub struct ModerationJurorEligibilityRecordV1 {
 }
 /// Deterministically selected primary panel and failover queue.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationPanelSelectionV1 {
     /// Exact already-committed parent block fixed only after registration closes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -690,10 +671,7 @@ pub struct ModerationPanelSelectionV1 {
 }
 /// One deterministic primary-juror no-show replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationJurorReplacementV1 {
     /// Primary juror who did not accept by the deadline.
     pub absent_juror: AccountId,
@@ -702,10 +680,7 @@ pub struct ModerationJurorReplacementV1 {
 }
 /// Consensus-owned appeal/sortition lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
@@ -726,10 +701,7 @@ pub enum ModerationAppealStatusV1 {
 }
 /// Authoritative appeal intake, `PoP` snapshot, sortition, and activation record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationAppealRecordV1 {
     /// Immutable appellant intake.
     pub intake: ModerationAppealIntakeV1,
@@ -955,10 +927,7 @@ pub enum ModerationSortitionError {
 }
 /// Immutable input used to open one authoritative moderation ballot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCaseSpecV1 {
     /// Schema version; must equal [`MODERATION_LEDGER_CASE_VERSION_V1`].
     pub version: u16,
@@ -1134,10 +1103,7 @@ pub fn sorafs_moderation_panel_roster_hash_v1(jurors: &[AccountId], quorum: u16)
 }
 /// Consensus lifecycle status of an authoritative case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
@@ -1152,10 +1118,7 @@ pub enum ModerationCaseStatusV1 {
 }
 /// Authoritative case header and constant-time lifecycle counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCaseRecordV1 {
     /// Immutable case specification.
     pub spec: ModerationCaseSpecV1,
@@ -1184,10 +1147,7 @@ pub struct ModerationCaseRecordV1 {
 }
 /// Immutable accepted juror commitment and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCommitRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1203,10 +1163,7 @@ pub struct ModerationCommitRecordV1 {
 }
 /// Immutable accepted juror reveal and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationRevealRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1222,10 +1179,7 @@ pub struct ModerationRevealRecordV1 {
 }
 /// Payload-free authoritative challenge category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -1256,10 +1210,7 @@ impl ModerationChallengeKindV1 {
 }
 /// Governance resolution for one challenge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "decision", content = "value", rename_all = "snake_case")
@@ -1277,10 +1228,7 @@ pub enum ModerationChallengeDecisionV1 {
 }
 /// Durable payload-free challenge and optional resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationChallengeRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1310,10 +1258,7 @@ pub struct ModerationChallengeRecordV1 {
 }
 /// Vote counts in a terminal authoritative outcome.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationVoteCountsV1 {
     /// `uphold` reveals.
     pub uphold: u32,
@@ -1359,10 +1304,7 @@ impl ModerationVoteCountsV1 {
 }
 /// Terminal classification for an authoritative moderation case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -1379,10 +1321,7 @@ pub enum ModerationOutcomeKindV1 {
 }
 /// Immutable terminal outcome for one case and round.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationOutcomeRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1405,10 +1344,7 @@ pub struct ModerationOutcomeRecordV1 {
 }
 /// Classification of one ballot no-show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -1421,10 +1357,7 @@ pub enum ModerationNoShowKindV1 {
 }
 /// Durable no-show penalty record derived atomically during finalization.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationNoShowRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1444,10 +1377,7 @@ pub struct ModerationNoShowRecordV1 {
 }
 /// Constant-time authoritative moderation-ledger counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationLedgerStatusV1 {
     /// Authoritative appeal intakes admitted.
     pub appeal_intakes: u64,
@@ -1480,10 +1410,7 @@ pub struct ModerationLedgerStatusV1 {
 }
 /// Finalized block anchor for one coherent moderation query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -1493,10 +1420,7 @@ pub struct ModerationFinalizedCursorV1 {
 }
 /// Exclusive cursor for one committed moderation event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedEventCursorV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1510,10 +1434,7 @@ pub struct ModerationFinalizedEventCursorV1 {
 }
 /// Typed moderation event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedEventV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1541,10 +1462,7 @@ impl ModerationFinalizedEventV1 {
 }
 /// Cursor-bounded page of typed committed moderation events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ModerationFinalizedCursorV1,
@@ -1557,10 +1475,7 @@ pub struct ModerationFinalizedEventPageV1 {
 }
 /// One appeal and every payload-free eligibility record from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedAppealViewV1 {
     /// Authoritative appeal, sortition, and activation record.
     pub appeal: ModerationAppealRecordV1,
@@ -1569,10 +1484,7 @@ pub struct ModerationFinalizedAppealViewV1 {
 }
 /// One case and every authoritative ballot subrecord from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedCaseViewV1 {
     /// Authoritative case header.
     pub case: ModerationCaseRecordV1,
@@ -1589,10 +1501,7 @@ pub struct ModerationFinalizedCaseViewV1 {
 }
 /// Complete bounded moderation projection read from one finalized state view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
     pub version: u16,
@@ -1740,10 +1649,7 @@ pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
 }
 /// Consensus-owned repair worker lease.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerLeaseV1 {
     /// Canonical account that exclusively owns the lease.
     pub owner: AccountId,
@@ -1758,10 +1664,7 @@ pub struct RepairLedgerLeaseV1 {
 }
 /// Successful repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerCompletedV1 {
     /// Digest of the completion evidence.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1769,10 +1672,7 @@ pub struct RepairLedgerCompletedV1 {
 }
 /// Unsuccessful repair outcome payload without slashing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerFailedV1 {
     /// Digest of the payload-free failure reason or external evidence.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1780,10 +1680,7 @@ pub struct RepairLedgerFailedV1 {
 }
 /// Escalated repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerEscalatedV1 {
     /// Digest of the exact canonical slash proposal.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1791,10 +1688,7 @@ pub struct RepairLedgerEscalatedV1 {
 }
 /// One immutable terminal repair outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -1809,10 +1703,7 @@ pub enum RepairLedgerTerminalKindV1 {
 }
 /// Provenance for the single terminal outcome of a repair task.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerTerminalOutcomeV1 {
     /// Terminal result.
     pub kind: RepairLedgerTerminalKindV1,
@@ -1825,10 +1716,7 @@ pub struct RepairLedgerTerminalOutcomeV1 {
 }
 /// Idempotent repair action accepted by consensus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerActionReceiptV1 {
     /// Task-scoped idempotency key digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1841,10 +1729,7 @@ pub struct RepairLedgerActionReceiptV1 {
 }
 /// Slash proposal committed atomically with an escalated terminal outcome.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerSlashRecordV1 {
     /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1859,10 +1744,7 @@ pub struct RepairLedgerSlashRecordV1 {
 }
 /// Provider appeal committed against one escalated repair slash proposal.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerAppealRecordV1 {
     /// Deterministic appeal identity.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1907,10 +1789,7 @@ pub fn sorafs_repair_appeal_id_v1(
 }
 /// Chain-authoritative repair task, lease, terminal result, slash, and appeal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerTaskV1 {
     /// Schema version; must equal [`REPAIR_LEDGER_TASK_VERSION_V1`].
     pub version: u16,
@@ -1955,10 +1834,7 @@ pub struct RepairLedgerTaskV1 {
 }
 /// Constant-time counters for the authoritative repair ledger.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerStatusV1 {
     /// Admitted repair tasks.
     pub tasks: u64,
@@ -1981,10 +1857,7 @@ pub struct RepairLedgerStatusV1 {
 }
 /// Finalized block anchor for one coherent repair-ledger query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -1994,10 +1867,7 @@ pub struct RepairFinalizedCursorV1 {
 }
 /// One authoritative repair task anchored to finalized chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedTaskV1 {
     /// Finalized state anchor at which the task was read.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -2006,10 +1876,7 @@ pub struct RepairFinalizedTaskV1 {
 }
 /// Authoritative repair counters anchored to finalized chain state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedStatusV1 {
     /// Finalized state anchor at which the counters were read.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -2018,10 +1885,7 @@ pub struct RepairFinalizedStatusV1 {
 }
 /// Cursor-bounded authoritative repair-task page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairLedgerTaskPageV1 {
     /// Finalized state anchor shared by every task in the page.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -2038,10 +1902,7 @@ pub struct RepairLedgerTaskPageV1 {
 }
 /// Exclusive cursor for one committed repair-ledger event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedEventCursorV1 {
     /// Monotonic repair-event sequence beginning at one.
     pub sequence: u64,
@@ -2055,10 +1916,7 @@ pub struct RepairFinalizedEventCursorV1 {
 }
 /// Typed repair-ledger event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedEventV1 {
     /// Monotonic repair-event sequence beginning at one.
     pub sequence: u64,
@@ -2086,10 +1944,7 @@ impl RepairFinalizedEventV1 {
 }
 /// Cursor-bounded page of typed committed repair-ledger events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RepairFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: RepairFinalizedCursorV1,

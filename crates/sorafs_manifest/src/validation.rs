@@ -762,7 +762,6 @@ fn validate_governance(
 mod tests {
     use super::*;
     use crate::{AliasClaim, CouncilSignature, GovernanceProofs, ManifestBuilder, MetadataEntry};
-    use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_chunker::ChunkProfile;
     fn manifest_with_defaults() -> ManifestV1 {

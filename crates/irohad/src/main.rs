@@ -931,7 +931,7 @@ pub struct Iroha {
         Arc<sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1>,
     >,
     /// Inert take-once tenure joining the exact prepared signed capture reader
-    /// to the embedded SoraFS storage/outbox incarnation.
+    /// to the embedded `SoraFS` storage/outbox incarnation.
     #[allow(dead_code)]
     sorafs_provider_ingest_completed_musubi_capture:
         Option<sorafs_node::ProviderIngestCompletedMusubiCaptureCoordinatorV1>,
@@ -1880,7 +1880,6 @@ impl ConsensusIngressLimiter {
         use iroha_core::sumeragi::message::BlockMessage;
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
-                BlockMessage::KuraReplicaAdvert(_) => IngressPolicy::limited(),
                 BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
@@ -1896,8 +1895,8 @@ impl ConsensusIngressLimiter {
                         ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
                             IngressPolicy::bulk()
                         }
-                        ConsensusMessageV2Payload::PayloadChunk(_) => IngressPolicy::critical(),
-                        ConsensusMessageV2Payload::Proposal(_)
+                        ConsensusMessageV2Payload::PayloadChunk(_)
+                        | ConsensusMessageV2Payload::Proposal(_)
                         | ConsensusMessageV2Payload::Vote(_)
                         | ConsensusMessageV2Payload::QuorumCertificate(_)
                         | ConsensusMessageV2Payload::TimeoutVote(_)
@@ -3269,6 +3268,7 @@ enum SumeragiRelayRetryRetentionError {
     Capacity(Box<PreparedSumeragiRelayWork>),
     RefinementViolation,
 }
+#[expect(clippy::too_many_lines, reason = "cohesive fairness transition")]
 fn sumeragi_relay_retain_retry(
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
     selection: &FairRetainedSelectionTrace<SumeragiRelaySource>,
@@ -3440,15 +3440,15 @@ enum SumeragiRelayFailureDisposition {
     RetireForShutdown,
     FailStop,
 }
+#[expect(clippy::fn_params_excessive_bools, reason = "truth table")]
 fn sumeragi_relay_dispatcher_lifecycle(
     shutdown_requested: bool,
     v2_open: bool,
     lane_open: bool,
     retained_empty: bool,
 ) -> SumeragiRelayDispatcherLifecycle {
-    // Do not close the receiver merely because shutdown was requested: detached
-    // worker generations still own senders and interpret receiver loss as a
-    // live-node fail-stop. Their closure plus an empty exact queue is the
+    // Do not close the receiver on shutdown request alone: detached workers still own senders and
+    // treat receiver loss as a live-node fail-stop. Their closure plus an empty exact queue is the
     // dispatcher subtree's teardown acknowledgement.
     if v2_open || lane_open || !retained_empty {
         SumeragiRelayDispatcherLifecycle::Running
@@ -6849,6 +6849,8 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn empty_state_fallback_preflight_propagates_geometry_failure_as_kura_start_error() {
+        const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
+            geometry no longer reaches the configured-primary replay floor";
         let kura = Kura::blank_kura_for_testing();
         let error = preflight_empty_state_snapshot_fallback(
             kura.as_ref(),
@@ -6857,8 +6859,6 @@ mod snapshot_read_error_tests {
         )
         .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
         assert!(matches!(error.current_context(), StartError::InitKura));
-        const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
-            geometry no longer reaches the configured-primary replay floor";
         assert!(
             error.frames().any(|frame| {
                 frame
@@ -7534,14 +7534,10 @@ impl Iroha {
             ],
         )
         .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
-        let sorafs_provider_ingest_preflight = match config
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_ref()
+        let sorafs_provider_ingest_preflight = if let Some(provider_ingest_config) =
+            config.torii.sorafs_storage.provider_ingest_runtime.as_ref()
         {
-            Some(provider_ingest_config) => {
-                let provider_id = config
+            let provider_id = config
                     .torii
                     .sorafs_storage
                     .provider_id
@@ -7550,7 +7546,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires the exact configured storage provider identity",
                         )
                     })?;
-                let authenticated_source = runtime_deps
+            let authenticated_source = runtime_deps
                     .sorafs_provider_ingest_authenticated_source
                     .clone()
                     .ok_or_else(|| {
@@ -7558,7 +7554,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
                         )
                     })?;
-                let signer_resolver = runtime_deps
+            let signer_resolver = runtime_deps
                     .sorafs_provider_ingest_signer_resolver
                     .clone()
                     .ok_or_else(|| {
@@ -7566,7 +7562,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected governance-aware HSM/KMS signer resolver",
                         )
                     })?;
-                let checkpoint_runtime = runtime_deps
+            let checkpoint_runtime = runtime_deps
                     .sorafs_provider_ingest_checkpoint_runtime
                     .clone()
                     .ok_or_else(|| {
@@ -7574,19 +7570,19 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected sealed monotonic checkpoint provider",
                         )
                     })?;
-                if provider_ingest_config
-                    .finalized_archive
-                    .retention_authority
+            if provider_ingest_config
+                .finalized_archive
+                .retention_authority
+                .is_some()
+                != runtime_deps
+                    .sorafs_provider_ingest_retention_authority
                     .is_some()
-                    != runtime_deps
-                        .sorafs_provider_ingest_retention_authority
-                        .is_some()
-                {
-                    return Err(Report::new(StartError::StartTorii).attach(
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
                         "SoraFS provider-ingest finalized-archive retention requires exact configured/injected sealed authority presence",
                     ));
-                }
-                Some(
+            }
+            Some(
                     sorafs_provider_ingest_runtime::preflight_runtime_adapters(
                         provider_ingest_config,
                         provider_id,
@@ -7603,27 +7599,25 @@ impl Iroha {
                         ))
                     })?,
                 )
-            }
-            None => {
-                if runtime_deps
-                    .sorafs_provider_ingest_authenticated_source
+        } else {
+            if runtime_deps
+                .sorafs_provider_ingest_authenticated_source
+                .is_some()
+                || runtime_deps
+                    .sorafs_provider_ingest_signer_resolver
                     .is_some()
-                    || runtime_deps
-                        .sorafs_provider_ingest_signer_resolver
-                        .is_some()
-                    || runtime_deps
-                        .sorafs_provider_ingest_checkpoint_runtime
-                        .is_some()
-                    || runtime_deps
-                        .sorafs_provider_ingest_retention_authority
-                        .is_some()
-                {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                        "disabled SoraFS provider-ingest runtime rejects unexpected runtime providers",
-                    ));
-                }
-                None
+                || runtime_deps
+                    .sorafs_provider_ingest_checkpoint_runtime
+                    .is_some()
+                || runtime_deps
+                    .sorafs_provider_ingest_retention_authority
+                    .is_some()
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "disabled SoraFS provider-ingest runtime rejects unexpected runtime providers",
+                ));
             }
+            None
         };
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
@@ -8462,7 +8456,7 @@ impl Iroha {
             p2p_identity_keys,
             config.network.clone(),
             expected_network_id,
-            Some(consensus_caps.clone()),
+            Some(consensus_caps),
             Some(confidential_caps),
             Some(crypto_caps),
             initial_trusted_sources,
@@ -9283,7 +9277,7 @@ impl Iroha {
             config.torii.sorafs_storage.provider_ingest_runtime.clone();
         let sorafs_provider_ingest_checkpoint_runtime = sorafs_provider_ingest_preflight
             .as_ref()
-            .map(|preflight| preflight.checkpoint_runtime());
+            .map(sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1::checkpoint_runtime);
         let sorafs_por_finalized_replay_archive =
             runtime_deps.sorafs_por_finalized_replay_archive.clone();
         let sorafs_gateway_compliance_feed_transport = runtime_deps
@@ -9432,9 +9426,9 @@ impl Iroha {
                 })?;
             let service_shutdown = supervisor.shutdown_signal();
             let child = tokio::spawn(async move {
-                if let Err(error) = runner
-                    .run_until(async move { service_shutdown.receive().await })
-                    .await
+                if let Err(error) =
+                    Box::pin(runner.run_until(async move { service_shutdown.receive().await }))
+                        .await
                 {
                     panic!("supervised Governance DAG service failed: {error}");
                 }
@@ -10953,9 +10947,9 @@ pub enum ConfigError {
     #[cfg(not(feature = "embedded-soracloud-runtime"))]
     /// Production Soracloud runtime was requested from a binary lacking support.
     SoracloudRuntimeFeatureRequired,
-    /// Embedded SoraFS storage was enabled without governed gateway compliance.
+    /// Embedded `SoraFS` storage was enabled without governed gateway compliance.
     SorafsStorageComplianceRequired,
-    /// SoraFS gateway automation was enabled while embedded storage was disabled.
+    /// `SoraFS` gateway automation was enabled while embedded storage was disabled.
     SorafsGatewayRequiresStorage,
 }
 impl core::fmt::Display for ConfigError {
@@ -12112,25 +12106,23 @@ mod build_line_tests {
     use toml::Table;
     pub fn minimal_config_table() -> Table {
         toml::from_str(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
+            r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
+nexus.storage.local_budget_bytes = 4096
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
-
 [network]
 address = "addr:127.0.0.1:1337#8F78"
 public_address = "addr:127.0.0.1:1337#8F78"
-
 [torii]
 address = "addr:127.0.0.1:8080#8942"
-
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
@@ -12140,38 +12132,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     pub fn multilane_config_table(enabled: bool) -> Table {
         toml::from_str(&format!(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
+            r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
 ]
-
 [network]
 address = "addr:127.0.0.1:1337#8F78"
 public_address = "addr:127.0.0.1:1337#8F78"
-
 [torii]
 address = "addr:127.0.0.1:8080#8942"
-
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-
 [nexus]
 enabled = {enabled}
 lane_count = 2
-
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
 metadata = {{}}
-
 [[nexus.lane_catalog]]
 index = 1
 alias = "zk"
@@ -12182,33 +12168,28 @@ metadata = {{}}
     }
     fn single_lane_override_config_table() -> Table {
         toml::from_str(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
+            r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
-
 [network]
 address = "addr:127.0.0.1:1337#8F78"
 public_address = "addr:127.0.0.1:1337#8F78"
-
 [torii]
 address = "addr:127.0.0.1:8080#8942"
-
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-
 [nexus]
 enabled = false
 lane_count = 1
-
 [[nexus.lane_catalog]]
 index = 0
 alias = "custom"
@@ -12224,24 +12205,36 @@ metadata = {}
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
     }
-    pub(super) fn load_unprovisioned_profile_for_inspection(path: &Path) -> Config {
+    pub fn load_unprovisioned_profile_for_inspection(path: &Path) -> Config {
         let source = std::fs::read_to_string(path).expect("read checked-in signing profile");
         let mut table: Table = toml::from_str(&source).expect("parse signing profile TOML");
-        let expected_hash = table
-            .get_mut("genesis")
-            .and_then(toml::Value::as_table_mut)
-            .and_then(|genesis| genesis.get_mut("expected_hash"))
-            .expect("signing profile genesis.expected_hash placeholder");
-        assert_eq!(
-            expected_hash.as_str(),
-            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH"),
-            "checked-in signing profiles must remain explicitly unprovisioned"
-        );
-        // This hash exists only so tests can inspect unrelated typed fields. It never enters a
-        // runtime config and the returned config must not be used to start a node.
-        *expected_hash = toml::Value::String(
-            Hash::new(b"irohad non-runtime signing-profile inspection").to_string(),
-        );
+        if table.remove("private_key_file").is_some() {
+            let fixture = minimal_config_table();
+            for key in [
+                "private_key",
+                "soranet_transport_public_key",
+                "soranet_transport_private_key",
+            ] {
+                table.insert(key.to_owned(), fixture[key].clone());
+            }
+            let transport_file = table.remove("soranet_transport_private_key_file");
+            assert!(transport_file.is_some());
+            let streaming = table
+                .get_mut("streaming")
+                .and_then(toml::Value::as_table_mut)
+                .expect("signing profile streaming table");
+            assert!(streaming.remove("identity_private_key_file").is_some());
+            for key in ["identity_public_key", "identity_private_key"] {
+                streaming.insert(key.to_owned(), fixture["streaming"][key].clone());
+            }
+            let genesis = table
+                .get_mut("genesis")
+                .and_then(toml::Value::as_table_mut)
+                .expect("signing profile genesis table");
+            assert!(genesis.remove("expected_hash_file").is_some());
+            let hash = fixture["genesis"]["expected_hash"].clone();
+            genesis.insert("expected_hash".to_owned(), hash);
+        }
         Config::from_toml_source(TomlSource::inline(table))
             .expect("resolve signing profile for non-runtime inspection")
     }
@@ -13113,9 +13106,9 @@ pub fn run_with_runtime_provider_registry(
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
 /// The caller supplies a one-shot factory which receives the exact daemon-owned finalized-state,
-/// transaction-queue, and SoraFS handles only after trusted startup replay. The factory must
+/// transaction-queue, and `SoraFS` handles only after trusted startup replay. The factory must
 /// assemble the complete private HTTPS runner, including its durable clock and journal, receipt
-/// signer, and admitted SoraFS backends. The launcher transfers that opaque factory into the
+/// signer, and admitted `SoraFS` backends. The launcher transfers that opaque factory into the
 /// daemon supervisor without requiring an unrelated runtime-provider registry. It never exposes
 /// the private routes through Torii or reads service credentials from argv or node configuration.
 /// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
@@ -13137,8 +13130,8 @@ pub fn run_with_musubi_publication(
 /// publication factory.
 ///
 /// The one-shot factory receives the exact daemon-owned finalized-state, transaction-queue, and
-/// SoraFS handles only after trusted startup replay. It must assemble the complete private HTTPS
-/// runner, including its durable clock and journal, receipt signer, and admitted SoraFS backends,
+/// `SoraFS` handles only after trusted startup replay. It must assemble the complete private HTTPS
+/// runner, including its durable clock and journal, receipt signer, and admitted `SoraFS` backends,
 /// while retaining every credential inside deployment-owned adapters. The launcher only transfers
 /// that opaque factory into the daemon supervisor; it never exposes the private routes through
 /// Torii or reads service credentials from argv or node configuration. An unexpected private-runner
@@ -13381,6 +13374,7 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
+#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main(
     build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
@@ -13593,8 +13587,9 @@ fn run_bounded_macos_acl_command(
 #[cfg(target_os = "macos")]
 fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
-    let newline_count = output.stdout.iter().filter(|byte| **byte == b'\n').count();
-    if !output.stderr.is_empty() || !output.stdout.ends_with(b"\n") || newline_count != 1 {
+    let suffix = output.stdout.strip_suffix(b"\n");
+    let invalid_stdout = suffix.is_none_or(|body| body.contains(&b'\n'));
+    if !output.stderr.is_empty() || invalid_stdout {
         return Err(format!(
             "{label} `{}` must not have an extended ACL",
             path.display()
@@ -13740,6 +13735,7 @@ impl QualificationSealPublicationTarget {
         }
     }
     #[cfg(unix)]
+    #[expect(clippy::too_many_lines, reason = "ordered credential ownership audit")]
     fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
         use std::os::unix::fs::MetadataExt as _;
         validate_canonical_absolute_path(path, "qualification seal path")?;
@@ -13946,8 +13942,8 @@ impl QualificationSealPublicationTarget {
                 )
             })?;
             if u64::try_from(named_before_acl_clear.st_dev).ok() != Some(before_acl_clear.dev())
-                || u64::try_from(named_before_acl_clear.st_ino).ok() != Some(before_acl_clear.ino())
-                || u64::try_from(named_before_acl_clear.st_nlink).ok() != Some(1)
+                || named_before_acl_clear.st_ino != before_acl_clear.ino()
+                || u64::from(named_before_acl_clear.st_nlink) != 1
             {
                 return Err("qualification seal staging name changed before ACL removal".to_owned());
             }
@@ -13983,8 +13979,8 @@ impl QualificationSealPublicationTarget {
             )
             .map_err(|error| format!("failed to bind qualification seal staging name: {error}"))?;
             if u64::try_from(named.st_dev).ok() != Some(metadata.dev())
-                || u64::try_from(named.st_ino).ok() != Some(metadata.ino())
-                || u64::try_from(named.st_nlink).ok() != Some(1)
+                || named.st_ino != metadata.ino()
+                || u64::from(named.st_nlink) != 1
             {
                 return Err(
                     "qualification seal staging name no longer identifies the opened file"
@@ -14059,10 +14055,10 @@ impl QualificationSealPublicationTarget {
             )
             .map_err(|error| format!("failed to inspect published qualification seal: {error}"))?;
             if u64::try_from(published.st_dev).ok() != Some(staged_device)
-                || u64::try_from(published.st_ino).ok() != Some(staged_inode)
-                || u64::try_from(published.st_nlink).ok() != Some(1)
-                || u32::try_from(published.st_uid).ok() != Some(self.expected_uid)
-                || u32::try_from(published.st_mode).map_or(true, |mode| mode & 0o7777 != 0o444)
+                || published.st_ino != staged_inode
+                || u64::from(published.st_nlink) != 1
+                || published.st_uid != self.expected_uid
+                || u32::from(published.st_mode) & 0o7777 != 0o444
             {
                 return Err(
                     "published qualification seal does not match the staged immutable inode"
@@ -14085,7 +14081,7 @@ impl QualificationSealPublicationTarget {
             ) {
                 Ok(current)
                     if u64::try_from(current.st_dev).ok() == Some(staged_device)
-                        && u64::try_from(current.st_ino).ok() == Some(staged_inode) =>
+                        && current.st_ino == staged_inode =>
                 {
                     rustix::fs::unlinkat(
                         &self.parent,
@@ -15259,16 +15255,16 @@ mod tests {
     fn governance_dag_service_storage(
         public_key: [u8; 32],
     ) -> iroha_config::parameters::actual::SorafsStorage {
-        let public_key_hex = hex::encode(public_key);
-        let mut storage = iroha_config::parameters::actual::SorafsStorage::default();
-        storage.enabled = true;
-        storage.governance_dag_dir =
-            Some(std::path::PathBuf::from("/var/lib/iroha/sorafs/governance"));
-        storage.governance_dag_publisher_peer_id =
-            Some(GOVERNANCE_DAG_PUBLISHER_PEER_ID.to_owned());
-        storage.governance_dag_signer_handle = Some(GOVERNANCE_DAG_PUBLISHER_HANDLE.to_owned());
-        storage.governance_dag_signer_revision = Some(1);
-        storage.governance_dag_signer_policy_digest = Some(GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST);
+        let mut storage = iroha_config::parameters::actual::SorafsStorage {
+            enabled: true,
+            governance_dag_dir: Some(std::path::PathBuf::from("/var/lib/iroha/sorafs/governance")),
+            governance_dag_publisher_peer_id: Some(GOVERNANCE_DAG_PUBLISHER_PEER_ID.to_owned()),
+            governance_dag_signer_handle: Some(GOVERNANCE_DAG_PUBLISHER_HANDLE.to_owned()),
+            governance_dag_signer_revision: Some(1),
+            governance_dag_signer_policy_digest: Some(GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST),
+            governance_dag_publisher_public_key_hex: Some(hex::encode(public_key)),
+            ..Default::default()
+        };
         storage.governance_dag_service.enabled = true;
         storage.governance_dag_service.checkpoint_store_handle =
             Some(GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE.to_owned());
@@ -15276,8 +15272,7 @@ mod tests {
         storage
             .governance_dag_service
             .checkpoint_store_policy_digest = Some(GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST);
-        storage.governance_dag_publisher_public_key_hex = Some(public_key_hex.clone());
-        storage.governance_dag_service.publisher_public_key_hex = Some(public_key_hex);
+        storage.governance_dag_service.publisher_public_key_hex = Some(hex::encode(public_key));
         storage
     }
     #[cfg(target_os = "macos")]
@@ -15972,6 +15967,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "complete dependency-forwarding contract"
+    )]
     fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
         let compact_source: String = include_str!("main.rs")
             .chars()
@@ -18937,7 +18936,7 @@ mod tests {
         #[test]
         fn qualification_seal_check_requires_local_genesis() {
             let config = sample_config();
-            let error = validate_config_for_check(&config, None, true).err().expect(
+            let error = validate_config_for_check(&config, None, true).expect_err(
                 "seal publication must wait for full Kagemusha release and genesis validation",
             );
             let rendered = format!("{error:?}");

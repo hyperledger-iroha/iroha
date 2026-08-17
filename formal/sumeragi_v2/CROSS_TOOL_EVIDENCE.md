@@ -123,10 +123,11 @@ Ledger obligation:
 `successor-activation-exact-recovery-production-refinement`.
 
 Named TLA+ theorem:
-`SumeragiV2ChainEpochRefinement!SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement`.
+`SumeragiV2ChainEpochRefinementShard16!SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement`
+(re-exported by the ledger-facing `SumeragiV2ChainEpochRefinement` façade).
 
 Required strict provider log:
-`target/formal/sumeragi_v2/tlaps/SumeragiV2ChainEpochRefinement.log`.
+`target/formal/sumeragi_v2/tlaps/SumeragiV2ChainEpochRefinementShard16.log`.
 
 Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 
@@ -178,44 +179,50 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The evidence architecture does not itself prove a production refinement. The
-three ledger obligations above remain `specified_unproved`, but the code-owned
-`4 + 7 + 6` inventory now has exact named Verus signatures, non-vacuous
+The checked-in legacy/revision-3-rooted ledger declares all three
+production-refinement rows `cross_tool_proved`, and
+`--print-cross-tool-obligations` returns their exact ordered IDs. That status
+does not prove the separate revision-4 exact-cardinality corridor. The
+code-owned `4 + 7 + 6` inventory has named Verus signatures, non-vacuous
 postconditions, shared Rust/Verus kernels, sealed projection builders and
 identity extractors, and fail-closed production call-site expressions. The
-checker seals all 22 primary production call-site contracts and the two
-supplemental reliable-flush kernel/call-site contracts. Those 24 triples span
-23 unique production call items; no call site remains intentionally unfrozen.
-Read-only reconstruction of the current source-bound claim payload succeeds
-for all `4/4`, `7/7`, and `6/6` claims. This is structural/source-fidelity
-validation, not backend proof evidence, so none of the three obligations is
-promoted.
+checker binds 24 primary production call contracts, six supplemental call
+contracts, and six linked-consumer contracts. Their call multiplicities cover
+33 guarded invocations plus six linked-consumer seams; all 39 seams carry
+reviewed item-token seals.
+
+The checked-in status is not backend evidence by itself. Release mode accepts
+the three rows only after fresh strict provider logs, the pinned Verus run,
+exact source manifests, proved transitive prerequisites, and the derived
+cross-tool document all bind the same ledger and signed source.
 
 - Effective-lock verification covers the serialized post-install lock,
   immutable body owner, exact retirement accounting, and bounded class
   selector through live production invocations. Its only ledger prerequisite,
   `effective-lock-body-acquisition-model`, is `tlaps_proved`. Repeated host
   invocation and terminating local work remain explicit runtime assumptions.
-  Promotion still requires one frozen-source strict TLAPS provider log, the
-  pinned Verus run, and derived cross-tool evidence.
+  Release acceptance requires one frozen-source strict TLAPS provider log,
+  the pinned Verus run, and derived cross-tool evidence.
 - Progress-witness verification covers seven pure reducer/WAL, timer/FIFO,
   ingress, two-stage relay retry, writer-flush, and application kernels. The
   writer-flush claim additionally binds two supplemental kernels to the same
   exact `MergeSidecarTransport::acknowledge_outbound_chunk` item. Its entire
-  transitive proof dependency closure is `tlaps_proved`. Promotion remains
-  blocked only on a fresh frozen-source strict TLAPS plus pinned Verus evidence
-  set and the derived cross-tool document.
+  transitive proof dependency closure is `tlaps_proved`. Release acceptance
+  remains blocked on a fresh frozen-source strict TLAPS plus pinned Verus
+  evidence set and the derived cross-tool document.
 - Successor verification covers six pure status, runner, startup, historical
   block-sync, and terminal Apply-boundary kernels. Its production source
-  binding is complete, but `successor-activation-starvation-freedom` remains
-  `specified_unproved`; the newly strengthened ChainEpoch-premised proof
-  source has not yet received release-grade strict TLAPS evidence or ledger
-  promotion. This prerequisite must close before the successor cross-tool
-  obligation can be promoted.
+  binding is complete, and `successor-activation-starvation-freedom` has its
+  promoted target status. Fresh release-grade strict TLAPS evidence for that
+  prerequisite must validate before derived successor cross-tool evidence is
+  accepted.
 
-`target/formal/sumeragi_v2` is currently absent, so no current
-`proof_evidence.json`, provider TLAPS logs, `verus.log`,
-`verus_evidence.json`, or `cross_tool_evidence.json` exists. Earlier results
-remain diagnostic. Because no ledger entry is yet `cross_tool_proved`,
-`--print-cross-tool-obligations` remains empty and cross-tool evidence must
-remain absent until the final source-bound promotion run.
+Mutable `target/formal/sumeragi_v2` contents are never durable status authority.
+The formal release wrapper removes prior outputs, regenerates every evidence
+document, and validates them against the frozen ledger and source before
+publishing completion.
+
+The mutable evidence directory is currently absent, so the checked-in status
+declaration and its three-entry `--print-cross-tool-obligations` inventory are
+not current backend evidence. Fresh provider TLAPS logs, `verus.log`,
+`verus_evidence.json`, and derived `cross_tool_evidence.json` remain required.

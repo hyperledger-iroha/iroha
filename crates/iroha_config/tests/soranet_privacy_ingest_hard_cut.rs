@@ -1,7 +1,7 @@
-//! Validate the exact-signature hard cut for SoraNet privacy telemetry ingress.
-use std::path::PathBuf;
+//! Validate the exact-signature hard cut for `SoraNet` privacy telemetry ingress.
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()

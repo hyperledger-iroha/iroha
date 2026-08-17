@@ -335,7 +335,7 @@ p2p_post_queue_cap = 2048     # per-peer post channel
 p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # Other networking parameters (for reference)
-block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes)
+block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples and block-sync updates)
 block_gossip_period_ms = 10000
 block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000
@@ -377,9 +377,9 @@ trust_min_score = -20              # drop trust gossip at or below this score
   flooding under load.
 - `connect_startup_delay_ms` delays outbound dials immediately after startup to reduce
   connection-refused noise when peers come up in waves (localnet or orchestrated rollouts).
-- NEW_VIEW votes are sent to the deterministic collector set for the current view and always
-  include the leader; if the collector set is empty or local-only, the sender falls back to the
-  full commit topology. This provides redundancy without relying on full broadcast in the steady state.
+- Revision-4 `TimeoutVote` messages (the NEW_VIEW equivalent) are sent to the
+  complete frozen committee. Any validator may aggregate the exact
+  `q = 2f + 1` equal-vote quorum into a `TimeoutCertificate`.
 - Trust scoring is deterministic: scores start at 0, penalties subtract `trust_penalty_bad_gossip`,
   and the debt halves every `trust_decay_half_life_ms` until it reaches 0. In permissioned mode,
   trust gossip that advertises peers outside the current topology applies `trust_penalty_unknown_peer`;
@@ -640,10 +640,15 @@ acquire this reply deadline.
   at most 32 concatenated inner Norito objects; the receiver rejects object 33
   before measuring or decoding it while preserving the first 32 admitted objects.
 - Topic caps (post-decode enforcement, tightened defaults) apply to complete decrypted and authenticated P2P frame bytes:
-  - `[network].max_frame_bytes_consensus` (default 17 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
-  - `[network].max_frame_bytes_control` (default 2 MiB; also caps the small
-    authoritative-v2 `ConsensusSafety` messages)
-  - `[network].max_frame_bytes_block_sync` (default = 17 MiB plaintext ceiling; caps bulk consensus payloads such as `BlockSyncUpdate`, `Proposal`, and `RbcChunk`, plus BlockSync responses)
+  - `[network].max_frame_bytes_consensus` (default 17 MiB; caps revision-4
+    recovery requests such as `CertifiedBodyRequest` and
+    `CommitCertificateRequest`)
+  - `[network].max_frame_bytes_control` (default 2 MiB; caps compact revision-4
+    `ConsensusSafety` messages such as `Proposal`, `Vote`,
+    `QuorumCertificate`, `TimeoutVote`, and `TimeoutCertificate`)
+  - `[network].max_frame_bytes_block_sync` (default = 17 MiB plaintext ceiling;
+    caps revision-4 `PayloadManifest`, `PayloadChunk`, and
+    `CertifiedBodyResponse` frames plus BlockSync responses)
   - `[network].max_frame_bytes_tx_gossip` (default 256 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

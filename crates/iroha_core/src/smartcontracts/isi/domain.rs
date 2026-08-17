@@ -3609,7 +3609,7 @@ mod tests {
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     ) -> ValidationFeeUnregisterTargets {
         let domain_id =
-            DomainId::try_new("validation", "guard").expect("validation-fee guard domain");
+            DomainId::try_new("validation", "universal").expect("validation-fee guard domain");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(authority, state_transaction)
             .expect("register validation-fee guard domain");
@@ -3643,7 +3643,7 @@ mod tests {
             voting_asset_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .execute(authority, state_transaction)
         .expect("register retained validation-fee voting asset");
@@ -3701,9 +3701,9 @@ mod tests {
         )
     }
     fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
-        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        "0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
-            .expect("canonical validation-fee guard network id")
+            .expect("exact validation-fee guard network id")
     }
     fn validation_fee_guard_payout_binding(
         rules: &ValidationFeePlainElectorateRulesV1,
@@ -7882,90 +7882,90 @@ mod tests {
             "deployment nonce must remain unchanged"
         );
     }
+    fn assert_account_unregister_guard(
+        configure: impl FnOnce(
+            &mut crate::state::StateTransaction<'_, '_>,
+            &DomainId,
+            &AccountId,
+            &AccountId,
+        ),
+        reject_message: &str,
+        error_fragment: &str,
+        error_diagnostic: &str,
+    ) {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        configure(&mut tx, &domain_id, &authority, &account_id);
+        let err = Unregister::account(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err(reject_message);
+        let err_string = err.to_string();
+        assert!(
+            err_string.contains(error_fragment),
+            "{error_diagnostic}: {err_string}"
+        );
+        assert!(
+            tx.world.accounts.get(&account_id).is_some(),
+            "account should remain after rejected unregister"
+        );
+    }
     #[test]
     fn unregister_account_rejects_when_account_is_governance_bond_escrow_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.gov.bond_escrow_account = account_id.clone();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("governance bond escrow account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("governance bond escrow account"),
-                    "error should explain governance bond escrow conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "governance bond escrow account must not be unregistered",
+            "governance bond escrow account",
+            "error should explain governance bond escrow conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_governance_viral_incentive_pool_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.gov.viral_incentives.incentive_pool_account = account_id.clone();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("governance viral incentive pool account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("governance viral incentive pool account"),
-                    "error should explain governance viral incentive pool conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "governance viral incentive pool account must not be unregistered",
+            "governance viral incentive pool account",
+            "error should explain governance viral incentive pool conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_oracle_reward_pool() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.oracle.economics.reward_pool = account_id.clone();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("oracle reward pool account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("oracle reward pool account"),
-                    "error should explain oracle reward-pool conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "oracle reward pool account must not be unregistered",
+            "oracle reward pool account",
+            "error should explain oracle reward-pool conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_fee_sink_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, authority, account_id| {
                 let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
                 Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(&authority, tx)
+                    .execute(authority, tx)
                     .expect("register helper account");
                 tx.nexus.fees.fee_sink_account_id = account_id.to_string();
                 tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
                 tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("nexus fee sink account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("nexus fee sink account"),
-                    "error should explain nexus fee-sink conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "nexus fee sink account must not be unregistered",
+            "nexus fee sink account",
+            "error should explain nexus fee-sink conflict",
         );
     }
     #[test]
@@ -8001,22 +8001,13 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_nexus_fee_sink_literal_is_invalid() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, _account_id| {
                 tx.nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("invalid nexus fee sink literal must fail closed");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("invalid nexus.fees.fee_sink_account_id account literal"),
-                    "error should explain invalid nexus fee-sink literal: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "invalid nexus fee sink literal must fail closed",
+            "invalid nexus.fees.fee_sink_account_id account literal",
+            "error should explain invalid nexus fee-sink literal",
         );
     }
     #[test]
@@ -8053,54 +8044,36 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_escrow_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, authority, account_id| {
                 let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
                 Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(&authority, tx)
+                    .execute(authority, tx)
                     .expect("register helper account");
                 tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
                 tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
                 tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("nexus staking escrow account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("nexus staking escrow account"),
-                    "error should explain nexus staking-escrow conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "nexus staking escrow account must not be unregistered",
+            "nexus staking escrow account",
+            "error should explain nexus staking-escrow conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_slash_sink_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, authority, account_id| {
                 let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
                 Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(&authority, tx)
+                    .execute(authority, tx)
                     .expect("register helper account");
                 tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
                 tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
                 tx.nexus.staking.slash_sink_account_id = account_id.to_string();
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("nexus staking slash sink account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("nexus staking slash sink account"),
-                    "error should explain nexus staking slash-sink conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "nexus staking slash sink account must not be unregistered",
+            "nexus staking slash sink account",
+            "error should explain nexus staking slash-sink conflict",
         );
     }
     #[test]
@@ -8266,67 +8239,38 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_is_content_publish_allow_account() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.content.publish_allow_accounts = vec![account_id.clone()];
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("content publish allow-list account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("content publish allow-list account"),
-                    "error should explain content publish-allow conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "content publish allow-list account must not be unregistered",
+            "content publish allow-list account",
+            "error should explain content publish-allow conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_sorafs_telemetry_submitter() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.gov.sorafs_telemetry.submitters = vec![account_id.clone()];
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("SoraFS telemetry submitter account must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("SoraFS telemetry submitter"),
-                    "error should explain telemetry-submitter conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "SoraFS telemetry submitter account must not be unregistered",
+            "SoraFS telemetry submitter",
+            "error should explain telemetry-submitter conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_configured_sorafs_provider_owner() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xD4; 32]);
                 tx.gov
                     .sorafs_provider_owners
                     .insert(provider_id, account_id.clone());
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err(
-                        "configured SoraFS provider-owner account must not be unregistered",
-                    );
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("configured as SoraFS provider owner"),
-                    "error should explain configured provider-owner conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "configured SoraFS provider-owner account must not be unregistered",
+            "configured as SoraFS provider owner",
+            "error should explain configured provider-owner conflict",
         );
     }
     #[test]
@@ -8354,31 +8298,22 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_has_citizenship_record() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.world.citizens.insert(
                     account_id.clone(),
                     crate::state::CitizenshipRecord::new(account_id.clone(), 100_u64.into(), 1),
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with citizenship record must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active citizenship record"),
-                    "error should explain citizenship conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with citizenship record must not be unregistered",
+            "active citizenship record",
+            "error should explain citizenship conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_validator_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 tx.world.public_lane_validators.insert(
                     (LaneId::SINGLE, account_id.clone()),
                     iroha_data_model::nexus::PublicLaneValidatorRecord {
@@ -8395,19 +8330,10 @@ mod tests {
                         last_reward_epoch: None,
                     },
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with validator stake state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("public-lane validator stake state"),
-                    "error should explain staking conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with validator stake state must not be unregistered",
+            "public-lane validator stake state",
+            "error should explain staking conflict",
         );
     }
     #[test]
@@ -8452,74 +8378,58 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_reward_record_state() {
-        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            tx.world.public_lane_rewards.insert(
-                (LaneId::SINGLE, 1),
-                iroha_data_model::nexus::PublicLaneRewardRecord {
-                    lane_id: LaneId::SINGLE,
-                    epoch: 1,
-                    asset: AssetId::new(
-                        AssetDefinitionId::derive_from_components(
-                            domain_id.clone(),
-                            "fee".parse().unwrap(),
+        assert_account_unregister_guard(
+            |tx, domain_id, _authority, account_id| {
+                tx.world.public_lane_rewards.insert(
+                    (LaneId::SINGLE, 1),
+                    iroha_data_model::nexus::PublicLaneRewardRecord {
+                        lane_id: LaneId::SINGLE,
+                        epoch: 1,
+                        asset: AssetId::new(
+                            AssetDefinitionId::derive_from_components(
+                                domain_id.clone(),
+                                "fee".parse().unwrap(),
+                            ),
+                            account_id.clone(),
                         ),
-                        account_id.clone(),
-                    ),
-                    total_reward: Quantity::from(1_u32),
-                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                        account: account_id.clone(),
-                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: Quantity::from(1_u32),
-                    }],
-                    metadata: Metadata::default(),
-                },
-            );
-            let err = Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect_err("account with public-lane reward state must not be unregistered");
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("public-lane reward ledger state"),
-                "error should explain reward-state conflict: {err_string}"
-            );
-            assert!(
-                tx.world.accounts.get(&account_id).is_some(),
-                "account should remain after rejected unregister"
-            );
-        });
+                        total_reward: Quantity::from(1_u32),
+                        shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                            account: account_id.clone(),
+                            role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                            amount: Quantity::from(1_u32),
+                        }],
+                        metadata: Metadata::default(),
+                    },
+                );
+            },
+            "account with public-lane reward state must not be unregistered",
+            "public-lane reward ledger state",
+            "error should explain reward-state conflict",
+        );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
-        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            tx.world.public_lane_reward_claims.insert(
-                (
-                    LaneId::SINGLE,
-                    authority.clone(),
-                    AssetId::new(
-                        AssetDefinitionId::derive_from_components(
-                            domain_id.clone(),
-                            "fee".parse().unwrap(),
+        assert_account_unregister_guard(
+            |tx, domain_id, authority, account_id| {
+                tx.world.public_lane_reward_claims.insert(
+                    (
+                        LaneId::SINGLE,
+                        authority.clone(),
+                        AssetId::new(
+                            AssetDefinitionId::derive_from_components(
+                                domain_id.clone(),
+                                "fee".parse().unwrap(),
+                            ),
+                            account_id.clone(),
                         ),
-                        account_id.clone(),
                     ),
-                ),
-                1,
-            );
-            let err = Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect_err(
-                    "account referenced by reward-claim asset owner must not be unregistered",
+                    1,
                 );
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("public-lane reward claim state"),
-                "error should explain reward-claim conflict: {err_string}"
-            );
-            assert!(
-                tx.world.accounts.get(&account_id).is_some(),
-                "account should remain after rejected unregister"
-            );
-        });
+            },
+            "account referenced by reward-claim asset owner must not be unregistered",
+            "public-lane reward claim state",
+            "error should explain reward-claim conflict",
+        );
     }
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
@@ -8581,147 +8491,123 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
-        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            let repo_id: iroha_data_model::repo::RepoAgreementId =
-                "repoguard".parse().expect("repo agreement id");
-            let agreement = iroha_data_model::repo::RepoAgreement::new(
-                repo_id.clone(),
-                account_id.clone(),
-                authority.clone(),
-                iroha_data_model::repo::RepoCashLeg {
-                    asset_definition_id: AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "usd".parse().unwrap(),
-                    ),
-                    quantity: Quantity::from(10_u32),
-                },
-                AssetId::new(
-                    AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "usd".parse().unwrap(),
-                    ),
+        assert_account_unregister_guard(
+            |tx, domain_id, authority, account_id| {
+                let repo_id: iroha_data_model::repo::RepoAgreementId =
+                    "repoguard".parse().expect("repo agreement id");
+                let agreement = iroha_data_model::repo::RepoAgreement::new(
+                    repo_id.clone(),
+                    account_id.clone(),
                     authority.clone(),
-                ),
-                iroha_data_model::repo::RepoCollateralLeg::new(
-                    AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "bond".parse().unwrap(),
-                    ),
-                    Quantity::from(12_u32),
-                ),
-                AssetId::new(
-                    AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "bond".parse().unwrap(),
-                    ),
-                    authority.clone(),
-                ),
-                250,
-                1000,
-                1,
-                iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
-                None,
-            );
-            tx.world.insert_repo_agreement_entry(agreement);
-            let err = Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect_err("account with repo agreement state must not be unregistered");
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("repo agreement state"),
-                "error should explain repo-state conflict: {err_string}"
-            );
-            assert!(
-                tx.world.accounts.get(&account_id).is_some(),
-                "account should remain after rejected unregister"
-            );
-        });
-    }
-    #[test]
-    fn unregister_account_rejects_when_account_has_committed_settlement_receipt() {
-        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            let settlement_id: iroha_data_model::isi::SettlementId =
-                "settleguard".parse().expect("settlement id");
-            let receipt = iroha_data_model::isi::SettlementReceipt {
-            kind: iroha_data_model::isi::SettlementKind::Dvp,
-            authority: account_id.clone(),
-            plan: iroha_data_model::isi::SettlementPlan::default(),
-            metadata: Metadata::default(),
-            block_height: 1,
-            block_hash:
-                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                    Hash::prehashed([0; Hash::LENGTH]),
-                ),
-            executed_at_ms: 1,
-            legs: [
-                iroha_data_model::isi::SettlementLegSnapshot {
-                    role: iroha_data_model::isi::SettlementLegRole::Delivery,
-                    leg: iroha_data_model::isi::SettlementLeg::new(
+                    iroha_data_model::repo::RepoCashLeg {
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
+                            domain_id.clone(),
+                            "usd".parse().unwrap(),
+                        ),
+                        quantity: Quantity::from(10_u32),
+                    },
+                    AssetId::new(
                         AssetDefinitionId::derive_from_components(
                             domain_id.clone(),
                             "usd".parse().unwrap(),
                         ),
-                        Quantity::one(),
-                        account_id.clone(),
                         authority.clone(),
                     ),
-                },
-                iroha_data_model::isi::SettlementLegSnapshot {
-                    role: iroha_data_model::isi::SettlementLegRole::Payment,
-                    leg: iroha_data_model::isi::SettlementLeg::new(
+                    iroha_data_model::repo::RepoCollateralLeg::new(
                         AssetDefinitionId::derive_from_components(
                             domain_id.clone(),
-                            "eur".parse().unwrap(),
+                            "bond".parse().unwrap(),
                         ),
-                        Quantity::one(),
-                        authority.clone(),
-                        account_id.clone(),
+                        Quantity::from(12_u32),
                     ),
-                },
-            ],
-            fx_corridor: None,
-        };
-            tx.world.settlement_receipts.insert(settlement_id, receipt);
-            let err = Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect_err("account with a committed settlement receipt must not be unregistered");
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("committed settlement receipt"),
-                "error should explain settlement-state conflict: {err_string}"
-            );
-            assert!(
-                tx.world.accounts.get(&account_id).is_some(),
-                "account should remain after rejected unregister"
-            );
-        });
+                    AssetId::new(
+                        AssetDefinitionId::derive_from_components(
+                            domain_id.clone(),
+                            "bond".parse().unwrap(),
+                        ),
+                        authority.clone(),
+                    ),
+                    250,
+                    1000,
+                    1,
+                    iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
+                    None,
+                );
+                tx.world.insert_repo_agreement_entry(agreement);
+            },
+            "account with repo agreement state must not be unregistered",
+            "repo agreement state",
+            "error should explain repo-state conflict",
+        );
+    }
+    #[test]
+    fn unregister_account_rejects_when_account_has_committed_settlement_receipt() {
+        assert_account_unregister_guard(
+            |tx, domain_id, authority, account_id| {
+                let settlement_id: iroha_data_model::isi::SettlementId =
+                    "settleguard".parse().expect("settlement id");
+                let receipt = iroha_data_model::isi::SettlementReceipt {
+                    kind: iroha_data_model::isi::SettlementKind::Dvp,
+                    authority: account_id.clone(),
+                    plan: iroha_data_model::isi::SettlementPlan::default(),
+                    metadata: Metadata::default(),
+                    block_height: 1,
+                    block_hash: iroha_crypto::HashOf::<
+                        iroha_data_model::block::BlockHeader,
+                    >::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+                    executed_at_ms: 1,
+                    legs: [
+                        iroha_data_model::isi::SettlementLegSnapshot {
+                            role: iroha_data_model::isi::SettlementLegRole::Delivery,
+                            leg: iroha_data_model::isi::SettlementLeg::new(
+                                AssetDefinitionId::derive_from_components(
+                                    domain_id.clone(),
+                                    "usd".parse().unwrap(),
+                                ),
+                                Quantity::one(),
+                                account_id.clone(),
+                                authority.clone(),
+                            ),
+                        },
+                        iroha_data_model::isi::SettlementLegSnapshot {
+                            role: iroha_data_model::isi::SettlementLegRole::Payment,
+                            leg: iroha_data_model::isi::SettlementLeg::new(
+                                AssetDefinitionId::derive_from_components(
+                                    domain_id.clone(),
+                                    "eur".parse().unwrap(),
+                                ),
+                                Quantity::one(),
+                                authority.clone(),
+                                account_id.clone(),
+                            ),
+                        },
+                    ],
+                    fx_corridor: None,
+                };
+                tx.world.settlement_receipts.insert(settlement_id, receipt);
+            },
+            "account with a committed settlement receipt must not be unregistered",
+            "committed settlement receipt",
+            "error should explain settlement-state conflict",
+        );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_provider_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
                 feed.providers = vec![account_id.clone()];
                 tx.world.oracle_feeds.insert(feed.feed_id.clone(), feed);
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with oracle provider state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active oracle feed provider state"),
-                    "error should explain oracle-state conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with oracle provider state must not be unregistered",
+            "active oracle feed provider state",
+            "error should explain oracle-state conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_history_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let kit = iroha_data_model::oracle::kits::price_xor_usd();
                 let feed = kit.feed_config;
                 let feed_id = feed.feed_id.clone();
@@ -8757,25 +8643,16 @@ mod tests {
                         evidence_hashes: Vec::new(),
                     }],
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with oracle history state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active oracle feed history state"),
-                    "error should explain oracle-history conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with oracle history state must not be unregistered",
+            "active oracle feed history state",
+            "error should explain oracle-history conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_governance_proposal_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let proposal_id = [0xA5; 32];
                 let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
@@ -8806,25 +8683,16 @@ mod tests {
                         enacted_at_height: None,
                     },
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with governance proposal state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active governance proposal state"),
-                    "error should explain governance proposal conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with governance proposal state must not be unregistered",
+            "active governance proposal state",
+            "error should explain governance proposal conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_content_bundle_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let bundle_id = Hash::new(b"content-bundle-account-guard");
                 let stripe_layout = iroha_data_model::da::prelude::DaStripeLayout::default();
                 let manifest = iroha_data_model::content::ContentBundleManifest {
@@ -8859,25 +8727,16 @@ mod tests {
                         expires_at_height: None,
                     },
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with content bundle state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("content bundle state"),
-                    "error should explain content-bundle conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with content bundle state must not be unregistered",
+            "content bundle state",
+            "error should explain content-bundle conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_runtime_upgrade_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
                     name: "runtime-guard".to_string(),
                     description: "guard".to_string(),
@@ -8901,25 +8760,16 @@ mod tests {
                         created_height: 1,
                     },
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with runtime upgrade state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active runtime upgrade proposal state"),
-                    "error should explain runtime-upgrade conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with runtime upgrade state must not be unregistered",
+            "active runtime upgrade proposal state",
+            "error should explain runtime-upgrade conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_viral_escrow_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let binding_digest = Hash::new(b"viral-escrow-account-guard");
                 tx.world.viral_escrows.insert(
                     binding_digest,
@@ -8933,66 +8783,48 @@ mod tests {
                         created_at_ms: 1,
                     },
                 );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with viral escrow state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active viral escrow state"),
-                    "error should explain viral-escrow conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
-                );
             },
+            "account with viral escrow state must not be unregistered",
+            "active viral escrow state",
+            "error should explain viral-escrow conflict",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_has_sorafs_pin_manifest_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, _authority, account_id| {
                 let digest =
                     iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAB; 32]);
                 tx.world.pin_manifests.insert(
-            digest,
-            iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
-                digest,
-                iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
-                    [0xBC; 32],
-                )
-                .expect("canonical manifest root CID"),
-                iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-                    profile_id: 1,
-                    namespace: "sorafs".to_string(),
-                    name: "sf1".to_string(),
-                    semver: "1.0.0".to_string(),
-                    multihash_code: 0x1E,
-                },
-                [0xCD; 32],
-                [0; 32],
-                0,
-                iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
-                account_id.clone(),
-                1,
-                None,
-                None,
-                Metadata::default(),
-            ),
-        );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err("account with SoraFS pin manifest state must not be unregistered");
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("active SoraFS pin manifest state"),
-                    "error should explain SoraFS pin-manifest conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
+                    digest,
+                    iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+                        digest,
+                        iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                            [0xBC; 32],
+                        )
+                        .expect("canonical manifest root CID"),
+                        iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                            profile_id: 1,
+                            namespace: "sorafs".to_string(),
+                            name: "sf1".to_string(),
+                            semver: "1.0.0".to_string(),
+                            multihash_code: 0x1E,
+                        },
+                        [0xCD; 32],
+                        [0; 32],
+                        0,
+                        iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+                        account_id.clone(),
+                        1,
+                        None,
+                        None,
+                        Metadata::default(),
+                    ),
                 );
             },
+            "account with SoraFS pin manifest state must not be unregistered",
+            "active SoraFS pin manifest state",
+            "error should explain SoraFS pin-manifest conflict",
         );
     }
     #[test]
@@ -9083,8 +8915,8 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_in_governance_parliament_snapshot_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
+        assert_account_unregister_guard(
+            |tx, _domain_id, authority, account_id| {
                 let proposal_id = [0xC5; 32];
                 let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
@@ -9111,44 +8943,33 @@ mod tests {
                     derived_by: Default::default(),
                 };
                 tx.world.put_governance_proposal(
-            proposal_id,
-            crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: 1,
-                status: crate::state::GovernanceProposalStatus::Proposed,
-                pipeline: crate::state::GovernancePipeline::default(),
-                parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
-                    selection_epoch: 1,
-                    beacon: [0x71; 32],
-                    roster_root: [0x72; 32],
-                    bodies: iroha_data_model::governance::types::ParliamentBodies {
-                        selection_epoch: 1,
-                        rosters: std::collections::BTreeMap::from([(
-                            iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-                            roster,
-                        )]),
+                    proposal_id,
+                    crate::state::GovernanceProposalRecord {
+                        proposer: authority.clone(),
+                        kind,
+                        created_height: 1,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                        pipeline: crate::state::GovernancePipeline::default(),
+                        parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
+                            selection_epoch: 1,
+                            beacon: [0x71; 32],
+                            roster_root: [0x72; 32],
+                            bodies: iroha_data_model::governance::types::ParliamentBodies {
+                                selection_epoch: 1,
+                                rosters: std::collections::BTreeMap::from([(
+                                    iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+                                    roster,
+                                )]),
+                            },
+                        }),
+                        finalization_evidence: None,
+                        enacted_at_height: None,
                     },
-                }),
-                finalization_evidence: None,
-                enacted_at_height: None,
-            },
-        );
-                let err = Unregister::account(account_id.clone())
-                    .execute(&authority, tx)
-                    .expect_err(
-                        "account in governance parliament snapshot must not be unregistered",
-                    );
-                let err_string = err.to_string();
-                assert!(
-                    err_string.contains("governance proposal parliament snapshot state"),
-                    "error should explain governance parliament snapshot conflict: {err_string}"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_some(),
-                    "account should remain after rejected unregister"
                 );
             },
+            "account in governance parliament snapshot must not be unregistered",
+            "governance proposal parliament snapshot state",
+            "error should explain governance parliament snapshot conflict",
         );
     }
     #[test]

@@ -10,15 +10,6 @@
 //! verification before any state mutation. Its retry journal is treated as
 //! untrusted startup input: fixed byte, item, key, and proof budgets are
 //! enforced before decoded state is retained.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::actual::{
     Fastpq, FastpqExecutionMode, FastpqPoseidonMode, NexusRelayWorker as NexusRelayWorkerConfig,
@@ -62,6 +53,15 @@ use mv::storage::StorageReadOnly;
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE: &str = "fee_sponsor_vault_allocation";
@@ -299,14 +299,13 @@ impl NexusFeeRelayWorker {
             validate_relay_work_bounds(&key, &envelope)?;
             if durable.relays.len() >= self.config.max_pending_relays.get()
                 && !durable.relays.contains_key(&key)
+                && !reclaim_oldest_rejected_relay(&mut durable)
             {
-                if !reclaim_oldest_rejected_relay(&mut durable) {
-                    iroha_logger::warn!(
-                        max_pending_relays = self.config.max_pending_relays.get(),
-                        "Nexus fee relay worker bounded durable relay set is full of active work; deferring finalized relay enqueue"
-                    );
-                    continue;
-                }
+                iroha_logger::warn!(
+                    max_pending_relays = self.config.max_pending_relays.get(),
+                    "Nexus fee relay worker bounded durable relay set is full of active work; deferring finalized relay enqueue"
+                );
+                continue;
             }
             if self.verified_relay_exists(&envelope)? {
                 continue;
@@ -1694,7 +1693,6 @@ fn integer_mantissa(value: &Quantity) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroU64;
     use iroha_crypto::{Algorithm, HashOf, MerkleProof};
     use iroha_data_model::{
         Level,
@@ -1704,6 +1702,7 @@ mod tests {
         nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
     };
     use iroha_primitives::numeric::Quantity;
+    use std::num::NonZeroU64;
     fn test_fastpq() -> Fastpq {
         Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,

@@ -50,6 +50,7 @@ fn provisioning(
         SoftwareSignerRoleV1::EvidenceViewer => "evidence-viewer",
         SoftwareSignerRoleV1::StreamToken => "stream-token",
         SoftwareSignerRoleV1::PopCredentials => "pop-credentials",
+        SoftwareSignerRoleV1::TairaAuthority => "taira-authority",
     };
     let purpose_binding = match role {
         SoftwareSignerRoleV1::ProofOutcome
@@ -76,6 +77,9 @@ fn provisioning(
         SoftwareSignerRoleV1::StreamToken => SoftwareSignerPurposeBindingV1::StreamToken,
         SoftwareSignerRoleV1::PopCredentials => SoftwareSignerPurposeBindingV1::PopCredentials {
             issuer_id: "pop-issuer-primary".to_owned(),
+        },
+        SoftwareSignerRoleV1::TairaAuthority => SoftwareSignerPurposeBindingV1::TairaAuthority {
+            role: "native-evidence".to_owned(),
         },
     };
     let instance = match role {
@@ -333,6 +337,10 @@ fn native_signing_and_recovery_cover_ed25519_and_ml_dsa() {
     }
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the service boundary matrix exercises every role, purpose, algorithm, and public identity"
+)]
 fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identities() {
     let governance_parent = temporary_parent();
     let governance = provision(
@@ -586,6 +594,10 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the promotion test keeps byte-exact signing and algorithm rejection assertions together"
+)]
 fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
     let parent = temporary_parent();
     let service = provision(

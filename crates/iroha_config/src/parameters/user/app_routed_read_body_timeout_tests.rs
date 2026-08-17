@@ -56,7 +56,7 @@ fn app_routed_read_transport_frame_phase_accepts_exact_and_rejects_plus_one() {
     let exact = i64::try_from(defaults::torii::HTTP_READ_CHUNK_BYTES_V1)
         .expect("HTTP read chunk fits TOML integer");
     let root = load_root(table_with_routed_read_frame_geometry(exact));
-    assert_eq!(root.torii.max_content_len.get(), exact as u64);
+    assert_eq!(root.torii.max_content_len.get(), exact.cast_unsigned());
     let error = actual::Root::from_toml_source(TomlSource::inline(
         table_with_routed_read_frame_geometry(exact - 1),
     ))

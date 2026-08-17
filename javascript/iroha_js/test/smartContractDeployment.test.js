@@ -248,8 +248,9 @@ test("deployment instruction transactions are locally signed and verified", asyn
     payloadHashHex: browserTransactionPayloadHashHex(payloadBytes),
     authority: AUTHORITY,
     signingPublicKey: PUBLIC_KEY,
-    signatureAlgorithm: "ed25519",
+    signatureAlgorithm: "0",
   });
+  assert.equal(signable.signatureAlgorithm, "ed25519");
   const signature = Buffer.from(
     ed25519.sign(Buffer.from(signable.payloadHashHex, "hex"), PRIVATE_KEY),
   );

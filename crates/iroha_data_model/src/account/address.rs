@@ -545,7 +545,7 @@ fn invalid_account_address_json() -> json::Error {
 #[cfg(feature = "json")]
 #[allow(unsafe_code)]
 fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::Error> {
-    if encoded.len() % 2 != 0 {
+    if !encoded.len().is_multiple_of(2) {
         return Err(json::Error::Message("invalid account address".to_owned()));
     }
     let bytes = encoded.len() / 2;
@@ -1475,11 +1475,7 @@ fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressErro
     if digits.is_empty() {
         return Err(AccountAddressError::InvalidLength);
     }
-    for &digit in digits {
-        if u32::from(digit) >= base {
-            return Err(AccountAddressError::InvalidI105Digit(digit));
-        }
-    }
+    validate_base_n_digits(digits, base)?;
     let leading_zeros = digits.iter().take_while(|&&d| d == 0).count();
     let significant = &digits[leading_zeros..];
     if significant.is_empty() {
@@ -1542,7 +1538,8 @@ fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressErro
             let mut carry = u128::from(chunk);
             for limb in &mut limbs {
                 let product = u128::from(*limb) * u128::from(multiplier) + carry;
-                *limb = product as u64;
+                *limb = u64::try_from(product & u128::from(u64::MAX))
+                    .expect("masked base-N product limb fits in u64");
                 carry = product >> 64;
             }
             if carry != 0 {
@@ -1579,6 +1576,14 @@ fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressErro
     }
     debug_assert_eq!(bytes.len(), output_bytes);
     Ok(bytes)
+}
+fn validate_base_n_digits(digits: &[u8], base: u32) -> Result<(), AccountAddressError> {
+    for &digit in digits {
+        if u32::from(digit) >= base {
+            return Err(AccountAddressError::InvalidI105Digit(digit));
+        }
+    }
+    Ok(())
 }
 fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
     let mut chk = 1_u32;
@@ -1845,7 +1850,7 @@ mod tests {
             AccountAddress::json_from_map_key(&literal)
         });
         assert!(matches!(decoded, Err(json::Error::DecodeResourceLimit)));
-        assert!(usage.total_allocated_bytes() <= exact - 1);
+        assert!(usage.total_allocated_bytes() < exact);
     }
     #[test]
     fn chain_discriminant_guard_scopes_override() {
@@ -1958,7 +1963,7 @@ mod tests {
     fn grouped_base105_decode_roundtrips_large_payload() {
         let mut bytes = Vec::with_capacity(1_024);
         for index in 0..1_024_u16 {
-            bytes.push(index.wrapping_mul(73).wrapping_add(19) as u8);
+            bytes.push(index.wrapping_mul(73).wrapping_add(19).to_le_bytes()[0]);
         }
         bytes[0] = 0;
         bytes[1] = 0;

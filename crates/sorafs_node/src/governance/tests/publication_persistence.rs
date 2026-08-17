@@ -216,28 +216,27 @@ fn filesystem_publisher_writes_settlement_files() {
     assert_eq!(json_u64(&queue, "assembled_count"), Some(1));
     let segment = json_array(&queue, "segments")
         .and_then(|segments| segments.first())
-        .and_then(JsonValue::as_object)
         .expect("first CAR segment");
     assert_eq!(
-        json_str(&segment, "schema"),
+        json_str(segment, "schema"),
         Some(GOVERNANCE_CAR_SEGMENT_SCHEMA)
     );
-    assert_eq!(json_str(&segment, "status"), Some("assembled"));
-    assert_eq!(json_u64(&segment, "source_publish_index_position"), Some(0));
+    assert_eq!(json_str(segment, "status"), Some("assembled"));
+    assert_eq!(json_u64(segment, "source_publish_index_position"), Some(0));
     assert_eq!(
-        json_str(&segment, "encoded_blake3"),
+        json_str(segment, "encoded_blake3"),
         Some(digest_hex.as_str())
     );
     let car_path = resolve_index_path(
         temp.path(),
-        json_str(&segment, "car_path").expect("car path"),
+        json_str(segment, "car_path").expect("car path"),
     )
     .expect("resolve car path");
     let car_bytes = fs::read(&car_path).expect("read CAR segment");
     let car_archive_digest_hex = blake3::hash(&car_bytes).to_hex().to_string();
-    assert_eq!(json_u64(&segment, "car_size"), Some(car_bytes.len() as u64));
+    assert_eq!(json_u64(segment, "car_size"), Some(car_bytes.len() as u64));
     assert_eq!(
-        json_str(&segment, "car_archive_blake3"),
+        json_str(segment, "car_archive_blake3"),
         Some(car_archive_digest_hex.as_str())
     );
     let archive_positions = json_object(&queue, "by_car_archive_blake3")
@@ -253,7 +252,7 @@ fn filesystem_publisher_writes_settlement_files() {
     );
     let plan_path = resolve_index_path(
         temp.path(),
-        json_str(&segment, "plan_path").expect("plan path"),
+        json_str(segment, "plan_path").expect("plan path"),
     )
     .expect("resolve plan path");
     let plan_bytes = fs::read(&plan_path).expect("read CAR plan");
@@ -267,7 +266,7 @@ fn filesystem_publisher_writes_settlement_files() {
     );
     let manifest_path = resolve_index_path(
         temp.path(),
-        json_str(&segment, "manifest_path").expect("manifest path"),
+        json_str(segment, "manifest_path").expect("manifest path"),
     )
     .expect("resolve segment manifest path");
     let manifest_bytes = fs::read(&manifest_path).expect("read segment manifest");
@@ -331,7 +330,7 @@ fn filesystem_publisher_writes_settlement_files() {
         .get("publish_index")
         .expect("republished nested index");
     assert_eq!(
-        json_u64(&index, "entry_count"),
+        json_u64(index, "entry_count"),
         Some(1),
         "duplicate attempts must not duplicate the index entry"
     );
@@ -339,7 +338,7 @@ fn filesystem_publisher_writes_settlement_files() {
         .get("car_queue")
         .expect("republished nested queue");
     assert_eq!(
-        json_u64(&queue, "segment_count"),
+        json_u64(queue, "segment_count"),
         Some(1),
         "duplicate attempts must not duplicate the CAR queue segment"
     );

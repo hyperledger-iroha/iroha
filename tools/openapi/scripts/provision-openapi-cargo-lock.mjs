@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Provision the ignored root Cargo.lock used by the Torii OpenAPI release gate.
+ * Verify the tracked root Cargo.lock used by the Torii OpenAPI release gate.
  *
- * The canonical operator interface is:
+ * The canonical verifier interface is:
  *
  *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
  *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs \
@@ -13,21 +13,14 @@
  *     pin --source=/absolute/canonical/Cargo.lock \
  *     --output=/absolute/external/staging/openapi-cargo-lock-v1.txt
  *
- * An exact existing root lock is reused. Otherwise an explicit operator
- * source is required. The provisioner never starts Cargo or generates lock
- * bytes; it only installs a stable, existing source that matches the tracked
- * V1 pin.
+ * The tracked root lock is the sole lock authority. An explicit source may be
+ * supplied only as an additional byte-identical comparison input. Provision
+ * never writes the checkout, starts Cargo, or generates lock bytes.
  */
 import {spawn} from 'node:child_process';
-import {createHash, randomBytes} from 'node:crypto';
-import {constants as fsConstants, readFileSync} from 'node:fs';
-import {
-  link,
-  lstat,
-  open,
-  realpath,
-  unlink,
-} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {constants as fsConstants} from 'node:fs';
+import {lstat, open, realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {TextDecoder} from 'node:util';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -53,15 +46,6 @@ const IO_CHUNK_BYTES = 64 * 1024;
 const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const defaultRepoRoot = path.resolve(__dirname, '..', '..', '..');
-const sourceBoundPin = parseOpenApiCargoLockPin(
-  readFileSync(path.join(defaultRepoRoot, OPENAPI_CARGO_LOCK_PIN_PATH)),
-);
-
-// Release-gate exports are derived from the tracked pin at module load and are
-// not independent size or digest authorities.
-export const OPENAPI_CARGO_LOCK_EXPECTED_BYTES = sourceBoundPin.bytes;
-export const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX =
-  sourceBoundPin.sha256Hex;
 
 /**
  * Remove ambient Git routing/configuration before repository-policy reads.
@@ -76,7 +60,18 @@ export function isolateGitRepositoryEnvironment(environment = process.env) {
       delete isolated[name];
     }
   }
-  isolated.GIT_OPTIONAL_LOCKS = '0';
+  Object.assign(isolated, {
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_NO_LAZY_FETCH: '1',
+    GIT_NO_REPLACE_OBJECTS: '1',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_KEY_1: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_1: 'false',
+  });
   return isolated;
 }
 
@@ -302,7 +297,7 @@ export function encodeOpenApiCargoLockPin(value) {
 /**
  * Read one stable regular non-executable file without following links.
  *
- * `afterRead` is an injectable race hook used only by focused tests.
+ * `beforeOpen` and `afterRead` are injectable race hooks used by focused tests.
  */
 export async function readOpenApiCargoLockStable(
   filePath,
@@ -310,6 +305,7 @@ export async function readOpenApiCargoLockStable(
     label = 'OpenAPI Cargo.lock',
     maxBytes = OPENAPI_CARGO_LOCK_MAX_BYTES,
     allowEmpty = false,
+    beforeOpen,
     afterRead,
   } = {},
 ) {
@@ -325,8 +321,10 @@ export async function readOpenApiCargoLockStable(
       `${label} maxBytes must be within 1..${OPENAPI_CARGO_LOCK_MAX_BYTES}`,
     );
   }
-  if (afterRead !== undefined && typeof afterRead !== 'function') {
-    throw new TypeError(`${label} afterRead must be a function`);
+  for (const [name, hook] of Object.entries({beforeOpen, afterRead})) {
+    if (hook !== undefined && typeof hook !== 'function') {
+      throw new TypeError(`${label} ${name} must be a function`);
+    }
   }
 
   await requireCanonicalParent(filePath, label);
@@ -335,10 +333,16 @@ export async function readOpenApiCargoLockStable(
     maxBytes,
     allowEmpty,
   });
+  if (beforeOpen) {
+    await beforeOpen({filePath});
+  }
   const flags =
     fsConstants.O_RDONLY |
     (typeof fsConstants.O_NOFOLLOW === 'number'
       ? fsConstants.O_NOFOLLOW
+      : 0) |
+    (typeof fsConstants.O_NONBLOCK === 'number'
+      ? fsConstants.O_NONBLOCK
       : 0);
   let handle;
   try {
@@ -420,7 +424,7 @@ export async function readOpenApiCargoLockStable(
 }
 
 /**
- * Verify the ignored/untracked Git policy for the root lock and the tracked pin.
+ * Verify the tracked Git policy for the root lock and its derived pin.
  */
 export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
   const root = await requireCanonicalRepoRoot(repoRoot);
@@ -439,24 +443,6 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
   if (canonicalTopLevel !== root) {
     throw new Error(
       `OpenAPI Cargo.lock repository root ${root} does not match Git root ${canonicalTopLevel}`,
-    );
-  }
-
-  let ignored;
-  try {
-    ignored = await gitBytes(
-      root,
-      ['check-ignore', '--no-index', '--', OPENAPI_CARGO_LOCK_PATH],
-      {allowedExitCodes: [0, 1]},
-    );
-  } catch (error) {
-    throw new Error(
-      `failed to verify Cargo.lock ignore policy: ${error?.message ?? error}`,
-    );
-  }
-  if (!ignored.equals(Buffer.from(`${OPENAPI_CARGO_LOCK_PATH}\n`, 'utf8'))) {
-    throw new Error(
-      'OpenAPI root Cargo.lock must be ignored by repository policy',
     );
   }
 
@@ -487,9 +473,19 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
         OPENAPI_CARGO_LOCK_PIN_PATH,
       ]),
     ]);
-  if (indexEntry.length !== 0 || headEntry.length !== 0) {
+  const lockIndexOid = parseTrackedIndexEntry(
+    indexEntry,
+    OPENAPI_CARGO_LOCK_PATH,
+    'OpenAPI root Cargo.lock',
+  );
+  const lockHeadOid = parseTrackedTreeEntry(
+    headEntry,
+    OPENAPI_CARGO_LOCK_PATH,
+    'OpenAPI root Cargo.lock',
+  );
+  if (lockIndexOid !== lockHeadOid) {
     throw new Error(
-      'OpenAPI root Cargo.lock must remain untracked in the index and HEAD',
+      'OpenAPI root Cargo.lock index and HEAD entries must reference the same blob',
     );
   }
   const escapedPin = escapeRegExp(OPENAPI_CARGO_LOCK_PIN_PATH);
@@ -514,7 +510,11 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
       'OpenAPI Cargo.lock V1 pin index and HEAD entries must reference the same blob',
     );
   }
-  const [committedPin, workingPin] = await Promise.all([
+  const [committedLock, workingLock, committedPin, workingPin] = await Promise.all([
+    gitBytes(root, ['cat-file', 'blob', lockHeadOid]),
+    readOpenApiCargoLockStable(path.join(root, OPENAPI_CARGO_LOCK_PATH), {
+      label: 'tracked root OpenAPI Cargo.lock',
+    }),
     gitBytes(root, ['cat-file', 'blob', pinHeadMatch[1]]),
     readOpenApiCargoLockStable(
       path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH),
@@ -524,77 +524,59 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
       },
     ),
   ]);
+  if (!committedLock.equals(workingLock.bytes)) {
+    throw new Error(
+      'OpenAPI root Cargo.lock working file must exactly match its HEAD blob',
+    );
+  }
   if (!committedPin.equals(workingPin.bytes)) {
     throw new Error(
       'OpenAPI Cargo.lock V1 pin working file must exactly match its HEAD blob',
     );
   }
-  parseOpenApiCargoLockPin(committedPin);
-  return root;
+  const pin = parseOpenApiCargoLockPin(committedPin);
+  validateOpenApiCargoLockBytes(committedLock, pin);
+  return {root, lockSnapshot: workingLock, pinSnapshot: workingPin, pin};
 }
 
 /**
- * Provision or reuse the exact ignored root lock.
+ * Verify the exact tracked root lock and any explicit comparison source.
  */
 export async function provisionOpenApiCargoLock({
   repoRoot = defaultRepoRoot,
   sourcePath,
-  beforeInstall,
+  beforeVerify,
 } = {}) {
-  if (beforeInstall !== undefined && typeof beforeInstall !== 'function') {
-    throw new TypeError('beforeInstall must be a function');
+  if (beforeVerify !== undefined && typeof beforeVerify !== 'function') {
+    throw new TypeError('beforeVerify must be a function');
   }
-  const root = await validateOpenApiCargoLockGitPolicy(repoRoot);
-  const pinPath = path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH);
-  const pinSnapshot = await readOpenApiCargoLockStable(pinPath, {
-    label: 'tracked OpenAPI Cargo.lock V1 pin',
-    maxBytes: OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
-  });
-  const pin = parseOpenApiCargoLockPin(pinSnapshot.bytes);
-  const targetPath = path.join(root, OPENAPI_CARGO_LOCK_PATH);
-  const existing = await readOptionalStable(targetPath, {
-    label: 'ignored root OpenAPI Cargo.lock',
-  });
-  if (existing) {
-    validateOpenApiCargoLockBytes(existing.bytes, pin);
-    await validateOpenApiCargoLockGitPolicy(root);
-    await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
-    await assertOpenApiCargoLockSnapshotStable(existing);
-    return provisionSummary('reused', 'existing', pin);
+  const policy = await validateOpenApiCargoLockGitPolicy(repoRoot);
+  let comparison;
+  if (sourcePath !== undefined) {
+    const candidatePath = await requireCanonicalSourcePath(sourcePath);
+    comparison = await readOpenApiCargoLockStable(candidatePath, {
+      label: 'comparison OpenAPI Cargo.lock candidate',
+    });
+    validateOpenApiCargoLockBytes(comparison.bytes, policy.pin);
+    if (!comparison.bytes.equals(policy.lockSnapshot.bytes)) {
+      throw new Error(
+        'comparison OpenAPI Cargo.lock must be byte-identical to the tracked root authority',
+      );
+    }
   }
-
-  if (sourcePath === undefined) {
-    throw new Error(
-      'absent OpenAPI Cargo.lock requires an explicit existing --source; provisioning never runs Cargo or generates lock bytes',
-    );
-  }
-
-  const candidatePath = await requireCanonicalSourcePath(sourcePath);
-  const sourceKind = 'operator';
-  const candidate = await readOpenApiCargoLockStable(candidatePath, {
-    label: `${sourceKind} OpenAPI Cargo.lock candidate`,
-  });
-  validateOpenApiCargoLockBytes(candidate.bytes, pin);
-  if (beforeInstall) {
-    await beforeInstall({
-      candidatePath,
-      targetPath,
-      sourceKind,
+  if (beforeVerify) {
+    await beforeVerify({
+      sourcePath: comparison?.filePath,
+      trackedPath: policy.lockSnapshot.filePath,
     });
   }
-  await assertOpenApiCargoLockSnapshotStable(candidate);
-  await assertTargetAbsent(targetPath);
-  await installAbsentAtomic(targetPath, candidate.bytes);
-
-  const installed = await readOpenApiCargoLockStable(targetPath, {
-    label: 'installed ignored root OpenAPI Cargo.lock',
-  });
-  validateOpenApiCargoLockBytes(installed.bytes, pin);
-  await validateOpenApiCargoLockGitPolicy(root);
-  await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
-  await assertOpenApiCargoLockSnapshotStable(candidate);
-  await assertOpenApiCargoLockSnapshotStable(installed);
-  return provisionSummary('installed', sourceKind, pin);
+  await assertOpenApiCargoLockSnapshotStable(policy.lockSnapshot);
+  await assertOpenApiCargoLockSnapshotStable(policy.pinSnapshot);
+  if (comparison) {
+    await assertOpenApiCargoLockSnapshotStable(comparison);
+  }
+  await validateOpenApiCargoLockGitPolicy(policy.root);
+  return provisionSummary('verified', 'tracked', policy.pin);
 }
 
 /**
@@ -752,7 +734,7 @@ async function requireCanonicalSourcePath(sourcePath) {
     path.resolve(sourcePath) !== sourcePath
   ) {
     throw new Error(
-      'operator OpenAPI Cargo.lock source must be an absolute canonical path',
+      'comparison OpenAPI Cargo.lock source must be an absolute canonical path',
     );
   }
   let canonical;
@@ -761,7 +743,7 @@ async function requireCanonicalSourcePath(sourcePath) {
   } catch (error) {
     throw withCode(
       new Error(
-        `failed to resolve operator OpenAPI Cargo.lock source ${sourcePath}: ${error?.message ?? error}`,
+        `failed to resolve comparison OpenAPI Cargo.lock source ${sourcePath}: ${error?.message ?? error}`,
         {cause: error},
       ),
       error?.code,
@@ -769,21 +751,10 @@ async function requireCanonicalSourcePath(sourcePath) {
   }
   if (canonical !== sourcePath) {
     throw new Error(
-      `operator OpenAPI Cargo.lock source must be canonical: ${sourcePath} resolves to ${canonical}`,
+      `comparison OpenAPI Cargo.lock source must be canonical: ${sourcePath} resolves to ${canonical}`,
     );
   }
   return canonical;
-}
-
-async function readOptionalStable(filePath, options) {
-  try {
-    return await readOpenApiCargoLockStable(filePath, options);
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
 }
 
 async function inspectStableFile(
@@ -887,153 +858,6 @@ function sameStableState(left, right) {
   );
 }
 
-async function assertTargetAbsent(targetPath) {
-  try {
-    await lstat(targetPath);
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-  throw new Error(
-    `ignored root OpenAPI Cargo.lock ${targetPath} appeared or was replaced during provisioning`,
-  );
-}
-
-async function installAbsentAtomic(targetPath, bytes) {
-  await requireCanonicalParent(targetPath, 'OpenAPI Cargo.lock installation');
-  await assertTargetAbsent(targetPath);
-  const parent = path.dirname(targetPath);
-  const temporaryPath = path.join(
-    parent,
-    `.openapi-cargo-lock-${process.pid}-${randomBytes(12).toString('hex')}.tmp`,
-  );
-  const flags =
-    fsConstants.O_WRONLY |
-    fsConstants.O_CREAT |
-    fsConstants.O_EXCL |
-    (typeof fsConstants.O_NOFOLLOW === 'number'
-      ? fsConstants.O_NOFOLLOW
-      : 0);
-  let handle;
-  let temporaryExists = false;
-  let targetInstalled = false;
-  let staged;
-  let succeeded = false;
-  try {
-    handle = await open(temporaryPath, flags, 0o600);
-    temporaryExists = true;
-    let offset = 0;
-    while (offset < bytes.length) {
-      const {bytesWritten} = await handle.write(
-        bytes,
-        offset,
-        bytes.length - offset,
-        offset,
-      );
-      if (bytesWritten <= 0) {
-        throw new Error('OpenAPI Cargo.lock atomic write made no progress');
-      }
-      offset += bytesWritten;
-    }
-    await handle.sync();
-    await handle.chmod(0o644);
-    staged = await handle.stat({bigint: true});
-    validateStableMetadata(staged, {
-      label: 'staged OpenAPI Cargo.lock',
-      filePath: temporaryPath,
-      maxBytes: OPENAPI_CARGO_LOCK_MAX_BYTES,
-      allowEmpty: false,
-    });
-    if (staged.size !== BigInt(bytes.length)) {
-      throw new Error('staged OpenAPI Cargo.lock has an unexpected size');
-    }
-    await handle.close();
-    handle = null;
-
-    await assertTargetAbsent(targetPath);
-    try {
-      await link(temporaryPath, targetPath);
-    } catch (error) {
-      if (error?.code === 'EEXIST') {
-        throw new Error(
-          `ignored root OpenAPI Cargo.lock ${targetPath} appeared during atomic installation`,
-          {cause: error},
-        );
-      }
-      throw error;
-    }
-    targetInstalled = true;
-    await unlink(temporaryPath);
-    temporaryExists = false;
-
-    const installed = await lstat(targetPath, {bigint: true});
-    validateStableMetadata(installed, {
-      label: 'installed OpenAPI Cargo.lock',
-      filePath: targetPath,
-      maxBytes: OPENAPI_CARGO_LOCK_MAX_BYTES,
-      allowEmpty: false,
-    });
-    if (
-      installed.dev !== staged.dev ||
-      installed.ino !== staged.ino ||
-      installed.size !== staged.size ||
-      (process.platform !== 'win32' &&
-        (installed.mode & 0o777n) !== 0o644n)
-    ) {
-      throw new Error(
-        'installed OpenAPI Cargo.lock changed during atomic installation',
-      );
-    }
-    await syncDirectory(parent);
-    succeeded = true;
-  } finally {
-    if (handle) {
-      await handle.close().catch(() => {});
-    }
-    if (temporaryExists) {
-      await unlink(temporaryPath).catch(() => {});
-    }
-    if (!succeeded && targetInstalled && staged) {
-      await unlinkIfSameIdentity(targetPath, staged);
-    }
-  }
-}
-
-async function unlinkIfSameIdentity(filePath, expected) {
-  try {
-    const current = await lstat(filePath, {bigint: true});
-    if (current.dev === expected.dev && current.ino === expected.ino) {
-      await unlink(filePath);
-    }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-}
-
-async function syncDirectory(directory) {
-  let handle;
-  try {
-    handle = await open(directory, fsConstants.O_RDONLY);
-    await handle.sync();
-  } catch (error) {
-    if (
-      process.platform === 'win32' &&
-      ['EACCES', 'EINVAL', 'ENOTSUP', 'EPERM'].includes(error?.code)
-    ) {
-      return;
-    }
-    throw error;
-  } finally {
-    if (handle) {
-      await handle.close().catch(() => {});
-    }
-  }
-}
-
 async function gitBytes(repoRoot, arguments_, {allowedExitCodes = [0]} = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn('git', arguments_, {
@@ -1101,6 +925,28 @@ function decodeGitLine(bytes, label) {
     throw new Error(`${label} must contain exactly one path`);
   }
   return value;
+}
+
+function parseTrackedIndexEntry(bytes, expectedPath, label) {
+  const escapedPath = escapeRegExp(expectedPath);
+  const match = new RegExp(
+    `^100644 ([0-9a-f]{40}) 0\\t${escapedPath}\\n$`,
+  ).exec(bytes.toString('utf8'));
+  if (!match || /^0{40}$/.test(match[1])) {
+    throw new Error(`${label} must be one stage-zero 100644 Git blob`);
+  }
+  return match[1];
+}
+
+function parseTrackedTreeEntry(bytes, expectedPath, label) {
+  const escapedPath = escapeRegExp(expectedPath);
+  const match = new RegExp(
+    `^100644 blob ([0-9a-f]{40})\\t${escapedPath}\\n$`,
+  ).exec(bytes.toString('utf8'));
+  if (!match || /^0{40}$/.test(match[1])) {
+    throw new Error(`${label} must be one canonical 100644 HEAD blob`);
+  }
+  return match[1];
 }
 
 function provisionSummary(status, source, pin) {

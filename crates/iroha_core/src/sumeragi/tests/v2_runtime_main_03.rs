@@ -211,7 +211,11 @@ fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
         .expect("canonical completion remains at the queue tail");
     assert_eq!(committed.tag, tag(3));
     assert_eq!(committed.class, CommandClass::Completion);
-    assert_eq!(committed.admission_ordinal, Some(3));
+    assert_eq!(
+        committed.admission_ordinal,
+        Some(4),
+        "pruning cannot reuse a retired actor-global admission ordinal"
+    );
     assert!(matches!(
         ingress.commands.back().map(|queued| &queued.command),
         Some(AdapterCommand::BodyAvailable { manifest }) if manifest.subject == subject
@@ -308,12 +312,12 @@ fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
                 signed_runtime_timeout_certificate(&context, &keys),
             ),
         ))
-        .expect("certified progress occupies the progress slot");
-    assert_eq!(runtime.remaining_completion_capacity(), 1);
+        .expect("certified progress occupies the isolated certified-fence slot");
+    assert_eq!(runtime.remaining_completion_capacity(), 2);
     let reservation = runtime
         .reserve_body_available(owner_tag, manifest.clone())
         .expect("reserve one unpublished exact completion");
-    assert_eq!(runtime.remaining_completion_capacity(), 0);
+    assert_eq!(runtime.remaining_completion_capacity(), 1);
     let source_after_reserve = runtime
         .ingress
         .lifecycle_ordinals
@@ -1248,6 +1252,16 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
         projection_before_alternate,
         "alternate ownership history must change the exact runtime projection"
     );
+    let replay_origin = &runtime.deferred_remote_proposal_replay[&admission_ordinal];
+    assert_eq!(
+        replay_origin.ingress, runtime.deferred_ingress_ownership[&admission_ordinal],
+        "the Proposal replay sidecar must atomically adopt merged ingress ownership"
+    );
+    assert!(
+        replay_origin
+            .ingress
+            .exactly_matches_authenticated(&replay_origin.authenticated)
+    );
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -1257,15 +1271,23 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     runtime
         .set_external_lifecycle_owners(Vec::new())
         .expect("retire the pending signer after completion enqueue");
+
     assert!(matches!(
         runtime.step(deadline),
         Ok(RuntimeStep::Advanced(ref effects))
             if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
     ));
-    assert!(runtime.take_last_scheduler_ownership().is_some());
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("the exact signer completion retains fence scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::FenceCompletion
+    );
     runtime
         .take_effect_ownership(1)
         .expect("the executor consumes the TimeoutVote broadcast owner");
+
     let deferred_effects = match runtime.step(deadline) {
         Ok(RuntimeStep::Advanced(effects)) => effects,
         other => panic!("deferred owner did not receive its service turn: {other:?}"),
@@ -1295,6 +1317,25 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
             .is_some_and(RuntimeIngressOwnershipEvidence::validate_exact)
     );
     assert!(runtime.deferred_ingress_ownership.is_empty());
+
+    let periodic_effects = match runtime.step(deadline) {
+        Ok(RuntimeStep::Advanced(effects)) => effects,
+        other => panic!("the frozen retransmit did not receive its bounded turn: {other:?}"),
+    };
+    assert!(
+        matches!(periodic_effects.as_slice(), [AdapterEffect::Broadcast(_)]),
+        "the post-signature retransmit repeats the durable TimeoutVote: {periodic_effects:?}"
+    );
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("the frozen retransmit retains exact scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer
+    );
+    runtime
+        .take_effect_ownership(periodic_effects.len())
+        .expect("the executor consumes the frozen retransmit effect owner");
     assert!(!runtime.fail_closed);
 }
 #[test]

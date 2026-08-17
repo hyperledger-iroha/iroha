@@ -474,8 +474,8 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
     }
     assert_eq!(
         runtime.driver.delivered,
-        vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)],
-        "class reserves protect admission capacity but cannot overtake an older lifecycle"
+        vec![(initial, 4), (initial, 2), (initial, 1), (initial, 3)],
+        "the persistent Completion/Progress/Normal cursor bounds service debt while preserving reserved capacity"
     );
 }
 #[test]
@@ -1005,9 +1005,8 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
         .expect("completed service owner shares the actor ordinal source");
-    let completed_evidence =
-        ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
-            .expect("completed service evidence is nonzero and exact");
+    let completed_evidence = ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
+        .expect("completed service evidence is nonzero and exact");
     let completed_target = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()

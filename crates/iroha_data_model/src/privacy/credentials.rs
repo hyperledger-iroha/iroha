@@ -137,10 +137,7 @@ pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Explicit network and governed-artifact binding shared by every statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyStatementContextV1 {
     /// Exact genesis-header-derived network identity.
@@ -209,10 +206,7 @@ impl PrivacyStatementContextV1 {
 /// hash; there is no optional field, default, alias, or legacy wire shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyNativeConsensusBindingV1 {
     /// Exact genesis-header-derived network identity.
@@ -422,10 +416,7 @@ pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
 }
 /// Typed encrypted output emitted by a private transfer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyEncryptedOutputV1 {
     /// Cryptographic recipient identity.
@@ -444,10 +435,7 @@ pub struct PrivacyEncryptedOutputV1 {
 }
 /// Closed lifecycle of one authoritative ZK-ACE authorization policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value", deny_unknown_fields)]
 pub enum PrivacyZkAcePolicyLifecycleV1 {
     /// The policy can authorize a matching proof action.
@@ -474,10 +462,7 @@ struct PrivacyZkAcePolicyDigestMaterialV1 {
 /// strict account-id order so snapshots, governance instructions, and proof
 /// preflight all have exactly one canonical representation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAcePolicyRecordV1 {
     /// Stable lookup key for this policy lineage.
@@ -809,10 +794,7 @@ pub fn validate_zk_ace_policy_revocation_v1(
 /// ZK-ACE authorization statement for a public asset transfer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.zk-ace.authorization-statement.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ZkAcePqAuthorizationStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -840,10 +822,7 @@ pub struct ZkAcePqAuthorizationStatementV1 {
 }
 /// Anonymous PGC k-out-of-n private payment statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AnonymousPgcKOutOfNStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -869,10 +848,7 @@ pub struct AnonymousPgcKOutOfNStatementV1 {
 }
 /// Bit width admitted by the Iroha `VeRange` Type-1 profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "bits", content = "value", deny_unknown_fields)
@@ -895,10 +871,7 @@ impl PrivacyVeRangeBitLengthV1 {
 }
 /// Iroha Type-1 P-256/SHA-256 unsigned range-proof statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VeRangeTransparentRangeStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -932,10 +905,7 @@ pub const ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1: usize = 201;
 /// `AccountRegistry` root. It fixes the issuer key, admission policy, registry
 /// namespace, and exact nonzero origin root in one atomic governance action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsRegistryBootstrapV1 {
     /// Credential issuer authorized to sign canonical PHCs.
@@ -1141,10 +1111,7 @@ pub enum PrivacyZkAmsRegistryBootstrapValidationError {
 /// seed secret over the same digest in the composed admission proof. No
 /// variable-length or free-form field is admitted by this first-release type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsPersonhoodCredentialV1 {
     /// Closed credential wire version; must equal one.
@@ -1197,10 +1164,7 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PrivacyZkAmsPhcCanonicalPayloadV1(
     /// Exact closed credential payload.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1219,10 +1183,7 @@ impl PrivacyZkAmsPhcCanonicalPayloadV1 {
 /// by the batch proof. Validation therefore preserves caller order and rejects
 /// duplicate credential hashes or seed public keys without sorting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsAdmissionAnchorV1 {
     /// Hash of the canonical Personhood Credential.
@@ -1237,10 +1198,7 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
 /// accumulator and cross-term commitments are already canonical proof sections; duplicating
 /// caller-selected digests in the public statement would be circular and is deliberately forbidden.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsBatchAdmissionV1 {
     /// Current admitted-identity registry root.
@@ -1261,10 +1219,7 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
 /// the referenced admitted-identity registry. The account id is the signed
 /// message binding, and the key image is the one-time replay nullifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsProvisionAccountV1 {
     /// Canonical admitted-identity registry root used for ring membership.
@@ -1280,10 +1235,7 @@ pub struct PrivacyZkAmsProvisionAccountV1 {
 }
 /// Closed ZK-AMS chain action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "action", content = "value", deny_unknown_fields)
@@ -1296,10 +1248,7 @@ pub enum PrivacyZkAmsActionV1 {
 }
 /// Native ZK-AMS batch-admission and anonymous-provisioning statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaZkAmsStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1326,10 +1275,7 @@ pub struct IrohaZkAmsStatementV1 {
 }
 /// Credential document family admitted by the Vega first-release profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "document", content = "value", deny_unknown_fields)
@@ -1340,10 +1286,7 @@ pub enum PrivacyCredentialDocumentTypeV1 {
 }
 /// Closed ISO/IEC 18013-5 namespace admitted by the Vega mDL-age profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "namespace", content = "value", deny_unknown_fields)
@@ -1354,10 +1297,7 @@ pub enum PrivacyVegaMdlNamespaceV1 {
 }
 /// Closed digest algorithm used throughout the Vega mDL-age circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "digest", content = "value", deny_unknown_fields)
@@ -1368,10 +1308,7 @@ pub enum PrivacyVegaMdlDigestAlgorithmV1 {
 }
 /// Closed COSE signature algorithm used by issuer and device authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "signature", content = "value", deny_unknown_fields)
@@ -1382,10 +1319,7 @@ pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
 }
 /// Forward-only lifecycle of one immutable Vega issuer governance lineage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
@@ -1408,10 +1342,7 @@ pub enum PrivacyVegaIssuerRecordLifecycleV1 {
 /// reactivated inside that lineage. A terminal revocation retains its immediately preceding key
 /// only to preserve the immutable audit trail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyVegaIssuerRecordV1 {
     /// Stable credential-issuer identity selecting this lineage.
@@ -1779,10 +1710,7 @@ pub fn validate_vega_issuer_revocation_v1(
 }
 /// Gregorian UTC calendar date used as Vega Figure 9 public input `(Y, M, D)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyVegaMdlDateV1 {
     /// Four-digit UTC year.
@@ -1803,10 +1731,7 @@ pub struct PrivacyVegaMdlDateV1 {
 /// exact active governance revision whose key and algorithm policy must match
 /// this statement before native verification. The proof has no ledger effect.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VegaExistingCredentialStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1962,10 +1887,7 @@ mod x509_key_usage_json_tests {
 }
 /// X.509 key-usage requirements admitted by the first-release certificate profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyX509KeyUsageV1 {
     /// RFC 5280 digital-signature bit.
@@ -1979,10 +1901,7 @@ pub struct PrivacyX509KeyUsageV1 {
 }
 /// Exact extended-key-usage purpose required from an admitted certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "purpose", content = "value", deny_unknown_fields)
@@ -1997,10 +1916,7 @@ pub enum PrivacyX509ExtendedKeyUsageV1 {
 }
 /// Closed lifecycle of one immutable X.509 governance-record lineage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
@@ -2019,10 +1935,7 @@ pub enum PrivacyZkX509RecordLifecycleV1 {
 /// commits the complete canonically ordered trust-anchor artifact; individual
 /// CA identity remains private behind the governed CA-membership root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkX509TrustAnchorRecordV1 {
     /// Stable lookup key for this trust-store lineage.
@@ -2180,10 +2093,7 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
 /// witness. In particular, a statement must disclose exactly the governed
 /// ordered index set rather than a prover-chosen subset or superset.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkX509CertificatePolicyRecordV1 {
     /// Exact trust-store lineage to which this policy belongs.
@@ -2354,10 +2264,7 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
 /// the current self-chained record while historical transitions remain committed by blocks.
 /// Revocation is terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkX509CrlRecordV1 {
     /// Exact trust-store lineage whose certificate chain selects this CRL.

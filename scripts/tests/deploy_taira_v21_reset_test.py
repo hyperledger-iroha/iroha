@@ -32,17 +32,14 @@ GENESIS_PUBLIC_KEY = "ed0120" + "AB" * 32
 GENESIS_EXPECTED_HASH = "00" * 31 + "01"
 DPN_VALIDATOR_RELEASE_COMMIT = "d" * 40
 
-
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_bytes(body)
     path.chmod(0o600)
 
-
 def _mkdir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.chmod(0o700)
-
 
 def test_acl_gate_is_a_stable_noop_off_macos(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -61,7 +58,6 @@ def test_acl_gate_is_a_stable_noop_off_macos(
 
     assert MODULE.metadata_identity(actual) == MODULE.metadata_identity(expected)
 
-
 def test_acl_gate_fails_closed_when_the_pinned_inspector_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -78,7 +74,6 @@ def test_acl_gate_fails_closed_when_the_pinned_inspector_fails(
 
     with pytest.raises(MODULE.DeploymentError, match="extended ACL"):
         MODULE.require_acl_free_path(path, "test trusted path")
-
 
 def test_acl_failure_removes_owned_unpublished_plist_staging_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -105,7 +100,6 @@ def test_acl_failure_removes_owned_unpublished_plist_staging_file(
 
     assert not path.exists()
     assert not temporary.exists()
-
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACL semantics")
 def test_acl_gate_rejects_everyone_write_and_clears_only_owned_temporary(
@@ -135,7 +129,6 @@ def test_acl_gate_rejects_everyone_write_and_clears_only_owned_temporary(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-
 
 def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
     bundle = tmp_path / "bundle"
@@ -217,7 +210,6 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
     )
     return bundle
 
-
 def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.BundlePlan:
     manifest_raw = (bundle / "reset-manifest.json").read_bytes()
     return MODULE.validate_bundle(
@@ -229,7 +221,6 @@ def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.Bundl
         minimum_free_bytes=0,
         maximum_fsync_latency_ms=10_000,
     )
-
 
 def _projection_config_text() -> str:
     return f"""chain = "{MODULE.CHAIN_ID}"
@@ -260,7 +251,6 @@ public_key = "{GENESIS_PUBLIC_KEY}"
 expected_hash = "{GENESIS_EXPECTED_HASH}"
 """
 
-
 def test_projection_parser_extracts_all_required_fields() -> None:
     config = MODULE.parse_config_projection_text(
         _projection_config_text(),
@@ -275,7 +265,6 @@ def test_projection_parser_extracts_all_required_fields() -> None:
         config["nexus"]["storage"]["disk_budget_weights"] == MODULE.NODE_STORAGE_WEIGHTS
     )
 
-
 def test_projection_parser_rejects_malformed_required_field() -> None:
     malformed = _projection_config_text().replace(
         f"chain_discriminant = {MODULE.CHAIN_DISCRIMINANT}",
@@ -284,7 +273,6 @@ def test_projection_parser_rejects_malformed_required_field() -> None:
 
     with pytest.raises(MODULE.DeploymentError, match="malformed integer"):
         MODULE.parse_config_projection_text(malformed, "validator config")
-
 
 def test_projection_parser_rejects_duplicate_required_field() -> None:
     duplicate = _projection_config_text().replace(
@@ -298,7 +286,6 @@ def test_projection_parser_rejects_duplicate_required_field() -> None:
     with pytest.raises(MODULE.DeploymentError, match="duplicates required field"):
         MODULE.parse_config_projection_text(duplicate, "validator config")
 
-
 def test_projection_parser_keeps_hash_inside_quoted_address() -> None:
     config = MODULE.parse_config_projection_text(
         _projection_config_text(),
@@ -307,7 +294,6 @@ def test_projection_parser_keeps_hash_inside_quoted_address() -> None:
 
     assert config["network"]["address"] == "addr:127.0.0.1:1337#ABCD"
     assert config["torii"]["address"] == "addr:127.0.0.1:8080#1234"
-
 
 def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) -> None:
     binary_sha = "a" * 64
@@ -323,7 +309,6 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert [peer.torii_port for peer in plan.peers] == list(MODULE.TORII_PORTS)
     assert [peer.p2p_port for peer in plan.peers] == list(MODULE.P2P_PORTS)
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
-
 
 def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
     tmp_path: Path,
@@ -350,7 +335,6 @@ def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
     with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
         _validate(bundle, binary_sha, source_commit)
 
-
 def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
     tmp_path: Path,
 ) -> None:
@@ -369,7 +353,6 @@ def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
             maximum_fsync_latency_ms=10_000,
         )
 
-
 def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> None:
     binary_sha = "8" * 64
     source_commit = "9" * 40
@@ -387,7 +370,6 @@ def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> 
             minimum_free_bytes=0,
             maximum_fsync_latency_ms=10_000,
         )
-
 
 def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     tmp_path: Path,
@@ -412,6 +394,7 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         runner=runner,
     )
 
+    assert MODULE.CONFIG_CHECK_TIMEOUT_SECONDS == 30
     assert [command for command, _kwargs in calls] == [
         [
             str(binary),
@@ -430,7 +413,6 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         and callable(kwargs["preexec_fn"])
         for _command, kwargs in calls
     )
-
 
 def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None:
     peers = tuple(
@@ -459,7 +441,6 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
 
     assert calls == 2
 
-
 def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -478,7 +459,6 @@ def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
         ("umask", 0o077),
     ]
 
-
 @pytest.mark.parametrize(("uid", "gid"), ((0, 502), (501, 0), (-1, 502)))
 def test_binary_config_gate_rejects_root_or_invalid_runtime_identity(
     uid: int,
@@ -486,7 +466,6 @@ def test_binary_config_gate_rejects_root_or_invalid_runtime_identity(
 ) -> None:
     with pytest.raises(MODULE.DeploymentError, match="non-root runtime identity"):
         MODULE._drop_config_check_privileges(uid, gid)
-
 
 @pytest.mark.parametrize(
     "mutation",
@@ -519,7 +498,6 @@ def test_bundle_preflight_rejects_identity_and_freshness_drift(
     with pytest.raises(MODULE.DeploymentError):
         _validate(bundle, binary_sha, source_commit)
 
-
 def _fake_plan(
     tmp_path: Path,
 ) -> tuple[MODULE.BundlePlan, MODULE.SourcePlan, os.stat_result]:
@@ -541,7 +519,6 @@ def _fake_plan(
         python_identity=(0,) * 9,
     )
     return bundle, sources, binary.lstat()
-
 
 def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     tmp_path: Path,
@@ -599,7 +576,6 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
         bundle.root / "genesis.signed.nrt"
     )
 
-
 def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -640,7 +616,6 @@ def test_validate_sources_uses_validated_runtime_not_controller_python(
     assert sources.python_identity == (7,) * 9
     assert str(sources.python) != MODULE.sys.executable
 
-
 @pytest.mark.parametrize(
     ("returncode", "stdout"),
     [
@@ -668,7 +643,6 @@ def test_supervisor_python_probe_fails_closed(
 
     with pytest.raises(MODULE.DeploymentError):
         MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
-
 
 def test_supervisor_python_accepts_root_controlled_python_39(
     monkeypatch: pytest.MonkeyPatch,
@@ -711,7 +685,6 @@ def test_supervisor_python_accepts_root_controlled_python_39(
         runtime,
         MODULE.metadata_identity(identity),
     )
-
 
 def test_supervisor_python_rejects_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -756,7 +729,6 @@ def test_supervisor_python_rejects_runtime_identity_drift(
     with pytest.raises(MODULE.DeploymentError, match="identity changed"):
         MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
 
-
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS deployment invariant")
 def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
     runtime, identity = MODULE.validate_supervisor_python(
@@ -772,7 +744,6 @@ def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
         == identity
     )
 
-
 def test_supervisor_python_rejects_homebrew_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -784,7 +755,6 @@ def test_supervisor_python_rejects_homebrew_path(
 
     with pytest.raises(MODULE.DeploymentError, match="exactly /usr/bin/python3"):
         MODULE.validate_supervisor_python(homebrew)
-
 
 def _health_getter(
     bundle: MODULE.BundlePlan, source_commit: str, *, bad_blocks: bool = False
@@ -852,7 +822,6 @@ def _health_getter(
         raise AssertionError(f"unexpected JSON health route: {url}")
 
     return get
-
 
 def test_operator_http_getter_signs_each_exact_target_without_fallback(
     tmp_path: Path,
@@ -925,7 +894,6 @@ def test_operator_http_getter_signs_each_exact_target_without_fallback(
         assert "x-iroha-operator-signature" in names
     assert MODULE._RejectRedirects().redirect_request(None, None, 302, "", {}, url) is None
 
-
 @pytest.mark.parametrize(
     "value",
     [
@@ -938,7 +906,6 @@ def test_operator_http_getter_signs_each_exact_target_without_fallback(
 )
 def test_block_hash_normalization_accepts_exact_canonical_forms(value: str) -> None:
     assert MODULE.normalized_block_hash(value, "test block") == "ab" * 32
-
 
 @pytest.mark.parametrize(
     "value",
@@ -954,7 +921,6 @@ def test_block_hash_normalization_accepts_exact_canonical_forms(value: str) -> N
 def test_block_hash_normalization_rejects_noncanonical_suffixes(value: str) -> None:
     with pytest.raises(MODULE.DeploymentError, match="canonical block hash"):
         MODULE.normalized_block_hash(value, "test block")
-
 
 def test_four_peer_health_requires_exact_common_status_and_dataspaces(
     tmp_path: Path,
@@ -1015,7 +981,6 @@ def test_four_peer_health_requires_exact_common_status_and_dataspaces(
             health_getter=lambda _url, _timeout: None,
         )
 
-
 def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) -> None:
     source_commit = "4" * 40
     bundle = _build_bundle(tmp_path, "5" * 64, source_commit)
@@ -1032,7 +997,6 @@ def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) ->
             getter=_health_getter(plan, source_commit),
             health_getter=unhealthy,
         )
-
 
 def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> None:
     source_commit = "4" * 40
@@ -1054,7 +1018,6 @@ def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> N
             getter=wrong_dpn,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 def test_four_peer_health_requires_exact_seven_lane_five_dataspace_topology(
     tmp_path: Path,
@@ -1081,7 +1044,6 @@ def test_four_peer_health_requires_exact_seven_lane_five_dataspace_topology(
             getter=wrong_dataspace,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
@@ -1165,7 +1127,6 @@ def test_four_peer_health_rejects_noncanonical_lane_bindings(
             health_getter=lambda _url, _timeout: None,
         )
 
-
 @pytest.mark.parametrize(
     ("path", "value"),
     [
@@ -1201,7 +1162,6 @@ def test_four_peer_health_rejects_underquorum_or_noncommit_qc(
             getter=getter,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 def test_controller_terminal_marker_is_private_bounded_and_redaction_safe(
     tmp_path: Path,
@@ -1246,7 +1206,6 @@ def test_controller_terminal_marker_is_private_bounded_and_redaction_safe(
     assert stat.S_IMODE(marker.stat().st_mode) == 0o600
     assert marker.stat().st_size <= MODULE.MAX_TERMINAL_UNHEALTHY_BYTES
 
-
 def test_new_binding_ignores_stale_marker_but_rejects_misbinding(
     tmp_path: Path,
 ) -> None:
@@ -1288,7 +1247,6 @@ def test_new_binding_ignores_stale_marker_but_rejects_misbinding(
     ):
         MODULE.require_no_terminal_unhealthy(plan, runtime_root, bindings)
 
-
 def test_controller_fails_before_initial_health_when_terminal_latched() -> None:
     calls: list[str] = []
 
@@ -1308,7 +1266,6 @@ def test_controller_fails_before_initial_health_when_terminal_latched() -> None:
         )
 
     assert calls == ["terminal"]
-
 
 def test_controller_fails_before_advancement_when_terminal_latched() -> None:
     calls: list[str] = []
@@ -1331,7 +1288,6 @@ def test_controller_fails_before_advancement_when_terminal_latched() -> None:
 
     assert calls == ["terminal"]
 
-
 def test_restart_log_gate_accepts_snapshot_restore_and_ignores_stale_prefix(
     tmp_path: Path,
 ) -> None:
@@ -1349,7 +1305,6 @@ def test_restart_log_gate_accepts_snapshot_restore_and_ignores_stale_prefix(
         stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
 
     MODULE.require_snapshot_backed_restart(cursor)
-
 
 @pytest.mark.parametrize(
     ("suffix", "message"),
@@ -1377,7 +1332,6 @@ def test_restart_log_gate_rejects_missing_or_forbidden_marker(
     with pytest.raises(MODULE.DeploymentError, match=message):
         MODULE.require_snapshot_backed_restart(cursor)
 
-
 @pytest.mark.parametrize("mutation", ["truncate", "replace"])
 def test_restart_log_gate_rejects_truncated_or_replaced_inode(
     tmp_path: Path, mutation: str
@@ -1395,7 +1349,6 @@ def test_restart_log_gate_rejects_truncated_or_replaced_inode(
 
     with pytest.raises(MODULE.DeploymentError, match="truncated|replaced|changed"):
         MODULE.require_snapshot_backed_restart(cursor)
-
 
 def test_restart_log_cursor_rejects_symlink_wrong_mode_owner_and_link_count(
     tmp_path: Path,
@@ -1427,7 +1380,6 @@ def test_restart_log_cursor_rejects_symlink_wrong_mode_owner_and_link_count(
         MODULE._require_safe_restart_log_owner_mode(
             wrong_owner, os.getuid(), os.getgid()
         )
-
 
 def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1478,7 +1430,6 @@ def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
     assert actual.duration_ms == 2
     assert events == [(11, 22), ("terminate", 22), (11, 33), "advanced", (11, 33)]
 
-
 @pytest.mark.parametrize("final_identity", [(11, 44), (12, 33)])
 def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
     tmp_path: Path,
@@ -1519,7 +1470,6 @@ def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
             ops,
         )
 
-
 def test_restart_proof_rejects_measured_duration_beyond_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1559,7 +1509,6 @@ def test_restart_proof_rejects_measured_duration_beyond_bound(
             ops,
         )
 
-
 def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
     calls: list[str] = []
 
@@ -1582,7 +1531,6 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
 
     assert calls == ["terminal"]
 
-
 def _darwin_procargs_payload(
     executable: str,
     argv: tuple[str, ...],
@@ -1597,7 +1545,6 @@ def _darwin_procargs_payload(
     encoded_argv = b"".join(os.fsencode(argument) + b"\0" for argument in argv)
     return argc + os.fsencode(executable) + b"\0\0\0" + encoded_argv + trailing
 
-
 def test_darwin_procargs2_parser_preserves_exact_nul_delimited_arguments() -> None:
     argv = (
         "/System Path/Python.app/Contents/MacOS/Python",
@@ -1610,7 +1557,6 @@ def test_darwin_procargs2_parser_preserves_exact_nul_delimited_arguments() -> No
     )
 
     assert MODULE.parse_darwin_procargs2(payload) == argv
-
 
 @pytest.mark.parametrize(
     ("payload", "message"),
@@ -1649,13 +1595,11 @@ def test_darwin_procargs2_parser_rejects_malformed_payloads(
     with pytest.raises(MODULE.DeploymentError, match=message):
         MODULE.parse_darwin_procargs2(payload)
 
-
 def test_darwin_procargs2_parser_rejects_payload_above_allocation_bound() -> None:
     payload = b"\0" * (MODULE.MAX_PROCESS_ARGUMENT_BYTES + 1)
 
     with pytest.raises(MODULE.DeploymentError, match="invalid size"):
         MODULE.parse_darwin_procargs2(payload)
-
 
 def test_process_inspection_rejects_native_argv_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -1671,7 +1615,6 @@ def test_process_inspection_rejects_native_argv_drift(
 
     with pytest.raises(MODULE.DeploymentError, match="changed during capture"):
         ops.inspect_process(77)
-
 
 def test_process_inspection_preserves_stable_native_argv(
     monkeypatch: pytest.MonkeyPatch,
@@ -1691,7 +1634,6 @@ def test_process_inspection_preserves_stable_native_argv(
         uid=501,
         argv=argv,
     )
-
 
 class _OldCaptureOps:
     def __init__(
@@ -1724,7 +1666,6 @@ class _OldCaptureOps:
         assert parent_pid == self.supervisor_pid
         return self._child_pids
 
-
 def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, ...]]:
     supervisor_argv = (
         "/usr/bin/python3",
@@ -1744,7 +1685,6 @@ def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, 
         },
         supervisor_argv,
     )
-
 
 def _framework_python_capture_payload(
     tmp_path: Path,
@@ -1783,7 +1723,6 @@ def _framework_python_capture_payload(
         "GroupName": grp.getgrgid(os.getgid()).gr_name,
     }
     return payload, plist_argv, runtime_argv, runtime
-
 
 def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv(
     tmp_path: Path,
@@ -1827,7 +1766,6 @@ def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv
     with pytest.raises(MODULE.DeploymentError, match="identity is wrong"):
         MODULE.verify_restored_snapshot(snapshot, ops)
 
-
 @pytest.mark.parametrize("mutation", ["wrong-root", "tail", "writable"])
 def test_framework_python_rewrite_rejects_any_nonstructural_difference(
     tmp_path: Path, mutation: str
@@ -1849,7 +1787,6 @@ def test_framework_python_rewrite_rejects_any_nonstructural_difference(
         plist_argv, runtime_argv, owner_uid=os.getuid()
     )
 
-
 def test_absent_old_child_requires_explicit_reset_authorization(
     tmp_path: Path,
 ) -> None:
@@ -1869,7 +1806,6 @@ def test_absent_old_child_requires_explicit_reset_authorization(
     )
     assert managed.child_was_present is False
 
-
 def test_absent_old_pid_rejects_any_untracked_supervisor_child(
     tmp_path: Path,
 ) -> None:
@@ -1885,7 +1821,6 @@ def test_absent_old_pid_rejects_any_untracked_supervisor_child(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_absent_old_pid_rejects_child_emerging_between_samples(
     tmp_path: Path,
@@ -1904,7 +1839,6 @@ def test_absent_old_pid_rejects_child_emerging_between_samples(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_existing_old_pid_rejects_a_mismatched_child_even_when_relaxed(
     tmp_path: Path,
@@ -1933,7 +1867,6 @@ def test_existing_old_pid_rejects_a_mismatched_child_even_when_relaxed(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
     tmp_path: Path,
@@ -1975,7 +1908,6 @@ def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
     )
     with pytest.raises(MODULE.DeploymentError, match="identity differs"):
         MODULE.verify_restored_snapshot(snapshot, ops)
-
 
 def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
@@ -2037,6 +1969,31 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         "apply_reset",
         lambda *args, **kwargs: pytest.fail("dry run called apply_reset"),
     )
+    dry_run_authority = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="verified",
+        authority_envelope={},
+        durable_receipt={},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, apply, **_kwargs: (
+            events.append(f"authority:{apply}") or dry_run_authority
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE.taira_authority_client,
+        "verify_receipt",
+        lambda *_args, **_kwargs: pytest.fail("dry run historically verified a lease"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_finalize_deploy_lease",
+        lambda *_args, **_kwargs: pytest.fail("dry run finalized a lease"),
+    )
     monkeypatch.setattr(
         MODULE,
         "exclusive_deployment_lock",
@@ -2076,8 +2033,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     assert report["boi_artifact_inventory_sha256"] == "2" * 64
     assert report["boi_qualified_inventory_sha256"] == "3" * 64
     assert report["boi_qualification_receipt_id"] == "4" * 64
-    assert events == ["admission-verify", "capture", "archive-recheck"]
-
+    assert events == [
+        "admission-verify",
+        "capture",
+        "archive-recheck",
+        "authority:False",
+    ]
 
 def test_deployment_admission_requires_and_binds_qualified_boi_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -2182,7 +2143,6 @@ def test_deployment_admission_requires_and_binds_qualified_boi_result(
     with pytest.raises(MODULE.DeploymentError, match="differs from the exact signed"):
         MODULE.verify_deployment_admission(args)
 
-
 @pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
 def test_admission_failure_precedes_every_deployment_preflight(
     monkeypatch: pytest.MonkeyPatch,
@@ -2225,16 +2185,14 @@ def test_admission_failure_precedes_every_deployment_preflight(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=False,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=apply,
     )
 
     with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE._execute_after_provisioned_authority_contracts(
-            args, ops=MODULE.SystemOps()
-        )
+        MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps())
 
     assert events == ["admission-verify"]
-
 
 def test_apply_lock_spans_old_cohort_capture_and_rollout(
     monkeypatch: pytest.MonkeyPatch,
@@ -2296,6 +2254,37 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
 
     monkeypatch.setattr(MODULE, "apply_reset", apply)
 
+    consumed_lease = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="authorized",
+        authority_envelope={"schema": "test-deploy-envelope"},
+        durable_receipt={"schema": "test-deploy-receipt"},
+    )
+    finalization = MODULE.taira_authority_client.AuthorityResult(
+        role="deploy-issuance",
+        operation_id="7" * 64,
+        run_id="8" * 64,
+        status="finalized",
+        authority_envelope={"schema": "test-final-envelope"},
+        durable_receipt={"schema": "test-final-receipt"},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, apply, **_kwargs: (
+            events.append(f"authority:{apply}") or consumed_lease
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_finalize_deploy_lease",
+        lambda *_args, outcome, **_kwargs: (
+            events.append(f"finalize:{outcome}") or finalization
+        ),
+    )
+
     @contextlib.contextmanager
     def consume(_admission):
         events.append("consume-enter")
@@ -2317,6 +2306,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
 
     monkeypatch.setattr(MODULE, "exclusive_deployment_lock", lock)
     monkeypatch.setattr(MODULE, "consume_admission_receipt", consume)
+    monkeypatch.setattr(MODULE, "build_operator_http_getter", lambda *_args: object())
     args = argparse.Namespace(
         bundle=Path("/bundle"),
         binary=Path("/binary"),
@@ -2339,12 +2329,11 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=True,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=True,
     )
 
-    assert MODULE._execute_after_provisioned_authority_contracts(
-        args, ops=MODULE.SystemOps()
-    ) == {
+    assert MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps()) == {
         "admission_archive_sha256": "0" * 64,
         "admission_receipt_consumed": True,
         "admission_receipt_id": "f" * 64,
@@ -2352,6 +2341,12 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         "boi_artifact_inventory_sha256": "2" * 64,
         "boi_qualified_inventory_sha256": "3" * 64,
         "boi_qualification_receipt_id": "4" * 64,
+        "deploy_authority_final_status": "finalized",
+        "deploy_authority_operation_id": "7" * 64,
+        "deploy_authority_result_receipt_sha256": hashlib.sha256(
+            finalization.durable_receipt_bytes
+        ).hexdigest(),
+        "deploy_authority_status": "authorized",
     }
     assert events == [
         "admission-verify",
@@ -2363,13 +2358,14 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         "capture:True",
         "recheck-inputs",
         "recheck-admission-evidence",
+        "authority:True",
         "consume-enter",
         "apply",
         "rollout-start",
         "consume-exit",
+        "finalize:success",
         "lock-exit",
     ]
-
 
 def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
     archive = tmp_path / "candidate.tar.gz"
@@ -2406,7 +2402,6 @@ def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
         release_manifest_verifier_sha256="8" * 64,
     )
 
-
 def _use_unprivileged_transaction_ledger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2426,12 +2421,10 @@ def _use_unprivileged_transaction_ledger(
         lambda _admission: None,
     )
 
-
 def _transaction_receipt_ids(admission: MODULE.AdmissionPlan) -> tuple[str, str]:
     return tuple(
         sorted((admission.receipt_id, admission.boi_qualification_receipt_id))
     )
-
 
 def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2458,7 +2451,6 @@ def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
 
     assert admission.replay_ledger.read_bytes() == prior
 
-
 def test_receipt_consumption_remains_committed_after_rollout_begins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2475,7 +2467,6 @@ def test_receipt_consumption_remains_committed_after_rollout_begins(
     ).consumed_receipt_ids
     assert consumed == _transaction_receipt_ids(admission)
 
-
 def test_successful_receipt_transaction_rechecks_committed_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2488,7 +2479,6 @@ def test_successful_receipt_transaction_rechecks_committed_ledger(
     assert MODULE.rollout_admission.load_replay_ledger(
         admission.replay_ledger
     ).consumed_receipt_ids == _transaction_receipt_ids(admission)
-
 
 def test_receipt_consumption_cannot_succeed_without_rollout_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2503,7 +2493,6 @@ def test_receipt_consumption_cannot_succeed_without_rollout_start(
 
     assert admission.replay_ledger.read_bytes() == prior
 
-
 def test_rollout_start_rejects_removed_receipt_and_preserves_prior_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2517,7 +2506,6 @@ def test_rollout_start_rejects_removed_receipt_and_preserves_prior_ledger(
             transaction.mark_rollout_started()
 
     assert admission.replay_ledger.read_bytes() == prior
-
 
 def test_unstarted_receipt_rollback_refuses_foreign_ledger_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2541,7 +2529,6 @@ def test_unstarted_receipt_rollback_refuses_foreign_ledger_change(
         sorted((*_transaction_receipt_ids(admission), foreign_receipt))
     )
 
-
 @pytest.mark.parametrize(
     "replayed_field", ["receipt_id", "boi_qualification_receipt_id"]
 )
@@ -2559,7 +2546,6 @@ def test_receipt_consumption_rejects_replay_under_lock(
     with pytest.raises(MODULE.DeploymentError, match="already consumed"):
         with MODULE.consume_admission_receipt(admission):
             pytest.fail("replayed receipt entered deployment transaction")
-
 
 def test_receipt_consumption_rejects_ledger_capacity_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2583,7 +2569,6 @@ def test_receipt_consumption_rejects_ledger_capacity_before_publication(
 
     assert admission.replay_ledger.read_bytes() == prior
 
-
 def test_archive_substitution_is_rejected_before_rollout(tmp_path: Path) -> None:
     admission = _receipt_transaction_plan(tmp_path)
     replacement = tmp_path / "replacement.tar.gz"
@@ -2592,7 +2577,6 @@ def test_archive_substitution_is_rejected_before_rollout(tmp_path: Path) -> None
 
     with pytest.raises(MODULE.DeploymentError, match="substituted"):
         MODULE.require_admission_archive_unchanged(admission)
-
 
 def test_production_config_may_differ_from_secret_free_qualification(tmp_path: Path) -> None:
     admission = _receipt_transaction_plan(tmp_path)
@@ -2624,7 +2608,6 @@ def test_production_config_may_differ_from_secret_free_qualification(tmp_path: P
     sources.binary_sha256 = "0" * 64
     with pytest.raises(MODULE.DeploymentError, match="do not match"):
         MODULE.require_inputs_match_admission(bundle, sources, admission)
-
 
 def test_under_lock_recheck_rejects_python_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -2679,7 +2662,6 @@ def test_under_lock_recheck_rejects_python_runtime_identity_drift(
             SimpleNamespace(), sources, admission
         )
 
-
 def test_exclusive_deployment_lock_refuses_contention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2709,7 +2691,6 @@ def test_exclusive_deployment_lock_refuses_contention(
         with MODULE.exclusive_deployment_lock():
             pytest.fail("contended lock was acquired")
 
-
 def test_headroom_is_required_on_every_distinct_filesystem(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2731,7 +2712,6 @@ def test_headroom_is_required_on_every_distinct_filesystem(
 
     with pytest.raises(MODULE.DeploymentError, match="device 22"):
         MODULE.require_filesystem_headroom([Path("/first"), Path("/second")], 10_000)
-
 
 class _RollbackOps:
     def __init__(
@@ -2790,7 +2770,6 @@ class _RollbackOps:
             )
         )
 
-
 def _rollback_snapshots(tmp_path: Path) -> tuple[MODULE.PlistSnapshot, ...]:
     snapshots: list[MODULE.PlistSnapshot] = []
     for index, label in enumerate(MODULE.LABELS):
@@ -2829,7 +2808,6 @@ def _rollback_snapshots(tmp_path: Path) -> tuple[MODULE.PlistSnapshot, ...]:
         )
     return tuple(snapshots)
 
-
 def test_rollback_unloads_and_restores_the_whole_four_job_cohort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2853,7 +2831,6 @@ def test_rollback_unloads_and_restores_the_whole_four_job_cohort(
     )
     assert ops.loaded == set(MODULE.LABELS)
 
-
 def test_rollback_attempts_full_restore_after_injected_bootout_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2873,7 +2850,6 @@ def test_rollback_attempts_full_restore_after_injected_bootout_failure(
     assert [label for action, label in ops.calls if action == "bootstrap"] == list(
         MODULE.LABELS
     )
-
 
 def test_cli_defaults_match_the_audited_operator_contract() -> None:
     argv = [
@@ -2942,7 +2918,6 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
     with pytest.raises(SystemExit):
         MODULE.build_parser().parse_args(missing_boi)
 
-
 def test_release_and_boi_qualification_signers_must_be_distinct() -> None:
     assert MODULE.require_distinct_signing_fingerprints("1" * 64, "2" * 64) == (
         "1" * 64,
@@ -2950,7 +2925,6 @@ def test_release_and_boi_qualification_signers_must_be_distinct() -> None:
     )
     with pytest.raises(MODULE.DeploymentError, match="must be distinct"):
         MODULE.require_distinct_signing_fingerprints("1" * 64, "1" * 64)
-
 
 @pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
 def test_deploy_issuance_barrier_precedes_identity_paths_admission_and_state(
@@ -2992,7 +2966,6 @@ def test_deploy_issuance_barrier_precedes_identity_paths_admission_and_state(
     assert calls == []
     assert state.read_bytes() == b"unchanged\n"
 
-
 @pytest.mark.parametrize(
     ("raw_uid", "raw_gid", "message"),
     [
@@ -3025,7 +2998,6 @@ def test_sealed_external_tool_identity_rejects_malformed_ids(
 
     with pytest.raises(MODULE.DeploymentError, match=message):
         MODULE.require_sealed_external_tool_identity()
-
 
 def test_sealed_external_tool_identity_is_exact_for_root_and_non_root(
     monkeypatch: pytest.MonkeyPatch,

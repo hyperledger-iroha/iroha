@@ -67,6 +67,10 @@ impl RegisterZkAsset {
     ///
     /// A shield verifier admits new confidential commitments. It is therefore
     /// invalid without an unshield verifier that can redeem those commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `vk_shield` is set while `vk_unshield` is absent.
     pub fn validate_verifier_roles(&self) -> Result<(), &'static str> {
         if self.vk_shield.is_some() && self.vk_unshield.is_none() {
             return Err("vk_shield requires vk_unshield so shielded funds remain redeemable");
@@ -375,7 +379,7 @@ impl_zk_decode_from_slice!(FinalizeElection {
 mod tests {
     #![allow(clippy::too_many_lines)]
     use super::*;
-    use norito::core::DecodeFromSlice;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use std::str::FromStr as _;
     #[test]
     fn election_shape_v1_enforces_option_and_tally_boundaries() {
@@ -442,35 +446,6 @@ mod tests {
             ProofBox::new(backend.clone(), vec![1, 2, 3, 4]),
             VerifyingKeyId::new(backend, "vk_test"),
         )
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(
-        registry: &crate::isi::InstructionRegistry,
-        wire_id: &str,
-        value: T,
-    ) where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     #[allow(clippy::too_many_lines)]

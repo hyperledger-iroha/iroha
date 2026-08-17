@@ -2918,8 +2918,10 @@ mod tests {
             CacheError::CorruptEntry(ref reason)
                 if reason == "verification lock bundle metadata is invalid or out of bounds"
         ));
-        let oversized_descriptor =
-            vec![0; MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize + 1].into_boxed_slice();
+        let oversized_descriptor_bytes =
+            usize::try_from(MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 + 1)
+                .expect("V1 oversized artifact descriptor length fits usize");
+        let oversized_descriptor = vec![0; oversized_descriptor_bytes].into_boxed_slice();
         let error = decode_cached_artifact_descriptor_v1(&oversized_descriptor)
             .expect_err("oversized descriptor must fail");
         assert!(matches!(

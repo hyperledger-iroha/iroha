@@ -756,8 +756,8 @@ fn validate_health_inputs(config: &PopConfig, report: &HealthReport) -> Result<(
     Ok(())
 }
 fn admit_health_summary_result(failed: usize, missing: usize) -> Result<(), HealthError> {
-    let retained = failed.checked_add(missing).unwrap_or(usize::MAX);
-    let found = retained.checked_add(1).unwrap_or(usize::MAX);
+    let retained = failed.saturating_add(missing);
+    let found = retained.saturating_add(1);
     if found > HEALTH_SUMMARY_MAX_RESULTS_V1 {
         return Err(HealthError::ResultLimitExceeded {
             found,

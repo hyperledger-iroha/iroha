@@ -1792,7 +1792,10 @@ fn stark_air_context_matches_statement(
 ) -> bool {
     match context {
         StarkAirVerificationContext::Binding => {
-            !stark_air_circuit_id_targets_governance_vote_relation(&air.circuit_id)
+            !stark_air_circuit_id_targets_bfv_full_bootstrap(&air.circuit_id)
+                && !stark_air_circuit_id_targets_zk_ace(&air.circuit_id)
+                && !stark_air_circuit_id_targets_ivm_execution(&air.circuit_id)
+                && !stark_air_circuit_id_targets_governance_vote_relation(&air.circuit_id)
                 && !stark_air_circuit_id_targets_soracloud_fhe_relation(&air.circuit_id)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {

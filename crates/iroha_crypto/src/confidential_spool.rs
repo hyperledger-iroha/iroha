@@ -299,6 +299,10 @@ impl ConfidentialSpoolLayoutV1 {
     ///
     /// This narrow accounting excludes Rust/allocator overhead, key and arena material, the live
     /// chunk/AAD/cipher state, filesystem and page cache, and all operating-system accounting.
+    #[expect(
+        clippy::unused_self,
+        reason = "cursor accounting remains an instance-level layout query for API consistency"
+    )]
     pub const fn writer_cursor_bytes_v1(&self) -> u64 {
         8
     }
@@ -550,7 +554,9 @@ impl ConfidentialSpoolWriterV1 {
     }
 
     /// Consume the writer and abort its unlinked backing resources.
-    pub fn abort_v1(self) {}
+    pub fn abort_v1(self) {
+        drop(self);
+    }
 }
 
 /// Move-only immutable sealed handle for authenticated random reads.
@@ -636,7 +642,9 @@ impl ConfidentialSpoolSnapshotV1 {
     }
 
     /// Consume the snapshot and abort its unlinked backing resources.
-    pub fn abort_v1(self) {}
+    pub fn abort_v1(self) {
+        drop(self);
+    }
 }
 
 struct ConfidentialSpoolResourcesV1 {
@@ -687,7 +695,7 @@ impl ConfidentialSpoolFileV1 {
         let metadata = self
             .file
             .metadata()
-            .map_err(|error| file_error_v1("metadata", error))?;
+            .map_err(|error| file_error_v1("metadata", &error))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -718,7 +726,7 @@ impl ConfidentialSpoolFileV1 {
     fn size_v1(&mut self, file_len: u64) -> Result<(), ConfidentialSpoolErrorV1> {
         self.file
             .set_len(file_len)
-            .map_err(|error| file_error_v1("set-len", error))?;
+            .map_err(|error| file_error_v1("set-len", &error))?;
         self.validate_detached_v1(file_len)
     }
 
@@ -741,6 +749,11 @@ impl ConfidentialSpoolFileV1 {
     }
 
     #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "production keeps the fallible test fault-injection interface at shared call sites"
+    )]
     fn maybe_fail_v1(
         &mut self,
         _operation: TestableFileOperationV1,
@@ -965,7 +978,7 @@ fn hash_snapshot_prefix_v1(
     hasher.update(arena_id);
 }
 
-fn file_error_v1(operation: &'static str, error: io::Error) -> ConfidentialSpoolErrorV1 {
+fn file_error_v1(operation: &'static str, error: &io::Error) -> ConfidentialSpoolErrorV1 {
     ConfidentialSpoolErrorV1::FileOperation {
         operation,
         kind: error.kind(),
@@ -981,13 +994,13 @@ fn create_detached_empty_file_v1(
     let named = tempfile::Builder::new()
         .prefix(".iroha-confidential-spool-v1-")
         .tempfile_in(directory)
-        .map_err(|error| file_error_v1("create", error))?;
+        .map_err(|error| file_error_v1("create", &error))?;
     let descriptor_metadata = named
         .as_file()
         .metadata()
-        .map_err(|error| file_error_v1("pre-unlink-fstat", error))?;
+        .map_err(|error| file_error_v1("pre-unlink-fstat", &error))?;
     let path_metadata = fs::symlink_metadata(named.path())
-        .map_err(|error| file_error_v1("pre-unlink-lstat", error))?;
+        .map_err(|error| file_error_v1("pre-unlink-lstat", &error))?;
     if !safe_pre_unlink_metadata_v1(&descriptor_metadata)
         || !safe_pre_unlink_metadata_v1(&path_metadata)
     {
@@ -1002,10 +1015,10 @@ fn create_detached_empty_file_v1(
     let (file, temp_path) = named.into_parts();
     temp_path
         .close()
-        .map_err(|error| file_error_v1("unlink", error))?;
+        .map_err(|error| file_error_v1("unlink", &error))?;
     let detached_metadata = file
         .metadata()
-        .map_err(|error| file_error_v1("post-unlink-fstat", error))?;
+        .map_err(|error| file_error_v1("post-unlink-fstat", &error))?;
     if !detached_metadata.file_type().is_file()
         || detached_metadata.len() != 0
         || detached_metadata.permissions().mode() & 0o7777 != 0o600
@@ -1056,7 +1069,7 @@ fn write_all_at_v1(
     while !bytes.is_empty() {
         let written = file
             .write_at(bytes, offset)
-            .map_err(|error| file_error_v1("write-at", error))?;
+            .map_err(|error| file_error_v1("write-at", &error))?;
         if written == 0 {
             return Err(ConfidentialSpoolErrorV1::FileOperation {
                 operation: "write-at-zero",
@@ -1094,7 +1107,7 @@ fn read_exact_at_v1(
     while !bytes.is_empty() {
         let read = file
             .read_at(bytes, offset)
-            .map_err(|error| file_error_v1("read-at", error))?;
+            .map_err(|error| file_error_v1("read-at", &error))?;
         if read == 0 {
             return Err(ConfidentialSpoolErrorV1::FileOperation {
                 operation: "read-at-eof",
@@ -1212,7 +1225,7 @@ mod tests {
                 destination.fill(byte);
             } else {
                 for (index, destination_byte) in destination.iter_mut().enumerate() {
-                    *destination_byte = byte.wrapping_add(index as u8);
+                    *destination_byte = byte.wrapping_add(index.to_le_bytes()[0]);
                 }
             }
             Ok(())
@@ -1982,15 +1995,9 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "cohesive ownership source contract")]
     fn public_owners_have_no_clone_debug_or_escape_surface_in_source() {
-        let source = include_str!("confidential_spool.rs");
         const TEST_MODULE_MARKER: &str = "#[cfg(test)]\nmod tests {";
-        assert_eq!(source.matches(TEST_MODULE_MARKER).count(), 1);
-        let production = source
-            .split_once(TEST_MODULE_MARKER)
-            .expect("inline test module marker")
-            .0;
-
         fn public_method_names_v1(region: &str) -> Vec<&str> {
             region
                 .lines()
@@ -2002,6 +2009,13 @@ mod tests {
                 })
                 .collect()
         }
+
+        let source = include_str!("confidential_spool.rs");
+        assert_eq!(source.matches(TEST_MODULE_MARKER).count(), 1);
+        let production = source
+            .split_once(TEST_MODULE_MARKER)
+            .expect("inline test module marker")
+            .0;
 
         let chunk_start = production
             .find("pub struct ConfidentialSpoolChunkV1")

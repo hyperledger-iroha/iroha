@@ -1066,6 +1066,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cohesive first-release telemetry and Sumeragi route policy matrix"
+    )]
     fn telemetry_and_sumeragi_routes_are_valid_sharp_first_release_surfaces() {
         let routes = telemetry::ROUTES
             .iter()
@@ -1918,4 +1922,5 @@ mod tests {
                 .any(|route| route.stable_route_id() == "sorafs.reputation_snapshot.publish")
         );
     }
+    include!("authentication_routes_test.rs");
 }

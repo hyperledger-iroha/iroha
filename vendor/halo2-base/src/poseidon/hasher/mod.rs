@@ -1,11 +1,11 @@
 use crate::{
+    AssignedValue, Context,
+    QuantumCell::Constant,
+    ScalarField,
     gates::{GateInstructions, RangeInstructions},
     poseidon::hasher::{spec::OptimizedPoseidonSpec, state::PoseidonState},
     safe_types::{SafeBool, SafeTypeChip},
     utils::BigPrimeField,
-    AssignedValue, Context,
-    QuantumCell::Constant,
-    ScalarField,
 };
 
 use getset::{CopyGetters, Getters};
@@ -48,7 +48,10 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonHasherConsts<F, 
         let init_state = PoseidonState::default(ctx);
         let mut state = init_state.clone();
         let empty_hash = fix_len_array_squeeze(ctx, gate, &[], &mut state, spec);
-        Self { init_state, empty_hash }
+        Self {
+            init_state,
+            empty_hash,
+        }
     }
 }
 
@@ -73,7 +76,11 @@ impl<F: ScalarField, const RATE: usize> PoseidonCompactInput<F, RATE> {
         is_final: SafeBool<F>,
         len: AssignedValue<F>,
     ) -> Self {
-        Self { inputs, is_final, len }
+        Self {
+            inputs,
+            is_final,
+            len,
+        }
     }
 
     /// Add data validation constraints.
@@ -85,7 +92,9 @@ impl<F: ScalarField, const RATE: usize> PoseidonCompactInput<F, RATE> {
         range.check_less_than_safe(ctx, self.len, (RATE + 1) as u64);
         // Valid rows either end a logical input or fill the entire absorb rate.
         let is_full: AssignedValue<F> =
-            range.gate().is_equal(ctx, self.len, Constant(F::from(RATE as u64)));
+            range
+                .gate()
+                .is_equal(ctx, self.len, Constant(F::from(RATE as u64)));
         let valid_cond = range.gate().or(ctx, *self.is_final.as_ref(), is_full);
         range.gate().assert_is_const(ctx, &valid_cond, &F::ONE);
     }
@@ -123,11 +132,15 @@ pub struct PoseidonCompactOutput<F: ScalarField> {
 impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonHasher<F, T, RATE> {
     /// Create a poseidon hasher from an existing spec.
     pub fn new(spec: OptimizedPoseidonSpec<F, T, RATE>) -> Self {
-        Self { spec, consts: OnceCell::new() }
+        Self {
+            spec,
+            consts: OnceCell::new(),
+        }
     }
     /// Initialize necessary consts of hasher. Must be called before any computation.
     pub fn initialize_consts(&mut self, ctx: &mut Context<F>, gate: &impl GateInstructions<F>) {
-        self.consts.get_or_init(|| PoseidonHasherConsts::<F, T, RATE>::new(ctx, gate, &self.spec));
+        self.consts
+            .get_or_init(|| PoseidonHasherConsts::<F, T, RATE>::new(ctx, gate, &self.spec));
     }
 
     /// Clear all consts.
@@ -175,7 +188,9 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonHasher<F, T, RAT
         let mut result_state = state.clone();
         for (i, chunk) in inputs.chunks(RATE).enumerate() {
             let is_last_perm =
-                range.gate().is_equal(ctx, num_perm, Constant(F::from((i + 1) as u64)));
+                range
+                    .gate()
+                    .is_equal(ctx, num_perm, Constant(F::from((i + 1) as u64)));
             let len_chunk = range.gate().select(
                 ctx,
                 len_last_chunk,
@@ -250,7 +265,10 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonHasher<F, T, RAT
             state_2.permutation(ctx, gate, &[], None, &self.spec);
             // Select the result of case 1/2 depending on if len == RATE.
             let hash = gate.select(ctx, state_2.s[1], state.s[1], is_full);
-            outputs.push(PoseidonCompactOutput { hash, is_final: input.is_final });
+            outputs.push(PoseidonCompactOutput {
+                hash,
+                is_final: input.is_final,
+            });
             // Reset state to init_state if this is the end of a logical input.
             // TODO: skip this if this is the last row.
             state.select(ctx, gate, input.is_final, self.init_state());
@@ -314,7 +332,12 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonSponge<F, T, RAT
     /// Initialize a poseidon hasher from an existing spec.
     pub fn from_spec(ctx: &mut Context<F>, spec: OptimizedPoseidonSpec<F, T, RATE>) -> Self {
         let init_state = PoseidonState::default(ctx);
-        Self { spec, state: init_state.clone(), init_state, absorbing: Vec::new() }
+        Self {
+            spec,
+            state: init_state.clone(),
+            init_state,
+            absorbing: Vec::new(),
+        }
     }
 
     /// Reset state to default and clear the buffer.

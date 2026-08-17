@@ -26,6 +26,7 @@ use iroha::{
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         metadata::Metadata,
         nexus::{DataSpaceId, LaneCatalog, LaneId},
+        peer::PeerId,
         prelude::{
             FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
             TransactionEntrypoint,
@@ -55,7 +56,10 @@ use iroha_core::{
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, NetworkPeer};
+use iroha_test_network::{
+    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NetworkBuilder, NetworkPeer,
+};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::{DecodeAll, Encode};
 use std::{
@@ -171,6 +175,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_consensus_message_control()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -2373,10 +2378,8 @@ fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlock
     }
     let expected_quorum = commit_quorum_from_len(validator_count).max(1);
     min_quorum == expected_quorum
-        && prepare_qc_signer_count >= min_quorum
-        && prepare_qc_signer_count <= validator_count
-        && commit_qc_signer_count >= min_quorum
-        && commit_qc_signer_count <= validator_count
+        && prepare_qc_signer_count == min_quorum
+        && commit_qc_signer_count == min_quorum
 }
 fn committed_lane_block_is_certified(block: &CommittedLaneBlockSnapshot) -> bool {
     committed_lane_block_targets_default_dataspace(block)
@@ -4391,8 +4394,8 @@ fn validate_lane_drain_certificate_evidence(
         }
     }
     ensure!(
-        signer_indices.len() >= usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
-        "drain certificate is below its committed quorum"
+        signer_indices.len() == usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
+        "drain certificate does not carry its exact committed quorum"
     );
     ensure!(
         certificate.signer_proofs.len() == signer_indices.len(),
@@ -5144,38 +5147,13 @@ fn evict_historical_block_body_offline(peer: &NetworkPeer, height: u64) -> Resul
     );
     Ok(payload_len)
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FourPeerByzantineFault {
-    ConflictingReady,
-    DuplicateInits,
-}
-fn four_peer_byzantine_fault_layer(fault: FourPeerByzantineFault) -> Table {
-    let mut rbc = Table::new();
-    match fault {
-        FourPeerByzantineFault::ConflictingReady => {
-            rbc.insert(
-                "conflicting_ready_mask".to_owned(),
-                TomlValue::Integer((1_i64 << TOTAL_PEERS) - 1),
-            );
-        }
-        FourPeerByzantineFault::DuplicateInits => {
-            rbc.insert("duplicate_inits".to_owned(), TomlValue::Boolean(true));
-        }
-    }
-    let mut debug = Table::new();
-    debug.insert("rbc".to_owned(), TomlValue::Table(rbc));
-    let mut sumeragi = Table::new();
-    sumeragi.insert("debug".to_owned(), TomlValue::Table(debug));
-    let mut layer = Table::new();
-    layer.insert("sumeragi".to_owned(), TomlValue::Table(sumeragi));
-    layer
-}
+include!("autoscale_localnet_consensus_fault.rs");
+
 fn restart_four_peer_validator(
     network: &sandbox::SerializedNetwork,
     runtime: &tokio::runtime::Runtime,
     peer_index: usize,
     base_layers: &[Table],
-    extra_layer: Option<Table>,
     catch_up_height: u64,
     context: &str,
 ) -> Result<()> {
@@ -5184,12 +5162,8 @@ fn restart_four_peer_validator(
         .get(peer_index)
         .ok_or_else(|| eyre!("{context}: missing peer {peer_index}"))?;
     runtime.block_on(peer.shutdown_if_started());
-    let mut layers = base_layers.to_vec();
-    if let Some(extra_layer) = extra_layer {
-        layers.push(extra_layer);
-    }
     runtime
-        .block_on(peer.start_checked(layers.iter().map(Cow::Borrowed), None))
+        .block_on(peer.start_checked(base_layers.iter().map(Cow::Borrowed), None))
         .map_err(|err| eyre!("{context}: restart peer {peer_index}: {err}"))?;
     if catch_up_height > 0 {
         runtime.block_on(async {
@@ -5230,8 +5204,8 @@ fn wait_for_certified_elastic_lane(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) =>
                 {
                     last_observed = last_observed.saturating_add(1);
@@ -5278,8 +5252,8 @@ fn wait_for_certified_elastic_lane_incarnation(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) {
                         last_observed = last_observed.saturating_add(1);
                     }
@@ -5366,7 +5340,7 @@ fn validate_autonomous_merge_execution(
         .map_err(|err| eyre!("invalid autonomous current proposal: {err}"))?;
     ensure!(
         execution.prepare_qc.payload_availability_qc.is_some(),
-        "autonomous prepare QC omitted its DA/RBC availability certificate"
+        "autonomous prepare QC omitted its DA payload-availability certificate"
     );
     let signer_pops = execution
         .signer_proofs
@@ -5784,8 +5758,8 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
         }
     }
     ensure!(
-        signer_indices.len() >= commit_quorum_from_len(qc.validator_set.len()),
-        "merge QC is below quorum: signers={}, roster={}",
+        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len()),
+        "merge QC cardinality mismatch: signers={}, roster={}",
         signer_indices.len(),
         qc.validator_set.len()
     );
@@ -5875,9 +5849,9 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
 fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl()
 -> Result<()> {
     const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
-    const FIRST_BYZANTINE_PEER: usize = 3;
+    const FIRST_FAULT_SENDER: usize = 3;
     const RECREATION_RESTART_PEER: usize = 2;
-    const SECOND_BYZANTINE_PEER: usize = 1;
+    const SECOND_FAULT_SENDER: usize = 1;
     const OFFLINE_DRAIN_PEER: usize = 0;
     let context = stringify!(
         nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
@@ -5928,13 +5902,10 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_FAULT_SENDER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::ConflictingReady,
-        )),
         initial_height,
-        "install first rotating Byzantine validator",
+        "restart first rotating validator before authenticated vote hold",
     )?;
     submitters = network
         .peers()
@@ -5944,10 +5915,22 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "first Byzantine window",
+        "first authenticated vote-hold window",
+    )?;
+    let first_fault = arm_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        FIRST_FAULT_SENDER,
+        ConsensusMessageControlAction::Hold,
+        "install first rotating authenticated vote hold",
     )?;
     let marker_a =
         expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 1)?;
+    wait_for_four_peer_authenticated_fault_activation(
+        &network,
+        &first_fault,
+        "first rotating authenticated vote hold",
+    )?;
     let autonomous_a =
         execute_autonomous_release_cycle_transaction(&network, &submitters, marker_a.clone(), 1)?;
     ensure!(
@@ -6004,14 +5987,19 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     )?;
     let archive_a_paths =
         assert_archived_incarnation_on_all_peers(&network, TARGET_LANE, marker_a.incarnation)?;
+    heal_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        &first_fault,
+        "heal first rotating authenticated vote hold",
+    )?;
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_FAULT_SENDER,
         &base_layers,
-        None,
         retirement_a_height,
-        "heal first rotating Byzantine validator",
+        "restart first rotating vote-fault sender after heal",
     )?;
     submitters = network
         .peers()
@@ -6025,12 +6013,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     )?;
     ensure!(
         wait_for_committed_transaction(
-            &submitters[FIRST_BYZANTINE_PEER],
+            &submitters[FIRST_FAULT_SENDER],
             autonomous_a.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed first Byzantine autonomous proof",
+            "healed first vote-fault sender autonomous proof",
         )? == autonomous_a.committed,
-        "healed first Byzantine peer reconstructed another autonomous proof"
+        "healed first vote-fault sender reconstructed another autonomous proof"
     );
     let marker_b =
         expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 2)?;
@@ -6060,7 +6048,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         RECREATION_RESTART_PEER,
         &base_layers,
-        None,
         recreation_height,
         "restart recreated incarnation after stale-marker rejection",
     )?;
@@ -6100,13 +6087,10 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_FAULT_SENDER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::DuplicateInits,
-        )),
         pre_second_fault_height,
-        "rotate Byzantine behavior to a second validator",
+        "restart second rotating validator before authenticated vote drop",
     )?;
     submitters = network
         .peers()
@@ -6116,23 +6100,40 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "second Byzantine window",
+        "second authenticated vote-drop window",
+    )?;
+    let second_fault = arm_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        SECOND_FAULT_SENDER,
+        ConsensusMessageControlAction::Drop,
+        "install second rotating authenticated vote drop",
     )?;
     let autonomous_b =
         execute_autonomous_release_cycle_transaction(&network, &submitters, marker_b.clone(), 2)?;
+    wait_for_four_peer_authenticated_fault_activation(
+        &network,
+        &second_fault,
+        "second rotating authenticated vote drop",
+    )?;
     ensure!(
         autonomous_b.merge_entry != autonomous_a.merge_entry
             && autonomous_b.entrypoint_hash != autonomous_a.entrypoint_hash,
         "recreated lane reused incarnation A's autonomous source identity"
     );
+    heal_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        &second_fault,
+        "heal second rotating authenticated vote drop",
+    )?;
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_FAULT_SENDER,
         &base_layers,
-        None,
         autonomous_b.merge_entry.merge_qc.carrier_height,
-        "heal second rotating Byzantine validator",
+        "restart second rotating vote-fault sender after heal",
     )?;
     submitters = network
         .peers()
@@ -6141,12 +6142,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         .collect();
     ensure!(
         wait_for_committed_transaction(
-            &submitters[SECOND_BYZANTINE_PEER],
+            &submitters[SECOND_FAULT_SENDER],
             autonomous_b.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed second Byzantine autonomous proof",
+            "healed second vote-fault sender autonomous proof",
         )? == autonomous_b.committed,
-        "healed second Byzantine peer reconstructed another autonomous proof"
+        "healed second vote-fault sender reconstructed another autonomous proof"
     );
     let intent_b = wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
         &network,
@@ -6210,7 +6211,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         OFFLINE_DRAIN_PEER,
         &base_layers,
-        None,
         retirement_b_height,
         "recover validator rotated offline during recreated-lane drain",
     )?;
@@ -6253,7 +6253,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         OFFLINE_DRAIN_PEER,
         &base_layers,
-        None,
         retirement_b_height,
         "restart after authenticated historical body eviction",
     )?;
@@ -6534,7 +6533,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         .map_err(|err| eyre!("invalid certified lane proposal: {err}"))?;
     ensure!(
         execution.prepare_qc.payload_availability_qc.is_some(),
-        "autonomous prepare QC omitted DA/RBC payload availability proof"
+        "autonomous prepare QC omitted DA payload-availability proof"
     );
     let lane_pops = execution
         .signer_proofs
@@ -7635,22 +7634,21 @@ mod tests {
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        FourPeerByzantineFault, LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence,
-        LaneDrainIntentLogEvidence, LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3,
-        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
-        PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-        PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
-        autoscale_soak_duration_from_env_value, commit_quorum_observation,
-        committed_lane_block_has_canonical_quorum_metadata, committed_lane_block_is_certified,
-        contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
-        decode_block_index_entry, elastic_lane_storage_progressed,
-        expansion_observed_on_quorum_or_scale_out_transition,
+        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
+        LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3, LaneRelaySnapshot,
+        LaneStatusSnapshot, LaneValidatorSnapshot, PUBLIC_PROFILE_ELASTIC_LANE_ID,
+        PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES, PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+        PeerStatusSnapshot, SoakTimingSummary, autoscale_soak_duration_from_env_value,
+        commit_quorum_observation, committed_lane_block_has_canonical_quorum_metadata,
+        committed_lane_block_is_certified, contraction_observed_on_quorum_peers,
+        contraction_observed_on_quorum_peers_for_profile, decode_block_index_entry,
+        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
         expansion_observed_on_storage_for_lane_count, expansion_probe_ready,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, first_retirement_height_after, four_peer_byzantine_fault_layer,
+        expansion_top_up_tx_count, first_retirement_height_after,
         is_autoscale_elastic_storage_segment, lifecycle_advanced_after_intent,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
         parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
@@ -7711,6 +7709,17 @@ mod tests {
             ..PeerStatusSnapshot::default()
         }
     }
+    const fn transition_stats(
+        scale_out_transitions: u64,
+        scale_in_transitions: u64,
+    ) -> AutoscaleTransitionStats {
+        AutoscaleTransitionStats {
+            scale_out_transitions,
+            scale_in_transitions,
+            scale_out_ambiguous_heights: 0,
+            scale_in_ambiguous_heights: 0,
+        }
+    }
     fn relay_snapshot(
         lane_id: u32,
         dataspace_id: u64,
@@ -7754,14 +7763,17 @@ mod tests {
             ..PeerStatusSnapshot::default()
         }
     }
+    fn uniform_commit_quorum(
+        commit_signatures_required: u64,
+        commit_qc_validator_set_len: u64,
+    ) -> Vec<PeerStatusSnapshot> {
+        let status =
+            status_with_commit_quorum(commit_signatures_required, commit_qc_validator_set_len);
+        vec![status; 4]
+    }
     #[test]
     fn commit_quorum_observation_requires_consistent_explicit_quorum() {
-        let consistent = vec![
-            status_with_commit_quorum(3, 4),
-            status_with_commit_quorum(3, 4),
-            status_with_commit_quorum(3, 4),
-            status_with_commit_quorum(3, 4),
-        ];
+        let consistent = uniform_commit_quorum(3, 4);
         assert_eq!(
             commit_quorum_observation(&consistent, 4),
             CommitQuorumObservation::Ready {
@@ -7814,12 +7826,7 @@ mod tests {
     }
     #[test]
     fn commit_quorum_observation_rejects_invalid_explicit_quorum() {
-        let invalid_required = vec![
-            status_with_commit_quorum(5, 4),
-            status_with_commit_quorum(5, 4),
-            status_with_commit_quorum(5, 4),
-            status_with_commit_quorum(5, 4),
-        ];
+        let invalid_required = uniform_commit_quorum(5, 4);
         let observation = commit_quorum_observation(&invalid_required, 4);
         assert_eq!(
             observation,
@@ -7838,12 +7845,7 @@ mod tests {
     }
     #[test]
     fn commit_quorum_observation_rejects_downgraded_explicit_quorum() {
-        let downgraded_against_validator_set = vec![
-            status_with_commit_quorum(2, 4),
-            status_with_commit_quorum(2, 4),
-            status_with_commit_quorum(2, 4),
-            status_with_commit_quorum(2, 4),
-        ];
+        let downgraded_against_validator_set = uniform_commit_quorum(2, 4);
         let observation = commit_quorum_observation(&downgraded_against_validator_set, 4);
         assert_eq!(
             observation,
@@ -7859,12 +7861,7 @@ mod tests {
                 .expect("downgraded explicit quorum should be terminal after timeout")
                 .contains("invalid commit quorum value")
         );
-        let downgraded_without_validator_set = vec![
-            status_with_commit_quorum(2, 0),
-            status_with_commit_quorum(2, 0),
-            status_with_commit_quorum(2, 0),
-            status_with_commit_quorum(2, 0),
-        ];
+        let downgraded_without_validator_set = uniform_commit_quorum(2, 0);
         assert_eq!(
             commit_quorum_observation(&downgraded_without_validator_set, 4),
             CommitQuorumObservation::InvalidRequired {
@@ -7874,12 +7871,7 @@ mod tests {
             },
             "explicit quorum without validator-set evidence must not downgrade below peer-count quorum"
         );
-        let smaller_validator_set = vec![
-            status_with_commit_quorum(2, 2),
-            status_with_commit_quorum(2, 2),
-            status_with_commit_quorum(2, 2),
-            status_with_commit_quorum(2, 2),
-        ];
+        let smaller_validator_set = uniform_commit_quorum(2, 2);
         assert_eq!(
             commit_quorum_observation(&smaller_validator_set, 4),
             CommitQuorumObservation::Ready {
@@ -7891,12 +7883,7 @@ mod tests {
     }
     #[test]
     fn commit_quorum_observation_derives_only_from_consistent_validator_set_len() {
-        let derived = vec![
-            status_with_commit_quorum(0, 4),
-            status_with_commit_quorum(0, 4),
-            status_with_commit_quorum(0, 4),
-            status_with_commit_quorum(0, 4),
-        ];
+        let derived = uniform_commit_quorum(0, 4);
         assert_eq!(
             commit_quorum_observation(&derived, 4),
             CommitQuorumObservation::Ready {
@@ -7923,12 +7910,7 @@ mod tests {
                 .expect("conflicting validator-set length should be terminal after timeout")
                 .contains("conflicting commit-QC validator-set lengths")
         );
-        let invalid_validator_len = vec![
-            status_with_commit_quorum(0, 5),
-            status_with_commit_quorum(0, 5),
-            status_with_commit_quorum(0, 5),
-            status_with_commit_quorum(0, 5),
-        ];
+        let invalid_validator_len = uniform_commit_quorum(0, 5);
         let observation = commit_quorum_observation(&invalid_validator_len, 4);
         assert!(
             matches!(
@@ -8021,43 +8003,35 @@ mod tests {
             ..PeerStatusSnapshot::default()
         }
     }
+    fn committed_lane_block_quorum_snapshot(
+        lane_id: u32,
+        height: u64,
+        prepare_signers: u32,
+        commit_signers: u32,
+    ) -> Vec<PeerStatusSnapshot> {
+        let status =
+            status_with_committed_lane_block(lane_id, height, prepare_signers, commit_signers);
+        let mut snapshot = vec![status; 3];
+        snapshot.push(PeerStatusSnapshot::default());
+        snapshot
+    }
     #[test]
     fn committed_lane_block_status_counts_as_expansion_only_after_qc_quorum() {
-        let certified = vec![
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            PeerStatusSnapshot::default(),
-        ];
+        let certified = committed_lane_block_quorum_snapshot(1, 1, 3, 3);
         assert!(expansion_observed_on_quorum_peers_for_lane(
             &certified, None, 1, 3
         ));
-        let under_quorum_prepare = vec![
-            status_with_committed_lane_block(1, 1, 2, 3),
-            status_with_committed_lane_block(1, 1, 2, 3),
-            status_with_committed_lane_block(1, 1, 2, 3),
-            PeerStatusSnapshot::default(),
-        ];
+        let under_quorum_prepare = committed_lane_block_quorum_snapshot(1, 1, 2, 3);
         assert!(
             !expansion_observed_on_quorum_peers_for_lane(&under_quorum_prepare, None, 1, 3),
             "prepare under-quorum committed lane-block status must not fake expansion"
         );
-        let under_quorum_commit = vec![
-            status_with_committed_lane_block(1, 1, 3, 2),
-            status_with_committed_lane_block(1, 1, 3, 2),
-            status_with_committed_lane_block(1, 1, 3, 2),
-            PeerStatusSnapshot::default(),
-        ];
+        let under_quorum_commit = committed_lane_block_quorum_snapshot(1, 1, 3, 2);
         assert!(
             !expansion_observed_on_quorum_peers_for_lane(&under_quorum_commit, None, 1, 3),
             "commit under-quorum committed lane-block status must not fake expansion"
         );
-        let mut wrong_dataspace = vec![
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            PeerStatusSnapshot::default(),
-        ];
+        let mut wrong_dataspace = committed_lane_block_quorum_snapshot(1, 1, 3, 3);
         for peer in wrong_dataspace.iter_mut().take(3) {
             peer.committed_lane_blocks
                 .first_mut()
@@ -8316,6 +8290,21 @@ mod tests {
             "wrong-dataspace direct-applied rows must not inflate direct-execution evidence"
         );
     }
+
+    struct RejectedCommittedLaneExecution(&'static str, bool, &'static str);
+
+    fn run_rejected_committed_lane_execution_cases(cases: &[RejectedCommittedLaneExecution]) {
+        for &RejectedCommittedLaneExecution(execution_status, payload_available, message) in cases {
+            let block = committed_lane_block_status_with_execution(
+                1,
+                1,
+                execution_status,
+                payload_available,
+            );
+            assert!(!committed_lane_block_is_certified(&block), "{message}");
+        }
+    }
+
     #[test]
     fn committed_lane_block_status_rejects_conflict_and_unknown_execution_states() {
         let allowed = [
@@ -8350,109 +8339,60 @@ mod tests {
                 "{execution_status} with matching availability should count as certified progress"
             );
         }
-        let conflict = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-            false,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&conflict),
-            "receipt/preflight conflicts must not fake autoscale expansion progress"
-        );
-        let preflight_rejected = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-            true,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&preflight_rejected),
-            "direct-execution preflight rejections must not fake autoscale expansion progress"
-        );
-        let predecessor_blocked = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-            false,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&predecessor_blocked),
-            "predecessor-blocked lane blocks must not fake autoscale expansion progress"
-        );
-        let forged_predecessor_blocked = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-            true,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&forged_predecessor_blocked),
-            "predecessor-blocked status must not become progress with a forged executable flag"
-        );
-        let forged_direct_applied = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            false,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&forged_direct_applied),
-            "direct-applied status must not become progress with a forged missing executable flag"
-        );
-        let unknown_executable =
-            committed_lane_block_status_with_execution(1, 1, "future_unknown_state", true);
-        assert!(
-            !committed_lane_block_is_certified(&unknown_executable),
-            "unknown executable statuses must be audited before rollout parsers count them"
-        );
-        let forged_awaiting = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-            true,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&forged_awaiting),
-            "awaiting status must not also claim executable payload availability"
-        );
-        let forged_recovered = committed_lane_block_status_with_execution(
-            1,
-            1,
-            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-            false,
-        );
-        assert!(
-            !committed_lane_block_is_certified(&forged_recovered),
-            "payload-ready statuses must carry matching executable availability"
-        );
+        run_rejected_committed_lane_execution_cases(&[
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+                false,
+                "receipt/preflight conflicts must not fake autoscale expansion progress",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+                true,
+                "direct-execution preflight rejections must not fake autoscale expansion progress",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+                false,
+                "predecessor-blocked lane blocks must not fake autoscale expansion progress",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+                true,
+                "predecessor-blocked status must not become progress with a forged executable flag",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+                false,
+                "direct-applied status must not become progress with a forged missing executable flag",
+            ),
+            RejectedCommittedLaneExecution(
+                "future_unknown_state",
+                true,
+                "unknown executable statuses must be audited before rollout parsers count them",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+                true,
+                "awaiting status must not also claim executable payload availability",
+            ),
+            RejectedCommittedLaneExecution(
+                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+                false,
+                "payload-ready statuses must carry matching executable availability",
+            ),
+        ]);
     }
     #[test]
     fn committed_lane_block_progress_requires_monotonic_certified_height() {
-        let baseline = vec![
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            PeerStatusSnapshot::default(),
-        ];
-        let progressed = vec![
-            status_with_committed_lane_block(1, 2, 3, 3),
-            status_with_committed_lane_block(1, 2, 3, 3),
-            status_with_committed_lane_block(1, 2, 3, 3),
-            PeerStatusSnapshot::default(),
-        ];
+        let baseline = committed_lane_block_quorum_snapshot(1, 1, 3, 3);
+        let progressed = committed_lane_block_quorum_snapshot(1, 2, 3, 3);
         assert!(expansion_observed_on_quorum_peers_for_lane(
             &progressed,
             Some(&baseline),
             1,
             3
         ));
-        let stale = vec![
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            status_with_committed_lane_block(1, 1, 3, 3),
-            PeerStatusSnapshot::default(),
-        ];
+        let stale = committed_lane_block_quorum_snapshot(1, 1, 3, 3);
         assert!(
             !expansion_observed_on_quorum_peers_for_lane(&stale, Some(&baseline), 1, 3),
             "same-height committed lane-block status must not fake post-baseline progress"
@@ -9146,22 +9086,14 @@ mod tests {
             scale_out_ambiguous_heights: 1,
             scale_in_ambiguous_heights: 1,
         };
-        let repaired_current = AutoscaleTransitionStats {
-            scale_out_transitions: 2,
-            scale_in_transitions: 2,
-            ..AutoscaleTransitionStats::default()
-        };
+        let repaired_current = transition_stats(2, 2);
         let ambiguous_current = AutoscaleTransitionStats {
             scale_out_transitions: 2,
             scale_in_transitions: 2,
             scale_out_ambiguous_heights: 1,
             scale_in_ambiguous_heights: 1,
         };
-        let clean_baseline = AutoscaleTransitionStats {
-            scale_out_transitions: 1,
-            scale_in_transitions: 1,
-            ..AutoscaleTransitionStats::default()
-        };
+        let clean_baseline = transition_stats(1, 1);
         assert_eq!(
             peers_with_scale_out_transition(
                 &vec![repaired_current; 3],
@@ -9278,34 +9210,14 @@ mod tests {
     #[test]
     fn autoscale_transition_delta_uses_peer_baseline() {
         let baseline = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 3,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 0),
+            transition_stats(2, 3),
             AutoscaleTransitionStats::default(),
         ];
         let current = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 4,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(2, 0),
+            transition_stats(2, 4),
+            transition_stats(1, 1),
         ];
         assert_eq!(peers_with_scale_out_transition(&current, &baseline), 2);
         assert_eq!(peers_with_scale_in_transition(&current, &baseline), 2);
@@ -9313,39 +9225,12 @@ mod tests {
     #[test]
     fn autoscale_transition_delta_rejects_rollbacks_and_missing_current_peers() {
         let baseline = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 3,
-                scale_in_transitions: 3,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 2,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(3, 3),
+            transition_stats(2, 2),
+            transition_stats(1, 1),
+            transition_stats(1, 1),
         ];
-        let current = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 4,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 3,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-        ];
+        let current = vec![transition_stats(2, 4), transition_stats(3, 1)];
         assert_eq!(
             peers_with_scale_out_transition(&current, &baseline),
             0,
@@ -9359,39 +9244,12 @@ mod tests {
     }
     #[test]
     fn autoscale_transition_delta_rejects_missing_baseline_peers() {
-        let baseline = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-        ];
+        let baseline = vec![transition_stats(1, 1), transition_stats(1, 1)];
         let current = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 2,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 2,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 99,
-                scale_in_transitions: 99,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 99,
-                scale_in_transitions: 99,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(2, 2),
+            transition_stats(2, 2),
+            transition_stats(99, 99),
+            transition_stats(99, 99),
         ];
         assert_eq!(
             peers_with_scale_out_transition(&current, &baseline),
@@ -9411,48 +9269,16 @@ mod tests {
     fn strict_scale_in_quorum_passes_with_post_expansion_transitions() {
         let baseline_since_cycle_start = vec![AutoscaleTransitionStats::default(); 4];
         let baseline_after_expansion = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 1),
+            transition_stats(1, 1),
+            transition_stats(1, 0),
+            transition_stats(1, 0),
         ];
         let current = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 2,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 2,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 2),
+            transition_stats(1, 2),
+            transition_stats(1, 1),
+            transition_stats(1, 0),
         ];
         let (after_expansion, since_cycle_start) = scale_in_transition_counts(
             &current,
@@ -9466,14 +9292,7 @@ mod tests {
     #[test]
     fn strict_scale_in_quorum_accepts_cycle_start_deltas_when_snapshot_races() {
         let baseline_since_cycle_start = vec![AutoscaleTransitionStats::default(); 4];
-        let baseline_after_expansion = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 1,
-                ..AutoscaleTransitionStats::default()
-            };
-            4
-        ];
+        let baseline_after_expansion = vec![transition_stats(1, 1); 4];
         let current = baseline_after_expansion.clone();
         let (after_expansion, since_cycle_start) = scale_in_transition_counts(
             &current,
@@ -10010,21 +9829,9 @@ mod tests {
         let status_without_lane_three = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let baseline_transitions = vec![AutoscaleTransitionStats::default(); 4];
         let transition_snapshot = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 0),
+            transition_stats(1, 0),
+            transition_stats(1, 0),
             AutoscaleTransitionStats::default(),
         ];
         assert!(
@@ -11703,95 +11510,164 @@ mod tests {
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));
     }
-    #[test]
-    fn expansion_accepts_scale_out_transition_quorum_without_status_signal() {
-        let status_without_expansion = vec![
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
+    #[derive(Clone, Copy)]
+    enum ExpansionGovernanceSpec {
+        None,
+        BaseOnly,
+        Expanded,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExpansionValidatorSpec {
+        total: u64,
+        active: u64,
+        pending_activation: u64,
+        jailed: u64,
+        exiting: u64,
+        max_activation_epoch: u64,
+        max_activation_height: u64,
+    }
+
+    impl ExpansionValidatorSpec {
+        const INACTIVE: Self = Self {
+            total: 4,
+            active: 0,
+            pending_activation: 0,
+            jailed: 0,
+            exiting: 0,
+            max_activation_epoch: 1,
+            max_activation_height: 100,
+        };
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExpansionPeerSpec {
+        target_lane: Option<(u64, u64)>,
+        commitment: Option<(u64, u64, u64)>,
+        governance: ExpansionGovernanceSpec,
+        validator: Option<ExpansionValidatorSpec>,
+        progress: u64,
+    }
+
+    impl ExpansionPeerSpec {
+        const fn base(governance: ExpansionGovernanceSpec) -> Self {
+            Self {
+                target_lane: None,
+                commitment: None,
+                governance,
+                validator: None,
+                progress: 10,
+            }
+        }
+
+        const fn with_target_lane(mut self, capacity: u64, committed: u64) -> Self {
+            self.target_lane = Some((capacity, committed));
+            self
+        }
+
+        const fn with_commitment(
+            mut self,
+            block_height: u64,
+            tx_count: u64,
+            teu_total: u64,
+        ) -> Self {
+            self.commitment = Some((block_height, tx_count, teu_total));
+            self
+        }
+
+        const fn with_governance(mut self, governance: ExpansionGovernanceSpec) -> Self {
+            self.governance = governance;
+            self
+        }
+
+        const fn with_validator(mut self, validator: ExpansionValidatorSpec) -> Self {
+            self.validator = Some(validator);
+            self
+        }
+
+        const fn with_progress(mut self, progress: u64) -> Self {
+            self.progress = progress;
+            self
+        }
+    }
+
+    fn expansion_status_peer(spec: ExpansionPeerSpec) -> PeerStatusSnapshot {
+        let mut lanes = vec![LaneStatusSnapshot {
+            lane_id: 0,
+            capacity: 6000,
+            committed: 12,
+        }];
+        if let Some((capacity, committed)) = spec.target_lane {
+            lanes.push(LaneStatusSnapshot {
+                lane_id: 1,
+                capacity,
+                committed,
+            });
+        }
+        let lane_commitments = if let Some((block_height, tx_count, teu_total)) = spec.commitment {
+            vec![LaneCommitmentSnapshot {
+                lane_id: 1,
+                block_height,
+                tx_count,
+                teu_total,
+            }]
+        } else {
+            Vec::new()
+        };
+        let lane_governance_ids = match spec.governance {
+            ExpansionGovernanceSpec::None => Vec::new(),
+            ExpansionGovernanceSpec::BaseOnly => vec![0],
+            ExpansionGovernanceSpec::Expanded => vec![0, 1],
+        };
+        let lane_validators = if let Some(validator) = spec.validator {
+            vec![LaneValidatorSnapshot {
+                lane_id: 1,
+                total: validator.total,
+                active: validator.active,
+                pending_activation: validator.pending_activation,
+                jailed: validator.jailed,
+                exiting: validator.exiting,
+                max_activation_epoch: validator.max_activation_epoch,
+                max_activation_height: validator.max_activation_height,
+            }]
+        } else {
+            Vec::new()
+        };
+        PeerStatusSnapshot {
+            lanes,
+            lane_commitments,
+            lane_governance_ids,
+            lane_relay: Vec::new(),
+            lane_validators,
+            commit_signatures_required: 3,
+            commit_qc_validator_set_len: 4,
+            txs_approved: spec.progress,
+            txs_rejected: 0,
+            blocks_non_empty: spec.progress,
+            ..PeerStatusSnapshot::default()
+        }
+    }
+
+    fn expansion_status_snapshot(specs: &[ExpansionPeerSpec]) -> Vec<PeerStatusSnapshot> {
+        let mut snapshot = Vec::with_capacity(specs.len());
+        for spec in specs {
+            snapshot.push(expansion_status_peer(*spec));
+        }
+        snapshot
+    }
+
+    fn run_scale_out_transition_evidence_case() {
+        let status_without_expansion = expansion_status_snapshot(&[
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly),
+        ]);
         let baseline_transitions = vec![AutoscaleTransitionStats::default(); 4];
         let transition_snapshot = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 0),
+            transition_stats(2, 0),
+            transition_stats(1, 0),
             AutoscaleTransitionStats::default(),
         ];
         assert!(!expansion_observed_on_quorum_peers(
@@ -11819,99 +11695,14 @@ mod tests {
             4
         ));
     }
-    #[test]
-    fn expansion_requires_active_lane_signal_on_quorum_peers() {
-        let status_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 5000,
-                        committed: 4,
-                    },
-                ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 4000,
-                        committed: 3,
-                    },
-                ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 3000,
-                        committed: 2,
-                    },
-                ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
+
+    fn run_active_lane_evidence_case() {
+        let status_snapshot = expansion_status_snapshot(&[
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None).with_target_lane(5000, 4),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None).with_target_lane(4000, 3),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None).with_target_lane(3000, 2),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None),
+        ]);
         assert!(expansion_observed_on_quorum_peers(
             &status_snapshot,
             None,
@@ -11922,151 +11713,49 @@ mod tests {
             None,
             4
         ));
-        let zero_capacity_snapshot = status_snapshot
-            .iter()
-            .cloned()
-            .map(|mut peer| {
-                for lane in &mut peer.lanes {
-                    if lane.lane_id == 1 {
-                        lane.capacity = 0;
-                        lane.committed = 0;
-                    }
+        let mut zero_capacity_snapshot = status_snapshot.clone();
+        for peer in &mut zero_capacity_snapshot {
+            for lane in &mut peer.lanes {
+                if lane.lane_id == 1 {
+                    lane.capacity = 0;
+                    lane.committed = 0;
                 }
-                peer
-            })
-            .collect::<Vec<_>>();
+            }
+        }
         assert!(!expansion_observed_on_quorum_peers(
             &zero_capacity_snapshot,
             None,
             3
         ));
-        let committed_only_snapshot = status_snapshot
-            .iter()
-            .cloned()
-            .map(|mut peer| {
-                for lane in &mut peer.lanes {
-                    if lane.lane_id == 1 {
-                        lane.capacity = 0;
-                        lane.committed = 1;
-                    }
+        let mut committed_only_snapshot = status_snapshot;
+        for peer in &mut committed_only_snapshot {
+            for lane in &mut peer.lanes {
+                if lane.lane_id == 1 {
+                    lane.capacity = 0;
+                    lane.committed = 1;
                 }
-                peer
-            })
-            .collect::<Vec<_>>();
+            }
+        }
         assert!(expansion_observed_on_quorum_peers(
             &committed_only_snapshot,
             None,
             3
         ));
     }
-    #[test]
-    fn expansion_accepts_sumeragi_lane_commitment_activity_on_quorum_peers() {
-        let commitment_only_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 4,
-                    teu_total: 128,
-                }],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 2,
-                    teu_total: 64,
-                }],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 1,
-                    teu_total: 32,
-                }],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
+
+    fn run_commitment_evidence_case() {
+        let commitment_only_snapshot = expansion_status_snapshot(&[
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None)
+                .with_target_lane(0, 0)
+                .with_commitment(10, 4, 128),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None)
+                .with_target_lane(0, 0)
+                .with_commitment(10, 2, 64),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None)
+                .with_target_lane(0, 0)
+                .with_commitment(10, 1, 32),
+            ExpansionPeerSpec::base(ExpansionGovernanceSpec::None),
+        ]);
         assert!(expansion_observed_on_quorum_peers(
             &commitment_only_snapshot,
             None,
@@ -12077,576 +11766,117 @@ mod tests {
             None,
             4
         ));
-        let zero_commitment_activity = commitment_only_snapshot
-            .iter()
-            .cloned()
-            .map(|mut peer| {
-                for commitment in &mut peer.lane_commitments {
-                    commitment.tx_count = 0;
-                    commitment.teu_total = 0;
-                }
-                peer
-            })
-            .collect::<Vec<_>>();
+        let mut zero_commitment_activity = commitment_only_snapshot;
+        for peer in &mut zero_commitment_activity {
+            for commitment in &mut peer.lane_commitments {
+                commitment.tx_count = 0;
+                commitment.teu_total = 0;
+            }
+        }
         assert!(!expansion_observed_on_quorum_peers(
             &zero_commitment_activity,
             None,
             3
         ));
     }
-    #[test]
-    fn expansion_accepts_lane_declaration_transition_on_quorum_peers() {
-        let baseline_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
-        let declaration_transition_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
-        assert!(expansion_observed_on_quorum_peers(
-            &declaration_transition_snapshot,
-            Some(&baseline_snapshot),
-            3
-        ));
-        assert!(!expansion_observed_on_quorum_peers(
-            &declaration_transition_snapshot,
-            None,
-            3
-        ));
+
+    #[derive(Clone, Copy)]
+    enum BaselineExpansionEvidenceCase {
+        Declaration,
+        CommitmentProgress,
+        Validator,
     }
-    #[test]
-    fn expansion_accepts_lane_progress_transition_on_quorum_peers() {
-        let baseline_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 6000,
-                        committed: 12,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 10,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
-        let progress_transition_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[0].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 11,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[1].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 11,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[2].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
-                    lane_id: 1,
-                    block_height: 11,
-                    tx_count: 0,
-                    teu_total: 0,
-                }],
-                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[3].lanes.clone(),
-                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
-        assert!(expansion_observed_on_quorum_peers(
-            &progress_transition_snapshot,
-            Some(&baseline_snapshot),
-            3
-        ));
-        assert!(!expansion_observed_on_quorum_peers(
-            &progress_transition_snapshot,
-            None,
-            3
-        ));
-    }
-    #[test]
-    fn expansion_accepts_lane_validator_transition_on_quorum_peers() {
-        let baseline_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
-                    active: 0,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
-                    max_activation_height: 100,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
-                    active: 0,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
-                    max_activation_height: 100,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
-                    active: 0,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
-                    max_activation_height: 100,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: vec![LaneStatusSnapshot {
-                    lane_id: 0,
-                    capacity: 6000,
-                    committed: 12,
-                }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
-                    active: 0,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
-                    max_activation_height: 100,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 10,
-                txs_rejected: 0,
-                blocks_non_empty: 10,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
-        let validator_transition_snapshot = vec![
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[0].lanes.clone(),
-                lane_commitments: baseline_snapshot[0].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
+
+    fn run_baseline_expansion_evidence_case(case: BaselineExpansionEvidenceCase) {
+        let (baseline_specs, current_specs) = match case {
+            BaselineExpansionEvidenceCase::Declaration => {
+                let baseline = [ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly); 4];
+                let mut current = [ExpansionPeerSpec::base(ExpansionGovernanceSpec::BaseOnly)
+                    .with_progress(11); 4];
+                for peer in current.iter_mut().take(3) {
+                    *peer = peer.with_governance(ExpansionGovernanceSpec::Expanded);
+                }
+                (baseline, current)
+            }
+            BaselineExpansionEvidenceCase::CommitmentProgress => {
+                let baseline_peer = ExpansionPeerSpec::base(ExpansionGovernanceSpec::Expanded)
+                    .with_target_lane(0, 0)
+                    .with_commitment(10, 0, 0);
+                let baseline = [baseline_peer; 4];
+                let mut current = [baseline_peer.with_progress(11); 4];
+                for peer in current.iter_mut().take(3) {
+                    *peer = peer.with_commitment(11, 0, 0);
+                }
+                (baseline, current)
+            }
+            BaselineExpansionEvidenceCase::Validator => {
+                let baseline_peer = ExpansionPeerSpec::base(ExpansionGovernanceSpec::Expanded)
+                    .with_validator(ExpansionValidatorSpec::INACTIVE);
+                let baseline = [baseline_peer; 4];
+                let mut current = [baseline_peer.with_progress(11); 4];
+                current[0] = current[0].with_validator(ExpansionValidatorSpec {
                     active: 3,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
-                    max_activation_height: 100,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[1].lanes.clone(),
-                lane_commitments: baseline_snapshot[1].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
+                    ..ExpansionValidatorSpec::INACTIVE
+                });
+                current[1] = current[1].with_validator(ExpansionValidatorSpec {
                     active: 2,
                     pending_activation: 1,
-                    jailed: 0,
-                    exiting: 0,
-                    max_activation_epoch: 1,
                     max_activation_height: 101,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[2].lanes.clone(),
-                lane_commitments: baseline_snapshot[2].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: vec![LaneValidatorSnapshot {
-                    lane_id: 1,
-                    total: 4,
+                    ..ExpansionValidatorSpec::INACTIVE
+                });
+                current[2] = current[2].with_validator(ExpansionValidatorSpec {
                     active: 1,
-                    pending_activation: 0,
-                    jailed: 0,
-                    exiting: 0,
                     max_activation_epoch: 2,
                     max_activation_height: 102,
-                }],
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-            PeerStatusSnapshot {
-                lanes: baseline_snapshot[3].lanes.clone(),
-                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
-                lane_relay: vec![],
-                lane_validators: baseline_snapshot[3].lane_validators.clone(),
-                commit_signatures_required: 3,
-                commit_qc_validator_set_len: 4,
-                txs_approved: 11,
-                txs_rejected: 0,
-                blocks_non_empty: 11,
-                ..PeerStatusSnapshot::default()
-            },
-        ];
+                    ..ExpansionValidatorSpec::INACTIVE
+                });
+                (baseline, current)
+            }
+        };
+        let baseline_snapshot = expansion_status_snapshot(&baseline_specs);
+        let transition_snapshot = expansion_status_snapshot(&current_specs);
         assert!(expansion_observed_on_quorum_peers(
-            &validator_transition_snapshot,
+            &transition_snapshot,
             Some(&baseline_snapshot),
             3
         ));
         assert!(!expansion_observed_on_quorum_peers(
-            &validator_transition_snapshot,
+            &transition_snapshot,
             None,
             3
         ));
     }
+
+    #[test]
+    fn expansion_accepts_scale_out_transition_quorum_without_status_signal() {
+        run_scale_out_transition_evidence_case();
+    }
+
+    #[test]
+    fn expansion_requires_active_lane_signal_on_quorum_peers() {
+        run_active_lane_evidence_case();
+    }
+
+    #[test]
+    fn expansion_accepts_sumeragi_lane_commitment_activity_on_quorum_peers() {
+        run_commitment_evidence_case();
+    }
+
+    #[test]
+    fn expansion_accepts_lane_declaration_transition_on_quorum_peers() {
+        run_baseline_expansion_evidence_case(BaselineExpansionEvidenceCase::Declaration);
+    }
+
+    #[test]
+    fn expansion_accepts_lane_progress_transition_on_quorum_peers() {
+        run_baseline_expansion_evidence_case(BaselineExpansionEvidenceCase::CommitmentProgress);
+    }
+
+    #[test]
+    fn expansion_accepts_lane_validator_transition_on_quorum_peers() {
+        run_baseline_expansion_evidence_case(BaselineExpansionEvidenceCase::Validator);
+    }
+
     #[test]
     fn expansion_rejects_ambiguous_lane_validator_rows() {
         let baseline_snapshot = vec![status_with_declared_lanes(&[0]); 4];
@@ -12771,21 +12001,9 @@ mod tests {
     #[test]
     fn strict_expansion_requires_fresh_scale_out_delta_after_baseline() {
         let baseline_transitions = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(1, 0),
+            transition_stats(1, 0),
+            transition_stats(1, 0),
             AutoscaleTransitionStats::default(),
         ];
         let stale_current = baseline_transitions.clone();
@@ -12795,21 +12013,9 @@ mod tests {
             3,
         ));
         let fresh_current = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 2,
-                scale_in_transitions: 0,
-                ..AutoscaleTransitionStats::default()
-            },
+            transition_stats(2, 0),
+            transition_stats(2, 0),
+            transition_stats(2, 0),
             AutoscaleTransitionStats::default(),
         ];
         assert!(scale_out_transition_observed_on_quorum_peers(
@@ -12993,41 +12199,6 @@ mod tests {
             Some(102),
             "the recreated-lane observer must select the first strictly post-carrier retirement"
         );
-    }
-    #[test]
-    fn four_peer_byzantine_layers_enable_one_exact_fault_class() {
-        let conflicting = four_peer_byzantine_fault_layer(FourPeerByzantineFault::ConflictingReady);
-        let conflicting_rbc = conflicting
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("conflicting READY layer has an RBC table");
-        assert_eq!(
-            conflicting_rbc
-                .get("conflicting_ready_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0b1111)
-        );
-        assert!(!conflicting_rbc.contains_key("duplicate_inits"));
-        let duplicate = four_peer_byzantine_fault_layer(FourPeerByzantineFault::DuplicateInits);
-        let duplicate_rbc = duplicate
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("duplicate INIT layer has an RBC table");
-        assert_eq!(
-            duplicate_rbc
-                .get("duplicate_inits")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert!(!duplicate_rbc.contains_key("conflicting_ready_mask"));
     }
     #[test]
     fn block_index_decoder_requires_an_exact_positive_height_entry() {

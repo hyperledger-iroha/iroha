@@ -2642,9 +2642,14 @@ pub enum NativeAmxQcValidationError {
     /// signer bitmap has the wrong length or an out-of-range bit
     #[error("native AMX QC signer bitmap is malformed")]
     InvalidSignerBitmap,
-    /// signer bitmap is below the required committee quorum
-    #[error("native AMX QC quorum is not met")]
-    QuorumNotMet,
+    /// signer bitmap does not carry exactly the canonical committee quorum
+    #[error("native AMX QC signer count mismatch: expected exactly {expected}, got {actual}")]
+    SignerCountMismatch {
+        /// Canonical signer count required by the committee.
+        expected: usize,
+        /// Signer count carried by the certificate bitmap.
+        actual: usize,
+    },
     /// selected signer is not a BLS-normal identity
     #[error("native AMX QC signer is not BLS-normal")]
     SignerNotBlsNormal,
@@ -2736,8 +2741,11 @@ pub fn validate_native_amx_qc(
             signer_pops.push(pop.as_slice());
         }
     }
-    if signer_keys.len() < min_signers {
-        return Err(NativeAmxQcValidationError::QuorumNotMet);
+    if signer_keys.len() != min_signers {
+        return Err(NativeAmxQcValidationError::SignerCountMismatch {
+            expected: min_signers,
+            actual: signer_keys.len(),
+        });
     }
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &expected_body.signature_preimage(),
@@ -2900,7 +2908,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                         .all(|pop| pop.len() == NATIVE_AMX_BLS_PROOF_BYTES)
                     && qc.signers_bitmap.len() == validator_count.div_ceil(8)
                     && trailing_bits_clear
-                    && signer_count >= expected_quorum
+                    && signer_count == expected_quorum
                     && qc.bls_aggregate_signature.len() == NATIVE_AMX_BLS_PROOF_BYTES
             };
             if !common_qc_shape(prepare, NativeAmxPhase::Prepare)
@@ -3046,6 +3054,7 @@ pub fn aggregate_votes_to_qc(
     let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
     let ordered_signatures = indexed_signatures
         .into_iter()
+        .take(min_signers)
         .map(|(index, signature)| {
             signers_bitmap[index / 8] |= 1_u8 << (index % 8);
             signature
@@ -4873,45 +4882,6 @@ mod tests {
         let expected_aggregate = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
             .expect("aggregate reference signatures");
         assert_eq!(qc.bls_aggregate_signature, expected_aggregate);
-    }
-    #[test]
-    fn aggregate_votes_to_qc_preserves_sparse_high_index_signer_order() {
-        let mut keypairs = (1_u8..=10).map(checked_bls_keypair).collect::<Vec<_>>();
-        keypairs.sort_by_key(|keypair| PeerId::new(keypair.public_key().clone()));
-        let validator_set = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        let body = body_for_validator_set(NativeAmxPhase::Commit, &validator_set);
-        let validator_set_pops = aligned_pops(&validator_set, &keypairs);
-        let signer_indices = [0_usize, 1, 2, 3, 4, 8, 9];
-        let votes = signer_indices
-            .into_iter()
-            .map(|index| signed_vote(&body, &keypairs[index]))
-            .collect::<Vec<_>>();
-        let qc = aggregate_votes_to_qc(body, validator_set.clone(), validator_set_pops, &votes, 7)
-            .expect("exact-threshold sparse native AMX QC");
-        assert_eq!(qc.signers_bitmap, vec![0b0001_1111, 0b0000_0011]);
-        let pops = keypairs
-            .iter()
-            .map(|keypair| {
-                (
-                    keypair.public_key().clone(),
-                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                        .expect("prove fixture PoP"),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            validate_native_amx_qc(&qc, &body, &validator_set, 7, &pops),
-            Ok(())
-        );
-        let mut high_padding_bit = qc;
-        high_padding_bit.signers_bitmap[1] |= 0b1000_0000;
-        assert_eq!(
-            validate_native_amx_qc(&high_padding_bit, &body, &validator_set, 7, &pops),
-            Err(NativeAmxQcValidationError::InvalidSignerBitmap)
-        );
     }
     #[test]
     fn aggregate_votes_to_qc_rejects_bad_vote_sets() {

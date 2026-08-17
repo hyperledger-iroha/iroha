@@ -137,7 +137,7 @@ fn governance_readback_is_discarded_when_provider_qualification_drifts() {
     );
     let policy = publication_policy(&trust);
     let signed = signed_snapshot(&trust, [0xD8; 16], None, FINALIZED_AT_MS / 1_000);
-    let block = governance_block_after(&signed, None);
+    let block = governance_block(&signed, None);
     let readback = ReputationGovernanceDagReadbackV1 {
         version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
         head: governance_head(std::slice::from_ref(&block)),

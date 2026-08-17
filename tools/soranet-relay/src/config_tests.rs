@@ -137,8 +137,10 @@ fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
     .into_bytes();
     manifest.resize(DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1, b' ');
     std::fs::write(exact.path(), manifest).expect("write exact manifest");
-    let mut policy = HandshakePolicy::default();
-    policy.descriptor_manifest_path = Some(exact.path().to_path_buf());
+    let mut policy = HandshakePolicy {
+        descriptor_manifest_path: Some(exact.path().to_path_buf()),
+        ..HandshakePolicy::default()
+    };
     assert_eq!(
         policy
             .identity_private_key_from_manifest()
@@ -168,8 +170,10 @@ fn descriptor_manifest_preflight_bounds_recursive_lookup() {
     deep.push_str("null");
     deep.push_str(&"]".repeat(DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1 + 1));
     let manifest = write_manifest(&deep);
-    let mut policy = HandshakePolicy::default();
-    policy.descriptor_manifest_path = Some(manifest.path().to_path_buf());
+    let policy = HandshakePolicy {
+        descriptor_manifest_path: Some(manifest.path().to_path_buf()),
+        ..HandshakePolicy::default()
+    };
     let error = policy
         .manifest_secrets()
         .expect_err("deep manifest must fail before Value allocation");
@@ -244,13 +248,15 @@ fn certificate_issuer_fields_are_length_checked_before_hex_decode() {
 }
 #[test]
 fn handshake_validation_enforces_producer_collection_limit() {
-    let mut policy = HandshakePolicy::default();
-    policy.kem = std::iter::repeat_with(|| KemPolicyEntry {
-        id: "ml-kem-768".to_string(),
-        required: true,
-    })
-    .take(RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1)
-    .collect();
+    let mut policy = HandshakePolicy {
+        kem: std::iter::repeat_with(|| KemPolicyEntry {
+            id: "ml-kem-768".to_string(),
+            required: true,
+        })
+        .take(RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1)
+        .collect(),
+        ..HandshakePolicy::default()
+    };
     policy
         .validate()
         .expect("producer collection at exact limit must validate");

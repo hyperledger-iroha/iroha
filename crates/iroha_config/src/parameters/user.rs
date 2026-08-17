@@ -7814,9 +7814,8 @@ pub struct Settlement {
     pub router: Router,
 }
 /// User-level optional Kagemusha proof-release cache configuration.
-#[allow(clippy::struct_field_names)]
 #[derive(Debug, ReadConfig, Clone)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the kagemusha_ prefix is part of the public settlement configuration schema"
 )]
@@ -8438,9 +8437,9 @@ impl Streaming {
                 );
                 None
             }
-            (Some(_), true, None) | (None, true, None) => None,
+            (Some(_) | None, true, None) => None,
             (None, false, None) => Some(identity.clone()),
-            (Some(_), false, Some(_)) | (None, false, Some(_)) => {
+            (Some(_) | None, false, Some(_)) => {
                 unreachable!("an unconfigured private-key source cannot resolve")
             }
         }
@@ -11330,11 +11329,6 @@ impl Nexus {
                         }
                     }
                 }
-                if let Some(shard_id) = descriptor.shard_id {
-                    lane_metadata
-                        .metadata
-                        .insert("shard_id".to_string(), shard_id.to_string());
-                }
                 if let Some(raw_scheme) = Self::normalize_opt(descriptor.proof_scheme) {
                     match raw_scheme.parse::<DaProofScheme>() {
                         Ok(scheme) => lane_metadata.proof_scheme = scheme,
@@ -11386,6 +11380,11 @@ impl Nexus {
                         }
                     })
                     .collect();
+                if let Some(shard_id) = descriptor.shard_id {
+                    lane_metadata
+                        .metadata
+                        .insert("da_shard_id".to_string(), shard_id.to_string());
+                }
                 lane_entries.push(lane_metadata);
             }
         }
@@ -12236,10 +12235,8 @@ pub struct Snapshot {
     /// Chunk size (bytes) used to derive Merkle proofs for snapshots.
     #[config(default = "defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES")]
     pub merkle_chunk_size_bytes: NonZeroUsize,
-    /// Maximum snapshot payload bytes buffered during startup.
-    ///
-    /// Snapshot authentication precedes JSON state construction, but restoration uses
-    /// additional transient memory beyond this on-disk byte bound.
+    /// Maximum authenticated snapshot bytes buffered during startup; restoration may
+    /// use additional transient memory beyond this on-disk bound.
     #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
     /// Typed decode and transient-allocation budgets for snapshot restoration.
@@ -12255,6 +12252,10 @@ pub struct Snapshot {
 }
 /// Strict typed-decoder and transient-allocation budgets for snapshot restoration.
 #[derive(Debug, Clone, Copy, ReadConfig)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public config keys share max_ prefix"
+)]
 pub struct SnapshotResourcePolicy {
     /// Maximum nesting depth admitted by the typed decoder.
     #[config(default = "defaults::snapshot::MAX_DECODE_DEPTH")]
@@ -12286,10 +12287,8 @@ impl Default for SnapshotResourcePolicy {
 impl SnapshotResourcePolicy {
     /// Validate resource-budget relationships against the enclosing payload bound.
     ///
-    /// The decoder cannot honor an individual-value budget larger than either
-    /// the authenticated payload or its total transient-allocation budget.
-    /// Keeping these relationships fail-closed also prevents a configuration
-    /// typo from silently weakening the smaller limit.
+    /// Relationships stay fail-closed so values cannot exceed the authenticated
+    /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
         if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
             return Err(format!(
@@ -16781,100 +16780,11 @@ impl ToriiKagemushaCommands {
     }
 }
 #[cfg(test)]
-mod torii_kagemusha_commands_tests {
-    use super::*;
-    use iroha_crypto::ExposedPrivateKey;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
-    struct TestKeyFile(PathBuf);
-    impl TestKeyFile {
-        fn create(contents: &str) -> Self {
-            let sequence = NEXT_KEY_FILE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "iroha-config-kagemusha-{}-{sequence}.key",
-                std::process::id()
-            ));
-            fs::write(&path, contents).expect("write Kagemusha key file");
-            Self(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TestKeyFile {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
-        }
-    }
-    fn sample() -> ToriiKagemushaCommands {
-        let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-        ToriiKagemushaCommands {
-            enabled: true,
-            private_key: Some(key_pair.private_key().clone()),
-            private_key_file: None,
-            minimum_xor_balance: Quantity::from(25_u32),
-            max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
-            operation_registry_max_entries:
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES,
-            operation_registry_max_bytes:
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
-        }
-    }
-    #[test]
-    fn parses_minimal_kagemusha_submission_authority() {
-        let parsed = sample().parse().expect("enabled configuration");
-        assert_eq!(
-            parsed.operation_registry_max_entries.get(),
-            defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
-        );
-        assert_eq!(parsed.minimum_xor_balance, Quantity::from(25_u32));
-        assert!(!parsed.max_tx_value.is_zero());
-    }
-    #[test]
-    fn parses_owner_held_kagemusha_submission_key() {
-        let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
-        let key_file = TestKeyFile::create(&format!(
-            "{}\n",
-            ExposedPrivateKey(key_pair.private_key().clone())
-        ));
-        let mut config = sample();
-        config.private_key = None;
-        config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-        let parsed = config.parse().expect("file-backed Kagemusha config");
-        assert_eq!(
-            parsed.authority,
-            AccountId::new(key_pair.public_key().clone())
-        );
-    }
-    #[test]
-    fn rejects_duplicate_kagemusha_private_key_sources() {
-        let key_file = TestKeyFile::create("");
-        let mut config = sample();
-        config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-    #[test]
-    fn rejects_zero_minimum_xor_balance() {
-        let mut config = sample();
-        config.minimum_xor_balance = Quantity::zero();
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-    #[test]
-    fn rejects_zero_operation_registry_limits() {
-        let mut config = sample();
-        config.operation_registry_max_entries = 0;
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-    #[test]
-    fn rejects_zero_maximum_transaction_value() {
-        let mut config = sample();
-        config.max_tx_value = Quantity::zero();
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-}
-#[cfg(test)]
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
+#[cfg(test)]
+#[path = "user/torii_kagemusha_commands_tests.rs"]
+mod torii_kagemusha_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRamLfe {
@@ -31334,7 +31244,7 @@ mod duration_clamp_tests {
                 ));
                 match fs::create_dir(&path) {
                     Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => panic!("create test directory {}: {error}", path.display()),
                 }
             }
@@ -31684,7 +31594,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524288),
+                    Value::Integer(524_288),
                 ),
             ])),
         );
@@ -31896,6 +31806,43 @@ policy_digest_hex = "{policy_digest_hex}"
         routing.insert("default_lane".into(), Value::Integer(default_lane));
         routing.insert("rules".into(), Value::Array(Vec::new()));
         Value::Table(routing)
+    }
+    #[test]
+    fn nexus_lane_shard_id_uses_canonical_metadata_key() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_lane_count(nexus, 2);
+        let mut sharded = lane_descriptor(1, "sharded");
+        {
+            let sharded = sharded.as_table_mut().expect("lane descriptor table");
+            sharded.insert("shard_id".into(), Value::Integer(9));
+            sharded
+                .get_mut("metadata")
+                .and_then(Value::as_table_mut)
+                .expect("lane metadata table")
+                .insert("da_shard_id".into(), Value::String("7".into()));
+        }
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![lane_descriptor(0, "primary"), sharded]),
+        );
+
+        let actual = load_root(table);
+        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane = actual
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .expect("configured sharded lane");
+        assert_eq!(
+            lane.metadata.get("da_shard_id").map(String::as_str),
+            Some("9"),
+            "the dedicated shard_id field must override normalized raw metadata"
+        );
+        assert_eq!(actual.nexus.lane_config.shard_id(lane_id), 9);
     }
     fn checked_onboarding_authority_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)

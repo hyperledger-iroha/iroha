@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         metadata::Metadata,
         nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
-    use super::*;
     #[test]
     fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
         let lanes = sora_lane_catalog();
@@ -1182,6 +1182,30 @@ mod tests {
             "data-model genesis defaults must track the canonical config projection",
         );
     }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
+        let universal = DataSpaceMetadata::default();
+        let settlement = DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "settlement".to_owned(),
+            description: Some("settlement dataspace".to_owned()),
+            fault_tolerance: 2,
+        };
+        let left = Nexus {
+            dataspace_catalog: DataSpaceCatalog::new(vec![universal.clone(), settlement.clone()])
+                .expect("valid dataspace catalog"),
+            ..Nexus::default()
+        };
+        let mut right = left.clone();
+        right.dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
+            .expect("valid reordered dataspace catalog");
+
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
+        );
+    }
     fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {
         let peer = PeerId::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1351,6 +1375,463 @@ mod tests {
                 &[second_lifecycle, first_lifecycle],
             ),
             "lane lifecycle input order must not affect the context commitment"
+        );
+    }
+}
+#[cfg(test)]
+mod sora_profile_tests {
+    use super::*;
+    use iroha_config_base::toml::TomlSource;
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
+    use std::num::NonZeroU32;
+    use toml::Table;
+    const MINIMAL_CONFIG: &str = r#"
+chain = "00000000-0000-0000-0000-000000000000"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+"#;
+    pub(super) fn minimal_root() -> Root {
+        let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
+        Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
+    }
+    fn minimal_root_with_sorafs_admission() -> Root {
+        let config = format!(
+            r#"{MINIMAL_CONFIG}
+
+[sorafs.discovery.admission]
+envelopes_dir = "admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
+"#
+        );
+        let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
+        Root::from_toml_source(TomlSource::inline(table))
+            .expect("load config with valid SoraFS admission")
+    }
+    #[test]
+    fn apply_sora_profile_leaves_discovery_disabled_without_admission() {
+        let mut root = minimal_root();
+        assert!(root.torii.sorafs_discovery.admission.is_none());
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+        root.apply_sora_profile();
+        assert!(root.nexus.enabled, "Sora profile must still enable Nexus");
+        assert!(
+            root.torii.sorafs_storage.enabled,
+            "Sora profile must still enable SoraFS storage"
+        );
+        assert!(
+            !root.torii.sorafs_discovery.discovery_enabled,
+            "discovery must remain fail-closed without an admission trust policy"
+        );
+    }
+    #[test]
+    fn apply_sora_profile_enables_discovery_with_parsed_admission() {
+        let mut root = minimal_root_with_sorafs_admission();
+        let trusted_council_keys = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("parsed admission policy")
+            .trusted_council_keys
+            .clone();
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+        root.apply_sora_profile();
+        let admission = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("profile must preserve parsed admission policy");
+        assert!(root.torii.sorafs_discovery.discovery_enabled);
+        assert_eq!(admission.trusted_council_keys, trusted_council_keys);
+        assert_eq!(admission.signature_threshold.get(), 1);
+        assert_eq!(admission.envelopes_dir, PathBuf::from("admission"));
+    }
+    #[test]
+    fn apply_sora_profile_enables_nexus_and_sets_catalogs_on_defaults() {
+        let mut root = minimal_root();
+        root.apply_sora_profile();
+        assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
+        assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
+        assert_eq!(root.nexus.routing_policy, sora_routing_policy());
+        assert_eq!(
+            root.nexus.lane_config.entries().len(),
+            root.nexus.lane_catalog.lanes().len()
+        );
+        assert_eq!(
+            root.tiered_state
+                .da_store_root
+                .as_ref()
+                .expect("DA store root should be defaulted"),
+            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
+        );
+    }
+    #[test]
+    fn has_lane_overrides_detects_single_lane_changes() {
+        let mut root = minimal_root();
+        root.nexus.enabled = false;
+        root.nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("nonzero lane count"),
+            vec![LaneConfigMetadata {
+                alias: "custom".to_string(),
+                ..LaneConfigMetadata::default()
+            }],
+        )
+        .expect("lane catalog");
+        assert!(root.nexus.has_lane_overrides());
+        assert!(
+            !root.nexus.uses_multilane_catalogs(),
+            "single-lane overrides should not be treated as multi-lane"
+        );
+    }
+    #[test]
+    fn apply_sora_profile_preserves_custom_catalogs_but_enables_flag() {
+        let mut root = minimal_root();
+        let custom_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfigMetadata {
+                    id: LaneId::new(0),
+                    alias: "alpha".to_string(),
+                    description: None,
+                    ..LaneConfigMetadata::default()
+                },
+                LaneConfigMetadata {
+                    id: LaneId::new(1),
+                    alias: "beta".to_string(),
+                    description: None,
+                    ..LaneConfigMetadata::default()
+                },
+            ],
+        )
+        .expect("valid custom catalog");
+        root.nexus.lane_config = LaneConfig::from_catalog(&custom_catalog);
+        root.nexus.lane_catalog = custom_catalog.clone();
+        root.apply_sora_profile();
+        assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert_eq!(
+            root.tiered_state
+                .da_store_root
+                .as_ref()
+                .expect("DA store root should be defaulted"),
+            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
+        );
+        assert_eq!(root.nexus.lane_catalog, custom_catalog);
+        assert_eq!(
+            root.nexus
+                .lane_config
+                .entry(LaneId::new(1))
+                .expect("lane config should be preserved")
+                .alias,
+            "beta"
+        );
+    }
+    #[test]
+    fn apply_storage_budget_clamps_component_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.local_budget_bytes = Some(Bytes(1_000));
+        root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
+            kura_blocks_bps: 5_000,
+            wsv_snapshots_bps: 2_000,
+            sorafs_bps: 2_000,
+            soranet_spool_bps: 500,
+            soravpn_spool_bps: 500,
+        };
+        root.tiered_state.enabled = false;
+        root.tiered_state.cold_store_root = None;
+        root.tiered_state.da_store_root = None;
+        root.kura.max_disk_usage_bytes = Bytes(0);
+        root.tiered_state.max_cold_bytes = Bytes(0);
+        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
+        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
+        root.apply_storage_budget();
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(1_000)
+        );
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
+        assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
+        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 50);
+        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 50);
+        assert!(root.tiered_state.enabled, "tiered state should be enabled");
+        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
+        assert!(root.tiered_state.da_store_root.is_none());
+        assert_eq!(
+            root.tiered_state
+                .cold_store_root
+                .as_ref()
+                .expect("cold store root defaulted")
+                .as_os_str(),
+            defaults::tiered_state::DEFAULT_COLD_STORE_ROOT
+        );
+    }
+    #[test]
+    fn apply_derived_storage_budget_uses_filesystem_group_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let filesystem_budgets = vec![
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
+                components: vec![
+                    NexusStorageBudgetComponent::Kura,
+                    NexusStorageBudgetComponent::Sorafs,
+                ],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(1_200).expect("non-zero budget"),
+                components: vec![
+                    NexusStorageBudgetComponent::WsvCold,
+                    NexusStorageBudgetComponent::SoranetSpool,
+                    NexusStorageBudgetComponent::SoravpnSpool,
+                ],
+            },
+        ];
+        root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
+            kura_blocks_bps: 5_000,
+            wsv_snapshots_bps: 2_000,
+            sorafs_bps: 2_000,
+            soranet_spool_bps: 500,
+            soravpn_spool_bps: 500,
+        };
+        root.tiered_state.enabled = false;
+        root.tiered_state.cold_store_root = None;
+        root.tiered_state.da_store_root = None;
+        root.kura.max_disk_usage_bytes = Bytes(0);
+        root.tiered_state.max_cold_bytes = Bytes(0);
+        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
+        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
+        let aggregate = root
+            .apply_derived_storage_budget(&filesystem_budgets)
+            .expect("valid filesystem budgets");
+        assert_eq!(aggregate.get(), 2_000);
+        assert!(root.nexus.storage.local_budget_bytes.is_none());
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(2_000)
+        );
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 572);
+        assert_eq!(root.tiered_state.max_cold_bytes.get(), 800);
+        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 228);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 200);
+        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 200);
+        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
+    }
+    #[test]
+    fn runtime_storage_budget_reconciliation_is_not_ratchet_bound() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.local_budget_bytes = None;
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights::default();
+        root.kura.max_disk_usage_bytes = Bytes(1_000);
+        let budget = |bytes| NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
+            components: vec![NexusStorageBudgetComponent::Kura],
+        };
+        root.apply_derived_storage_budget(&[budget(200)])
+            .expect("valid filesystem budget");
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 200);
+        root.apply_storage_budget();
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(200),
+            "an absent operator budget must not erase the runtime-derived effective budget"
+        );
+        root.apply_derived_storage_budget(&[budget(800)])
+            .expect("valid filesystem budget");
+        assert_eq!(
+            root.kura.max_disk_usage_bytes.get(),
+            800,
+            "a later filesystem probe may raise the cap back toward its configured ceiling"
+        );
+        assert!(root.nexus.storage.local_budget_bytes.is_none());
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(800)
+        );
+    }
+    #[test]
+    fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let filesystem_budgets = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(u64::MAX).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::WsvCold],
+            },
+        ];
+        let error = root
+            .apply_derived_storage_budget(&filesystem_budgets)
+            .expect_err("the aggregate must use checked arithmetic");
+        assert_eq!(error, NexusStorageBudgetApplicationError::AggregateOverflow);
+        assert!(
+            root.nexus.storage.effective_local_budget_bytes.is_none(),
+            "an invalid aggregate must be rejected before mutating effective configuration"
+        );
+    }
+    #[test]
+    fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutation() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let empty = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: Vec::new(),
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[empty])
+                .expect_err("empty component sets must be rejected"),
+            NexusStorageBudgetApplicationError::EmptyComponentSet { group_index: 0 }
+        );
+        let noncanonical = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Sorafs,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert!(matches!(
+            root.apply_derived_storage_budget(&[noncanonical]),
+            Err(
+                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
+                    group_index: 0,
+                    ..
+                }
+            )
+        ));
+        let duplicate_within_group = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[duplicate_within_group])
+                .expect_err("within-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+        let duplicate = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+        ];
+        assert_eq!(
+            root.apply_derived_storage_budget(&duplicate)
+                .expect_err("cross-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+        assert!(
+            root.nexus.storage.effective_local_budget_bytes.is_none(),
+            "invalid filesystem metadata must not mutate effective configuration"
+        );
+    }
+    #[test]
+    fn derived_storage_budget_rejects_zero_component_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let budget = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Sorafs,
+            ],
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[budget])
+                .expect_err("zero means unlimited to component cap consumers"),
+            NexusStorageBudgetApplicationError::ZeroComponentAllocation {
+                group_index: 0,
+                component: NexusStorageBudgetComponent::Sorafs,
+            }
+        );
+        assert!(root.nexus.storage.effective_local_budget_bytes.is_none());
+    }
+    #[test]
+    fn storage_budget_splitting_is_exact_at_u64_max() {
+        let weights = NexusStorageWeights::default();
+        let global = derive_global_nexus_storage_component_caps(u64::MAX, weights);
+        assert_eq!(global.total(), u64::MAX);
+        let filesystem = split_filesystem_budget_across_components(
+            u64::MAX,
+            &NexusStorageBudgetComponent::ORDER,
+            weights,
+        );
+        assert_eq!(filesystem.total(), u64::MAX);
+        for component in NexusStorageBudgetComponent::ORDER {
+            assert!(filesystem.budget_for(component) > 0);
+        }
+    }
+    #[test]
+    fn streaming_soravpn_defaults_match_constants() {
+        let config = StreamingSoravpn::from_defaults();
+        assert_eq!(
+            config.provision_spool_dir,
+            PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)
+        );
+        assert_eq!(
+            config.provision_spool_max_bytes.get(),
+            defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES.get()
+        );
+    }
+    #[test]
+    fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
+        let config = SoranetVpn::default();
+        assert!(!config.enabled);
+        assert_eq!(
+            config.operator_account_id,
+            defaults::governance::bond_escrow_account_id()
         );
     }
 }

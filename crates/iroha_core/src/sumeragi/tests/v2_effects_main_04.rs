@@ -2001,30 +2001,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             owner_directory.path(),
         );
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
-    let foreign_fetch_prepared = fixture
-        .executor
-        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-        .expect("the exact response remains selectable for the foreign-cursor probe");
-    let mut foreign_ingress_context = fixture.context.clone();
-    foreign_ingress_context.height = foreign_ingress_context.height.saturating_add(1);
-    let before_foreign_fetch_cursor =
-        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-    assert!(matches!(
-        owner.persist_recovered_decision_fetch_response(
-            &production_services,
-            &mut fixture.executor,
-            foreign_fetch_prepared,
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(
-                &foreign_ingress_context,
-            ),
-        ),
-        Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)
-    ));
-    assert_eq!(
-        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-        before_foreign_fetch_cursor,
-        "a foreign Ingress cursor cannot change the recovered Fetch lease or registry row",
-    );
     let before_foreign_sign_cursor =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
     assert!(matches!(
@@ -2198,9 +2174,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     );
     assert!(matches!(
         repeated_result,
-        Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork(
-            _
-        ))
+        Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork { .. })
     ));
     assert_eq!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),

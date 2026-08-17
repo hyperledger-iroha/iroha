@@ -110,40 +110,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
         "subscriptions create alias should dispatch and return a status code"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subscription_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062233,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.subscriptions.get",
-                "arguments": {
-                    "subscription_id": "not-a-subscription-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subscription_id => error(
+        1062233,
+        "iroha.subscriptions.get",
+        InvalidSubscriptionId,
+        "invalid subscription id should be marked as MCP tool error for subscription detail alias",
+        "expected invalid subscription id to be rejected by subscription detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid subscription id should be marked as MCP tool error for subscription detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid subscription id to be rejected by subscription detail alias"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_flat_subscription_id() {
@@ -260,40 +235,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
         "expected invalid flat asset-definitions limit to be rejected"
     );
 }
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_definition_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062241,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.definitions.get",
-                "arguments": {
-                    "definition_id": "not-a-definition-id"
-                }
-            }
-        }),
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_definition_id => error(
+        1062241,
+        "iroha.assets.definitions.get",
+        InvalidDefinitionId,
+        "invalid definition id should be marked as MCP tool error for definition detail alias",
+        "expected invalid definition id to be rejected by explorer definition detail alias",
     )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid definition id should be marked as MCP tool error for definition detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid definition id to be rejected by explorer definition detail alias"
-    );
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat_envelope_fields() {

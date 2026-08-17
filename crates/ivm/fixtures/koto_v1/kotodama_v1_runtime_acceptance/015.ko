@@ -1,0 +1,31 @@
+
+seiyaku SignedComparisonAcceptance {
+  view fn compare(int left, int right) -> (bool, bool, bool, bool, bool, bool, int, int, int, int, int, int) {
+    var int branch_eq = 0;
+    var int branch_ne = 0;
+    var int branch_lt = 0;
+    var int branch_le = 0;
+    var int branch_gt = 0;
+    var int branch_ge = 0;
+    if (left == right) { branch_eq = 1; }
+    if (left != right) { branch_ne = 1; }
+    if (left < right) { branch_lt = 1; }
+    if (left <= right) { branch_le = 1; }
+    if (left > right) { branch_gt = 1; }
+    if (left >= right) { branch_ge = 1; }
+    return (
+      left == right,
+      left != right,
+      left < right,
+      left <= right,
+      left > right,
+      left >= right,
+      branch_eq,
+      branch_ne,
+      branch_lt,
+      branch_le,
+      branch_gt,
+      branch_ge
+    );
+  }
+}

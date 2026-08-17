@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-11
+Last updated: 2026-08-17
 
 The public roadmap lives in [`../roadmap.md`](../roadmap.md). Completed
 history lives in [`../status.md`](../status.md). This file should only
@@ -3717,7 +3717,9 @@ redistributable schemas, and official trust/revocation bundles.
   refresh ciphertexts decrypt to zero under the matching secret key, including
   a bundle-level check over every rotation and bootstrap refresh mask, and
   public bootstrap admission now requires a verifier-backed statement proof
-  envelope.
+  envelope, but binding-only STARK AIR is rejected after metadata preflight;
+  admission remains closed until a dedicated zero-refresh witness AIR proves
+  the encrypted-zero and round-consistency relation.
   Public deterministic transcript checks now recompute rotation and bootstrap
   encrypted-zero refresh material from the advertised seed, public key, key id,
   and round count, rejecting wrong-seed, key-id-drifted, or tampered refresh
@@ -3764,17 +3766,18 @@ redistributable schemas, and official trust/revocation bundles.
   pins proof public-key presence, ciphertext digest-list arity/sentinel checks,
   rejection of `fhe_public_key_digest` metadata on non-FHE state rows, and
   all-zero `fhe_public_key_digest` placeholders on FHE rows.
-  Core input-admission verification now recomputes those per-slot statement
-  digests from the decoded payload and proof public key, persists the admitted
-  public-key digest beside proven FHE bound metadata, and rejects persisted FHE
-  job inputs whose public-key digest does not match the governed job key or
-  whose BFV-shaped payload is an all-zero ciphertext sentinel before evaluator
-  execution.
+  Core input-admission preflight recomputes those per-slot statement digests
+  from the decoded payload and proof public key, but binding-only AIR is
+  rejected at the missing dedicated ciphertext-witness boundary before any FHE
+  row, public-key digest, or claimed bound metadata is persisted. The input
+  loader still rejects corrupt persisted rows whose public-key digest mismatches
+  the governed job key or whose BFV payload is an all-zero sentinel.
   `RunSoracloudFheJob` now carries an
   optional bootstrap-key proof attachment, provenance signs it, and Core
   requires it for bootstrap execution while checking the policy-bound
-  statement hash against an active Soracloud STARK verifier record or
-  preverified proof cache entry. The verifier registry now rejects canonical
+  statement hash and active Soracloud STARK verifier record before failing
+  closed at the missing dedicated zero-refresh witness AIR boundary. The
+  verifier registry now rejects canonical
   Soracloud bootstrap verifier records whose registry id, namespace, circuit
   version, public-input schema hash, gas schedule, or active inline key
   material drift from the governed v1 profile, moving those rollout failures
@@ -4147,8 +4150,9 @@ redistributable schemas, and official trust/revocation bundles.
   Soracloud FHE proof attachment decoders now reject noncanonical STARK/FRI
   backend labels before verifier lookup or full-bootstrap native verifier
   dispatch.
-  The bootstrap-key proof gate still has positive active-verifier coverage for
-  the shared binding-AIR verifier path.
+  Input-admission, public-key, and bootstrap-key binding-AIR payloads are
+  rejection fixtures: their public binding does not prove the required BFV
+  ciphertext, key-generation, or zero-refresh witness relations.
   Full-bootstrap material proof verification now also preflights the active
   record's stored STARK/FRI verifier-key payload against the canonical material
   circuit before backend dispatch, so corrupted state cannot retarget the
@@ -5200,8 +5204,8 @@ redistributable schemas, and official trust/revocation bundles.
   public-input shape for verifier-backed proof handoff. Core policy-bound
   admission now also requires and signs public-key proof attachments in FHE job
   provenance, derives the expected public-key statement from the refresh
-  transcript, and verifies active Soracloud verifier records or preverified
-  proof cache entries before accepting policy-bound public-key material.
+  transcript, and validates active Soracloud verifier records before rejecting
+  binding-only AIR at the missing key-generation witness AIR boundary.
   Shared FHE execution-policy validation, production FHE governance-bundle
   admission, Core FHE job admission, and Torii signed FHE job preflight now
   require `public_key_proof_statement_digest`; Core and Torii derive the same
@@ -5211,8 +5215,8 @@ redistributable schemas, and official trust/revocation bundles.
   statement binding for policy-bound key material admission. Torii's signed
   FHE job preflight and `RunSoracloudFheJob` now require `public_key_proof`,
   include it in the canonical job provenance payload, and validate proof
-  envelopes against the policy-bound statement hash before Core verifier-backed
-  admission.
+  envelopes against the policy-bound statement hash before Core's dedicated
+  witness-AIR fail-closed boundary.
   Seeded key generation and public-key encryption now also fail closed unless
   the parameter set's centered `q/t` capacity covers the same deterministic
   encrypted-zero refresh bound, so structurally valid but too-narrow profiles
@@ -5330,9 +5334,10 @@ redistributable schemas, and official trust/revocation bundles.
   key-authorized centered-noise bound at the core runtime boundary; the same
   bounded wrapper coverage now pins Multiply and packed `RotateLeft` propagated
   output bounds while decrypting the registered target-limb outputs, and
-  ledger-level `RunSoracloudFheJob` coverage now persists bounded Multiply,
-  packed `RotateLeft`, and two-round Bootstrap output rows with the expected
-  bound mode, bound value, payload commitment, and decrypted plaintext.
+  direct evaluator coverage pins bounded Multiply, packed `RotateLeft`, and
+  two-round Bootstrap output bounds and decrypted plaintext. Ledger-level
+  `RunSoracloudFheJob` rejects binding-only public/bootstrap proofs before
+  output rows, audit events, internal events, or proof quota are recorded.
   Persisted FHE rows that carry public bound metadata now must also carry an
   explicit exact-residual or bounded-noise mode; Core rejects legacy/corrupt
   bound-only rows at input loading instead of silently treating them as exact.
@@ -5537,9 +5542,10 @@ redistributable schemas, and official trust/revocation bundles.
   refresh-transcript admission now also
   derives its deterministic seed, bootstrap key-id, rotation-transcript, and
   bootstrap max-round caps from the public `iroha_crypto` constants.
-  Verifier-backed bounded-noise FHE input-admission envelopes now persist
-  bounded metadata after statement-hash, shared `OpenVerifyEnvelope`
-  admission-shape, active-verifier, and backend proof checks; portable proof
+  Bounded-noise FHE input-admission envelopes receive statement-hash, shared
+  `OpenVerifyEnvelope` admission-shape, active-verifier, and native binding
+  metadata preflight, then fail closed because no dedicated ciphertext-witness
+  AIR exists; they do not persist bounded metadata. Portable proof
   validation now rejects cheap attachment metadata before BFV bound capacity
   (backend consistency, canonical verifier id, verifier-key commitment
   metadata, and envelope-hash presence), while retaining BFV bound-capacity
@@ -5699,13 +5705,14 @@ redistributable schemas, and official trust/revocation bundles.
   Packed `RotateLeft` now also has conservative exact-bound propagation for the
   current Galois key-switch bridge and plaintext-mask schedule, including
   capacity rejection for parameter profiles whose centered modulus cannot cover
-  key-switch residuals. Soracloud service-state rows now carry optional exact
-  BFV residual-multiple metadata for FHE ciphertexts, and `RunSoracloudFheJob`
-  persists propagated bounds for Add, balanced Multiply/relinearization,
-  outer/packed `RotateLeft`, and Bootstrap outputs while rejecting
-  missing or over-capacity input bounds before execution. The exact packed
-  `RotateLeft` runtime regression now decrypts the scheduled packed output and
-  asserts the persisted conservative residual bound. Client-provided FHE state
+  key-switch residuals. Soracloud service-state rows can carry optional exact
+  BFV residual-multiple metadata for FHE ciphertexts, while direct evaluator
+  tests preserve propagated-bound coverage for Add, balanced
+  Multiply/relinearization, outer/packed `RotateLeft`, and Bootstrap.
+  Ledger-level `RunSoracloudFheJob` remains fail-closed at the dedicated
+  witness-AIR boundary and persists no binding-only output. The exact packed
+  `RotateLeft` evaluator regression decrypts the scheduled output and asserts
+  its conservative residual bound. Client-provided FHE state
   mutations without proof-carrying input admission intentionally remain
   metadata-free and cannot feed FHE jobs. Upsert mutations may now carry a
   canonical Soracloud FHE input-admission proof attachment: provenance signs
@@ -5715,9 +5722,8 @@ redistributable schemas, and official trust/revocation bundles.
   `OpenVerifyEnvelope` against an active `soracloud`
   verifier key for the canonical V1 circuit id, rejects restored verifier
   records whose Goldilocks field label or inline key length drift from the
-  stored key material, and persists the claimed residual bound only after the
-  envelope, ciphertext shape, registered identifier slot cap, and residual
-  capacity checks pass. The
+  stored key material, then rejects binding-only AIR before the claimed
+  residual bound can be persisted. The
   production circuit and governed key-material rollout for public noise
   admission remains open, so this is the ledger admission boundary rather than
   a complete BFV-RNS proof system.

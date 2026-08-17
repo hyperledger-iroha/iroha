@@ -1,0 +1,11 @@
+
+        seiyaku PointerConstructors {
+          kotoage fn main() authorize("PointerConstructors") {
+            let did = "wonderland.universal";
+            let aid = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+            let key = "cursor";
+            ledger::account::set_detail(account: AccountId::parse(aid), key: Name::parse(key), value: Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
+            ledger::domain::transfer(source: context::authority(), domain: DomainId::parse(did), destination: AccountId::parse(aid));
+          }
+        }
+    

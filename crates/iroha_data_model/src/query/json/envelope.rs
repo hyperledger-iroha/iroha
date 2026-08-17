@@ -21,8 +21,8 @@ use std::{
 };
 use thiserror::Error;
 fn build_query_with_params<T, Q, F>(
-    predicate: CompoundPredicate<T>,
-    selector: SelectorTuple<T>,
+    predicate: &CompoundPredicate<T>,
+    selector: &SelectorTuple<T>,
     params: QueryParams,
     builder: F,
 ) -> QueryWithParams
@@ -41,8 +41,8 @@ where
         query: (),
         query_payload: query.dyn_encode(),
         item: query.query_item_kind(),
-        predicate_bytes: norito::codec::Encode::encode(&predicate),
-        selector_bytes: norito::codec::Encode::encode(&selector),
+        predicate_bytes: norito::codec::Encode::encode(predicate),
+        selector_bytes: norito::codec::Encode::encode(selector),
         params,
     }
 }
@@ -798,8 +798,8 @@ impl IterableQueryJson {
         #[cfg(feature = "ids_projection")]
         let selector = self.selector::<Item>();
         Ok(build_query_with_params::<Item, Q, _>(
-            predicate,
-            selector,
+            &predicate,
+            &selector,
             params,
             constructor,
         ))

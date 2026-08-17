@@ -1,0 +1,7 @@
+
+        seiyaku IfExpression {
+            view fn main(bool condition, int yes, int no) -> int {
+                if condition { yes } else { no }
+            }
+        }
+    

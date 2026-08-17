@@ -1838,10 +1838,11 @@ impl PublicKeyCompact {
             .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
         // SAFETY: `layout` is non-zero and valid for `allocation_bytes` bytes.
         let allocation = unsafe { std::alloc::alloc(layout) };
-        let allocation =
-            core::ptr::NonNull::new(allocation).ok_or(norito::core::Error::AllocationFailed {
+        let allocation = core::ptr::NonNull::new(allocation).ok_or_else(|| {
+            norito::core::Error::AllocationFailed {
                 bytes: u64::try_from(allocation_bytes).unwrap_or(u64::MAX),
-            })?;
+            }
+        })?;
         // SAFETY: the exact allocation owns `allocation_bytes`; write its tag
         // and copy the disjoint payload tail before creating the boxed slice.
         unsafe {
@@ -1873,10 +1874,11 @@ impl PublicKeyCompact {
         // SAFETY: the exact destination and validation high-water were both
         // admitted before this allocation; null is rejected before ownership.
         let allocation = unsafe { std::alloc::alloc(layout) };
-        let allocation =
-            core::ptr::NonNull::new(allocation).ok_or(norito::core::Error::AllocationFailed {
+        let allocation = core::ptr::NonNull::new(allocation).ok_or_else(|| {
+            norito::core::Error::AllocationFailed {
                 bytes: u64::try_from(allocation_bytes).unwrap_or(u64::MAX),
-            })?;
+            }
+        })?;
         // SAFETY: every payload pair is canonical and initializes one disjoint
         // byte; on failure the raw allocation is reclaimed with its exact layout.
         unsafe { allocation.as_ptr().write(Self::algorithm_tag(algorithm)) };
@@ -2413,22 +2415,19 @@ impl fmt::Debug for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.structural_components() {
-            Ok((algorithm, payload)) => {
-                fmt_lower_varint_hex(multihash::public_key_digest_function(algorithm), f)?;
-                fmt_lower_varint_hex(payload.len() as u64, f)?;
-                for byte in payload {
-                    write!(f, "{byte:02X}")?;
-                }
-                Ok(())
+        if let Ok((algorithm, payload)) = self.structural_components() {
+            fmt_lower_varint_hex(multihash::public_key_digest_function(algorithm), f)?;
+            fmt_lower_varint_hex(payload.len() as u64, f)?;
+            for byte in payload {
+                write!(f, "{byte:02X}")?;
             }
-            Err(_) => {
-                f.write_str("invalid-public-key:")?;
-                for byte in self.0.algorithm_and_payload.as_ref() {
-                    write!(f, "{byte:02x}")?;
-                }
-                Ok(())
+            Ok(())
+        } else {
+            f.write_str("invalid-public-key:")?;
+            for byte in self.0.algorithm_and_payload.as_ref() {
+                write!(f, "{byte:02x}")?;
             }
+            Ok(())
         }
     }
 }

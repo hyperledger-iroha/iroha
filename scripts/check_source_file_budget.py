@@ -96,12 +96,21 @@ def parse_args() -> argparse.Namespace:
         default=Path("ci/source_file_budget.json"),
         help="Budget baseline path, relative to --root by default.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--write-baseline",
         action="store_true",
         help=(
             "Rewrite the baseline from the current tracked tree. Use this after "
             "reviewing intentional file splits or other line-count reductions."
+        ),
+    )
+    mode.add_argument(
+        "--require-objective",
+        action="store_true",
+        help=(
+            "Fail unless the repository-wide Rust line count is at or below "
+            "aggregate_rust.ceiling."
         ),
     )
     parser.add_argument(
@@ -313,8 +322,13 @@ def limit_for(path: str, budget: Budget) -> int:
     return budget.test_limit if is_test_path(path) else budget.production_limit
 
 
-def evaluate(counts: dict[str, int], budget: Budget) -> list[Finding]:
-    """Compare observed line counts with exact ratcheting exceptions."""
+def evaluate(
+    counts: dict[str, int],
+    budget: Budget,
+    *,
+    require_objective: bool = False,
+) -> list[Finding]:
+    """Compare observed line counts with exact ratchets and aggregate policy."""
     findings: list[Finding] = []
     for path, lines in sorted(counts.items()):
         default_limit = limit_for(path, budget)
@@ -355,12 +369,22 @@ def evaluate(counts: dict[str, int], budget: Budget) -> list[Finding]:
         rust_lines = sum(
             lines for path, lines in counts.items() if path.endswith(".rs")
         )
-        if rust_lines > budget.aggregate_rust.ratchet_ceiling:
+        aggregate_limit = (
+            budget.aggregate_rust.ceiling
+            if require_objective
+            else budget.aggregate_rust.ratchet_ceiling
+        )
+        aggregate_limit_name = (
+            "aggregate objective ceiling"
+            if require_objective
+            else "aggregate ratchet"
+        )
+        if rust_lines > aggregate_limit:
             findings.append(
                 Finding(
                     "<aggregate Rust>",
-                    f"{rust_lines} lines exceeds the aggregate ratchet "
-                    f"{budget.aggregate_rust.ratchet_ceiling}",
+                    f"{rust_lines} lines exceeds the {aggregate_limit_name} "
+                    f"{aggregate_limit}",
                 )
             )
     return findings
@@ -471,7 +495,11 @@ def main() -> int:
             tracked_paths(root),
             budget.excluded_prefixes,
         )
-        findings = evaluate(counts, budget)
+        findings = evaluate(
+            counts,
+            budget,
+            require_objective=args.require_objective,
+        )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as err:
         print(f"ERROR: source file budget check failed: {err}", file=sys.stderr)
         return 2

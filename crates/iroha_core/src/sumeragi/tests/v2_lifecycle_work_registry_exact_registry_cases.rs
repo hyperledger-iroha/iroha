@@ -410,10 +410,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
     for required in [
         "_persisted: SealedLiveWalPersistedEffectV1",
         "LiveWalReplayPreAdmissionOrigin<'a>",
-        "PayloadFree",
         "Apply(PreparedValidatedBodyCompletion<'a>)",
-        "seal_payload_free(\n        persisted: SealedLiveWalPersistedEffectV1",
-        "persisted.exactly_binds_payload_free_pending()",
     ] {
         assert!(
             token.contains(required),
@@ -438,6 +435,9 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
         "pub(super) fn pending(",
         "pub(super) fn receipt(",
         "pub(super) fn source(",
+        "PayloadFree",
+        "seal_payload_free(",
+        "exactly_binds_payload_free_pending",
         "into_parts",
         "fn install(",
         "fn commit(",
@@ -536,7 +536,7 @@ fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
         "the inert token must have no production caller"
     );
     for caller in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_concrete_admission.rs"),
         include_str!("../v2_effects.rs"),
@@ -639,7 +639,7 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
         "the inert remote Proposal token has no production admission caller"
     );
     for caller in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_concrete_admission.rs"),
         include_str!("../v2_effects.rs"),
@@ -2007,7 +2007,7 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         "receipt hash and repaired-pair shape must share one loaded frame"
     );
     for caller_source in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),

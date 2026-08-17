@@ -8,6 +8,7 @@ import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import { NumericV1 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -40,117 +41,34 @@ const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
  * those strings losslessly, so no JavaScript number rounding is possible.
  */
 export function parseStrictGovernanceInstructionJson(text, context) {
-  if (typeof text !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} JSON source must be a string`);
-  }
-  let index = 0;
-  let nodes = 0;
-  const scopes = [];
-  let rewritten = "";
-  const fail = (message, ErrorType = TypeError) => {
-    throw new ErrorType(
-      `${context} contains invalid JSON at character ${index}: ${message}`,
-    );
-  };
-  const consumeNode = () => {
-    nodes += 1;
-    if (nodes > 2_000_000) {
-      fail("value exceeds the 2000000-node limit", RangeError);
-    }
-    if (scopes.length > 128) {
-      fail("value exceeds the 128-level nesting limit", RangeError);
-    }
-  };
-  while (index < text.length) {
-    const character = text[index];
-    if (character === '"') {
-      const start = index;
-      index += 1;
-      while (index < text.length) {
-        if (text[index] === "\\") {
-          index += 2;
-        } else if (text[index] === '"') {
-          index += 1;
-          break;
-        } else {
-          index += 1;
-        }
-      }
-      const token = text.slice(start, index);
-      let decoded;
-      try {
-        decoded = JSON.parse(token);
-      } catch {
-        fail("invalid string token");
-      }
-      for (let offset = 0; offset < decoded.length; offset += 1) {
-        const code = decoded.charCodeAt(offset);
-        if (code >= 0xd800 && code <= 0xdbff) {
-          const low = decoded.charCodeAt(offset + 1);
-          if (!(low >= 0xdc00 && low <= 0xdfff)) fail("unpaired high surrogate");
-          offset += 1;
-        } else if (code >= 0xdc00 && code <= 0xdfff) {
-          fail("unpaired low surrogate");
-        }
-      }
-      let cursor = index;
-      while (/\s/u.test(text[cursor] ?? "")) cursor += 1;
-      if (text[cursor] === ":") {
-        const keys = scopes[scopes.length - 1];
-        if (keys?.has(decoded)) {
-          fail(`duplicate object key ${JSON.stringify(decoded)}`);
-        }
-        keys?.add(decoded);
-      } else {
-        consumeNode();
-      }
-      rewritten += token;
-      continue;
-    }
-    if (character === "{" || character === "[") {
-      consumeNode();
-      scopes.push(character === "{" ? new Set() : null);
-      rewritten += character;
-      index += 1;
-      continue;
-    }
-    if (character === "}" || character === "]") {
-      scopes.pop();
-      rewritten += character;
-      index += 1;
-      continue;
-    }
-    if (character === "-" || /[0-9]/u.test(character)) {
-      const match = /^-?(?:0|[1-9][0-9]*)/u.exec(text.slice(index));
-      if (!match || match[0] === "-0") {
-        fail("numeric tokens must be canonical integers");
-      }
-      rewritten += JSON.stringify(match[0]);
-      index += match[0].length;
-      consumeNode();
-      continue;
-    }
-    let matchedLiteral = false;
-    for (const literal of ["true", "false", "null"]) {
-      if (text.startsWith(literal, index)) {
-        rewritten += literal;
-        index += literal.length;
-        consumeNode();
-        matchedLiteral = true;
-        break;
-      }
-    }
-    if (matchedLiteral) {
-      continue;
-    }
-    rewritten += character;
-    index += 1;
-  }
+  let parsed;
   try {
-    return JSON.parse(rewritten);
+    parsed = parseStrictLosslessIntegerJson(text, context);
   } catch (error) {
-    fail(error instanceof Error ? error.message : "invalid JSON");
+    const remapped = error?.message?.replace(
+      /(?:high surrogate must be followed[^:]*|unterminated high surrogate)/u,
+      "unpaired high surrogate",
+    );
+    if (remapped !== error?.message) {
+      throw new error.constructor(remapped);
+    }
+    throw error;
   }
+  const stringifyIntegers = (value) => {
+    if (typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_NUMBER) {
+      return value.toString(10);
+    }
+    if (Array.isArray(value)) {
+      return value.map(stringifyIntegers);
+    }
+    if (value !== null && typeof value === JS_TYPE_OBJECT) {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, stringifyIntegers(entry)]),
+      );
+    }
+    return value;
+  };
+  return stringifyIntegers(parsed);
 }
 
 /**

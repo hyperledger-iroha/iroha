@@ -4602,7 +4602,7 @@ pub mod isi {
                     "verifying key not found".into(),
                 ));
             };
-            if vk_rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+            if !vk_rec.is_active_at(state_transaction.block_height()) {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -13339,7 +13339,7 @@ pub mod isi {
             )
             .into());
         };
-        if rec.status != ConfidentialStatus::Active {
+        if !rec.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not active".into(),
             ));
@@ -14188,7 +14188,7 @@ pub mod isi {
                     )))
                     .into());
                 };
-                if rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+                if !rec.is_active_at(state_transaction.block_height()) {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key is not active".into(),
                     ));
@@ -14498,7 +14498,7 @@ pub mod isi {
                     format!("{label} verifying key not found").into(),
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key is not Active").into(),
             ));
@@ -14552,7 +14552,7 @@ pub mod isi {
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation("verifying key not found".into())
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not Active".into(),
             ));
@@ -14636,7 +14636,7 @@ pub mod isi {
                     "verifying key for tally not found".into(),
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not Active".into(),
             ));
@@ -14766,7 +14766,7 @@ pub mod isi {
                         "tally verifying key not found".into(),
                     )
                 })?;
-            if tally_rec.status != ConfidentialStatus::Active {
+            if !tally_rec.is_active_at(state_transaction.block_height()) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "tally verifying key is not Active".into(),
                 ));
@@ -18870,7 +18870,7 @@ pub mod isi {
                                     {
                                         return Err(InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(format!(
-                                                "sumeragi.npos.reconfig.{field} must be greater than zero"
+                                                "SumeragiNposParameters.reconfig.{field} must be greater than zero"
                                             )),
                                         ));
                                     }
@@ -18990,7 +18990,7 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
-        use crate::smartcontracts::triggers::set::SetReadOnly;
+        use crate::{smartcontracts::triggers::set::SetReadOnly, state::StateBlock};
         use core::num::{NonZeroU32, NonZeroU64};
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -31278,6 +31278,43 @@ seiyaku GovernanceLifecycle {
             assert!(msg.contains("gas_schedule_id"), "unexpected msg: {msg}");
         }
         #[test]
+        fn register_vk_rejects_empty_lifecycle_window_without_mutating_state() {
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
+            stx.apply();
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                TEST_HALO2_CIRCUIT_ID,
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x61; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+            rec.activation_height = Some(10);
+            rec.withdraw_height = Some(10);
+            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: rec,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("an empty verifier-key lifecycle must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("greater"), "unexpected msg: {msg}");
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+        #[test]
         fn register_vk_rejects_inline_key_length_mismatch() {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
@@ -32758,7 +32795,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.evidence_horizon_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),
@@ -32778,7 +32815,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.activation_lag_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),
@@ -32798,7 +32835,7 @@ seiyaku GovernanceLifecycle {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
                         assert_eq!(
                             msg,
-                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
+                            "SumeragiNposParameters.reconfig.slashing_delay_blocks must be greater than zero"
                         )
                     }
                     other => panic!("unexpected error type: {other:?}"),
@@ -35574,107 +35611,6 @@ seiyaku GovernanceLifecycle {
                 }
             }
             best
-        }
-        fn proof_record_alias_values(record: &ProofRecord, field: &str) -> Vec<String> {
-            match field {
-                "id" => vec![record.id.to_string()],
-                "backend" | "id.backend" => vec![record.id.backend.to_string()],
-                "status" => vec![proof_status_label(record.status).to_owned()],
-                _ => Vec::new(),
-            }
-        }
-        fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-            if path.is_empty() {
-                return None;
-            }
-            let mut current = value;
-            for segment in path.split('.') {
-                if segment.is_empty() {
-                    return None;
-                }
-                match current {
-                    Value::Object(map) => current = map.get(segment)?,
-                    _ => return None,
-                }
-            }
-            Some(current)
-        }
-        fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-            matches!(value, Value::String(raw) if raw == expected)
-        }
-        fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-            values
-                .iter()
-                .any(|value| matches!(value, Value::String(raw) if raw == expected))
-        }
-        fn proof_record_json_value<'a>(
-            cache: &'a mut Option<Value>,
-            record: &ProofRecord,
-        ) -> Option<&'a Value> {
-            if cache.is_none() {
-                *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(record);
-            }
-            cache.as_ref()
-        }
-        fn predicate_matches_proof_record(predicate: &PredicateJson, record: &ProofRecord) -> bool {
-            let mut record_json = None;
-            for cond in &predicate.equals {
-                let aliases = proof_record_alias_values(record, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if actual != &cond.value {
-                    return false;
-                }
-            }
-            for cond in &predicate.r#in {
-                let aliases = proof_record_alias_values(record, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if !cond.values.iter().any(|candidate| candidate == actual) {
-                    return false;
-                }
-            }
-            for field in &predicate.exists {
-                if !proof_record_alias_values(record, field).is_empty() {
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, field) else {
-                    return false;
-                };
-                if actual.is_null() {
-                    return false;
-                }
-            }
-            true
         }
         include!("world/proof_record_query_impls.rs");
     }

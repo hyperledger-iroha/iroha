@@ -155,7 +155,7 @@ impl SoftwareSignerAuditJournalV1 {
         validate_private_directory(&directory)?;
         let mut inventory = scan_audit_directory(&directory, AUDIT_RETENTION_LIMITS_V1)?;
         recover_pending_record(&directory, &mut inventory)?;
-        let recovered = validate_records_streaming(&directory, inventory)?;
+        let recovered = validate_records_streaming(&directory, &inventory)?;
         Ok((
             Self {
                 directory,
@@ -192,7 +192,7 @@ impl SoftwareSignerAuditJournalV1 {
             event,
         };
         let record_digest = digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &body)
-            .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
+            .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?;
         let attestation_message = audit_attestation_message(record_digest, sequence);
         let attestation = Signature::try_new(keypair.private_key(), &attestation_message)
             .map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)?
@@ -231,7 +231,7 @@ struct AuditDirectoryInventoryV1 {
 #[allow(clippy::too_many_lines)]
 fn validate_records_streaming(
     directory: &Path,
-    inventory: AuditDirectoryInventoryV1,
+    inventory: &AuditDirectoryInventoryV1,
 ) -> Result<RecoveredJournalV1, SoftwareSignerJournalErrorV1> {
     if inventory.record_count == 0 {
         return Err(SoftwareSignerJournalErrorV1::Invalid);
@@ -278,7 +278,7 @@ fn validate_records_streaming(
             || body.predecessor_digest != expected_predecessor
             || record_digest == [0; 32]
             || digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &body)
-                .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?
+                .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?
                 != record_digest
             || attestation.is_empty()
             || attestation.len() != active_key.algorithm.algorithm().signature_payload_len()
@@ -699,7 +699,6 @@ pub enum SoftwareSignerJournalErrorV1 {
 mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
     fn write_private_file(path: &Path, bytes: &[u8]) {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);

@@ -1,0 +1,32 @@
+
+            seiyaku Demo {
+                error enum DemoError {
+                    Rejected = 1,
+                }
+
+                state int counter;
+                state AccountId last_actor;
+
+                hajimari() {
+                    counter = 1;
+                    last_actor = context::authority();
+                }
+
+                kotoage fn increment() authorize("Test") {
+                    counter = counter + 4;
+                }
+
+                kotoage fn remember_caller() authorize("Test") {
+                    last_actor = context::authority();
+                }
+
+                view fn pair() -> (int, int) {
+                    return (2, 3);
+                }
+
+                kotoage fn reject_me() authorize("Test") {
+                    require(false, DemoError::Rejected);
+                }
+
+            }
+            

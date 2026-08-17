@@ -1,0 +1,11 @@
+
+        seiyaku Demo {
+            kotoage fn run() authorize("Trigger") {}
+
+            trigger wake -> run {
+                on time pre_commit;
+                repeats 2;
+                metadata { tag: "alpha"; }
+            }
+        }
+    

@@ -8,7 +8,7 @@ import {
   registerConnectSession,
 } from "./connect.browser.js";
 import { blake2b256 } from "./blake2b.js";
-import { verifyEd25519 } from "./crypto.browser.js";
+import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
 import {
   BrowserTransactionCodecError,
   browserTransactionCodec,

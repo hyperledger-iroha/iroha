@@ -28,7 +28,21 @@ use iroha_data_model::{
         KagemushaOnlineHardwareAssertionV1, KagemushaRecipientPaymentRequestV2,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
         KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
-        KagemushaRequestAuthorizationV2, OFFLINE_REJECTION_REASON_PREFIX,
+        KagemushaRequestAuthorizationV2, OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1, OFFLINE_REJECTION_REASON_PREFIX,
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
         OfflineIosAppAttestationPolicy,
@@ -927,7 +941,6 @@ pub mod isi {
     const OFFLINE_ATTESTATION_APP_ATTEST_FLAG_USER_VERIFIED: u8 = 0x04;
     const OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
     const OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA: u8 = 0x80;
-    const OFFLINE_ATTESTATION_APP_ATTEST_MAX_BUNDLE_VERSION_BYTES: usize = 128;
     const OFFLINE_ATTESTATION_APP_ATTEST_NONCE_OID: &str = "1.2.840.113635.100.8.2";
     const OFFLINE_ATTESTATION_ANDROID_KEY_OID: &str = "1.3.6.1.4.1.11129.2.1.17";
     const OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION: &str = "production";
@@ -1431,12 +1444,151 @@ pub mod isi {
             .into()),
         }
     }
-    fn normalize_policy_ascii(value: &str, field: &str) -> Result<String, Error> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() || !trimmed.is_ascii() {
+    fn ensure_offline_attestation_policy_limit(
+        actual: usize,
+        maximum: usize,
+        field: &str,
+    ) -> Result<(), Error> {
+        if actual > maximum {
             return Err(labeled_invariant(
                 "invalid_attestation_policy",
-                format!("Offline device attestation policy {field} must be non-empty ASCII"),
+                format!(
+                    "Offline device attestation policy {field} exceeds the first-release limit of {maximum}"
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
+    fn validate_offline_attestation_policy_bounds(
+        policy: &OfflineDeviceAttestationPolicy,
+    ) -> Result<(), Error> {
+        ensure_offline_attestation_policy_limit(
+            policy.trusted_roots.len(),
+            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1,
+            "trusted-root count",
+        )?;
+        ensure_offline_attestation_policy_limit(
+            policy.revoked_certificate_sha256.len(),
+            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1,
+            "revoked-certificate count",
+        )?;
+        ensure_offline_attestation_policy_limit(
+            policy.ios_apps.len(),
+            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1,
+            "iOS app count",
+        )?;
+        ensure_offline_attestation_policy_limit(
+            policy.android_apps.len(),
+            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
+            "Android app count",
+        )?;
+        for platform in [
+            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST,
+            OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT,
+        ] {
+            ensure_offline_attestation_policy_limit(
+                policy
+                    .trusted_roots
+                    .iter()
+                    .filter(|root| root.platform == platform)
+                    .count(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
+                "trusted roots per platform",
+            )?;
+        }
+        for root in &policy.trusted_roots {
+            ensure_offline_attestation_policy_limit(
+                root.platform.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+                "trusted-root platform bytes",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                root.der.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
+                "trusted-root DER bytes",
+            )?;
+        }
+        for digest in &policy.revoked_certificate_sha256 {
+            ensure_offline_attestation_policy_limit(
+                digest.len(),
+                32,
+                "revoked-certificate digest bytes",
+            )?;
+        }
+        for app in &policy.ios_apps {
+            ensure_offline_attestation_policy_limit(
+                app.team_id.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
+                "iOS Team ID bytes",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                app.bundle_id.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+                "iOS bundle ID bytes",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                app.environment.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+                "iOS environment bytes",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                app.allowed_validation_categories.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1,
+                "iOS validation-category count",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                app.allowed_bundle_versions.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1,
+                "iOS bundle-version count",
+            )?;
+            for version in &app.allowed_bundle_versions {
+                ensure_offline_attestation_policy_limit(
+                    version.len(),
+                    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1,
+                    "iOS bundle-version bytes",
+                )?;
+            }
+        }
+        for app in &policy.android_apps {
+            ensure_offline_attestation_policy_limit(
+                app.package_name.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+                "Android package-name bytes",
+            )?;
+            ensure_offline_attestation_policy_limit(
+                app.signing_certificate_sha256.len(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
+                "Android signing-certificate count",
+            )?;
+            for digest in &app.signing_certificate_sha256 {
+                ensure_offline_attestation_policy_limit(
+                    digest.len(),
+                    32,
+                    "Android signing-certificate digest bytes",
+                )?;
+            }
+        }
+        let canonical = norito::encode_canonical(policy).map_err(|error| {
+            labeled_invariant(
+                "invalid_attestation_policy",
+                format!("failed to encode Offline device attestation policy: {error}"),
+            )
+        })?;
+        ensure_offline_attestation_policy_limit(
+            canonical.len(),
+            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
+            "canonical bytes",
+        )
+    }
+    fn normalize_policy_ascii(value: &str, field: &str) -> Result<String, Error> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || !trimmed.is_ascii() || trimmed.chars().any(char::is_control) {
+            return Err(labeled_invariant(
+                "invalid_attestation_policy",
+                format!(
+                    "Offline device attestation policy {field} must be non-empty printable ASCII"
+                ),
             )
             .into());
         }
@@ -1504,6 +1656,7 @@ pub mod isi {
             )
             .into());
         }
+        validate_offline_attestation_policy_bounds(policy)?;
         if policy.trusted_roots.is_empty() {
             return Err(labeled_invariant(
                 "invalid_attestation_policy",
@@ -1623,7 +1776,8 @@ pub mod isi {
             for bundle_version in &app.allowed_bundle_versions {
                 let bundle_version =
                     normalize_policy_ascii(bundle_version, "iOS allowed bundle version")?;
-                if bundle_version.len() > OFFLINE_ATTESTATION_APP_ATTEST_MAX_BUNDLE_VERSION_BYTES
+                if bundle_version.len()
+                    > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1
                     || bundle_version.chars().any(char::is_control)
                     || !bundle_versions.insert(bundle_version)
                 {
@@ -1710,7 +1864,7 @@ pub mod isi {
                 OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST,
             ])
             || policy.trusted_roots.iter().any(|root| {
-                root.der.len() > 16 * 1024
+                root.der.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1
                     || root
                         .not_before_ms
                         .zip(root.not_after_ms)
@@ -2192,7 +2346,7 @@ pub mod isi {
                 )
             })?;
         let circuit_key = (record.circuit_id.clone(), record.version);
-        if record.status != ConfidentialStatus::Active
+        if !record.is_active_at(state_transaction.block_height())
             || state_transaction
                 .world
                 .verifying_keys_by_circuit
@@ -4559,6 +4713,7 @@ pub mod isi {
     fn validate_optional_attestation_metadata_string(
         value: Option<&str>,
         field: &'static str,
+        maximum_bytes: usize,
     ) -> Result<(), Error> {
         let Some(value) = value else {
             return Ok(());
@@ -4579,242 +4734,47 @@ pub mod isi {
             )
             .into());
         }
+        if value.len() > maximum_bytes || value.chars().any(char::is_control) {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!(
+                    "offline device attestation {field} must contain at most {maximum_bytes} bytes and no control characters"
+                ),
+            )
+            .into());
+        }
         Ok(())
     }
     fn validate_offline_attestation_optional_metadata(
         registration: &OfflineDeviceAttestationRegistration,
     ) -> Result<(), Error> {
-        for (field, value) in [
-            ("ios_team_id", registration.ios_team_id.as_deref()),
-            ("ios_bundle_id", registration.ios_bundle_id.as_deref()),
-            ("ios_environment", registration.ios_environment.as_deref()),
+        for (field, value, maximum_bytes) in [
+            (
+                "ios_team_id",
+                registration.ios_team_id.as_deref(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
+            ),
+            (
+                "ios_bundle_id",
+                registration.ios_bundle_id.as_deref(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+            ),
+            (
+                "ios_environment",
+                registration.ios_environment.as_deref(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
+            ),
             (
                 "android_package_name",
                 registration.android_package_name.as_deref(),
+                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
             ),
         ] {
-            validate_optional_attestation_metadata_string(value, field)?;
+            validate_optional_attestation_metadata_string(value, field, maximum_bytes)?;
         }
         Ok(())
     }
-    fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
-        public_key.len() == OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-            && public_key.first() == Some(&0x04)
-            && public_key[1..].iter().all(|byte| *byte == 0)
-    }
-    fn validate_p256_uncompressed_public_key(public_key: &[u8]) -> Result<(), Error> {
-        if public_key.len() != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-            || public_key.first() != Some(&0x04)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be an uncompressed P-256 SEC1 key",
-            )
-            .into());
-        }
-        if p256_public_key_has_zero_coordinate_material(public_key) {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be a valid uncompressed P-256 SEC1 point",
-            )
-            .into());
-        }
-        P256PublicKey::from_sec1_bytes(public_key).map(|_| ()).map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be a valid uncompressed P-256 SEC1 point",
-            )
-            .into()
-        })
-    }
-    fn cbor_text_key_value<'a>(
-        map: &'a [(ciborium::value::Value, ciborium::value::Value)],
-        key: &str,
-    ) -> Result<Option<&'a ciborium::value::Value>, Error> {
-        let mut matches = map.iter().filter(
-            |(candidate, _)| matches!(candidate, ciborium::value::Value::Text(text) if text == key),
-        );
-        let first = matches.next().map(|(_, value)| value);
-        if matches.next().is_some() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation CBOR map contains a duplicate text key",
-            )
-            .into());
-        }
-        Ok(first)
-    }
-    fn cbor_integer_key_value<'a>(
-        map: &'a [(ciborium::value::Value, ciborium::value::Value)],
-        key: i128,
-    ) -> Result<Option<&'a ciborium::value::Value>, Error> {
-        let mut matches = map.iter().filter(|(candidate, _)| {
-            matches!(candidate, ciborium::value::Value::Integer(value) if i128::from(value.clone()) == key)
-        });
-        let first = matches.next().map(|(_, value)| value);
-        if matches.next().is_some() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation CBOR map contains a duplicate integer key",
-            )
-            .into());
-        }
-        Ok(first)
-    }
-    fn cbor_text_value(
-        map: &[(ciborium::value::Value, ciborium::value::Value)],
-        key: &str,
-    ) -> Result<Option<String>, Error> {
-        Ok(match cbor_text_key_value(map, key)? {
-            Some(ciborium::value::Value::Text(text)) => Some(text.clone()),
-            _ => None,
-        })
-    }
-    fn cbor_bytes_value(
-        map: &[(ciborium::value::Value, ciborium::value::Value)],
-        key: &str,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        Ok(match cbor_text_key_value(map, key)? {
-            Some(ciborium::value::Value::Bytes(bytes)) => Some(bytes.clone()),
-            _ => None,
-        })
-    }
-    fn cbor_map_value<'a>(
-        map: &'a [(ciborium::value::Value, ciborium::value::Value)],
-        key: &str,
-    ) -> Result<Option<&'a [(ciborium::value::Value, ciborium::value::Value)]>, Error> {
-        Ok(match cbor_text_key_value(map, key)? {
-            Some(ciborium::value::Value::Map(map)) => Some(map.as_slice()),
-            _ => None,
-        })
-    }
-    fn cbor_array_value<'a>(
-        map: &'a [(ciborium::value::Value, ciborium::value::Value)],
-        key: &str,
-    ) -> Result<Option<&'a [ciborium::value::Value]>, Error> {
-        Ok(match cbor_text_key_value(map, key)? {
-            Some(ciborium::value::Value::Array(values)) => Some(values.as_slice()),
-            _ => None,
-        })
-    }
-    fn cbor_int_value(
-        map: &[(ciborium::value::Value, ciborium::value::Value)],
-        key: i128,
-    ) -> Result<Option<i128>, Error> {
-        Ok(match cbor_integer_key_value(map, key)? {
-            Some(ciborium::value::Value::Integer(value)) => Some(i128::from(value.clone())),
-            _ => None,
-        })
-    }
-    fn cbor_bytes_value_i(
-        map: &[(ciborium::value::Value, ciborium::value::Value)],
-        key: i128,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        Ok(match cbor_integer_key_value(map, key)? {
-            Some(ciborium::value::Value::Bytes(bytes)) => Some(bytes.clone()),
-            _ => None,
-        })
-    }
-    fn decode_cbor_value_exact(
-        input: &[u8],
-        parse_message: &str,
-        trailing_message: &str,
-    ) -> Result<ciborium::value::Value, Error> {
-        let mut cursor = Cursor::new(input);
-        let value: ciborium::value::Value = ciborium::de::from_reader(&mut cursor)
-            .map_err(|_| labeled_invariant("invalid_attestation", parse_message.to_owned()))?;
-        if cursor.position() != input.len() as u64 {
-            return Err(labeled_invariant("invalid_attestation", trailing_message).into());
-        }
-        Ok(value)
-    }
-    fn read_definite_cbor_header(
-        input: &[u8],
-        offset: &mut usize,
-        source: &str,
-    ) -> Result<(u8, u64), Error> {
-        let first = *input.get(*offset).ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extensions contain truncated CBOR"),
-            )
-        })?;
-        *offset += 1;
-        let major = first >> 5;
-        let additional = first & 0x1f;
-        let argument_bytes = match additional {
-            0..=23 => return Ok((major, u64::from(additional))),
-            24 => 1,
-            25 => 2,
-            26 => 4,
-            27 => 8,
-            _ => {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    format!("iOS App Attest {source} extensions must use definite valid CBOR"),
-                )
-                .into());
-            }
-        };
-        let end = offset.checked_add(argument_bytes).ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} CBOR length overflows"),
-            )
-        })?;
-        let bytes = input.get(*offset..end).ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extensions contain truncated CBOR"),
-            )
-        })?;
-        *offset = end;
-        let mut argument = 0u64;
-        for byte in bytes {
-            argument = (argument << 8) | u64::from(*byte);
-        }
-        Ok((major, argument))
-    }
-    fn read_definite_cbor_text<'a>(
-        input: &'a [u8],
-        offset: &mut usize,
-        source: &str,
-    ) -> Result<&'a str, Error> {
-        let (major, length) = read_definite_cbor_header(input, offset, source)?;
-        if major != 3 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extension key/value must be text"),
-            )
-            .into());
-        }
-        let length = usize::try_from(length).map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} CBOR text length is out of range"),
-            )
-        })?;
-        let end = offset.checked_add(length).ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} CBOR text length overflows"),
-            )
-        })?;
-        let bytes = input.get(*offset..end).ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extensions contain truncated text"),
-            )
-        })?;
-        *offset = end;
-        std::str::from_utf8(bytes).map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extension text is not UTF-8"),
-            )
-            .into()
-        })
-    }
+    include!("offline/device_attestation_cbor_helpers.rs");
     fn decode_ios_app_attest_extensions(
         input: &[u8],
         source: &str,
@@ -4881,7 +4841,8 @@ pub mod isi {
         }
         let bundle_version = bundle_version.expect("both exact extension keys checked");
         if bundle_version.is_empty()
-            || bundle_version.len() > OFFLINE_ATTESTATION_APP_ATTEST_MAX_BUNDLE_VERSION_BYTES
+            || bundle_version.len()
+                > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1
             || !bundle_version.is_ascii()
             || bundle_version.trim() != bundle_version
             || bundle_version.chars().any(char::is_control)
@@ -6078,23 +6039,9 @@ pub mod isi {
         }
         Ok(())
     }
-    fn validate_offline_device_attestation_registration(
+    fn validate_offline_attestation_registration_identifiers(
         registration: &OfflineDeviceAttestationRegistration,
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(Hash, [u8; 32]), Error> {
-        ensure_can_submit_kagemusha_for_account(
-            &registration.account_id,
-            authority,
-            state_transaction,
-        )?;
-        if registration.version != 1 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation registration version is unsupported",
-            )
-            .into());
-        }
+    ) -> Result<(), Error> {
         for (field, value) in [
             ("platform", registration.platform.as_str()),
             ("key_id", registration.key_id.as_str()),
@@ -6113,6 +6060,48 @@ pub mod isi {
             )
             .map_err(Error::from)?;
         }
+        if registration.key_id.len() > OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1 {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!(
+                    "offline device attestation key_id exceeds the first-release limit of {} bytes",
+                    OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1
+                ),
+            )
+            .into());
+        }
+        if registration.device_id.len() > OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
+            || registration.device_id.chars().any(char::is_control)
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!(
+                    "offline device attestation device_id must contain at most {} bytes and no control characters",
+                    OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
+    fn validate_offline_device_attestation_registration(
+        registration: &OfflineDeviceAttestationRegistration,
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(Hash, [u8; 32]), Error> {
+        ensure_can_submit_kagemusha_for_account(
+            &registration.account_id,
+            authority,
+            state_transaction,
+        )?;
+        if registration.version != 1 {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "offline device attestation registration version is unsupported",
+            )
+            .into());
+        }
+        validate_offline_attestation_registration_identifiers(registration)?;
         if registration.assertion_public_key.is_empty() {
             return Err(labeled_invariant(
                 "invalid_attestation",

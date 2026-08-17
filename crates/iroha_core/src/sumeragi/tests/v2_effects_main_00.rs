@@ -13,7 +13,6 @@ use crate::sumeragi::{
         CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
         ProductionIngressCapacityRetry, ProductionIngressCapacityStatus,
         ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
-        ProductionRecoveredDecisionFetchPersistenceErrorV1,
         ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
     },
     v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},

@@ -3381,6 +3381,7 @@ fn validate_lane_block_proposal_for_vote(
         .collect::<Result<Vec<_>, _>>()?;
     let is_consistent = descriptor.lane_id == proposal.subject.lane_id
         && descriptor.dataspace_id == proposal.subject.dataspace_id
+        && descriptor.lane_incarnation == proposal.subject.lane_incarnation
         && descriptor.lane_block_height == proposal.subject.lane_block_height
         && descriptor.lane_block_view == proposal.subject.lane_block_view
         && descriptor.subject_hash == proposal.subject.subject_hash
@@ -3394,6 +3395,7 @@ fn validate_lane_block_proposal_for_vote(
         && descriptor.qc_mode_tag == proposal.ownership.qc_mode_tag
         && proposal.ownership.lane_id == proposal.subject.lane_id
         && proposal.ownership.dataspace_id == proposal.subject.dataspace_id
+        && proposal.ownership.lane_incarnation == proposal.subject.lane_incarnation
         && proposal.ownership.lane_block_height == proposal.subject.lane_block_height
         && proposal.ownership.lane_block_view == proposal.subject.lane_block_view
         && proposal.ownership.subject_hash == proposal.subject.subject_hash;

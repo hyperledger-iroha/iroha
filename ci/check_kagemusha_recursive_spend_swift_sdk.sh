@@ -32,6 +32,8 @@ fi
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaArtifactCoordinator.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaOperationFinalityCoordinator.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaScaledAmount.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineDeviceAttestation.swift \
   IrohaSwift/Sources/IrohaSwift/ProofAttachment.swift \
@@ -43,6 +45,12 @@ fi
   IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaArtifactCoordinatorTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaOperationFinalityCoordinatorTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaRedemptionChangeV4Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaDeviceAuthorityV2Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaHardwareAuthorizationV2Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaDeviceAttestationSignedTransactionTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI21ParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift \
@@ -122,6 +130,12 @@ fi
 (
   cd IrohaSwift
   run_swift_test --filter KagemushaRecursiveSpendTests
+)
+
+(
+  cd IrohaSwift
+  run_swift_test \
+    --filter 'KagemushaArtifactCoordinatorTests|KagemushaOperationFinalityCoordinatorTests|KagemushaRedemptionChangeV4Tests|KagemushaDeviceAuthorityV2Tests|KagemushaHardwareAuthorizationV2Tests|KagemushaDeviceAttestationSignedTransactionTests'
 )
 
 (

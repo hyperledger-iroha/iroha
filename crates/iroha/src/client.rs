@@ -1697,10 +1697,6 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     #[norito(rename = "max_governed_lanes")]
@@ -1731,10 +1727,6 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     #[norito(rename = "max_outbound_messages_per_block")]
@@ -4459,10 +4451,6 @@ fn expected_zk_vk_status(
         )),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the verifier-key draft reconstruction keeps its ordered fail-closed validation in one audit surface"
-)]
 fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
@@ -7506,9 +7494,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let status = if Self::is_norito_content_type(content_type) {
-            let status = decode_from_bytes::<SumeragiV2Status>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
-            status
+            decode_from_bytes::<SumeragiV2Status>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else if Self::is_exact_json_content_type(content_type) {
             norito::json::from_slice::<SumeragiV2Status>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
@@ -27638,6 +27625,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the operator-authentication audit checks every signed header and network binding in one fixture"
+    )]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 2] = [
@@ -29115,6 +29106,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the hedging and billing audit keeps all endpoint-specific signed-request bindings together"
+    )]
     fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -29324,6 +29319,8 @@ mod tests {
     );
     #[test]
     fn sorafs_list_readbacks_target_exact_endpoints() {
+        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
+        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
@@ -29372,8 +29369,6 @@ mod tests {
                 response.expect("SoraFS list readback request");
             }
         });
-        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
-        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let expected = [
             ("/v1/sorafs/moderation/quarantine", Some("limit=7")),
             ("/v1/sorafs/moderation/model-registry", Some("limit=11")),

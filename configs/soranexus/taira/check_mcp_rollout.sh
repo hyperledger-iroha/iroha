@@ -44,11 +44,14 @@ POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
 POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
 MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="${MCP_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
+ROLLOUT_DEADLINE_SECONDS="${ROLLOUT_DEADLINE_SECONDS:-240}"
+readonly ROLLOUT_STARTED_AT_SECONDS="$SECONDS"
+ROLLOUT_DEADLINE_AT_SECONDS=0
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 TAIRA_RELEASE_VALIDATOR_COUNT=4
 VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
 VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
-VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
+VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-2}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT:-}"
 OPERATOR_NETWORK_ID="${OPERATOR_NETWORK_ID:-}"
@@ -71,6 +74,18 @@ VALIDATOR_ROOT_COUNT=0
 CURL_RESOLVE_RULES=()
 CURL_URL_RESOLVE_ARGS=()
 
+make_temp_file() {
+  if [[ -n "${TMPDIR:-}" ]]; then
+    [[ -d "$TMPDIR" ]] || {
+      echo "TMPDIR is not an existing directory: ${TMPDIR}" >&2
+      return 1
+    }
+    mktemp "${TMPDIR%/}/taira-mcp-rollout.XXXXXX"
+    return
+  fi
+  mktemp
+}
+
 usage() {
   cat <<'EOF'
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
@@ -83,6 +98,7 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
+                            [--deadline-seconds N]
                             [--expected-chain-id UUID]
                             [--expected-git-sha 7_TO_40_HEX_SHA]
                             [--expected-dpn-validator-release-commit 40_HEX_COMMIT]
@@ -104,9 +120,11 @@ The check fails unless:
   - GET /v1/nexus/lifecycle binds all seven lanes to those five canonical
     dataspace IDs and publishes one catalog identity
   - every physical dataspace publishes a non-empty, quorum-capable validator
-    roster through /status lane telemetry; lanes in one dataspace agree on the
-    roster, and no two physical dataspaces reuse the same roster. Universal's
-    projected roster must also match the frozen global consensus count/quorum.
+    roster and schema-closed validator/PeerId/Torii binding projection through
+    /status lane telemetry; roster-bearing lanes in one dataspace agree on the
+    complete projection, and physical dataspaces do not reuse any declared
+    account, PeerId, or canonical HTTPS Torii origin. Universal's projected
+    roster must also match the frozen global consensus count/quorum.
   - POST /v1/mcp initialize returns HTTP 200
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
@@ -180,6 +198,11 @@ Public checks intentionally require an explicit public node URL
 `https://taira.sora.org` is the current public Torii root, but this script
 still requires an explicit URL so operators do not accidentally validate the
 wrong edge or validator hostname.
+
+Every invocation has one absolute wall-clock budget, including retries and the
+signed write canary. The default is 240 seconds; use `--deadline-seconds N` to
+select a smaller or larger positive budget. Per-request and canary status
+timeouts are clamped to the time remaining in that budget.
 EOF
 }
 
@@ -671,6 +694,14 @@ while [[ $# -gt 0 ]]; do
       MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="$2"
       shift 2
       ;;
+    --deadline-seconds)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --deadline-seconds" >&2
+        exit 1
+      }
+      ROLLOUT_DEADLINE_SECONDS="$2"
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -773,6 +804,58 @@ require_nonnegative_integer() {
   fi
 }
 
+rollout_deadline_failure() {
+  echo "Taira MCP rollout exceeded its absolute ${ROLLOUT_DEADLINE_SECONDS}-second deadline" >&2
+  exit 124
+}
+
+rollout_remaining_seconds() {
+  local remaining
+  remaining=$((ROLLOUT_DEADLINE_AT_SECONDS - SECONDS))
+  if [[ $remaining -le 0 ]]; then
+    rollout_deadline_failure
+  fi
+  printf '%s\n' "$remaining"
+}
+
+clamp_seconds_to_rollout_deadline() {
+  local requested="$1"
+  local remaining
+  remaining="$(rollout_remaining_seconds)"
+  if [[ $requested -lt $remaining ]]; then
+    printf '%s\n' "$requested"
+  else
+    printf '%s\n' "$remaining"
+  fi
+}
+
+clamp_status_timeout_ms_to_rollout_deadline() {
+  local requested="$1"
+  local remaining_seconds remaining_ms
+  remaining_seconds="$(rollout_remaining_seconds)"
+  remaining_ms=$((remaining_seconds * 1000))
+  if [[ $requested -lt $remaining_ms ]]; then
+    printf '%s\n' "$requested"
+  else
+    printf '%s\n' "$remaining_ms"
+  fi
+}
+
+deadline_aware_sleep() {
+  local requested="$1"
+  local remaining
+  rollout_remaining_seconds >/dev/null
+  remaining="$(rollout_remaining_seconds)"
+  if [[ $requested -ge $remaining ]]; then
+    echo "Taira MCP rollout has ${remaining}s left and cannot start a ${requested}s retry delay" >&2
+    exit 124
+  fi
+  if [[ $requested -gt 0 ]]; then
+    sleep "$requested"
+  fi
+  rollout_remaining_seconds >/dev/null
+}
+
 validate_numeric_inputs() {
   require_positive_integer \
     "EXPECTED_TAIRA_LANE_COUNT" \
@@ -810,9 +893,14 @@ validate_numeric_inputs() {
   require_positive_integer \
     "MCP_ROLLOUT_CURL_MAX_TIME_SECONDS" \
     "$MCP_ROLLOUT_CURL_MAX_TIME_SECONDS"
+  require_positive_integer \
+    "ROLLOUT_DEADLINE_SECONDS" \
+    "$ROLLOUT_DEADLINE_SECONDS"
 }
 
 validate_numeric_inputs
+ROLLOUT_DEADLINE_AT_SECONDS=$((ROLLOUT_STARTED_AT_SECONDS + ROLLOUT_DEADLINE_SECONDS))
+rollout_remaining_seconds >/dev/null
 
 if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
   WRITE_CONFIG="$(default_write_config_path)"
@@ -1076,28 +1164,40 @@ http_request() {
   local accept="${4:-application/json}"
   local body_file header_file error_file
   local curl_output curl_rc
+  local curl_connect_timeout_seconds curl_max_time_seconds
   # The first-release /v1 API has no version-negotiation request header.
-  local curl_cmd=(
+  local curl_cmd=()
+
+  body_file="$(make_temp_file)"
+  header_file="$(make_temp_file)"
+  error_file="$(make_temp_file)"
+  cleanup
+  last_body="$body_file"
+  last_headers="$header_file"
+  build_curl_resolve_args "$url"
+  append_operator_auth_args "$method" "$url"
+  rollout_remaining_seconds >/dev/null
+  curl_max_time_seconds="$(
+    clamp_seconds_to_rollout_deadline "$MCP_ROLLOUT_CURL_MAX_TIME_SECONDS"
+  )"
+  curl_connect_timeout_seconds="$(
+    clamp_seconds_to_rollout_deadline "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+  )"
+  if [[ $curl_connect_timeout_seconds -gt $curl_max_time_seconds ]]; then
+    curl_connect_timeout_seconds="$curl_max_time_seconds"
+  fi
+  curl_cmd=(
     curl
     --silent
     --show-error
     -H
     "accept: ${accept}"
     --connect-timeout
-    "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+    "$curl_connect_timeout_seconds"
     --max-time
-    "$MCP_ROLLOUT_CURL_MAX_TIME_SECONDS"
+    "$curl_max_time_seconds"
   )
-
-  body_file="$(mktemp)"
-  header_file="$(mktemp)"
-  error_file="$(mktemp)"
-  cleanup
-  last_body="$body_file"
-  last_headers="$header_file"
-  build_curl_resolve_args "$url"
   curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
-  append_operator_auth_args "$method" "$url"
   curl_cmd+=( ${OPERATOR_CURL_AUTH_ARGS[@]+"${OPERATOR_CURL_AUTH_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
@@ -1128,6 +1228,8 @@ http_request() {
     curl_rc=$?
     set -e
   fi
+
+  rollout_remaining_seconds >/dev/null
 
   if [[ $curl_rc -ne 0 ]]; then
     last_status="curl_error_${curl_rc}"
@@ -2012,7 +2114,7 @@ check_status_snapshot_with_retry() {
     if [[ $attempt -eq $attempts ]]; then
       return "$rc"
     fi
-    sleep "$delay_seconds"
+    deadline_aware_sleep "$delay_seconds"
   done
 
   return 1
@@ -2038,7 +2140,7 @@ check_sumeragi_snapshot_with_retry() {
     if [[ $attempt -eq $attempts ]]; then
       return "$rc"
     fi
-    sleep "$delay_seconds"
+    deadline_aware_sleep "$delay_seconds"
   done
 
   return 1
@@ -2234,6 +2336,8 @@ check_taira_physical_dataspace_rosters() {
   python3 - "$label" "$status_path" "$sumeragi_path" "$dataspace_summary" <<'PY'
 import json
 import sys
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 label, status_path, sumeragi_path, topology_raw = sys.argv[1:]
 
@@ -2273,10 +2377,106 @@ def canonical_roster(value, field):
     for position, member in enumerate(value):
         if not isinstance(member, str) or not member.strip():
             fail(f"{field}[{position}] is not a non-empty validator identity")
-        members.append(member.strip())
+        if member != member.strip():
+            fail(f"{field}[{position}] is not a canonical validator identity")
+        members.append(member)
     if len(members) != len(set(members)):
         fail(f"{field} contains duplicate validator identities")
     return tuple(sorted(members))
+
+
+def canonical_torii_origin(value, field):
+    if not isinstance(value, str) or not value:
+        fail(f"{field} is not a non-empty Torii URL")
+    if value != value.strip():
+        fail(f"{field} is not a canonical Torii URL")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        fail(f"{field} is not a valid absolute HTTPS origin: {error}")
+    if parsed.scheme != "https" or not parsed.netloc or hostname is None:
+        fail(f"{field} must be an absolute HTTPS origin")
+    if parsed.username is not None or parsed.password is not None:
+        fail(f"{field} must not contain credentials")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        fail(f"{field} must not contain a path, query, or fragment")
+    canonical_hostname = hostname.lower().rstrip(".")
+    if not canonical_hostname:
+        fail(f"{field} must contain a hostname")
+    try:
+        canonical_hostname = str(ip_address(canonical_hostname))
+    except ValueError:
+        labels = canonical_hostname.split(".")
+        if (
+            len(canonical_hostname) > 253
+            or (len(labels) == 4 and all(label.isdecimal() for label in labels))
+            or any(
+                not label
+                or len(label) > 63
+                or not all(character.isascii() and (character.isalnum() or character == "-") for character in label)
+                or not label[0].isalnum()
+                or not label[-1].isalnum()
+                for label in labels
+            )
+        ):
+            fail(f"{field} contains a non-canonical hostname")
+    canonical_host = (
+        f"[{canonical_hostname}]" if ":" in canonical_hostname else canonical_hostname
+    )
+    effective_port = 443 if port is None else port
+    if effective_port <= 0:
+        fail(f"{field} contains an invalid port")
+    if effective_port != 443:
+        canonical_host = f"{canonical_host}:{effective_port}"
+    canonical = f"https://{canonical_host}"
+    if value != canonical:
+        fail(f"{field} is not canonical; expected {canonical!r}")
+    return canonical
+
+
+def canonical_bindings(value, field):
+    if not isinstance(value, list):
+        fail(f"{field} is not an array")
+    expected_fields = {"validator", "peer_id", "torii_url"}
+    bindings = []
+    seen_validators = set()
+    seen_peers = set()
+    seen_torii_origins = set()
+    for position, binding in enumerate(value):
+        row_field = f"{field}[{position}]"
+        if not isinstance(binding, dict):
+            fail(f"{row_field} is not an object")
+        if set(binding) != expected_fields:
+            fail(
+                f"{row_field} fields must be exactly "
+                "['peer_id', 'torii_url', 'validator']"
+            )
+        validator = binding["validator"]
+        peer_id = binding["peer_id"]
+        if not isinstance(validator, str) or not validator:
+            fail(f"{row_field}.validator is not a non-empty identity")
+        if validator != validator.strip():
+            fail(f"{row_field}.validator is not canonical")
+        if not isinstance(peer_id, str) or not peer_id:
+            fail(f"{row_field}.peer_id is not a non-empty PeerId")
+        if peer_id != peer_id.strip():
+            fail(f"{row_field}.peer_id is not canonical")
+        torii_origin = canonical_torii_origin(
+            binding["torii_url"], f"{row_field}.torii_url"
+        )
+        if validator in seen_validators:
+            fail(f"{field} contains duplicate validator identities")
+        if peer_id in seen_peers:
+            fail(f"{field} contains duplicate PeerIds")
+        if torii_origin in seen_torii_origins:
+            fail(f"{field} contains duplicate Torii origins")
+        seen_validators.add(validator)
+        seen_peers.add(peer_id)
+        seen_torii_origins.add(torii_origin)
+        bindings.append((validator, peer_id, torii_origin))
+    return tuple(sorted(bindings))
 
 
 node_status = load_json(status_path, "/status")
@@ -2423,6 +2623,16 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
         lane.get("manifest_validators"),
         f"/status.teu_lane_commit lane {lane_id} manifest_validators",
     )
+    bindings = canonical_bindings(
+        lane.get("manifest_validator_bindings"),
+        f"/status.teu_lane_commit lane {lane_id} manifest_validator_bindings",
+    )
+    binding_validators = tuple(sorted(binding[0] for binding in bindings))
+    if roster != binding_validators:
+        fail(
+            f"lane {lane_alias!r} manifest validator roster does not exactly match "
+            "its validator-binding account set"
+        )
     quorum = lane.get("manifest_quorum")
     if roster:
         quorum = require_nonnegative_int(
@@ -2452,6 +2662,7 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
             "lane_id": lane_id,
             "lane_alias": lane_alias,
             "members": roster,
+            "bindings": bindings,
             "quorum": quorum,
         }
     )
@@ -2511,15 +2722,17 @@ for dataspace_alias in physical_dataspace_order:
         )
     else:
         baseline_members = nonempty[0]["members"]
+        baseline_bindings = nonempty[0]["bindings"]
         baseline_quorum = nonempty[0]["quorum"]
         for projection in nonempty[1:]:
             if (
                 projection["members"] != baseline_members
+                or projection["bindings"] != baseline_bindings
                 or projection["quorum"] != baseline_quorum
             ):
                 fail(
                     f"lanes in physical dataspace {dataspace_alias!r} project "
-                    "different validator rosters or quorums"
+                    "different validator rosters, bindings, or quorums"
                 )
         if dataspace_alias == "universal" and (
             len(baseline_members) != global_validator_count
@@ -2532,6 +2745,14 @@ for dataspace_alias in physical_dataspace_order:
         rosters[dataspace_alias] = {
             "source": "lane_manifest",
             "members": list(baseline_members),
+            "bindings": [
+                {
+                    "validator": validator,
+                    "peer_id": peer_id,
+                    "torii_url": torii_url,
+                }
+                for validator, peer_id, torii_url in baseline_bindings
+            ],
             "quorum": baseline_quorum,
             "projected_lanes": sorted(
                 projection["lane_alias"] for projection in lane_projections
@@ -2555,6 +2776,24 @@ for dataspace_alias in physical_dataspace_order:
         )
     seen_manifest_rosters[fingerprint] = dataspace_alias
 
+seen_accounts = {}
+seen_peers = {}
+seen_torii_origins = {}
+for dataspace_alias in physical_dataspace_order:
+    for binding in rosters[dataspace_alias]["bindings"]:
+        for identity_kind, identity, owners in (
+            ("validator account", binding["validator"], seen_accounts),
+            ("PeerId", binding["peer_id"], seen_peers),
+            ("Torii origin", binding["torii_url"], seen_torii_origins),
+        ):
+            previous = owners.get(identity)
+            if previous is not None and previous != dataspace_alias:
+                fail(
+                    f"physical dataspaces {previous!r} and {dataspace_alias!r} reuse "
+                    f"the same manifest {identity_kind} {identity!r}"
+                )
+            owners[identity] = dataspace_alias
+
 print(json.dumps(rosters, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
 PY
 }
@@ -2562,7 +2801,7 @@ PY
 capture_validator_fleet_sample() {
   local records_file status_copy dataspace_summary roster_summary
   local idx label root
-  records_file="$(mktemp)"
+  records_file="$(make_temp_file)"
 
   for idx in "${!VALIDATOR_ROOTS[@]}"; do
     label="${VALIDATOR_LABELS[$idx]}"
@@ -2586,7 +2825,7 @@ capture_validator_fleet_sample() {
       rm -f "$records_file"
       return 1
     fi
-    status_copy="$(mktemp)"
+    status_copy="$(make_temp_file)"
     cp "$last_body" "$status_copy"
 
     if ! check_effective_routing_policy "validator ${label}" "$status_copy"; then
@@ -2843,7 +3082,7 @@ check_validator_fleet() {
         break
       fi
       if [[ $attempt -lt $VALIDATOR_ALIGNMENT_ATTEMPTS ]]; then
-        sleep 1
+        deadline_aware_sleep 1
       fi
     done
     if [[ $aligned -ne 1 ]]; then
@@ -2878,7 +3117,7 @@ PY
     echo "validator fleet sample ${sample}/${VALIDATOR_PROGRESS_SAMPLES}: ${summary}"
     previous_summary="$summary"
     if [[ $sample -lt $VALIDATOR_PROGRESS_SAMPLES ]]; then
-      sleep "$VALIDATOR_PROGRESS_DELAY_SECONDS"
+      deadline_aware_sleep "$VALIDATOR_PROGRESS_DELAY_SECONDS"
     fi
   done
 }
@@ -3201,6 +3440,8 @@ ensure_iroha_bin() {
 ensure_write_canary_config() {
   local target_url="$1"
 
+  rollout_remaining_seconds >/dev/null
+
   if [[ -f "$WRITE_CONFIG" ]]; then
     return 0
   fi
@@ -3217,6 +3458,10 @@ ensure_write_canary_config() {
     exit 1
   fi
 
+  local status_timeout_ms
+  status_timeout_ms="$(
+    clamp_status_timeout_ms_to_rollout_deadline "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  )"
   local bootstrap_cmd=(
     python3
     "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
@@ -3226,7 +3471,7 @@ ensure_write_canary_config() {
     --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
     --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
-    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+    --status-timeout-ms "$status_timeout_ms"
   )
 
   if [[ -n "$IROHA_BIN" ]]; then
@@ -3241,6 +3486,7 @@ ensure_write_canary_config() {
 
   echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
   "${bootstrap_cmd[@]}" >&2
+  rollout_remaining_seconds >/dev/null
 }
 
 resolve_canary_account_id() {
@@ -3294,7 +3540,7 @@ PY
   local public_key="${values[0]}"
   local chain_discriminant="${values[1]}"
   local output_file
-  output_file="$(mktemp)"
+  output_file="$(make_temp_file)"
   "${IROHA_RUNNER[@]}" tools address convert --network-prefix "$chain_discriminant" --format json "$public_key" \
     >"$output_file" 2>&1 || {
     sed -n '1,80p' "$output_file" >&2 || true
@@ -3325,11 +3571,17 @@ PY
 claim_faucet_for_canary() {
   local target_url="$1"
   local account_id="$2"
+  local status_timeout_ms
+  rollout_remaining_seconds >/dev/null
+  status_timeout_ms="$(
+    clamp_status_timeout_ms_to_rollout_deadline "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  )"
   echo "==> faucet bootstrap: ${account_id}" >&2
   python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
     --account-id "$account_id" \
     --torii-root "$target_url" \
-    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+    --status-timeout-ms "$status_timeout_ms"
+  rollout_remaining_seconds >/dev/null
 }
 
 retry_write_canary() {
@@ -3341,6 +3593,7 @@ retry_write_canary() {
   local attempt
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
+    rollout_remaining_seconds >/dev/null
     if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" \
         --fee-payer sponsor \
         --fee-program "$ROLLOUT_CANARY_FEE_PROGRAM_ID" \
@@ -3353,7 +3606,7 @@ retry_write_canary() {
       return 1
     fi
     if [[ $attempt -lt $attempts ]]; then
-      sleep "$delay_seconds"
+      deadline_aware_sleep "$delay_seconds"
     fi
   done
   return 1
@@ -3361,23 +3614,28 @@ retry_write_canary() {
 
 run_write_canary() {
   local target_url="$1"
-  local output_file temp_config write_msg
+  local output_file temp_config write_msg status_timeout_ms
 
+  rollout_remaining_seconds >/dev/null
   ensure_iroha_bin
   [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   ensure_write_canary_config "$target_url"
 
-  temp_config="$(mktemp)"
-  output_file="$(mktemp)"
+  temp_config="$(make_temp_file)"
+  output_file="$(make_temp_file)"
   trap 'rm -f "${temp_config:-}" "${output_file:-}"; cleanup' EXIT
+  status_timeout_ms="$(
+    clamp_status_timeout_ms_to_rollout_deadline "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  )"
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
     "$temp_config" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
-    "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+    "$status_timeout_ms"
   write_msg="${WRITE_MESSAGE_PREFIX}-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "==> write canary: ${target_url} (message: ${write_msg})"
+  rollout_remaining_seconds >/dev/null
   if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" \
       --fee-payer sponsor \
       --fee-program "$ROLLOUT_CANARY_FEE_PROGRAM_ID" \
@@ -3434,6 +3692,7 @@ run_write_canary() {
     sed -n '1,80p' "$output_file" >&2 || true
     exit 1
   fi
+  rollout_remaining_seconds >/dev/null
   rm -f "$temp_config" "$output_file"
   trap cleanup EXIT
 }
@@ -3481,6 +3740,8 @@ if [[ -n "$WRITE_CONFIG" ]]; then
 elif [[ $SKIP_PUBLIC -eq 0 ]]; then
   echo "read-only checks passed; signed write canary was explicitly skipped" >&2
 fi
+
+rollout_remaining_seconds >/dev/null
 
 if [[ $SKIP_PUBLIC -eq 1 ]]; then
   echo "Taira MCP local diagnostic checks passed; this is not public cutover evidence."

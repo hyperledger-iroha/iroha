@@ -1,0 +1,7 @@
+
+        seiyaku ResultIfLetExpression {
+            view fn main(Result<int, bool> value, int fallback) -> int {
+                if let Result::ok(payload) = value { payload } else { fallback }
+            }
+        }
+    

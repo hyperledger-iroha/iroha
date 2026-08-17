@@ -1,0 +1,31 @@
+
+seiyaku StateMapOptionAcceptance {
+  error enum StateMapError {
+    MissingReportedPresent = 1,
+    MissingFallbackIgnored = 2,
+    PresentReportedMissing = 3,
+    PresentZeroLost = 4,
+    RemovalReportedPresent = 5,
+    RemovalLostValue = 6
+  }
+
+  state StateMap<int, int> Values;
+
+  kotoage fn run() -> int authorize("WriteState") {
+    let missing = Values.get(7);
+    require(missing.is_none(), StateMapError::MissingReportedPresent);
+    require(missing.unwrap_or(91) == 91, StateMapError::MissingFallbackIgnored);
+
+    Values[7] = 0;
+    let present = Values.get(7);
+    require(present.is_some(), StateMapError::PresentReportedMissing);
+    require(present.unwrap_or(91) == 0, StateMapError::PresentZeroLost);
+
+    let deleted = Values.remove(7);
+    require(deleted.is_some(), StateMapError::RemovalReportedPresent);
+    require(deleted.unwrap_or(91) == 0, StateMapError::RemovalLostValue);
+    let removed = Values.get(7);
+    require(removed.is_none(), StateMapError::RemovalReportedPresent);
+    return 1;
+  }
+}

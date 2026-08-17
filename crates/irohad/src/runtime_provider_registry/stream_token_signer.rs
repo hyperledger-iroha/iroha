@@ -77,15 +77,15 @@ const fn map_probe_error(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use super::*;
     use iroha_torii::sorafs::{
         StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
         StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
     };
-    use super::*;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     const HANDLE: &str = "software://sorafs/stream-token/eu-1";
     const REVISION: u64 = 7;
     const POLICY_DIGEST: [u8; 32] = [0x42; 32];
@@ -148,7 +148,7 @@ mod tests {
                 .expect("qualification reports")
                 .get(index)
                 .copied()
-                .unwrap_or(Ok(qualification(REVISION)))
+                .unwrap_or_else(|| Ok(qualification(REVISION)))
         }
         fn sign(&self, _signing_payload: &[u8]) -> Result<[u8; 64], StreamTokenSigningError> {
             Err(StreamTokenSigningError::Refused)

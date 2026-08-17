@@ -8881,6 +8881,7 @@ impl PyNetworkId {
         canonical_network_id_literal(&self.inner)
     }
     /// Return a defensive copy of the exact genesis-header hash bytes.
+    #[expect(clippy::wrong_self_convention, reason = "PyO3 borrowed receiver")]
     fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, self.inner.as_bytes())
     }
@@ -10627,41 +10628,6 @@ fn python_nonzero_privacy_digest_v1(value: &[u8], field: &str) -> PyResult<[u8; 
     }
     Ok(digest)
 }
-fn python_vega_draft_statement_v1(
-    context: PrivacyStatementContextV1,
-    issuer_id: [u8; 32],
-    issuer_record_epoch: u64,
-    issuer_record_digest: [u8; 32],
-    issuer_public_key: [u8; 33],
-    presentation_year: u16,
-    presentation_month: u8,
-    presentation_day: u8,
-    minimum_age_years: u8,
-    reader_challenge: [u8; 32],
-    session_transcript_digest: [u8; 32],
-) -> VegaExistingCredentialStatementV1 {
-    VegaExistingCredentialStatementV1 {
-        context,
-        issuer_id: PrivacyIssuerIdV1::new(issuer_id),
-        issuer_record_epoch,
-        issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(issuer_record_digest),
-        document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
-        namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
-        digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
-        issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
-        device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
-        issuer_public_key: PrivacyP256PointV1::new(issuer_public_key),
-        device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]),
-        presentation_date: PrivacyVegaMdlDateV1 {
-            year: presentation_year,
-            month: presentation_month,
-            day: presentation_day,
-        },
-        minimum_age_years,
-        reader_challenge: PrivacyChallengeV1::new(reader_challenge),
-        session_transcript_digest: PrivacySessionTranscriptDigestV1::new(session_transcript_digest),
-    }
-}
 fn python_bind_vega_device_authentication_digest_v1(
     mut statement: VegaExistingCredentialStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -10678,7 +10644,10 @@ fn python_bind_vega_device_authentication_digest_v1(
     statement.device_authentication_digest = digest;
     Ok(statement)
 }
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit consensus statement fields"
+)]
 fn python_vega_statement_v1(
     context: PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -10694,19 +10663,29 @@ fn python_vega_statement_v1(
     session_transcript_digest: [u8; 32],
 ) -> PyResult<VegaExistingCredentialStatementV1> {
     python_bind_vega_device_authentication_digest_v1(
-        python_vega_draft_statement_v1(
+        VegaExistingCredentialStatementV1 {
             context,
-            issuer_id,
+            issuer_id: PrivacyIssuerIdV1::new(issuer_id),
             issuer_record_epoch,
-            issuer_record_digest,
-            issuer_public_key,
-            presentation_year,
-            presentation_month,
-            presentation_day,
+            issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(issuer_record_digest),
+            document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            issuer_public_key: PrivacyP256PointV1::new(issuer_public_key),
+            device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]),
+            presentation_date: PrivacyVegaMdlDateV1 {
+                year: presentation_year,
+                month: presentation_month,
+                day: presentation_day,
+            },
             minimum_age_years,
-            reader_challenge,
-            session_transcript_digest,
-        ),
+            reader_challenge: PrivacyChallengeV1::new(reader_challenge),
+            session_transcript_digest: PrivacySessionTranscriptDigestV1::new(
+                session_transcript_digest,
+            ),
+        },
         canonical_genesis_hash,
     )
 }

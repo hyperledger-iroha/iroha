@@ -848,11 +848,11 @@ where
             return Ok(());
         }
         self.cleanup(now);
-        if !self.entries.contains_key(&key) {
-            if self.entries.len() >= self.params.max_entries || self.entries.try_reserve(1).is_err()
-            {
-                return Err(self.params.cooldown);
-            }
+        if !self.entries.contains_key(&key)
+            && (self.entries.len() >= self.params.max_entries
+                || self.entries.try_reserve(1).is_err())
+        {
+            return Err(self.params.cooldown);
         }
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,

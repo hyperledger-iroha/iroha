@@ -1,4 +1,4 @@
-//! Closed route descriptors for the authenticated SoraFS proof-of-personhood service.
+//! Closed route descriptors for the authenticated `SoraFS` proof-of-personhood service.
 use super::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
     RouteDescriptor, RouteEffect, RouteProjections,

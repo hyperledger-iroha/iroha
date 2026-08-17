@@ -1,1669 +1,886 @@
-#[test]
-fn fhe_input_admission_proof_validate_rejects_public_input_shape_replay() {
-    let sample = sample_fhe_input_admission_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash);
-    let other_statement = <[u8; Hash::LENGTH]>::from(sample_hash(21));
-    let assert_rejected = |label: &str, public_inputs: Vec<Vec<[u8; Hash::LENGTH]>>| {
+use FheProofFamily::{BootstrapKey, FullBootstrapExecution, InputAdmission, PublicKey};
+use FheValidationScenario::{
+    AttachmentMetadataDrift, CanonicalEnvelope, CanonicalVerifierName, CommitmentAndEnvelopeHash,
+    InputAdmissionBackendMismatch, OpenVerifyEnvelopeDrift, OversizedPayloads,
+    PublicInputShapeReplay, PublishedBounds,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FheProofFamily {
+    InputAdmission,
+    PublicKey,
+    BootstrapKey,
+    FullBootstrapExecution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FheValidationScenario {
+    PublicInputShapeReplay,
+    PublishedBounds,
+    OversizedPayloads,
+    CanonicalVerifierName,
+    InputAdmissionBackendMismatch,
+    CanonicalEnvelope,
+    CommitmentAndEnvelopeHash,
+    OpenVerifyEnvelopeDrift,
+    AttachmentMetadataDrift,
+}
+
+const FHE_PROOF_VALIDATION_CASE_IDS: [&str; 27] = [
+    "fhe_input_admission_proof_validate_rejects_public_input_shape_replay",
+    "fhe_input_admission_open_verify_bounds_match_published_caps",
+    "fhe_input_admission_proof_validate_rejects_oversized_proof_payloads",
+    "fhe_input_admission_proof_validate_requires_canonical_vk_ref_name",
+    "fhe_input_admission_proof_validate_rejects_backend_mismatch",
+    "fhe_public_key_proof_validate_accepts_canonical_envelope",
+    "fhe_public_key_proof_validate_requires_vk_commitment_and_matching_envelope_hash",
+    "fhe_public_key_proof_validate_rejects_open_verify_envelope_drift",
+    "fhe_public_key_proof_validate_rejects_public_input_shape_replay",
+    "fhe_public_key_proof_open_verify_bounds_match_published_caps",
+    "fhe_public_key_proof_validate_rejects_oversized_proof_payloads",
+    "fhe_public_key_proof_validate_rejects_attachment_metadata_drift",
+    "fhe_bootstrap_key_proof_validate_accepts_canonical_envelope",
+    "fhe_bootstrap_key_proof_validate_requires_vk_commitment_and_matching_envelope_hash",
+    "fhe_bootstrap_key_proof_validate_rejects_open_verify_envelope_drift",
+    "fhe_bootstrap_key_proof_validate_rejects_public_input_shape_replay",
+    "fhe_bootstrap_key_proof_open_verify_bounds_match_published_caps",
+    "fhe_bootstrap_key_proof_validate_rejects_oversized_proof_payloads",
+    "fhe_bootstrap_key_proof_validate_requires_canonical_vk_ref_name",
+    "fhe_bootstrap_key_proof_validate_rejects_attachment_metadata_drift",
+    "fhe_full_bootstrap_execution_proof_validate_accepts_canonical_envelope",
+    "fhe_full_bootstrap_execution_proof_validate_requires_vk_commitment_and_matching_envelope_hash",
+    "fhe_full_bootstrap_execution_proof_validate_rejects_open_verify_envelope_drift",
+    "fhe_full_bootstrap_execution_proof_validate_rejects_public_input_shape_replay",
+    "fhe_full_bootstrap_execution_proof_open_verify_bounds_match_published_caps",
+    "fhe_full_bootstrap_execution_proof_validate_rejects_oversized_proof_payloads",
+    "fhe_full_bootstrap_execution_proof_validate_rejects_attachment_metadata_drift",
+];
+
+const FHE_PROOF_VALIDATION_ROUTES: [(FheProofFamily, FheValidationScenario); 27] = [
+    (InputAdmission, PublicInputShapeReplay),
+    (InputAdmission, PublishedBounds),
+    (InputAdmission, OversizedPayloads),
+    (InputAdmission, CanonicalVerifierName),
+    (InputAdmission, InputAdmissionBackendMismatch),
+    (PublicKey, CanonicalEnvelope),
+    (PublicKey, CommitmentAndEnvelopeHash),
+    (PublicKey, OpenVerifyEnvelopeDrift),
+    (PublicKey, PublicInputShapeReplay),
+    (PublicKey, PublishedBounds),
+    (PublicKey, OversizedPayloads),
+    (PublicKey, AttachmentMetadataDrift),
+    (BootstrapKey, CanonicalEnvelope),
+    (BootstrapKey, CommitmentAndEnvelopeHash),
+    (BootstrapKey, OpenVerifyEnvelopeDrift),
+    (BootstrapKey, PublicInputShapeReplay),
+    (BootstrapKey, PublishedBounds),
+    (BootstrapKey, OversizedPayloads),
+    (BootstrapKey, CanonicalVerifierName),
+    (BootstrapKey, AttachmentMetadataDrift),
+    (FullBootstrapExecution, CanonicalEnvelope),
+    (FullBootstrapExecution, CommitmentAndEnvelopeHash),
+    (FullBootstrapExecution, OpenVerifyEnvelopeDrift),
+    (FullBootstrapExecution, PublicInputShapeReplay),
+    (FullBootstrapExecution, PublishedBounds),
+    (FullBootstrapExecution, OversizedPayloads),
+    (FullBootstrapExecution, AttachmentMetadataDrift),
+];
+
+#[derive(Clone, Copy)]
+struct FheProofProfile {
+    fill_byte: u8,
+    other_statement_seed: u8,
+    canonical_commitment: u8,
+    forged_commitment: u8,
+    circuit_id: &'static str,
+    wrong_circuit_id: &'static str,
+    public_inputs_schema: &'static [u8],
+    wrong_public_inputs_schema: &'static [u8],
+    verifier_alias: &'static str,
+    max_open_verify_bytes: usize,
+    max_stark_wrapper_bytes: usize,
+    max_native_envelope_bytes: usize,
+}
+
+impl FheProofFamily {
+    fn profile(self) -> FheProofProfile {
+        match self {
+            Self::InputAdmission => FheProofProfile {
+                fill_byte: 0xA5,
+                other_statement_seed: 21,
+                canonical_commitment: 0x42,
+                forged_commitment: 0xA4,
+                circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                wrong_circuit_id: "soracloud_fhe_input_admission_v2",
+                public_inputs_schema: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+                wrong_public_inputs_schema: b"soracloud:fhe-input-admission:public-inputs:v2",
+                verifier_alias: "soracloud_fhe_input_admission_alias_v1",
+                max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+                max_stark_wrapper_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES,
+                max_native_envelope_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+            },
+            Self::PublicKey => FheProofProfile {
+                fill_byte: 0xAA,
+                other_statement_seed: 15,
+                canonical_commitment: 0x4A,
+                forged_commitment: 0xA4,
+                circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+                wrong_circuit_id: "soracloud_fhe_public_key_v2",
+                public_inputs_schema: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                wrong_public_inputs_schema: b"soracloud:fhe-public-key:public-inputs:v2",
+                verifier_alias: "soracloud_fhe_public_key_alias_v1",
+                max_open_verify_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+                max_stark_wrapper_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
+                max_native_envelope_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            },
+            Self::BootstrapKey => FheProofProfile {
+                fill_byte: 0xB5,
+                other_statement_seed: 21,
+                canonical_commitment: 0x52,
+                forged_commitment: 0x25,
+                circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                wrong_circuit_id: "soracloud_fhe_bootstrap_key_proof_v2",
+                public_inputs_schema: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                wrong_public_inputs_schema: b"soracloud:fhe-bootstrap-key:public-inputs:v2",
+                verifier_alias: "soracloud_fhe_bootstrap_key_alias_v1",
+                max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+                max_stark_wrapper_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
+                max_native_envelope_bytes:
+                    SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            },
+            Self::FullBootstrapExecution => FheProofProfile {
+                fill_byte: 0xD5,
+                other_statement_seed: 21,
+                canonical_commitment: 0x63,
+                forged_commitment: 0x27,
+                circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                wrong_circuit_id: "iroha_bfv_full_bootstrap_v2",
+                public_inputs_schema:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                wrong_public_inputs_schema:
+                    b"soracloud:fhe-full-bootstrap-execution:public-inputs:v2",
+                verifier_alias: "soracloud_fhe_full_bootstrap_execution_alias_v1",
+                max_open_verify_bytes:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES,
+                max_stark_wrapper_bytes:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_STARK_WRAPPER_BYTES,
+                max_native_envelope_bytes:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            },
+        }
+    }
+
+    fn sample(self) -> FheProof {
+        match self {
+            Self::InputAdmission => {
+                FheProof::InputAdmission(Box::new(sample_fhe_input_admission_proof()))
+            }
+            Self::PublicKey => FheProof::PublicKey(Box::new(sample_fhe_public_key_proof())),
+            Self::BootstrapKey => {
+                FheProof::BootstrapKey(Box::new(sample_fhe_bootstrap_key_proof()))
+            }
+            Self::FullBootstrapExecution => FheProof::FullBootstrapExecution(Box::new(
+                sample_fhe_full_bootstrap_execution_proof(),
+            )),
+        }
+    }
+
+    fn bounds(self) -> OpenVerifyEnvelopeBounds {
+        match self {
+            Self::InputAdmission => soracloud_fhe_input_admission_open_verify_bounds(),
+            Self::PublicKey => soracloud_fhe_public_key_proof_open_verify_bounds(),
+            Self::BootstrapKey => soracloud_fhe_bootstrap_key_proof_open_verify_bounds(),
+            Self::FullBootstrapExecution => {
+                soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds()
+            }
+        }
+    }
+
+    fn schema_hash(self) -> [u8; 32] {
+        match self {
+            Self::PublicKey => soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1(),
+            Self::BootstrapKey => soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
+            Self::FullBootstrapExecution => {
+                soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
+            }
+            Self::InputAdmission => unreachable!("input admission has no canonical-envelope case"),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum FheProof {
+    InputAdmission(Box<SoracloudFheInputAdmissionProofV1>),
+    PublicKey(Box<SoracloudFhePublicKeyProofV1>),
+    BootstrapKey(Box<SoracloudFheBootstrapKeyProofV1>),
+    FullBootstrapExecution(Box<SoracloudFheFullBootstrapExecutionProofV1>),
+}
+
+impl FheProof {
+    fn attachment(&self) -> &ProofAttachment {
+        match self {
+            Self::InputAdmission(proof) => &proof.proof,
+            Self::PublicKey(proof) => &proof.proof,
+            Self::BootstrapKey(proof) => &proof.proof,
+            Self::FullBootstrapExecution(proof) => &proof.proof,
+        }
+    }
+
+    fn attachment_mut(&mut self) -> &mut ProofAttachment {
+        match self {
+            Self::InputAdmission(proof) => &mut proof.proof,
+            Self::PublicKey(proof) => &mut proof.proof,
+            Self::BootstrapKey(proof) => &mut proof.proof,
+            Self::FullBootstrapExecution(proof) => &mut proof.proof,
+        }
+    }
+
+    fn statement_hash(&self) -> Hash {
+        match self {
+            Self::InputAdmission(proof) => proof.statement_hash,
+            Self::PublicKey(proof) => proof.statement_hash,
+            Self::BootstrapKey(proof) => proof.statement_hash,
+            Self::FullBootstrapExecution(proof) => proof.statement_hash,
+        }
+    }
+
+    fn validate(&self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::InputAdmission(proof) => proof.validate(),
+            Self::PublicKey(proof) => proof.validate(),
+            Self::BootstrapKey(proof) => proof.validate(),
+            Self::FullBootstrapExecution(proof) => proof.validate(),
+        }
+    }
+
+    fn replace_envelope(&mut self, envelope: &OpenVerifyEnvelope) {
+        match self {
+            Self::InputAdmission(proof) => {
+                replace_fhe_input_admission_open_verify_envelope(proof, envelope)
+            }
+            Self::PublicKey(proof) => replace_fhe_public_key_open_verify_envelope(proof, envelope),
+            Self::BootstrapKey(proof) => {
+                replace_fhe_bootstrap_key_open_verify_envelope(proof, envelope)
+            }
+            Self::FullBootstrapExecution(proof) => {
+                replace_fhe_full_bootstrap_execution_open_verify_envelope(proof, envelope)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FheErrorExpectation {
+    InvalidField(&'static str),
+    EmptyField(&'static str),
+}
+
+fn assert_fhe_valid(proof: &FheProof, id: &str, expectation: &str) {
+    if let Err(err) = proof.validate() {
+        panic!("{id}: {expectation}: {err}");
+    }
+}
+
+fn assert_fhe_rejected(
+    proof: &FheProof,
+    id: &str,
+    label: &str,
+    expected: FheErrorExpectation,
+    reason: Option<&str>,
+) {
+    let err = match proof.validate() {
+        Ok(()) => panic!("{id}: {label}"),
+        Err(err) => err,
+    };
+    match (expected, &err) {
+        (
+            FheErrorExpectation::InvalidField(expected),
+            SoracloudManifestError::InvalidField { field, .. },
+        )
+        | (
+            FheErrorExpectation::EmptyField(expected),
+            SoracloudManifestError::EmptyField { field, .. },
+        ) => assert_eq!(*field, expected, "{id}: unexpected error: {err}"),
+        _ => panic!("{id}: unexpected error: {err}"),
+    }
+    if let Some(reason) = reason {
+        assert!(
+            err.to_string().contains(reason),
+            "{id}: unexpected error: {err}"
+        );
+    }
+}
+
+fn decode_fhe_envelope(proof: &FheProof, id: &str) -> OpenVerifyEnvelope {
+    match norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.attachment().proof.bytes) {
+        Ok(envelope) => envelope,
+        Err(err) => panic!("{id}: decode sample OpenVerifyEnvelope: {err}"),
+    }
+}
+
+fn decode_fhe_open_proof(envelope: &OpenVerifyEnvelope, id: &str) -> StarkFriOpenProofV1 {
+    match norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes) {
+        Ok(proof) => proof,
+        Err(err) => panic!("{id}: decode sample STARK public-input wrapper: {err}"),
+    }
+}
+
+fn encode_fhe_open_proof(proof: &StarkFriOpenProofV1, id: &str, label: &str) -> Vec<u8> {
+    match norito::to_bytes(proof) {
+        Ok(bytes) => bytes,
+        Err(err) => panic!("{id}: {label}: {err}"),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PublicInputShapeMutation {
+    ExtraRow,
+    ExtraColumn,
+    DuplicateStatement,
+}
+
+fn run_public_input_shape_replay(family: FheProofFamily, id: &str) {
+    let sample = family.sample();
+    let envelope = decode_fhe_envelope(&sample, id);
+    let open_proof = decode_fhe_open_proof(&envelope, id);
+    let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash());
+    let other_statement =
+        <[u8; Hash::LENGTH]>::from(sample_hash(family.profile().other_statement_seed));
+    let mutations = [
+        (
+            PublicInputShapeMutation::ExtraRow,
+            "extra STARK public-input row must be rejected",
+        ),
+        (
+            PublicInputShapeMutation::ExtraColumn,
+            "extra STARK public-input column must be rejected",
+        ),
+        (
+            PublicInputShapeMutation::DuplicateStatement,
+            "duplicate STARK public-input statement must be rejected",
+        ),
+    ];
+    for (mutation, label) in mutations {
+        let public_inputs = match mutation {
+            PublicInputShapeMutation::ExtraRow => {
+                vec![vec![statement], vec![other_statement]]
+            }
+            PublicInputShapeMutation::ExtraColumn => vec![vec![statement, other_statement]],
+            PublicInputShapeMutation::DuplicateStatement => {
+                vec![vec![statement], vec![statement]]
+            }
+        };
         let mut proof = sample.clone();
         let mut replay_envelope = envelope.clone();
         let mut replay_open = open_proof.clone();
         replay_open.public_inputs = public_inputs;
         replay_envelope.proof_bytes =
-            norito::to_bytes(&replay_open).expect("encode replay-shaped STARK wrapper");
-        replace_fhe_input_admission_open_verify_envelope(&mut proof, &replay_envelope);
-        let err = proof.validate().expect_err(label);
-        assert!(matches!(
-            err,
-            SoracloudManifestError::InvalidField {
-                field: "proof.proof.bytes",
-                ..
-            }
-        ));
-    };
-    assert_rejected(
-        "extra STARK public-input row must be rejected",
-        vec![vec![statement], vec![other_statement]],
-    );
-    assert_rejected(
-        "extra STARK public-input column must be rejected",
-        vec![vec![statement, other_statement]],
-    );
-    assert_rejected(
-        "duplicate STARK public-input statement must be rejected",
-        vec![vec![statement], vec![statement]],
-    );
+            encode_fhe_open_proof(&replay_open, id, "encode replay-shaped STARK wrapper");
+        proof.replace_envelope(&replay_envelope);
+        assert_fhe_rejected(
+            &proof,
+            id,
+            label,
+            FheErrorExpectation::InvalidField("proof.proof.bytes"),
+            None,
+        );
+    }
 }
-#[test]
-fn fhe_input_admission_open_verify_bounds_match_published_caps() {
-    let bounds = soracloud_fhe_input_admission_open_verify_bounds();
+
+fn run_published_bounds(family: FheProofFamily, id: &str) {
+    let profile = family.profile();
+    let bounds = family.bounds();
     assert_eq!(
         bounds.max_circuit_id_bytes,
-        SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1.len()
+        profile.circuit_id.len(),
+        "{id}"
     );
     assert_eq!(
         bounds.max_public_input_bytes,
-        SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.len()
+        profile.public_inputs_schema.len(),
+        "{id}"
     );
     assert_eq!(
-        bounds.max_proof_bytes,
-        SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES
+        bounds.max_proof_bytes, profile.max_stark_wrapper_bytes,
+        "{id}"
     );
-    assert_eq!(bounds.max_aux_bytes, 0);
-    assert!(!bounds.allow_aux);
-    assert!(bounds.require_nonzero_vk_hash);
+    assert_eq!(bounds.max_aux_bytes, 0, "{id}");
+    assert!(!bounds.allow_aux, "{id}");
+    assert!(bounds.require_nonzero_vk_hash, "{id}");
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_input_admission_proof_validate_rejects_oversized_proof_payloads() {
-    let sample = sample_fhe_input_admission_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
+
+fn run_oversized_payloads(family: FheProofFamily, id: &str) {
+    let profile = family.profile();
+    let sample = family.sample();
+    let envelope = decode_fhe_envelope(&sample, id);
+    let open_proof = decode_fhe_open_proof(&envelope, id);
+
     let mut oversized_outer = sample.clone();
-    oversized_outer.proof.proof.bytes =
-        vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES + 1];
-    oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
-        &oversized_outer.proof.proof.bytes,
-    )));
-    let err = oversized_outer
-        .validate()
-        .expect_err("oversized OpenVerify envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("OpenVerifyEnvelope length"),
-        "unexpected error: {err}"
+    oversized_outer.attachment_mut().proof.bytes =
+        vec![profile.fill_byte; profile.max_open_verify_bytes + 1];
+    let envelope_hash = <[u8; 32]>::from(Hash::new(&oversized_outer.attachment().proof.bytes));
+    oversized_outer.attachment_mut().envelope_hash = Some(envelope_hash);
+    assert_fhe_rejected(
+        &oversized_outer,
+        id,
+        "oversized OpenVerify envelope bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        (family != FullBootstrapExecution).then_some("OpenVerifyEnvelope length"),
     );
+
     let mut oversized_circuit = sample.clone();
     let mut oversized_circuit_envelope = envelope.clone();
-    oversized_circuit_envelope.circuit_id =
-        format!("{SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1}_x");
-    replace_fhe_input_admission_open_verify_envelope(
-        &mut oversized_circuit,
-        &oversized_circuit_envelope,
+    oversized_circuit_envelope.circuit_id = format!("{}_x", profile.circuit_id);
+    oversized_circuit.replace_envelope(&oversized_circuit_envelope);
+    assert_fhe_rejected(
+        &oversized_circuit,
+        id,
+        "oversized OpenVerify circuit id must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("circuit id length"),
     );
-    let err = oversized_circuit
-        .validate()
-        .expect_err("oversized OpenVerify circuit id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("circuit id length"),
-        "unexpected error: {err}"
-    );
+
     let mut oversized_schema = sample.clone();
     let mut oversized_schema_envelope = envelope.clone();
-    oversized_schema_envelope.public_inputs =
-        SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+    oversized_schema_envelope.public_inputs = profile.public_inputs_schema.to_vec();
     oversized_schema_envelope.public_inputs.push(b'x');
-    replace_fhe_input_admission_open_verify_envelope(
-        &mut oversized_schema,
-        &oversized_schema_envelope,
+    oversized_schema.replace_envelope(&oversized_schema_envelope);
+    assert_fhe_rejected(
+        &oversized_schema,
+        id,
+        "oversized OpenVerify public-input schema must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("public inputs length"),
     );
-    let err = oversized_schema
-        .validate()
-        .expect_err("oversized OpenVerify public-input schema must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("public inputs length"),
-        "unexpected error: {err}"
-    );
+
     let mut oversized_wrapper = sample.clone();
     let mut oversized_wrapper_envelope = envelope.clone();
     oversized_wrapper_envelope.proof_bytes =
-        vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES + 1];
-    replace_fhe_input_admission_open_verify_envelope(
-        &mut oversized_wrapper,
-        &oversized_wrapper_envelope,
+        vec![profile.fill_byte; profile.max_stark_wrapper_bytes + 1];
+    oversized_wrapper.replace_envelope(&oversized_wrapper_envelope);
+    assert_fhe_rejected(
+        &oversized_wrapper,
+        id,
+        "oversized STARK wrapper bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("proof bytes length"),
     );
-    let err = oversized_wrapper
-        .validate()
-        .expect_err("oversized STARK wrapper bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("proof bytes length"),
-        "unexpected error: {err}"
-    );
+
     let mut oversized_native = sample;
     let mut oversized_native_envelope = envelope;
     let mut oversized_native_open = open_proof;
     oversized_native_open.envelope_bytes =
-        vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES + 1];
+        vec![profile.fill_byte; profile.max_native_envelope_bytes + 1];
     oversized_native_envelope.proof_bytes =
-        norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
-    replace_fhe_input_admission_open_verify_envelope(
-        &mut oversized_native,
-        &oversized_native_envelope,
-    );
-    let err = oversized_native
-        .validate()
-        .expect_err("oversized native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("native envelope bytes length"),
-        "unexpected error: {err}"
+        encode_fhe_open_proof(&oversized_native_open, id, "encode oversized STARK wrapper");
+    oversized_native.replace_envelope(&oversized_native_envelope);
+    assert_fhe_rejected(
+        &oversized_native,
+        id,
+        "oversized native STARK envelope bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("native envelope bytes length"),
     );
 }
-#[test]
-fn fhe_input_admission_proof_validate_requires_canonical_vk_ref_name() {
-    let mut admission = sample_fhe_input_admission_proof();
-    admission.proof.vk_ref.name = "soracloud_fhe_input_admission_alias_v1".to_string();
-    let err = admission
-        .validate()
-        .expect_err("non-canonical FHE verifier id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.name",
-            ..
-        }
-    ));
-}
-#[test]
-fn fhe_input_admission_proof_validate_rejects_backend_mismatch() {
-    let mut admission = sample_fhe_input_admission_proof();
-    admission.proof.proof.backend = "stark/fri/other".into();
-    let err = admission
-        .validate()
-        .expect_err("mismatched proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.backend",
-            ..
-        }
-    ));
-    let mut wrong_stark_profile = sample_fhe_input_admission_proof();
-    wrong_stark_profile.proof.backend = "stark/fri/poseidon2-goldilocks".into();
-    wrong_stark_profile.proof.proof.backend = wrong_stark_profile.proof.backend.clone();
-    wrong_stark_profile.proof.vk_ref.backend = wrong_stark_profile.proof.backend.clone();
-    let err = wrong_stark_profile
-        .validate()
-        .expect_err("alternate STARK/FRI profile must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("canonical BFV STARK/FRI backend"),
-        "unexpected error: {err}"
+
+fn run_canonical_verifier_name(family: FheProofFamily, id: &str) {
+    let mut proof = family.sample();
+    proof.attachment_mut().vk_ref.name = family.profile().verifier_alias.to_string();
+    let label = match family {
+        InputAdmission => "non-canonical FHE verifier id must be rejected",
+        BootstrapKey => "non-canonical bootstrap-key verifier id must be rejected",
+        _ => panic!("{id}: canonical-verifier-name case has unsupported family"),
+    };
+    assert_fhe_rejected(
+        &proof,
+        id,
+        label,
+        FheErrorExpectation::InvalidField("proof.vk_ref.name"),
+        None,
     );
-    let mut unsupported = sample_fhe_input_admission_proof();
-    unsupported.proof.backend = "stark/fri/debug-proof".into();
-    unsupported.proof.proof.backend = unsupported.proof.backend.clone();
-    unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
-    let err = unsupported
-        .validate()
-        .expect_err("unsupported FHE admission backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
 }
-#[test]
-fn fhe_public_key_proof_validate_accepts_canonical_envelope() {
-    let proof = sample_fhe_public_key_proof();
-    proof
-        .validate()
-        .expect("canonical public-key proof envelope must validate");
+
+fn run_input_admission_backend_mismatch(id: &str) {
+    let mut admission = InputAdmission.sample();
+    admission.attachment_mut().proof.backend = "stark/fri/other".into();
+    assert_fhe_rejected(
+        &admission,
+        id,
+        "mismatched proof backend must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.backend"),
+        None,
+    );
+
+    let mut wrong_stark_profile = InputAdmission.sample();
+    wrong_stark_profile.attachment_mut().backend = "stark/fri/poseidon2-goldilocks".into();
+    let backend = wrong_stark_profile.attachment().backend.clone();
+    wrong_stark_profile.attachment_mut().proof.backend = backend.clone();
+    wrong_stark_profile.attachment_mut().vk_ref.backend = backend;
+    assert_fhe_rejected(
+        &wrong_stark_profile,
+        id,
+        "alternate STARK/FRI profile must be rejected",
+        FheErrorExpectation::InvalidField("proof.backend"),
+        Some("canonical BFV STARK/FRI backend"),
+    );
+
+    let mut unsupported = InputAdmission.sample();
+    unsupported.attachment_mut().backend = "stark/fri/debug-proof".into();
+    let backend = unsupported.attachment().backend.clone();
+    unsupported.attachment_mut().proof.backend = backend.clone();
+    unsupported.attachment_mut().vk_ref.backend = backend;
+    assert_fhe_rejected(
+        &unsupported,
+        id,
+        "unsupported FHE admission backend must be rejected",
+        FheErrorExpectation::InvalidField("proof.backend"),
+        None,
+    );
+}
+
+fn run_canonical_envelope(family: FheProofFamily, id: &str) {
+    let proof = family.sample();
+    let label = match family {
+        PublicKey => "canonical public-key proof envelope must validate",
+        BootstrapKey => "canonical bootstrap-key proof envelope must validate",
+        FullBootstrapExecution => "canonical full-bootstrap execution proof validates",
+        InputAdmission => panic!("{id}: canonical-envelope case has unsupported family"),
+    };
+    assert_fhe_valid(&proof, id, label);
+    let profile = family.profile();
+    if family == FullBootstrapExecution {
+        let envelope = decode_fhe_envelope(&proof, id);
+        assert_eq!(envelope.circuit_id, profile.circuit_id, "{id}");
+        assert_eq!(envelope.public_inputs, profile.public_inputs_schema, "{id}");
+    }
     assert_eq!(
-        soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1(),
-        <[u8; 32]>::from(Hash::new(
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-        ))
+        family.schema_hash(),
+        <[u8; 32]>::from(Hash::new(profile.public_inputs_schema)),
+        "{id}"
     );
 }
-#[test]
-fn fhe_public_key_proof_validate_requires_vk_commitment_and_matching_envelope_hash() {
-    let mut proof = sample_fhe_public_key_proof();
-    proof.proof.vk_commitment = None;
-    let err = proof
-        .validate()
-        .expect_err("missing vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    proof.proof.vk_commitment = Some([0x4A; 32]);
-    proof.proof.envelope_hash = None;
-    let err = proof
-        .validate()
-        .expect_err("missing envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.envelope_hash",
-            ..
-        }
-    ));
-    proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
-    proof
-        .validate()
-        .expect("matching envelope hash must be accepted");
+
+fn run_commitment_and_envelope_hash(family: FheProofFamily, id: &str) {
+    let profile = family.profile();
+    let mut proof = family.sample();
+    proof.attachment_mut().vk_commitment = None;
+    assert_fhe_rejected(
+        &proof,
+        id,
+        "missing vk_commitment must be rejected",
+        FheErrorExpectation::InvalidField("proof.vk_commitment"),
+        None,
+    );
+
+    proof.attachment_mut().vk_commitment = Some([profile.canonical_commitment; 32]);
+    proof.attachment_mut().envelope_hash = None;
+    assert_fhe_rejected(
+        &proof,
+        id,
+        "missing envelope hash must be rejected",
+        FheErrorExpectation::InvalidField("proof.envelope_hash"),
+        None,
+    );
+
+    let envelope_hash = <[u8; 32]>::from(Hash::new(&proof.attachment().proof.bytes));
+    proof.attachment_mut().envelope_hash = Some(envelope_hash);
+    assert_fhe_valid(&proof, id, "matching envelope hash must be accepted");
+
     let mut forged_commitment = proof.clone();
-    forged_commitment.proof.vk_commitment = Some([0xA4; 32]);
-    let err = forged_commitment
-        .validate()
-        .expect_err("forged vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    let mut forged_hash = proof.proof.envelope_hash.expect("matching hash");
+    forged_commitment.attachment_mut().vk_commitment = Some([profile.forged_commitment; 32]);
+    assert_fhe_rejected(
+        &forged_commitment,
+        id,
+        "forged vk_commitment must be rejected",
+        FheErrorExpectation::InvalidField("proof.vk_commitment"),
+        None,
+    );
+
+    let mut forged_hash = proof.attachment().envelope_hash.expect("matching hash");
     forged_hash[0] ^= 0x01;
-    proof.proof.envelope_hash = Some(forged_hash);
-    let err = proof
-        .validate()
-        .expect_err("forged envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField { field: "proof", .. }
-    ));
+    proof.attachment_mut().envelope_hash = Some(forged_hash);
+    assert_fhe_rejected(
+        &proof,
+        id,
+        "forged envelope hash must be rejected",
+        FheErrorExpectation::InvalidField("proof"),
+        None,
+    );
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_public_key_proof_validate_rejects_open_verify_envelope_drift() {
-    let sample = sample_fhe_public_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the adversarial matrix keeps every ordered OpenVerify envelope mutation together"
+)]
+fn run_open_verify_envelope_drift(family: FheProofFamily, id: &str) {
+    let profile = family.profile();
+    let sample = family.sample();
+    let envelope = decode_fhe_envelope(&sample, id);
+    let open_proof = decode_fhe_open_proof(&envelope, id);
+
     let mut malformed = sample.clone();
-    malformed.proof.proof.bytes = vec![0xAA];
-    malformed.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&malformed.proof.proof.bytes)));
-    let err = malformed
-        .validate()
-        .expect_err("malformed OpenVerify bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+    malformed.attachment_mut().proof.bytes = vec![profile.fill_byte];
+    let envelope_hash = <[u8; 32]>::from(Hash::new(&malformed.attachment().proof.bytes));
+    malformed.attachment_mut().envelope_hash = Some(envelope_hash);
+    assert_fhe_rejected(
+        &malformed,
+        id,
+        "malformed OpenVerify bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
+    );
+
     let mut wrong_backend = sample.clone();
     let mut wrong_backend_envelope = envelope.clone();
     wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
-    replace_fhe_public_key_open_verify_envelope(&mut wrong_backend, &wrong_backend_envelope);
-    let err = wrong_backend
-        .validate()
-        .expect_err("OpenVerify backend drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+    wrong_backend.replace_envelope(&wrong_backend_envelope);
+    assert_fhe_rejected(
+        &wrong_backend,
+        id,
+        "OpenVerify backend drift must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
+    );
+
     let mut wrong_circuit = sample.clone();
     let mut wrong_circuit_envelope = envelope.clone();
-    wrong_circuit_envelope.circuit_id = "soracloud_fhe_public_key_v2".to_string();
-    replace_fhe_public_key_open_verify_envelope(&mut wrong_circuit, &wrong_circuit_envelope);
-    let err = wrong_circuit
-        .validate()
-        .expect_err("OpenVerify circuit id drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string()
-            .contains("OpenVerifyEnvelope circuit id must be canonical v1"),
-        "unexpected error: {err}"
+    wrong_circuit_envelope.circuit_id = profile.wrong_circuit_id.to_string();
+    wrong_circuit.replace_envelope(&wrong_circuit_envelope);
+    assert_fhe_rejected(
+        &wrong_circuit,
+        id,
+        "OpenVerify circuit id drift must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("OpenVerifyEnvelope circuit id must be canonical v1"),
     );
+
+    if family == FullBootstrapExecution {
+        reject_wrong_open_verify_schema(&sample, &envelope, profile, id);
+        let mut wrong_vk_hash = sample.clone();
+        let mut wrong_vk_hash_envelope = envelope.clone();
+        wrong_vk_hash_envelope.vk_hash = [0xA4; 32];
+        wrong_vk_hash.replace_envelope(&wrong_vk_hash_envelope);
+        assert_fhe_rejected(
+            &wrong_vk_hash,
+            id,
+            "OpenVerify verifier-key commitment drift must be rejected",
+            FheErrorExpectation::InvalidField("proof.vk_commitment"),
+            None,
+        );
+    }
+
     let mut wrong_wrapper_version = sample.clone();
     let mut wrong_wrapper_version_envelope = envelope.clone();
     let mut version_drift = open_proof.clone();
     version_drift.version = 2;
     wrong_wrapper_version_envelope.proof_bytes =
-        norito::to_bytes(&version_drift).expect("encode version-drifted STARK wrapper");
-    replace_fhe_public_key_open_verify_envelope(
-        &mut wrong_wrapper_version,
-        &wrong_wrapper_version_envelope,
+        encode_fhe_open_proof(&version_drift, id, "encode version-drifted STARK wrapper");
+    wrong_wrapper_version.replace_envelope(&wrong_wrapper_version_envelope);
+    assert_fhe_rejected(
+        &wrong_wrapper_version,
+        id,
+        "STARK wrapper version drift must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
     );
-    let err = wrong_wrapper_version
-        .validate()
-        .expect_err("STARK wrapper version drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+
     let mut wrong_statement = sample.clone();
     let mut wrong_statement_envelope = envelope.clone();
     let mut statement_drift = open_proof.clone();
     statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
-    wrong_statement_envelope.proof_bytes =
-        norito::to_bytes(&statement_drift).expect("encode statement-drifted STARK wrapper");
-    replace_fhe_public_key_open_verify_envelope(&mut wrong_statement, &wrong_statement_envelope);
-    let err = wrong_statement
-        .validate()
-        .expect_err("STARK wrapper statement drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_schema = sample.clone();
-    let mut wrong_schema_envelope = envelope.clone();
-    wrong_schema_envelope.public_inputs = b"soracloud:fhe-public-key:public-inputs:v2".to_vec();
-    replace_fhe_public_key_open_verify_envelope(&mut wrong_schema, &wrong_schema_envelope);
-    let err = wrong_schema
-        .validate()
-        .expect_err("OpenVerify public-input schema drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+    wrong_statement_envelope.proof_bytes = encode_fhe_open_proof(
+        &statement_drift,
+        id,
+        "encode statement-drifted STARK wrapper",
+    );
+    wrong_statement.replace_envelope(&wrong_statement_envelope);
+    assert_fhe_rejected(
+        &wrong_statement,
+        id,
+        "STARK wrapper statement drift must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
+    );
+
+    if family != FullBootstrapExecution {
+        reject_wrong_open_verify_schema(&sample, &envelope, profile, id);
+    }
+
     let mut empty_native = sample.clone();
     let mut empty_native_envelope = envelope.clone();
     let mut empty_native_open = open_proof.clone();
     empty_native_open.envelope_bytes.clear();
     empty_native_envelope.proof_bytes =
-        norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
-    replace_fhe_public_key_open_verify_envelope(&mut empty_native, &empty_native_envelope);
-    let err = empty_native
-        .validate()
-        .expect_err("empty native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+        encode_fhe_open_proof(&empty_native_open, id, "encode empty-native STARK wrapper");
+    empty_native.replace_envelope(&empty_native_envelope);
+    assert_fhe_rejected(
+        &empty_native,
+        id,
+        "empty native STARK envelope bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
+    );
+
     let mut all_zero_native = sample;
     let mut all_zero_native_envelope = envelope;
     let mut all_zero_native_open = open_proof;
     all_zero_native_open.envelope_bytes = vec![0; 32];
     all_zero_native_envelope.proof_bytes =
-        norito::to_bytes(&all_zero_native_open).expect("encode all-zero STARK wrapper");
-    replace_fhe_public_key_open_verify_envelope(&mut all_zero_native, &all_zero_native_envelope);
-    let err = all_zero_native
-        .validate()
-        .expect_err("all-zero native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("all-zero"),
-        "unexpected error: {err}"
+        encode_fhe_open_proof(&all_zero_native_open, id, "encode all-zero STARK wrapper");
+    all_zero_native.replace_envelope(&all_zero_native_envelope);
+    assert_fhe_rejected(
+        &all_zero_native,
+        id,
+        "all-zero native STARK envelope bytes must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        Some("all-zero"),
     );
 }
-#[test]
-fn fhe_public_key_proof_validate_rejects_public_input_shape_replay() {
-    let sample = sample_fhe_public_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash);
-    let other_statement = <[u8; Hash::LENGTH]>::from(sample_hash(15));
-    let assert_rejected = |label: &str, public_inputs: Vec<Vec<[u8; Hash::LENGTH]>>| {
-        let mut proof = sample.clone();
-        let mut replay_envelope = envelope.clone();
-        let mut replay_open = open_proof.clone();
-        replay_open.public_inputs = public_inputs;
-        replay_envelope.proof_bytes =
-            norito::to_bytes(&replay_open).expect("encode replay-shaped STARK wrapper");
-        replace_fhe_public_key_open_verify_envelope(&mut proof, &replay_envelope);
-        let err = proof.validate().expect_err(label);
-        assert!(matches!(
-            err,
-            SoracloudManifestError::InvalidField {
-                field: "proof.proof.bytes",
-                ..
-            }
-        ));
-    };
-    assert_rejected(
-        "extra STARK public-input row must be rejected",
-        vec![vec![statement], vec![other_statement]],
-    );
-    assert_rejected(
-        "extra STARK public-input column must be rejected",
-        vec![vec![statement, other_statement]],
-    );
-    assert_rejected(
-        "duplicate STARK public-input statement must be rejected",
-        vec![vec![statement], vec![statement]],
-    );
-}
-#[test]
-fn fhe_public_key_proof_open_verify_bounds_match_published_caps() {
-    let bounds = soracloud_fhe_public_key_proof_open_verify_bounds();
-    assert_eq!(
-        bounds.max_circuit_id_bytes,
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1.len()
-    );
-    assert_eq!(
-        bounds.max_public_input_bytes,
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len()
-    );
-    assert_eq!(
-        bounds.max_proof_bytes,
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES
-    );
-    assert_eq!(bounds.max_aux_bytes, 0);
-    assert!(!bounds.allow_aux);
-    assert!(bounds.require_nonzero_vk_hash);
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_public_key_proof_validate_rejects_oversized_proof_payloads() {
-    let sample = sample_fhe_public_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let mut oversized_outer = sample.clone();
-    oversized_outer.proof.proof.bytes =
-        vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES + 1];
-    oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
-        &oversized_outer.proof.proof.bytes,
-    )));
-    let err = oversized_outer
-        .validate()
-        .expect_err("oversized OpenVerify envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("OpenVerifyEnvelope length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_circuit = sample.clone();
-    let mut oversized_circuit_envelope = envelope.clone();
-    oversized_circuit_envelope.circuit_id =
-        format!("{SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1}_x");
-    replace_fhe_public_key_open_verify_envelope(
-        &mut oversized_circuit,
-        &oversized_circuit_envelope,
-    );
-    let err = oversized_circuit
-        .validate()
-        .expect_err("oversized OpenVerify circuit id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("circuit id length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_schema = sample.clone();
-    let mut oversized_schema_envelope = envelope.clone();
-    oversized_schema_envelope.public_inputs =
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
-    oversized_schema_envelope.public_inputs.push(b'x');
-    replace_fhe_public_key_open_verify_envelope(&mut oversized_schema, &oversized_schema_envelope);
-    let err = oversized_schema
-        .validate()
-        .expect_err("oversized OpenVerify public-input schema must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("public inputs length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_wrapper = sample.clone();
-    let mut oversized_wrapper_envelope = envelope.clone();
-    oversized_wrapper_envelope.proof_bytes =
-        vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES + 1];
-    replace_fhe_public_key_open_verify_envelope(
-        &mut oversized_wrapper,
-        &oversized_wrapper_envelope,
-    );
-    let err = oversized_wrapper
-        .validate()
-        .expect_err("oversized STARK wrapper bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("proof bytes length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_native = sample;
-    let mut oversized_native_envelope = envelope;
-    let mut oversized_native_open = open_proof;
-    oversized_native_open.envelope_bytes =
-        vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES + 1];
-    oversized_native_envelope.proof_bytes =
-        norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
-    replace_fhe_public_key_open_verify_envelope(&mut oversized_native, &oversized_native_envelope);
-    let err = oversized_native
-        .validate()
-        .expect_err("oversized native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("native envelope bytes length"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn fhe_public_key_proof_validate_rejects_attachment_metadata_drift() {
-    let mut proof_backend_mismatch = sample_fhe_public_key_proof();
-    proof_backend_mismatch.proof.proof.backend = "stark/fri/other".into();
-    let err = proof_backend_mismatch
-        .validate()
-        .expect_err("mismatched proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.backend",
-            ..
-        }
-    ));
-    let mut vk_backend_mismatch = sample_fhe_public_key_proof();
-    vk_backend_mismatch.proof.vk_ref.backend = "stark/fri/other".into();
-    let err = vk_backend_mismatch
-        .validate()
-        .expect_err("mismatched verifier backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.backend",
-            ..
-        }
-    ));
-    let mut wrong_vk_ref = sample_fhe_public_key_proof();
-    wrong_vk_ref.proof.vk_ref.name = "soracloud_fhe_public_key_alias_v1".to_string();
-    let err = wrong_vk_ref
-        .validate()
-        .expect_err("non-canonical public-key verifier id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.name",
-            ..
-        }
-    ));
-    let mut wrong_stark_profile = sample_fhe_public_key_proof();
-    wrong_stark_profile.proof.backend = "stark/fri/poseidon2-goldilocks".into();
-    wrong_stark_profile.proof.proof.backend = wrong_stark_profile.proof.backend.clone();
-    wrong_stark_profile.proof.vk_ref.backend = wrong_stark_profile.proof.backend.clone();
-    let err = wrong_stark_profile
-        .validate()
-        .expect_err("alternate STARK/FRI profile must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("canonical BFV STARK/FRI backend"),
-        "unexpected error: {err}"
-    );
-    let mut unsupported = sample_fhe_public_key_proof();
-    unsupported.proof.backend = "stark/fri/debug-proof".into();
-    unsupported.proof.proof.backend = unsupported.proof.backend.clone();
-    unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
-    let err = unsupported
-        .validate()
-        .expect_err("unsupported public-key proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-}
-#[test]
-fn fhe_bootstrap_key_proof_validate_accepts_canonical_envelope() {
-    let proof = sample_fhe_bootstrap_key_proof();
-    proof
-        .validate()
-        .expect("canonical bootstrap-key proof envelope must validate");
-    assert_eq!(
-        soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
-        <[u8; 32]>::from(Hash::new(
-            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-        ))
-    );
-}
-#[test]
-fn fhe_bootstrap_key_proof_validate_requires_vk_commitment_and_matching_envelope_hash() {
-    let mut proof = sample_fhe_bootstrap_key_proof();
-    proof.proof.vk_commitment = None;
-    let err = proof
-        .validate()
-        .expect_err("missing vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    proof.proof.vk_commitment = Some([0x52; 32]);
-    proof.proof.envelope_hash = None;
-    let err = proof
-        .validate()
-        .expect_err("missing envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.envelope_hash",
-            ..
-        }
-    ));
-    proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
-    proof
-        .validate()
-        .expect("matching envelope hash must be accepted");
-    let mut forged_commitment = proof.clone();
-    forged_commitment.proof.vk_commitment = Some([0x25; 32]);
-    let err = forged_commitment
-        .validate()
-        .expect_err("forged vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    let mut forged_hash = proof.proof.envelope_hash.expect("matching hash");
-    forged_hash[0] ^= 0x01;
-    proof.proof.envelope_hash = Some(forged_hash);
-    let err = proof
-        .validate()
-        .expect_err("forged envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField { field: "proof", .. }
-    ));
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_bootstrap_key_proof_validate_rejects_open_verify_envelope_drift() {
-    let sample = sample_fhe_bootstrap_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let mut malformed = sample.clone();
-    malformed.proof.proof.bytes = vec![0xB5];
-    malformed.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&malformed.proof.proof.bytes)));
-    let err = malformed
-        .validate()
-        .expect_err("malformed OpenVerify bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_backend = sample.clone();
-    let mut wrong_backend_envelope = envelope.clone();
-    wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut wrong_backend, &wrong_backend_envelope);
-    let err = wrong_backend
-        .validate()
-        .expect_err("OpenVerify backend drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_circuit = sample.clone();
-    let mut wrong_circuit_envelope = envelope.clone();
-    wrong_circuit_envelope.circuit_id = "soracloud_fhe_bootstrap_key_proof_v2".to_string();
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut wrong_circuit, &wrong_circuit_envelope);
-    let err = wrong_circuit
-        .validate()
-        .expect_err("OpenVerify circuit id drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string()
-            .contains("OpenVerifyEnvelope circuit id must be canonical v1"),
-        "unexpected error: {err}"
-    );
-    let mut wrong_wrapper_version = sample.clone();
-    let mut wrong_wrapper_version_envelope = envelope.clone();
-    let mut version_drift = open_proof.clone();
-    version_drift.version = 2;
-    wrong_wrapper_version_envelope.proof_bytes =
-        norito::to_bytes(&version_drift).expect("encode version-drifted STARK wrapper");
-    replace_fhe_bootstrap_key_open_verify_envelope(
-        &mut wrong_wrapper_version,
-        &wrong_wrapper_version_envelope,
-    );
-    let err = wrong_wrapper_version
-        .validate()
-        .expect_err("STARK wrapper version drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_statement = sample.clone();
-    let mut wrong_statement_envelope = envelope.clone();
-    let mut statement_drift = open_proof.clone();
-    statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
-    wrong_statement_envelope.proof_bytes =
-        norito::to_bytes(&statement_drift).expect("encode statement-drifted STARK wrapper");
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut wrong_statement, &wrong_statement_envelope);
-    let err = wrong_statement
-        .validate()
-        .expect_err("STARK wrapper statement drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
+
+fn reject_wrong_open_verify_schema(
+    sample: &FheProof,
+    envelope: &OpenVerifyEnvelope,
+    profile: FheProofProfile,
+    id: &str,
+) {
     let mut wrong_schema = sample.clone();
     let mut wrong_schema_envelope = envelope.clone();
-    wrong_schema_envelope.public_inputs = b"soracloud:fhe-bootstrap-key:public-inputs:v2".to_vec();
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut wrong_schema, &wrong_schema_envelope);
-    let err = wrong_schema
-        .validate()
-        .expect_err("OpenVerify public-input schema drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut empty_native = sample.clone();
-    let mut empty_native_envelope = envelope.clone();
-    let mut empty_native_open = open_proof.clone();
-    empty_native_open.envelope_bytes.clear();
-    empty_native_envelope.proof_bytes =
-        norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut empty_native, &empty_native_envelope);
-    let err = empty_native
-        .validate()
-        .expect_err("empty native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut all_zero_native = sample;
-    let mut all_zero_native_envelope = envelope;
-    let mut all_zero_native_open = open_proof;
-    all_zero_native_open.envelope_bytes = vec![0; 32];
-    all_zero_native_envelope.proof_bytes =
-        norito::to_bytes(&all_zero_native_open).expect("encode all-zero STARK wrapper");
-    replace_fhe_bootstrap_key_open_verify_envelope(&mut all_zero_native, &all_zero_native_envelope);
-    let err = all_zero_native
-        .validate()
-        .expect_err("all-zero native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("all-zero"),
-        "unexpected error: {err}"
+    wrong_schema_envelope.public_inputs = profile.wrong_public_inputs_schema.to_vec();
+    wrong_schema.replace_envelope(&wrong_schema_envelope);
+    assert_fhe_rejected(
+        &wrong_schema,
+        id,
+        "OpenVerify public-input schema drift must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.bytes"),
+        None,
     );
 }
-#[test]
-fn fhe_bootstrap_key_proof_validate_rejects_public_input_shape_replay() {
-    let sample = sample_fhe_bootstrap_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash);
-    let other_statement = <[u8; Hash::LENGTH]>::from(sample_hash(21));
-    let assert_rejected = |label: &str, public_inputs: Vec<Vec<[u8; Hash::LENGTH]>>| {
-        let mut proof = sample.clone();
-        let mut replay_envelope = envelope.clone();
-        let mut replay_open = open_proof.clone();
-        replay_open.public_inputs = public_inputs;
-        replay_envelope.proof_bytes =
-            norito::to_bytes(&replay_open).expect("encode replay-shaped STARK wrapper");
-        replace_fhe_bootstrap_key_open_verify_envelope(&mut proof, &replay_envelope);
-        let err = proof.validate().expect_err(label);
-        assert!(matches!(
-            err,
-            SoracloudManifestError::InvalidField {
-                field: "proof.proof.bytes",
-                ..
-            }
-        ));
+
+fn run_attachment_metadata_drift(family: FheProofFamily, id: &str) {
+    let mut proof_backend_mismatch = family.sample();
+    proof_backend_mismatch.attachment_mut().proof.backend = "stark/fri/other".into();
+    assert_fhe_rejected(
+        &proof_backend_mismatch,
+        id,
+        "mismatched proof backend must be rejected",
+        FheErrorExpectation::InvalidField("proof.proof.backend"),
+        None,
+    );
+
+    let mut vk_backend_mismatch = family.sample();
+    vk_backend_mismatch.attachment_mut().vk_ref.backend = "stark/fri/other".into();
+    let vk_label = if family == PublicKey {
+        "mismatched verifier backend must be rejected"
+    } else {
+        "mismatched verifier-key backend must be rejected"
     };
-    assert_rejected(
-        "extra STARK public-input row must be rejected",
-        vec![vec![statement], vec![other_statement]],
+    assert_fhe_rejected(
+        &vk_backend_mismatch,
+        id,
+        vk_label,
+        FheErrorExpectation::InvalidField("proof.vk_ref.backend"),
+        None,
     );
-    assert_rejected(
-        "extra STARK public-input column must be rejected",
-        vec![vec![statement, other_statement]],
-    );
-    assert_rejected(
-        "duplicate STARK public-input statement must be rejected",
-        vec![vec![statement], vec![statement]],
-    );
-}
-#[test]
-fn fhe_bootstrap_key_proof_open_verify_bounds_match_published_caps() {
-    let bounds = soracloud_fhe_bootstrap_key_proof_open_verify_bounds();
-    assert_eq!(
-        bounds.max_circuit_id_bytes,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1.len()
-    );
-    assert_eq!(
-        bounds.max_public_input_bytes,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len()
-    );
-    assert_eq!(
-        bounds.max_proof_bytes,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_STARK_WRAPPER_BYTES
-    );
-    assert_eq!(bounds.max_aux_bytes, 0);
-    assert!(!bounds.allow_aux);
-    assert!(bounds.require_nonzero_vk_hash);
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_bootstrap_key_proof_validate_rejects_oversized_proof_payloads() {
-    let sample = sample_fhe_bootstrap_key_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let mut oversized_outer = sample.clone();
-    oversized_outer.proof.proof.bytes =
-        vec![0xB5; SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES + 1];
-    oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
-        &oversized_outer.proof.proof.bytes,
-    )));
-    let err = oversized_outer
-        .validate()
-        .expect_err("oversized OpenVerify envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("OpenVerifyEnvelope length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_circuit = sample.clone();
-    let mut oversized_circuit_envelope = envelope.clone();
-    oversized_circuit_envelope.circuit_id =
-        format!("{SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1}_x");
-    replace_fhe_bootstrap_key_open_verify_envelope(
-        &mut oversized_circuit,
-        &oversized_circuit_envelope,
-    );
-    let err = oversized_circuit
-        .validate()
-        .expect_err("oversized OpenVerify circuit id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("circuit id length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_schema = sample.clone();
-    let mut oversized_schema_envelope = envelope.clone();
-    oversized_schema_envelope.public_inputs =
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
-    oversized_schema_envelope.public_inputs.push(b'x');
-    replace_fhe_bootstrap_key_open_verify_envelope(
-        &mut oversized_schema,
-        &oversized_schema_envelope,
-    );
-    let err = oversized_schema
-        .validate()
-        .expect_err("oversized OpenVerify public-input schema must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("public inputs length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_wrapper = sample.clone();
-    let mut oversized_wrapper_envelope = envelope.clone();
-    oversized_wrapper_envelope.proof_bytes =
-        vec![0xB5; SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_STARK_WRAPPER_BYTES + 1];
-    replace_fhe_bootstrap_key_open_verify_envelope(
-        &mut oversized_wrapper,
-        &oversized_wrapper_envelope,
-    );
-    let err = oversized_wrapper
-        .validate()
-        .expect_err("oversized STARK wrapper bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("proof bytes length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_native = sample;
-    let mut oversized_native_envelope = envelope;
-    let mut oversized_native_open = open_proof;
-    oversized_native_open.envelope_bytes =
-        vec![0xB5; SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES + 1];
-    oversized_native_envelope.proof_bytes =
-        norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
-    replace_fhe_bootstrap_key_open_verify_envelope(
-        &mut oversized_native,
-        &oversized_native_envelope,
-    );
-    let err = oversized_native
-        .validate()
-        .expect_err("oversized native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("native envelope bytes length"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn fhe_bootstrap_key_proof_validate_requires_canonical_vk_ref_name() {
-    let mut proof = sample_fhe_bootstrap_key_proof();
-    proof.proof.vk_ref.name = "soracloud_fhe_bootstrap_key_alias_v1".to_string();
-    let err = proof
-        .validate()
-        .expect_err("non-canonical bootstrap-key verifier id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.name",
-            ..
-        }
-    ));
-}
-#[test]
-fn fhe_bootstrap_key_proof_validate_rejects_attachment_metadata_drift() {
-    let mut proof_backend_mismatch = sample_fhe_bootstrap_key_proof();
-    proof_backend_mismatch.proof.proof.backend = "stark/fri/other".into();
-    let err = proof_backend_mismatch
-        .validate()
-        .expect_err("mismatched proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.backend",
-            ..
-        }
-    ));
-    let mut vk_backend_mismatch = sample_fhe_bootstrap_key_proof();
-    vk_backend_mismatch.proof.vk_ref.backend = "stark/fri/other".into();
-    let err = vk_backend_mismatch
-        .validate()
-        .expect_err("mismatched verifier-key backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.backend",
-            ..
-        }
-    ));
-    let mut wrong_stark_profile = sample_fhe_bootstrap_key_proof();
-    wrong_stark_profile.proof.backend = "stark/fri/poseidon2-goldilocks".into();
-    wrong_stark_profile.proof.proof.backend = wrong_stark_profile.proof.backend.clone();
-    wrong_stark_profile.proof.vk_ref.backend = wrong_stark_profile.proof.backend.clone();
-    let err = wrong_stark_profile
-        .validate()
-        .expect_err("alternate STARK/FRI profile must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("canonical BFV STARK/FRI backend"),
-        "unexpected error: {err}"
-    );
-    let mut unsupported = sample_fhe_bootstrap_key_proof();
-    unsupported.proof.backend = "stark/fri/debug-proof".into();
-    unsupported.proof.proof.backend = unsupported.proof.backend.clone();
-    unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
-    let err = unsupported
-        .validate()
-        .expect_err("unsupported bootstrap-key proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-    let mut empty_backend = sample_fhe_bootstrap_key_proof();
-    empty_backend.proof.backend = " \t ".into();
-    let err = empty_backend
-        .validate()
-        .expect_err("empty bootstrap-key proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::EmptyField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-}
-#[test]
-fn fhe_full_bootstrap_execution_proof_validate_accepts_canonical_envelope() {
-    let proof = sample_fhe_full_bootstrap_execution_proof();
-    proof
-        .validate()
-        .expect("canonical full-bootstrap execution proof validates");
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    assert_eq!(
-        envelope.circuit_id,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1
-    );
-    assert_eq!(
-        envelope.public_inputs,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    );
-    assert_eq!(
-        soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1(),
-        <[u8; 32]>::from(Hash::new(
-            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-        ))
-    );
-}
-#[test]
-fn fhe_full_bootstrap_execution_proof_validate_requires_vk_commitment_and_matching_envelope_hash() {
-    let mut proof = sample_fhe_full_bootstrap_execution_proof();
-    proof.proof.vk_commitment = None;
-    let err = proof
-        .validate()
-        .expect_err("missing vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    proof.proof.vk_commitment = Some([0x63; 32]);
-    proof.proof.envelope_hash = None;
-    let err = proof
-        .validate()
-        .expect_err("missing envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.envelope_hash",
-            ..
-        }
-    ));
-    proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
-    proof
-        .validate()
-        .expect("matching envelope hash must be accepted");
-    let mut forged_commitment = proof.clone();
-    forged_commitment.proof.vk_commitment = Some([0x27; 32]);
-    let err = forged_commitment
-        .validate()
-        .expect_err("forged vk_commitment must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    let mut forged_hash = proof.proof.envelope_hash.expect("matching hash");
-    forged_hash[0] ^= 0x01;
-    proof.proof.envelope_hash = Some(forged_hash);
-    let err = proof
-        .validate()
-        .expect_err("forged envelope hash must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField { field: "proof", .. }
-    ));
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn fhe_full_bootstrap_execution_proof_validate_rejects_open_verify_envelope_drift() {
-    let sample = sample_fhe_full_bootstrap_execution_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let mut malformed = sample.clone();
-    malformed.proof.proof.bytes = vec![0xD5];
-    malformed.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&malformed.proof.proof.bytes)));
-    let err = malformed
-        .validate()
-        .expect_err("malformed OpenVerify bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_backend = sample.clone();
-    let mut wrong_backend_envelope = envelope.clone();
-    wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_backend,
-        &wrong_backend_envelope,
-    );
-    let err = wrong_backend
-        .validate()
-        .expect_err("OpenVerify backend drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_circuit = sample.clone();
-    let mut wrong_circuit_envelope = envelope.clone();
-    wrong_circuit_envelope.circuit_id = "soracloud_fhe_full_bootstrap_execution_v2".to_string();
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_circuit,
-        &wrong_circuit_envelope,
-    );
-    let err = wrong_circuit
-        .validate()
-        .expect_err("OpenVerify circuit id drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_schema = sample.clone();
-    let mut wrong_schema_envelope = envelope.clone();
-    wrong_schema_envelope.public_inputs =
-        b"soracloud:fhe-full-bootstrap-execution:public-inputs:v2".to_vec();
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_schema,
-        &wrong_schema_envelope,
-    );
-    let err = wrong_schema
-        .validate()
-        .expect_err("OpenVerify public-input schema drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_vk_hash = sample.clone();
-    let mut wrong_vk_hash_envelope = envelope.clone();
-    wrong_vk_hash_envelope.vk_hash = [0xA4; 32];
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_vk_hash,
-        &wrong_vk_hash_envelope,
-    );
-    let err = wrong_vk_hash
-        .validate()
-        .expect_err("OpenVerify verifier-key commitment drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_commitment",
-            ..
-        }
-    ));
-    let mut wrong_wrapper_version = sample.clone();
-    let mut wrong_wrapper_version_envelope = envelope.clone();
-    let mut version_drift = open_proof.clone();
-    version_drift.version = 2;
-    wrong_wrapper_version_envelope.proof_bytes =
-        norito::to_bytes(&version_drift).expect("encode version-drifted STARK wrapper");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_wrapper_version,
-        &wrong_wrapper_version_envelope,
-    );
-    let err = wrong_wrapper_version
-        .validate()
-        .expect_err("STARK wrapper version drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut wrong_statement = sample.clone();
-    let mut wrong_statement_envelope = envelope.clone();
-    let mut statement_drift = open_proof.clone();
-    statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
-    wrong_statement_envelope.proof_bytes =
-        norito::to_bytes(&statement_drift).expect("encode statement-drifted STARK wrapper");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut wrong_statement,
-        &wrong_statement_envelope,
-    );
-    let err = wrong_statement
-        .validate()
-        .expect_err("STARK wrapper statement drift must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut empty_native = sample.clone();
-    let mut empty_native_envelope = envelope.clone();
-    let mut empty_native_open = open_proof.clone();
-    empty_native_open.envelope_bytes.clear();
-    empty_native_envelope.proof_bytes =
-        norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut empty_native,
-        &empty_native_envelope,
-    );
-    let err = empty_native
-        .validate()
-        .expect_err("empty native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut all_zero_native = sample;
-    let mut all_zero_native_envelope = envelope;
-    let mut all_zero_native_open = open_proof;
-    all_zero_native_open.envelope_bytes = vec![0; 32];
-    all_zero_native_envelope.proof_bytes =
-        norito::to_bytes(&all_zero_native_open).expect("encode all-zero STARK wrapper");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut all_zero_native,
-        &all_zero_native_envelope,
-    );
-    let err = all_zero_native
-        .validate()
-        .expect_err("all-zero native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("all-zero"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn fhe_full_bootstrap_execution_proof_validate_rejects_public_input_shape_replay() {
-    let sample = sample_fhe_full_bootstrap_execution_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash);
-    let other_statement = <[u8; Hash::LENGTH]>::from(sample_hash(21));
-    let assert_rejected = |label: &str, public_inputs: Vec<Vec<[u8; Hash::LENGTH]>>| {
-        let mut proof = sample.clone();
-        let mut replay_envelope = envelope.clone();
-        let mut replay_open = open_proof.clone();
-        replay_open.public_inputs = public_inputs;
-        replay_envelope.proof_bytes =
-            norito::to_bytes(&replay_open).expect("encode replay-shaped STARK wrapper");
-        replace_fhe_full_bootstrap_execution_open_verify_envelope(&mut proof, &replay_envelope);
-        let err = proof.validate().expect_err(label);
-        assert!(matches!(
-            err,
-            SoracloudManifestError::InvalidField {
-                field: "proof.proof.bytes",
-                ..
-            }
-        ));
+
+    if family != BootstrapKey {
+        let mut wrong_vk_ref = family.sample();
+        wrong_vk_ref.attachment_mut().vk_ref.name = family.profile().verifier_alias.to_string();
+        let label = if family == PublicKey {
+            "non-canonical public-key verifier id must be rejected"
+        } else {
+            "non-canonical full-bootstrap execution verifier id must be rejected"
+        };
+        assert_fhe_rejected(
+            &wrong_vk_ref,
+            id,
+            label,
+            FheErrorExpectation::InvalidField("proof.vk_ref.name"),
+            None,
+        );
+    }
+
+    let mut wrong_stark_profile = family.sample();
+    wrong_stark_profile.attachment_mut().backend = "stark/fri/poseidon2-goldilocks".into();
+    let backend = wrong_stark_profile.attachment().backend.clone();
+    wrong_stark_profile.attachment_mut().proof.backend = backend.clone();
+    wrong_stark_profile.attachment_mut().vk_ref.backend = backend;
+    let profile_label = if family == FullBootstrapExecution {
+        "non-canonical full-bootstrap execution STARK profile must be rejected"
+    } else {
+        "alternate STARK/FRI profile must be rejected"
     };
-    assert_rejected(
-        "extra STARK public-input row must be rejected",
-        vec![vec![statement], vec![other_statement]],
+    let profile_reason = if family == FullBootstrapExecution {
+        "canonical BFV full-bootstrap"
+    } else {
+        "canonical BFV STARK/FRI backend"
+    };
+    assert_fhe_rejected(
+        &wrong_stark_profile,
+        id,
+        profile_label,
+        FheErrorExpectation::InvalidField("proof.backend"),
+        Some(profile_reason),
     );
-    assert_rejected(
-        "extra STARK public-input column must be rejected",
-        vec![vec![statement, other_statement]],
+
+    let mut unsupported = family.sample();
+    unsupported.attachment_mut().backend = "stark/fri/debug-proof".into();
+    let backend = unsupported.attachment().backend.clone();
+    unsupported.attachment_mut().proof.backend = backend.clone();
+    unsupported.attachment_mut().vk_ref.backend = backend;
+    let unsupported_label = match family {
+        PublicKey => "unsupported public-key proof backend must be rejected",
+        BootstrapKey => "unsupported bootstrap-key proof backend must be rejected",
+        FullBootstrapExecution => {
+            "unsupported full-bootstrap execution proof backend must be rejected"
+        }
+        InputAdmission => panic!("{id}: attachment-metadata case has unsupported family"),
+    };
+    assert_fhe_rejected(
+        &unsupported,
+        id,
+        unsupported_label,
+        FheErrorExpectation::InvalidField("proof.backend"),
+        None,
     );
-    assert_rejected(
-        "duplicate STARK public-input statement must be rejected",
-        vec![vec![statement], vec![statement]],
-    );
+
+    if family == BootstrapKey {
+        let mut empty_backend = family.sample();
+        empty_backend.attachment_mut().backend = " \t ".into();
+        assert_fhe_rejected(
+            &empty_backend,
+            id,
+            "empty bootstrap-key proof backend must be rejected",
+            FheErrorExpectation::EmptyField("proof.backend"),
+            None,
+        );
+    }
 }
-#[test]
-fn fhe_full_bootstrap_execution_proof_open_verify_bounds_match_published_caps() {
-    let bounds = soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds();
-    assert_eq!(
-        bounds.max_circuit_id_bytes,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1.len()
-    );
-    assert_eq!(
-        bounds.max_public_input_bytes,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len()
-    );
-    assert_eq!(
-        bounds.max_proof_bytes,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_STARK_WRAPPER_BYTES
-    );
-    assert_eq!(bounds.max_aux_bytes, 0);
-    assert!(!bounds.allow_aux);
-    assert!(bounds.require_nonzero_vk_hash);
+
+fn run_fhe_proof_validation_case(
+    family: FheProofFamily,
+    scenario: FheValidationScenario,
+    id: &str,
+) {
+    match scenario {
+        PublicInputShapeReplay => run_public_input_shape_replay(family, id),
+        PublishedBounds => run_published_bounds(family, id),
+        OversizedPayloads => run_oversized_payloads(family, id),
+        CanonicalVerifierName => run_canonical_verifier_name(family, id),
+        InputAdmissionBackendMismatch => run_input_admission_backend_mismatch(id),
+        CanonicalEnvelope => run_canonical_envelope(family, id),
+        CommitmentAndEnvelopeHash => run_commitment_and_envelope_hash(family, id),
+        OpenVerifyEnvelopeDrift => run_open_verify_envelope_drift(family, id),
+        AttachmentMetadataDrift => run_attachment_metadata_drift(family, id),
+    }
 }
+
 #[test]
 #[allow(clippy::too_many_lines)]
-fn fhe_full_bootstrap_execution_proof_validate_rejects_oversized_proof_payloads() {
-    let sample = sample_fhe_full_bootstrap_execution_proof();
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
-        .expect("decode sample OpenVerifyEnvelope");
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .expect("decode sample STARK public-input wrapper");
-    let mut oversized_outer = sample.clone();
-    oversized_outer.proof.proof.bytes =
-        vec![0xD5; SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES + 1];
-    oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
-        &oversized_outer.proof.proof.bytes,
-    )));
-    let err = oversized_outer
-        .validate()
-        .expect_err("oversized OpenVerify envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    let mut oversized_circuit = sample.clone();
-    let mut oversized_circuit_envelope = envelope.clone();
-    oversized_circuit_envelope.circuit_id =
-        format!("{SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1}_x");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut oversized_circuit,
-        &oversized_circuit_envelope,
-    );
-    let err = oversized_circuit
-        .validate()
-        .expect_err("oversized OpenVerify circuit id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("circuit id length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_schema = sample.clone();
-    let mut oversized_schema_envelope = envelope.clone();
-    oversized_schema_envelope.public_inputs =
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
-    oversized_schema_envelope.public_inputs.push(b'x');
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut oversized_schema,
-        &oversized_schema_envelope,
-    );
-    let err = oversized_schema
-        .validate()
-        .expect_err("oversized OpenVerify public-input schema must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("public inputs length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_wrapper = sample.clone();
-    let mut oversized_wrapper_envelope = envelope.clone();
-    oversized_wrapper_envelope.proof_bytes =
-        vec![0xD5; SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_STARK_WRAPPER_BYTES + 1];
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut oversized_wrapper,
-        &oversized_wrapper_envelope,
-    );
-    let err = oversized_wrapper
-        .validate()
-        .expect_err("oversized STARK wrapper bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("proof bytes length"),
-        "unexpected error: {err}"
-    );
-    let mut oversized_native = sample;
-    let mut oversized_native_envelope = envelope;
-    let mut oversized_native_open = open_proof;
-    oversized_native_open.envelope_bytes =
-        vec![0xD5; SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES + 1];
-    oversized_native_envelope.proof_bytes =
-        norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
-    replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        &mut oversized_native,
-        &oversized_native_envelope,
-    );
-    let err = oversized_native
-        .validate()
-        .expect_err("oversized native STARK envelope bytes must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.bytes",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("native envelope bytes length"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn fhe_full_bootstrap_execution_proof_validate_rejects_attachment_metadata_drift() {
-    let mut proof_backend_mismatch = sample_fhe_full_bootstrap_execution_proof();
-    proof_backend_mismatch.proof.proof.backend = "stark/fri/other".into();
-    let err = proof_backend_mismatch
-        .validate()
-        .expect_err("mismatched proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.proof.backend",
-            ..
-        }
-    ));
-    let mut vk_backend_mismatch = sample_fhe_full_bootstrap_execution_proof();
-    vk_backend_mismatch.proof.vk_ref.backend = "stark/fri/other".into();
-    let err = vk_backend_mismatch
-        .validate()
-        .expect_err("mismatched verifier-key backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.backend",
-            ..
-        }
-    ));
-    let mut wrong_vk_ref = sample_fhe_full_bootstrap_execution_proof();
-    wrong_vk_ref.proof.vk_ref.name = "soracloud_fhe_full_bootstrap_execution_alias_v1".to_string();
-    let err = wrong_vk_ref
-        .validate()
-        .expect_err("non-canonical full-bootstrap execution verifier id must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.vk_ref.name",
-            ..
-        }
-    ));
-    let mut wrong_stark_profile = sample_fhe_full_bootstrap_execution_proof();
-    wrong_stark_profile.proof.backend = "stark/fri/poseidon2-goldilocks".into();
-    wrong_stark_profile.proof.proof.backend = wrong_stark_profile.proof.backend.clone();
-    wrong_stark_profile.proof.vk_ref.backend = wrong_stark_profile.proof.backend.clone();
-    let err = wrong_stark_profile
-        .validate()
-        .expect_err("non-canonical full-bootstrap execution STARK profile must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
-    assert!(
-        err.to_string().contains("canonical BFV full-bootstrap"),
-        "unexpected error: {err}"
-    );
-    let mut unsupported = sample_fhe_full_bootstrap_execution_proof();
-    unsupported.proof.backend = "stark/fri/debug-proof".into();
-    unsupported.proof.proof.backend = unsupported.proof.backend.clone();
-    unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
-    let err = unsupported
-        .validate()
-        .expect_err("unsupported full-bootstrap execution proof backend must be rejected");
-    assert!(matches!(
-        err,
-        SoracloudManifestError::InvalidField {
-            field: "proof.backend",
-            ..
-        }
-    ));
+fn fhe_proof_validation_matrix() {
+    for (index, id) in FHE_PROOF_VALIDATION_CASE_IDS.into_iter().enumerate() {
+        let (family, scenario) = FHE_PROOF_VALIDATION_ROUTES[index];
+        run_fhe_proof_validation_case(family, scenario, id);
+    }
 }
 #[test]
 fn rollout_provenance_payload_encodes_canonical_tuple() {

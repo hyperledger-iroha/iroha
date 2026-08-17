@@ -3,15 +3,9 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
 #[test]
 fn kotodama_state_scalar_reads_durable() {
-    let src = r#"
-        seiyaku ScalarState {
-            state int counter;
-            hajimari() { counter = 0; }
-            view fn main() -> int {
-                return counter;
-            }
-        }
-    "#;
+    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile scalar state reader");
@@ -26,33 +20,9 @@ fn kotodama_state_scalar_reads_durable() {
 }
 #[test]
 fn kotodama_state_struct_helper_param_reads_flattened_fields() {
-    let src = r#"
-        seiyaku StructState {
-            struct Ledger { int counter, bool flag }
-            state Ledger ledger;
-
-            hajimari() {
-                ledger = Ledger { counter: 0, flag: false };
-            }
-
-            fn read_counter(Ledger entry) -> int {
-                return entry.counter;
-            }
-
-            fn score(Ledger entry) -> int {
-                var value = read_counter(entry);
-                if (entry.flag) {
-                    value = value + 1;
-                }
-                return value;
-            }
-
-            kotoage fn main() -> int authorize("WriteState") {
-                ledger = Ledger { counter: 7, flag: true };
-                return score(ledger);
-            }
-        }
-    "#;
+    let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile struct state helper");
@@ -88,50 +58,12 @@ fn run_named_struct_order(source: &str) -> (i64, i64) {
 }
 #[test]
 fn out_of_order_named_struct_fields_match_explicit_source_order_at_runtime() {
-    let named = r#"
-        seiyaku NamedStruct {
-            struct Pair { int first, int second }
-            state int trace;
-
-            hajimari() { trace = 0; }
-
-            fn record(int value) -> int {
-                trace = trace * 10 + value;
-                value
-            }
-
-            kotoage fn main() -> int authorize("WriteState") {
-                let pair = Pair {
-                    second: record(2),
-                    first: record(1),
-                };
-                trace * 100 + pair.first * 10 + pair.second
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku NamedStruct {
-            struct Pair { int first, int second }
-            state int trace;
-
-            hajimari() { trace = 0; }
-
-            fn record(int value) -> int {
-                trace = trace * 10 + value;
-                value
-            }
-
-            kotoage fn main() -> int authorize("WriteState") {
-                let int second_value = record(2);
-                let int first_value = record(1);
-                let pair = Pair {
-                    first: first_value,
-                    second: second_value,
-                };
-                trace * 100 + pair.first * 10 + pair.second
-            }
-        }
-    "#;
+    let named = include_str!("../fixtures/koto_v1/kotodama_state_scalar/003.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/kotodama_state_scalar/004.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     let named = run_named_struct_order(named);
     let explicit = run_named_struct_order(explicit);
     assert_eq!(named, explicit, "named and explicit forms must agree");

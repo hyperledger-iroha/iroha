@@ -200,7 +200,8 @@ if [[ -z "$prebuilt_bin_dir" ]]; then
     --bin irohad --bin sorafs_governance_dag --bin iroha --bin kagami
     --bin attachment_sanitizer)
   if [[ "$os_tag" != "win" ]]; then
-    cargo_command+=(--bin sorafs_external_software_signer)
+    cargo_command+=(--bin sorafs_external_software_signer
+      --features irohad/external-software-signer-bin)
   fi
   if [[ -n "$target" ]]; then
     cargo_command+=(--target "$target")

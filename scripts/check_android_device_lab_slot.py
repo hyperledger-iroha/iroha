@@ -63,11 +63,7 @@ ANDROID_TAG_ROOT_OF_TRUST = 704
 ANDROID_TAG_ATTESTATION_APPLICATION_ID = 709
 MAX_ANDROID_ATTESTATION_REVOCATION_STATUS_BYTES = 1024 * 1024
 MAX_AUTHORITY_TOOL_BYTES = 256 * 1024 * 1024
-
-# Set only after all paths, metadata, and caller-supplied digests have been
-# checked. The command-line entry point requires an explicit configuration for
-# production evidence. Tests and other in-process callers use the same public
-# configurator; there is deliberately no PATH or SDK-directory discovery.
+# Configured only after all inputs are checked; callers opt in explicitly (no PATH/SDK discovery).
 _ANDROID_EVIDENCE_AUTHORITY: dict[str, Any] | None = None
 REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "telemetry/telemetry.json",
@@ -146,6 +142,10 @@ KAGEMUSHA_CANDIDATE_VALIDATION_FIELDS_V2: frozenset[str] = frozenset(
         "source_commit",
         "source_tree_sha256",
         "source_repo_dirty",
+        "reviewed_source_closure_descriptor_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "generation",
         "generation_memory_limit_bytes",
         "generation_memory_enforcement_profile",

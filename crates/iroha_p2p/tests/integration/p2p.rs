@@ -174,7 +174,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let started_a = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_a.clone()),
         trust_config(addr_a.clone(), false, Duration::from_secs(60)),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -187,7 +187,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let started_b = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_b.clone()),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -320,7 +320,7 @@ async fn trust_gossip_enabled_flows_through() {
     let started_a = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_a.clone()),
         trust_config(addr_a.clone(), true, Duration::from_secs(60)),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -333,7 +333,7 @@ async fn trust_gossip_enabled_flows_through() {
     let started_b = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_b.clone()),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -418,7 +418,7 @@ async fn ws_fallback_connects_and_handshakes() {
     let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(peer2_key_pair.clone()),
         websocket_test_config(peer2_listen_address, idle_timeout, false),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -568,7 +568,7 @@ async fn two_networks() {
     let (mut network1, _) = NetworkHandle::start(
         super::p2p_identity_keys(key_pair1),
         config1,
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -586,7 +586,7 @@ async fn two_networks() {
     let (mut network2, _) = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2),
         config2,
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -675,7 +675,7 @@ async fn update_peers_triggers_immediate_connect() {
     let started1 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair1.clone()),
         trust_config(address1.clone(), TRUST_GOSSIP, idle_timeout),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -693,7 +693,7 @@ async fn update_peers_triggers_immediate_connect() {
     let started2 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2.clone()),
         trust_config(address2.clone(), TRUST_GOSSIP, idle_timeout),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -750,7 +750,7 @@ async fn happy_eyeballs_parallel_dials() {
     let started2 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2.clone()),
         trust_config(address2.clone(), TRUST_GOSSIP, idle_timeout),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -769,7 +769,7 @@ async fn happy_eyeballs_parallel_dials() {
     let started1 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair1.clone()),
         trust_config(address1.clone(), TRUST_GOSSIP, idle_timeout),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -857,7 +857,7 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
             ..trust_config(addr_b.clone(), TRUST_GOSSIP, idle_timeout)
         },
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -882,7 +882,7 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
             ..trust_config(addr_a.clone(), TRUST_GOSSIP, idle_timeout)
         },
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1001,7 +1001,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(hub_kp.clone()),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1021,7 +1021,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             RelayMode::Spoke,
             vec![hub_addr.clone()],
         ),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1041,7 +1041,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             RelayMode::Spoke,
             vec![hub_addr.clone()],
         ),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1147,7 +1147,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(hub_kp.clone()),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1163,7 +1163,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     let (mut spoke_net, _spoke_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(spoke_kp.clone()),
         make_config(spoke_addr.clone(), RelayMode::Spoke, vec![hub_addr.clone()]),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1185,7 +1185,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
             RelayMode::Assist,
             vec![hub_addr.clone()],
         ),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1301,7 +1301,7 @@ async fn multiple_networks() {
                 peers.clone(),
                 msgs.clone(),
                 Arc::clone(&barrier),
-                chain_id.clone(),
+                chain_id,
                 ShutdownSignal::new(),
             )
         })
@@ -1456,7 +1456,7 @@ async fn tls_inbound_listener_smoke() {
             tls_listen_address: Some(WithOrigin::inline(tls_listen_addr.clone())),
             ..config1
         },
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -1488,7 +1488,7 @@ async fn tls_inbound_listener_smoke() {
                 TRUST_GOSSIP,
             )
         },
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),

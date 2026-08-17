@@ -14,6 +14,7 @@ mod coordinator_support;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test,
 };
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
@@ -199,8 +200,6 @@ pub(crate) use scheduler_inputs::{
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
-    ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
-    ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
@@ -426,6 +425,7 @@ impl LifecycleCoordinator {
         self.active_context
     }
     /// Return the durable ordinal high-water mark.
+    #[cfg(test)]
     pub(crate) const fn high_water(&self) -> u128 {
         self.high_water
     }

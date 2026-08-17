@@ -1,6 +1,11 @@
 //! Asset definitions and builders.
 pub use self::model::*;
 use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
+#[cfg(feature = "json")]
+use crate::{
+    DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+    DeriveJsonSerialize as DeriveJsonSer,
+};
 use crate::{
     HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
     isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
@@ -149,14 +154,7 @@ mod model {
     )]
     #[display("{id} {spec}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinition {
@@ -252,11 +250,7 @@ mod model {
     )]
     #[cfg_attr(
         feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        ),
+        derive(DeriveJsonSer, DeriveJsonDe, DeriveFast),
         norito(no_fast_from_json)
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -382,14 +376,7 @@ mod model {
         CopyGetters,
         Getters,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ConfidentialPolicyTransition {
@@ -424,14 +411,7 @@ mod model {
         CopyGetters,
         Getters,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize,
-            crate::DeriveFastJson
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetConfidentialPolicy {

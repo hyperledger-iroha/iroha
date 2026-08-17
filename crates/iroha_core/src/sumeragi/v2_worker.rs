@@ -80,10 +80,10 @@ use crate::{
     lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
-        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarClosedPrefix,
-        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
-        MergeSidecarError, reliable_flush_topic_tag,
+        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarCloseAckV1,
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage,
+        CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
+        CertifiedMergeSidecarStreamEpochV1, MergeSidecarError, reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };
@@ -2589,17 +2589,9 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
     state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
     operation: Option<ConsensusFailStopOperation<'a>>,
     key: RecoveredDecisionApplyDispatchKeyV1,
-    predecessor_debt: u64,
     predecessor_ordinal: Option<u128>,
 }
 impl RecoveredDecisionApplyCapacityReservationV1<'_> {
-    /// Return the exact frozen predecessor debt only to scheduler authority.
-    pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
-        &self,
-        _factory: &AuthenticatedSchedulerInputsFactory,
-    ) -> u64 {
-        self.predecessor_debt
-    }
     /// Recheck that the claimed registry projection names this exact reservation.
     pub(in crate::sumeragi) fn preflight(
         &self,
@@ -2680,28 +2672,6 @@ impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
             }
         }
     }
-}
-/// Typed capacity result for the recovered Decision Apply Consensus lane.
-#[must_use = "the recovered Decision Apply capacity result must be consumed"]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureV1<'a> {
-    /// The exact queue cut is reserved and ready for registry projection commit.
-    Reserved(RecoveredDecisionApplyCapacityReservationV1<'a>),
-    /// No Consensus position was available at the current release generation.
-    Unavailable,
-}
-/// Closed failure before recovered Decision Apply capacity can be retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
-    /// The dispatch key belongs to another immutable height context.
-    ForeignContext,
-    /// The height-local worker command corridor is closed.
-    Disconnected,
-    /// Canonical output admission already requires restart.
-    OutputClosed,
-    /// The exact queue position is not representable in the scheduler rank.
-    PositionOverflow,
-    /// The same closed carrier already owns queued, active, or pending work.
-    AlreadyDispatched,
 }
 /// Locked Consensus capacity for one exact lifecycle-owned recovered Sign.
 #[must_use = "the recovered Sign reservation must commit its prepared dispatch"]
@@ -2997,7 +2967,6 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
             state: Some(state),
             operation: Some(operation),
             key,
-            predecessor_debt: self.worker_predecessor_debt,
             predecessor_ordinal,
         })
     }
@@ -3084,7 +3053,6 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
                 operation: Some(operation),
                 pending: Some(pending),
                 fanout,
-                predecessor_debt: self.output_predecessor_debt,
             },
         ))
     }
@@ -4454,102 +4422,6 @@ impl V2IoCommandQueue {
                 operation: Some(operation),
                 target: Some(target),
                 predecessor_debt,
-            },
-        ))
-    }
-    fn capture_recovered_decision_apply_capacity<'a>(
-        self: &'a Arc<Self>,
-        operation: ConsensusFailStopOperation<'a>,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-    ) -> Result<
-        RecoveredDecisionApplyCapacityCaptureV1<'a>,
-        RecoveredDecisionApplyCapacityCaptureErrorV1,
-    > {
-        let mut state = self.lock();
-        if !state.sender_open || !state.receiver_open {
-            drop(operation);
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected);
-        }
-        if state.recovered_decision_applies.contains_key(&key) {
-            drop(operation);
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::AlreadyDispatched);
-        }
-        let predecessor_debt = match u64::try_from(state.commands.len()) {
-            Ok(debt) => debt,
-            Err(_) => {
-                drop(operation);
-                return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::PositionOverflow);
-            }
-        };
-        let command_ordinal = key.lifecycle_ordinal();
-        let exact_predecessor_ordinal =
-            state
-                .serve_ingress_reservation
-                .as_ref()
-                .and_then(|reservation| {
-                    if command_ordinal >= reservation.id.0 {
-                        return None;
-                    }
-                    match reservation.predecessor_admission {
-                        CertifiedServePredecessorAdmissionState::Open {
-                            predecessor_ordinal: None,
-                        } => Some(command_ordinal),
-                        CertifiedServePredecessorAdmissionState::Open {
-                            predecessor_ordinal: Some(existing),
-                        } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServePredecessorAdmissionState::Closed
-                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
-                    }
-                });
-        let exact_target_active = state.serve_ingress_reservation.is_some()
-            || !state.serve_ingress_waiters.is_empty()
-            || state.serve_barrier.is_some();
-        if exact_target_active && exact_predecessor_ordinal.is_none() {
-            operation.complete();
-            return Ok(RecoveredDecisionApplyCapacityCaptureV1::Unavailable);
-        }
-        let suspended_target = exact_predecessor_ordinal.is_some()
-            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
-        if state.commands.len() >= self.capacity
-            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
-        {
-            if suspended_target {
-                assert!(
-                    self.materialize_serve_barrier(&mut state),
-                    "failed recovered Apply reservation must restore its Serve placeholder"
-                );
-            }
-            operation.complete();
-            return Ok(RecoveredDecisionApplyCapacityCaptureV1::Unavailable);
-        }
-        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
-            let reservation = state
-                .serve_ingress_reservation
-                .as_mut()
-                .expect("recovered Apply predecessor retains its exact Serve ticket");
-            match &mut reservation.predecessor_admission {
-                CertifiedServePredecessorAdmissionState::Open {
-                    predecessor_ordinal: selected,
-                } => match selected {
-                    Some(existing) => assert_eq!(
-                        *existing, predecessor_ordinal,
-                        "one Serve turn cannot admit two causal lifecycle owners"
-                    ),
-                    None => *selected = Some(predecessor_ordinal),
-                },
-                CertifiedServePredecessorAdmissionState::Closed => {
-                    unreachable!("recovered Apply predecessor escaped its open Serve admission")
-                }
-            }
-        }
-        Ok(RecoveredDecisionApplyCapacityCaptureV1::Reserved(
-            RecoveredDecisionApplyCapacityReservationV1 {
-                queue: self.as_ref(),
-                state: Some(state),
-                operation: Some(operation),
-                key,
-                predecessor_debt,
-                predecessor_ordinal: exact_predecessor_ordinal,
             },
         ))
     }
@@ -9410,22 +9282,11 @@ impl V2CompletionDrainOutcome {
         (self.serviced, self.certified_fetch_body)
     }
 }
-/// Owner-only result of draining at most one recovered Decision Apply completion.
-#[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
-    completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
-}
 /// Owner-only drain of at most one guarded recovered Sign completion.
 #[must_use = "a recovered Sign drain remains parked under its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
     completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
 }
-/// Owner-only drain of at most one guarded recovered Fetch body completion.
-#[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
-pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
-    completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
-}
-
 /// Opaque result of taking the physical completion head exactly once.
 ///
 /// Ordinary I/O and local reconstruction work is never exposed. An ordinary
@@ -9447,27 +9308,11 @@ pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
     DecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
 }
 
-impl RecoveredDecisionFetchBodyCompletionDrainV1 {
-    /// Consume the drain result into its optional guarded persistence completion.
-    pub(in crate::sumeragi) fn into_completion(
-        self,
-    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
-        self.completion
-    }
-}
 impl RecoveredLifecycleSignCompletionDrainV1 {
     /// Consume the drain into its optional opaque guarded completion.
     pub(in crate::sumeragi) fn into_completion(
         self,
     ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
-        self.completion
-    }
-}
-impl RecoveredDecisionApplyCompletionDrainV1 {
-    /// Consume the drain result into its optional exact owner completion.
-    pub(in crate::sumeragi) fn into_completion(
-        self,
-    ) -> Option<PreparedRecoveredDecisionApplyCompletionV1> {
         self.completion
     }
 }
@@ -13145,23 +12990,12 @@ impl PendingExactOutput {
         }
         Ok(heights)
     }
-    fn close_certified_sidecar_prefix(
+    fn remove_fanouts_matching(
         &mut self,
-        prefix: &CertifiedMergeSidecarClosedPrefix,
+        covered: impl Fn(&PendingExactFanout) -> bool,
+        validate_removed: impl Fn(&PendingExactFanout) -> Result<(), String>,
+        operation: &'static str,
     ) -> Result<usize, String> {
-        let covered = |fanout: &PendingExactFanout| {
-            matches!(
-                &fanout.rollover_claim,
-                ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
-                    if certified_sidecar_prefix_covers_occurrence(
-                        prefix,
-                        &transfer.requester,
-                        transfer.service_generation,
-                        transfer.stream_epoch,
-                        transfer.semantic_sequence,
-                    )
-            )
-        };
         let mut current_sources = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
         let mut current_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
         let mut retained_sources =
@@ -13176,12 +13010,12 @@ impl PendingExactOutput {
                     .zip(&fanout.message_hashes)
                     .any(|(message, expected)| HashOf::new(message) != *expected)
             {
-                return Err(
-                    "Sumeragi v2 sidecar close found altered exact-output payload".to_owned(),
-                );
+                return Err(format!(
+                    "Sumeragi v2 {operation} found altered exact-output payload"
+                ));
             }
             let fifo_id = fanout.fifo_id.ok_or_else(|| {
-                "Sumeragi v2 sidecar close found an unowned exact-output fanout".to_owned()
+                format!("Sumeragi v2 {operation} found an unowned exact-output fanout")
             })?;
             let sources = fanout.outstanding_sources()?;
             let reservations = fanout.outstanding_reservation_counts()?;
@@ -13193,19 +13027,15 @@ impl PendingExactOutput {
             }
             for (reservation, count) in &reservations {
                 let aggregate = current_reservations.entry(reservation.clone()).or_default();
-                *aggregate = aggregate.checked_add(*count).ok_or_else(|| {
-                    "Sumeragi v2 sidecar close ownership count overflowed".to_owned()
-                })?;
+                *aggregate = aggregate
+                    .checked_add(*count)
+                    .ok_or_else(|| format!("Sumeragi v2 {operation} ownership count overflowed"))?;
             }
             if covered(fanout) {
-                if !fanout.is_certified_sidecar_chunk_fanout() {
-                    return Err(
-                        "Sumeragi v2 sidecar close claim covers a different output kind".to_owned(),
-                    );
-                }
+                validate_removed(fanout)?;
                 removed = removed
                     .checked_add(1)
-                    .ok_or_else(|| "Sumeragi v2 sidecar close count overflowed".to_owned())?;
+                    .ok_or_else(|| format!("Sumeragi v2 {operation} count overflowed"))?;
                 continue;
             }
             for source in sources {
@@ -13214,31 +13044,73 @@ impl PendingExactOutput {
             for (reservation, count) in reservations {
                 let aggregate = retained_reservations.entry(reservation).or_default();
                 *aggregate = aggregate.checked_add(count).ok_or_else(|| {
-                    "Sumeragi v2 retained sidecar ownership count overflowed".to_owned()
+                    format!("Sumeragi v2 retained {operation} ownership count overflowed")
                 })?;
             }
         }
         if current_sources != self.source_fifo_owners
             || current_reservations != self.reservation_owner_counts
         {
-            return Err(
-                "Sumeragi v2 sidecar close found inconsistent exact-output ownership".to_owned(),
-            );
+            return Err(format!(
+                "Sumeragi v2 {operation} found inconsistent exact-output ownership"
+            ));
         }
         let mut retained_units = 0usize;
         let mut retained_shared_units = 0usize;
         for (reservation, count) in &retained_reservations {
             retained_units = retained_units
                 .checked_add(*count)
-                .ok_or_else(|| "Sumeragi v2 retained sidecar units overflowed".to_owned())?;
+                .ok_or_else(|| format!("Sumeragi v2 retained {operation} units overflowed"))?;
             let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
             retained_shared_units = retained_shared_units
                 .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
-                    "Sumeragi v2 retained sidecar frozen credit exceeded ownership".to_owned()
+                    format!("Sumeragi v2 retained {operation} frozen credit exceeded ownership")
                 })?)
-                .ok_or_else(|| "Sumeragi v2 retained shared units overflowed".to_owned())?;
+                .ok_or_else(|| {
+                    format!("Sumeragi v2 retained {operation} shared units overflowed")
+                })?;
         }
         self.fanouts.retain(|fanout| !covered(fanout));
+        self.source_fifo_owners = retained_sources;
+        self.reservation_owner_counts = retained_reservations;
+        self.ownership_units = retained_units;
+        self.shared_ownership_units = retained_shared_units;
+        self.next_fanout_index = if self.fanouts.is_empty() {
+            0
+        } else {
+            self.next_fanout_index % self.fanouts.len()
+        };
+        Ok(removed)
+    }
+    fn close_certified_sidecar_prefix(
+        &mut self,
+        prefix: &CertifiedMergeSidecarClosedPrefix,
+    ) -> Result<usize, String> {
+        let covered = |fanout: &PendingExactFanout| {
+            matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
+                    if certified_sidecar_prefix_covers_occurrence(
+                        prefix,
+                        &transfer.requester,
+                        transfer.service_generation,
+                        transfer.stream_epoch,
+                        transfer.semantic_sequence,
+                )
+            )
+        };
+        let removed = self.remove_fanouts_matching(
+            covered,
+            |fanout| {
+                fanout
+                    .is_certified_sidecar_chunk_fanout()
+                    .then_some(())
+                    .ok_or_else(|| {
+                        "Sumeragi v2 sidecar close claim covers a different output kind".to_owned()
+                    })
+            },
+            "sidecar close",
+        )?;
         self.admitted_sidecar_chunks.retain(|admission| {
             let projection = admission.projection();
             !certified_sidecar_prefix_covers_occurrence(
@@ -13249,17 +13121,97 @@ impl PendingExactOutput {
                 projection.semantic_sequence,
             )
         });
-        self.source_fifo_owners = retained_sources;
-        self.reservation_owner_counts = retained_reservations;
-        self.ownership_units = retained_units;
-        self.shared_ownership_units = retained_shared_units;
-        self.next_fanout_index = if self.fanouts.is_empty() {
-            0
-        } else {
-            self.next_fanout_index % self.fanouts.len()
-        };
         debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
         Ok(removed)
+    }
+    fn cancel_historical_lane_recovery_requests(
+        &mut self,
+        request_hashes: &BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
+    ) -> Result<usize, String> {
+        if request_hashes.is_empty() {
+            return Ok(0);
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    &fanout.rollover_claim,
+                    ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                        request_hash,
+                        ..
+                    } if request_hashes.contains(request_hash)
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "historical recovery cancellation",
+        )
+    }
+    fn cancel_certified_merge_sidecar_requests(
+        &mut self,
+        request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
+    ) -> Result<usize, String> {
+        if request_hashes.is_empty() {
+            return Ok(0);
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    &fanout.rollover_claim,
+                    ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                        request_hash,
+                        ..
+                    } if request_hashes.contains(request_hash)
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "certified merge-sidecar request cancellation",
+        )
+    }
+    fn cancel_acknowledged_certified_merge_sidecar_closes(
+        &mut self,
+        acknowledgements: &[CertifiedMergeSidecarCloseAckV1],
+    ) -> Result<usize, String> {
+        if acknowledgements.is_empty() {
+            return Ok(0);
+        }
+        if acknowledgements.iter().any(|acknowledgement| {
+            acknowledgement.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                || acknowledgement.closed_through == 0
+                || acknowledgement.close_id != acknowledgement.canonical_close_id()
+        }) {
+            return Err(
+                "Sumeragi v2 requester Close cancellation has an invalid acknowledgement prefix"
+                    .to_owned(),
+            );
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    fanout.messages.as_slice(),
+                    [NetworkMessage::CertifiedMergeSidecar(message)]
+                        if matches!(
+                            message.as_ref(),
+                            CertifiedMergeSidecarMessage::Close(close)
+                                if acknowledgements.iter().any(|acknowledgement| {
+                                    acknowledgement.covers_requester_close(close)
+                                })
+                        )
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "acknowledged certified merge-sidecar Close cancellation",
+        )
     }
     fn pending_sidecar_flushes(&self) -> usize {
         self.fanouts
@@ -15908,346 +15860,7 @@ fn durable_history_source_covers(
         _ => Err("Sumeragi v2 durable response claim changed output kind".to_owned()),
     }
 }
-include!("v2_worker/autonomous_lane_output_retirement.rs");
-fn payload_chunk_output_has_applied_height_authority(
-    messages: &[NetworkMessage],
-    manifest: &wire::PayloadManifest,
-    artifact: &wire::finality::V2FinalityArtifact,
-) -> Result<(), String> {
-    let context = &artifact.height_context;
-    manifest.validate(context).map_err(|error| {
-        format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
-    })?;
-    let manifest_hash = HashOf::new(manifest);
-    if messages.len() != manifest.chunk_hashes.len() {
-        return Err("payload-chunk rollover changed the exact chunk count".to_owned());
-    }
-    for (expected_index, message) in messages.iter().enumerate() {
-        if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
-            return Err(
-                "payload-chunk rollover contains non-reconstructible transport traffic".to_owned(),
-            );
-        }
-        let NetworkMessage::SumeragiBlock(envelope) = message else {
-            return Err("payload-chunk rollover contains non-Sumeragi traffic".to_owned());
-        };
-        let BlockMessage::V2(message) = envelope.as_message() else {
-            return Err("payload-chunk rollover contains lane traffic".to_owned());
-        };
-        message
-            .validate_version()
-            .map_err(|error| error.to_string())?;
-        let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
-            return Err("payload-chunk rollover contains another v2 payload".to_owned());
-        };
-        if chunk.manifest_hash != manifest_hash
-            || usize::try_from(chunk.index).ok() != Some(expected_index)
-        {
-            return Err(
-                "payload-chunk rollover differs from its exact manifest coordinates".to_owned(),
-            );
-        }
-        chunk.validate(context, manifest).map_err(|error| {
-            format!("payload-chunk rollover is invalid for its exact manifest: {error}")
-        })?;
-        let sender_index = usize::try_from(chunk.sender)
-            .map_err(|_| "payload-chunk rollover sender is not representable".to_owned())?;
-        let sender = context.roster.get(sender_index).ok_or_else(|| {
-            "payload-chunk rollover sender is outside the applied roster".to_owned()
-        })?;
-        let preimage = chunk
-            .signature_preimage(context, manifest)
-            .map_err(|error| error.to_string())?;
-        Signature::try_from_bytes(&chunk.signature)
-            .map_err(|error| format!("payload-chunk rollover has an invalid signature: {error}"))?
-            .verify(sender.validator.public_key(), &preimage)
-            .map_err(|error| {
-                format!("payload-chunk rollover signature is not owned by its sender: {error}")
-            })?;
-    }
-    Ok(())
-}
-fn applied_height_reconstruction_covers(
-    messages: &[NetworkMessage],
-    peers: &[PeerId],
-    rollover_claim: &ExactOutputRolloverClaim,
-    artifact: &wire::finality::V2FinalityArtifact,
-    durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
-    durable_history: Option<&Kura>,
-) -> Result<(), String> {
-    rollover_claim.validate_fanout(messages, peers)?;
-    if matches!(
-        rollover_claim,
-        ExactOutputRolloverClaim::NonRetireableLaneTransport { .. }
-    ) {
-        return Err(
-            "non-retireable lane transport must drain before applied-height handoff".to_owned(),
-        );
-    }
-    let scope = rollover_claim.scope().ok_or_else(|| {
-        "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
-    })?;
-    if !scope.covers(artifact) {
-        return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
-    }
-    if let ExactOutputRolloverClaim::PayloadChunks { manifest, .. } = rollover_claim {
-        return payload_chunk_output_has_applied_height_authority(messages, manifest, artifact);
-    }
-    if let ExactOutputRolloverClaim::AutonomousLane {
-        local_peer,
-        proposal_height,
-        ..
-    } = rollover_claim
-    {
-        return autonomous_lane_output_has_durable_reconstruction_source(
-            messages,
-            artifact,
-            durable_lane_authority.ok_or_else(|| {
-                "autonomous-lane output lacks finalized winning-lane authority".to_owned()
-            })?,
-            durable_history.ok_or_else(|| {
-                "autonomous-lane output lacks an independently readable Kura source".to_owned()
-            })?,
-            local_peer,
-            *proposal_height,
-        );
-    }
-    if matches!(
-        rollover_claim,
-        ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
-            | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
-            | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
-            | ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification { .. }
-            | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
-    ) {
-        return durable_history_source_covers(
-            messages,
-            rollover_claim,
-            &artifact.height_context.network_id,
-            artifact.height,
-            durable_history.ok_or_else(|| {
-                "Sumeragi v2 durable response lacks an independently readable history source"
-                    .to_owned()
-            })?,
-        );
-    }
-    if let ExactOutputRolloverClaim::DurableKuraReplicaAdvert { source_height, .. } = rollover_claim
-    {
-        let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-            return Err("durable Kura replica advert rollover lost its exact message".to_owned());
-        };
-        let BlockMessage::KuraReplicaAdvert(advert) = envelope.as_message() else {
-            return Err("durable Kura replica advert rollover changed output kind".to_owned());
-        };
-        if *source_height > artifact.height {
-            return Err(
-                "durable Kura replica advert belongs to a future applied height".to_owned(),
-            );
-        }
-        let expected_peers = artifact
-            .height_context
-            .roster
-            .iter()
-            .filter(|entry| entry.validator != advert.keeper)
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        if peers != expected_peers.as_slice() {
-            return Err("durable Kura replica advert changed its frozen roster fanout".to_owned());
-        }
-        durable_history
-            .ok_or_else(|| {
-                "durable Kura replica advert lacks an independently readable Kura source".to_owned()
-            })?
-            .revalidate_kura_replica_advert_source(advert)
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-    if matches!(
-        rollover_claim,
-        ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest { .. }
-            | ExactOutputRolloverClaim::NativeAmx { .. }
-            | ExactOutputRolloverClaim::LaneDrainVote { .. }
-            | ExactOutputRolloverClaim::MergeShare { .. }
-            | ExactOutputRolloverClaim::CertifiedSidecarRequest { .. }
-            | ExactOutputRolloverClaim::CertifiedSidecarControl { .. }
-            | ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
-    ) {
-        return Ok(());
-    }
-    let context_id = artifact.context_id();
-    let height = artifact.height;
-    let round_matches =
-        |round: wire::ConsensusRound| round.context_id == context_id && round.height == height;
-    let lane_output_is_covered = |lane_message: &BlockMessage| -> Result<bool, String> {
-        let authority = durable_lane_authority.ok_or_else(|| {
-            "Sumeragi v2 lane output lacks a typed durable rollover authority".to_owned()
-        })?;
-        if authority
-            .covered_source_hash(artifact, lane_message)?
-            .is_some()
-        {
-            return Ok(true);
-        }
-        let Some((proposal_height, _)) = lane_output_identity(lane_message) else {
-            return Ok(false);
-        };
-        if proposal_height >= artifact.height {
-            return Ok(false);
-        }
-        durable_historical_lane_output_source_hash(
-            durable_history.ok_or_else(|| {
-                "historical lane output lacks an independently readable Kura source".to_owned()
-            })?,
-            lane_message,
-        )
-        .map(|source| source.is_some())
-    };
-    for message in messages {
-        let NetworkMessage::SumeragiBlock(envelope) = message else {
-            return Err(
-                "Sumeragi v2 exact output has no applied-height reconstruction source".to_owned(),
-            );
-        };
-        match envelope.as_message() {
-            BlockMessage::V2(message)
-                if matches!(rollover_claim, ExactOutputRolloverClaim::GlobalV2(_)) =>
-            {
-                message
-                    .validate_version()
-                    .map_err(|error| error.to_string())?;
-                if matches!(
-                    &message.payload,
-                    wire::ConsensusMessageV2Payload::PayloadChunk(_)
-                ) {
-                    return Err(
-                        "Sumeragi v2 payload chunks require an exact manifest rollover claim"
-                            .to_owned(),
-                    );
-                }
-            }
-            lane_message @ (BlockMessage::LaneBlockProposal(_)
-            | BlockMessage::LaneBlockVote(_)
-            | BlockMessage::LaneBlockQc(_)
-            | BlockMessage::LaneBlockCertificate(_))
-                if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
-            {
-                if !lane_output_is_covered(lane_message)? {
-                    return Err(
-                        "Sumeragi v2 lane output lacks an exact typed durable rollover witness"
-                            .to_owned(),
-                    );
-                }
-            }
-            _ => {
-                return Err(
-                    "Sumeragi v2 lane or legacy output lacks a typed durable rollover witness"
-                        .to_owned(),
-                );
-            }
-        }
-    }
-    for message in messages {
-        if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
-            return Err(
-                "Sumeragi v2 exact output has no applied-height reconstruction source".to_owned(),
-            );
-        }
-        let NetworkMessage::SumeragiBlock(envelope) = message else {
-            unreachable!("global rollover preflight rejected non-Sumeragi output")
-        };
-        let covered = match envelope.as_message() {
-            BlockMessage::V2(message)
-                if matches!(rollover_claim, ExactOutputRolloverClaim::GlobalV2(_)) =>
-            {
-                match &message.payload {
-                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                        round_matches(proposal.round)
-                    }
-                    wire::ConsensusMessageV2Payload::Vote(vote) => round_matches(vote.round),
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                        round_matches(certificate.round)
-                    }
-                    wire::ConsensusMessageV2Payload::TimeoutVote(vote) => round_matches(vote.round),
-                    wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
-                        round_matches(certificate.round)
-                    }
-                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-                        round_matches(manifest.round)
-                    }
-                    wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,
-                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
-                        round_matches(request.round)
-                    }
-                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
-                        round_matches(response.manifest.round)
-                    }
-                    wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
-                        request.context_id == context_id && request.height == height
-                    }
-                    wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
-                        round_matches(response.certificate.round)
-                    }
-                    wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
-                        commit.epoch == artifact.height_context.epoch
-                    }
-                    wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
-                        reveal.epoch == artifact.height_context.epoch
-                    }
-                }
-            }
-            lane_message @ (BlockMessage::LaneBlockProposal(_)
-            | BlockMessage::LaneBlockVote(_)
-            | BlockMessage::LaneBlockQc(_)
-            | BlockMessage::LaneBlockCertificate(_))
-                if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
-            {
-                lane_output_is_covered(lane_message)?
-            }
-            _ => unreachable!("rollover preflight rejected an untyped block output"),
-        };
-        if !covered {
-            return Err(
-                "Sumeragi v2 output is not bound to the applied height authority".to_owned(),
-            );
-        }
-    }
-    Ok(())
-}
-#[cfg(test)]
-pub(in crate::sumeragi) enum ExactOutputTestAdmission {
-    /// Simulate a completed non-sidecar actor transfer.
-    Admitted,
-    /// Retain a sidecar response until the supplied writer completion resolves.
-    SidecarFlush(NetworkReplyFlushAck),
-    /// Simulate the tenure-cancellation race with no actor ownership.
-    Retired,
-}
-/// Test-only RAII hold for one auxiliary physical I/O admission unit.
-///
-/// The hold changes only the shared admission counter. Dropping it releases
-/// the exact unit and advances the ordinary lifecycle capacity generation.
-#[cfg(test)]
-#[must_use = "the auxiliary I/O admission hold must remain live for the intended test cut"]
-pub(in crate::sumeragi) struct ProductionAuxiliaryIoAdmissionHoldV1 {
-    admission: Arc<V2IoAdmission>,
-}
-
-#[cfg(test)]
-impl Drop for ProductionAuxiliaryIoAdmissionHoldV1 {
-    fn drop(&mut self) {
-        self.admission.release();
-    }
-}
-
-#[cfg(test)]
-type ExactOutputAdmissionHook = Box<
-    dyn FnMut(
-            Post<NetworkMessage>,
-            Option<NetworkActorAdmissionTicket>,
-        )
-            -> Result<ExactOutputTestAdmission, NetworkActorAdmissionError<Post<NetworkMessage>>>
-        + Send,
->;
+include!("v2_worker/autonomous_lane_output_reconstruction.rs");
 include!("v2_worker/kura_replica_advert_refresh.rs");
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
@@ -16562,13 +16175,6 @@ impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
         operation.complete();
     }
 }
-/// Result of reserving exact output for one recovered Decision Fetch request.
-pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service> {
-    /// The bounded corridor cannot own this fanout yet; nothing was claimed.
-    Unavailable,
-    /// The same corridor mutex and fail-stop permit remain retained through claim.
-    Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
-}
 /// Borrow-bound exact-output reservation retained before coordinator claim.
 ///
 /// Preencoding, topology construction, rollover validation, and `can_enqueue`
@@ -16579,14 +16185,10 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'s
     operation: Option<ConsensusFailStopOperation<'service>>,
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     fanout: Option<PendingExactFanout>,
-    predecessor_debt: u64,
 }
 impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
-    /// Exact retained output-prefix debt used by the authenticated scheduler row.
-    pub(in crate::sumeragi) const fn predecessor_debt(&self) -> u64 {
-        self.predecessor_debt
-    }
-    /// Release an unchanged pre-claim reservation without fail-stopping output.
+    /// Test-only release of an unchanged pre-claim reservation.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn abort_before_claim(mut self) {
         drop(self.pending.take());
         self.operation
@@ -17023,45 +16625,6 @@ impl ProductionV2Services {
         };
         operation.complete();
         Ok(owner)
-    }
-    /// Reserve exact output for an already fixed-signature recovered request.
-    pub(in crate::sumeragi) fn capture_recovered_decision_fetch_exact_output(
-        &self,
-        owner: &RecoveredDecisionFetchRequestOwnerV1,
-    ) -> Result<RecoveredDecisionFetchExactOutputCaptureV1<'_>, String> {
-        if !owner.validates_exact_executor_context(&self.context, &self.local_peer)
-            || self.exact_output_handoff_owner.is_sealed()
-        {
-            return Err(
-                "recovered Decision Fetch output belongs to another service cut".to_owned(),
-            );
-        }
-        let fanout = self.recovered_decision_fetch_fanout(owner)?;
-        let operation = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "recovered Decision Fetch exact output requires restart".to_owned())?;
-        let pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err("recovered Decision Fetch output sealed during capture".to_owned());
-        }
-        let predecessor_debt = u64::try_from(pending.fanouts.len())
-            .map_err(|_| "recovered Decision Fetch output debt overflowed".to_owned())?;
-        if let Some(fanout) = fanout.as_ref()
-            && !pending.can_enqueue(fanout)?
-        {
-            drop(pending);
-            operation.complete();
-            return Ok(RecoveredDecisionFetchExactOutputCaptureV1::Unavailable);
-        }
-        Ok(RecoveredDecisionFetchExactOutputCaptureV1::Reserved(
-            RecoveredDecisionFetchExactOutputReservationV1 {
-                operation: Some(operation),
-                pending: Some(pending),
-                fanout,
-                predecessor_debt,
-            },
-        ))
     }
     fn recovered_decision_fetch_fanout(
         &self,
@@ -17539,33 +17102,6 @@ impl ProductionV2Services {
                 Err(LifecycleIoCapacityCaptureError { failure, prepared })
             }
         }
-    }
-    /// Reserve the Consensus I/O lane for one exact recovered Decision Apply key.
-    ///
-    /// Capacity is captured before the coordinator claims the carrier. The
-    /// returned locked reservation accepts only the borrow-bound registry
-    /// projection carrying this same opaque key.
-    pub(in crate::sumeragi) fn capture_recovered_decision_apply_capacity<'a>(
-        &'a self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-    ) -> Result<
-        RecoveredDecisionApplyCapacityCaptureV1<'a>,
-        RecoveredDecisionApplyCapacityCaptureErrorV1,
-    > {
-        if !key.matches_height_context(&self.context) {
-            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::ForeignContext);
-        }
-        let io = self
-            .io
-            .as_ref()
-            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected)?;
-        let operation = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::OutputClosed)?;
-        io.command_tx
-            .queue
-            .capture_recovered_decision_apply_capacity(operation, key)
     }
     /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
     ///
@@ -19347,33 +18883,6 @@ impl ProductionV2Services {
             ownership_position,
         })
     }
-    fn take_recovered_decision_apply_completion(&mut self) -> IoCompletionTake {
-        if let Some(completion) = self.held_io_completion.take() {
-            if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
-                return IoCompletionTake::ready(PendingServiceCompletion::Io {
-                    completion,
-                    ownership_position: 0,
-                });
-            }
-            self.held_io_completion = Some(completion);
-            return IoCompletionTake::unavailable();
-        }
-        let Some(io) = self.io.as_ref() else {
-            return IoCompletionTake::unavailable();
-        };
-        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-            return IoCompletionTake::unavailable();
-        };
-        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
-            IoCompletionTake::ready(PendingServiceCompletion::Io {
-                completion,
-                ownership_position: 0,
-            })
-        } else {
-            self.held_io_completion = Some(completion);
-            IoCompletionTake::unavailable()
-        }
-    }
     fn take_recovered_lifecycle_sign_completion(&mut self) -> IoCompletionTake {
         if let Some(completion) = self.held_io_completion.take() {
             if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
@@ -19392,39 +18901,6 @@ impl ProductionV2Services {
             return IoCompletionTake::unavailable();
         };
         if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
-            IoCompletionTake::ready(PendingServiceCompletion::Io {
-                completion,
-                ownership_position: 0,
-            })
-        } else {
-            self.held_io_completion = Some(completion);
-            IoCompletionTake::unavailable()
-        }
-    }
-    fn take_recovered_decision_fetch_body_completion(&mut self) -> IoCompletionTake {
-        if let Some(completion) = self.held_io_completion.take() {
-            if matches!(
-                &completion,
-                V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
-            ) {
-                return IoCompletionTake::ready(PendingServiceCompletion::Io {
-                    completion,
-                    ownership_position: 0,
-                });
-            }
-            self.held_io_completion = Some(completion);
-            return IoCompletionTake::unavailable();
-        }
-        let Some(io) = self.io.as_ref() else {
-            return IoCompletionTake::unavailable();
-        };
-        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-            return IoCompletionTake::unavailable();
-        };
-        if matches!(
-            &completion,
-            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
-        ) {
             IoCompletionTake::ready(PendingServiceCompletion::Io {
                 completion,
                 ownership_position: 0,
@@ -19600,39 +19076,6 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_with_lifecycle(executor)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-    /// Drain the oldest completion only when it belongs to recovered Decision Apply.
-    ///
-    /// This path does not accept an effect executor and cannot call the
-    /// reducer's generic application completion API. A different oldest
-    /// completion remains held in place for the ordinary drain, preserving
-    /// the single worker FIFO.
-    pub(in crate::sumeragi) fn drain_recovered_decision_apply_completion(
-        &mut self,
-    ) -> Result<RecoveredDecisionApplyCompletionDrainV1, String> {
-        if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
-        }
-        let take = self.take_recovered_decision_apply_completion();
-        let Some(PendingServiceCompletion::Io {
-            completion: V2IoCompletion::RecoveredDecisionApply(guarded),
-            ownership_position: _,
-        }) = take.completion
-        else {
-            return Ok(RecoveredDecisionApplyCompletionDrainV1 { completion: None });
-        };
-        let key = guarded.result().dispatch_key();
-        let work_ack = self
-            .io
-            .as_ref()
-            .ok_or_else(|| {
-                "recovered Decision Apply completion lost its I/O service owner".to_owned()
-            })?
-            .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))?;
-        Ok(RecoveredDecisionApplyCompletionDrainV1 {
-            completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
-        })
-    }
-
     /// Take and classify the oldest Completion-lane owner in one operation.
     ///
     /// This is the lifecycle driver's sole physical-head classifier. It does
@@ -19759,35 +19202,6 @@ impl ProductionV2Services {
             })
             .ok_or_else(|| "recovered Sign completion lost its exact dedicated owner".to_owned())?;
         Ok(RecoveredLifecycleSignCompletionDrainV1 {
-            completion: Some(completion),
-        })
-    }
-    /// Drain only the oldest lifecycle-owned recovered Fetch body completion.
-    /// Generic completion service retains this family at the physical head.
-    pub(in crate::sumeragi) fn drain_recovered_decision_fetch_body_completion(
-        &mut self,
-    ) -> Result<RecoveredDecisionFetchBodyCompletionDrainV1, String> {
-        if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
-        }
-        let take = self.take_recovered_decision_fetch_body_completion();
-        let Some(PendingServiceCompletion::Io {
-            completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded),
-            ownership_position,
-        }) = take.completion
-        else {
-            return Ok(RecoveredDecisionFetchBodyCompletionDrainV1 { completion: None });
-        };
-        let completion = self
-            .io
-            .as_ref()
-            .and_then(|io| {
-                io.prepare_recovered_decision_fetch_body_completion(guarded, ownership_position)
-            })
-            .ok_or_else(|| {
-                "recovered Decision Fetch body completion lost its exact dedicated owner".to_owned()
-            })?;
-        Ok(RecoveredDecisionFetchBodyCompletionDrainV1 {
             completion: Some(completion),
         })
     }
@@ -21035,6 +20449,43 @@ impl ProductionV2Services {
         }
         pending.close_certified_sidecar_prefix(prefix)
     }
+    /// Cancel every exact-output occurrence whose historical request owner
+    /// completed through another authenticated source.
+    pub(crate) fn cancel_historical_lane_recovery_requests(
+        &self,
+        request_hashes: &BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_historical_lane_recovery_requests(request_hashes)
+    }
+    /// Cancel requester-side sidecar output after its transport attempt retires.
+    pub(crate) fn cancel_certified_merge_sidecar_requests(
+        &self,
+        request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_certified_merge_sidecar_requests(request_hashes)
+    }
+    /// Cancel requester-side Close retries covered by cumulative acknowledgements.
+    pub(crate) fn cancel_acknowledged_certified_merge_sidecar_closes(
+        &self,
+        acknowledgements: &[CertifiedMergeSidecarCloseAckV1],
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_acknowledged_certified_merge_sidecar_closes(acknowledgements)
+    }
     fn exact_target_geometry(
         peer: &PeerId,
         reply_routes: Option<&NetworkReplyRoutes>,
@@ -22154,747 +21605,7 @@ impl Drop for ProductionV2Services {
         }
     }
 }
-impl V2EffectServices for ProductionV2Services {
-    type Error = String;
-    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
-        self.io()?.begin_decision_serve_reconciliation()
-    }
-    fn finish_decision_serve_reconciliation(
-        &mut self,
-        decided_subject: Option<wire::BlockSubject>,
-    ) -> Result<(), Self::Error> {
-        if decided_subject.is_some() {
-            let next = self.leader_wire_recovery_authority.with_durable_decision();
-            self.leader_wire_ingress
-                .advance_leader_wire_recovery_cut(next)?;
-            self.leader_wire_recovery_authority = next;
-        }
-        self.io()?
-            .finish_decision_serve_reconciliation(decided_subject)
-    }
-    fn complete_leader_wire_runtime_terminal(
-        &mut self,
-        terminal: LeaderWireRuntimeTerminal,
-    ) -> Result<(), Self::Error> {
-        match terminal {
-            LeaderWireRuntimeTerminal::Volatile(runtime) => self
-                .leader_wire_ingress
-                .mark_leader_wire_volatile_terminal(&runtime),
-            LeaderWireRuntimeTerminal::Producer { runtime, terminal } => self
-                .leader_wire_ingress
-                .mark_leader_wire_producer_terminal(&runtime, terminal),
-        }
-    }
-    fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let restore_outbound_payload = match task.request() {
-            super::v2::SignRequest::Proposal(proposal) => !self
-                .outbound_chunks
-                .contains_key(&HashOf::new(&proposal.manifest)),
-            super::v2::SignRequest::Vote(_) | super::v2::SignRequest::TimeoutVote(_) => false,
-        };
-        let prepared = match task.request() {
-            super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
-                Some(PreparedCandidateBody {
-                    tag: task.tag(),
-                    subject: vote.subject,
-                })
-            }
-            super::v2::SignRequest::Proposal(_)
-            | super::v2::SignRequest::Vote(_)
-            | super::v2::SignRequest::TimeoutVote(_) => None,
-        };
-        self.io()?.enqueue(V2IoCommand::Sign {
-            task,
-            restore_outbound_payload,
-        })?;
-        if let Some(prepared) = prepared
-            && self.prepared_candidates.len() < self.max_orphan_chunks
-        {
-            self.prepared_candidates.push_back(prepared);
-        }
-        operation.complete();
-        Ok(())
-    }
-    fn cancel_consensus_sign(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
-        self.io()?.cancel(work_id, V2IoCancellableKind::Sign)?;
-        Ok(())
-    }
-    fn retire_outbound_payload_for_subject(
-        &mut self,
-        subject: wire::BlockSubject,
-    ) -> Result<(), Self::Error> {
-        self.outbound_chunks
-            .retain(|_, retained| retained.subject != subject);
-        Ok(())
-    }
-    fn retire_all_outbound_payloads(&mut self) -> Result<(), Self::Error> {
-        self.outbound_chunks.clear();
-        Ok(())
-    }
-    fn retire_candidate_work_after_decision(
-        &mut self,
-        decision_round: wire::ConsensusRound,
-        decision_subject: wire::BlockSubject,
-    ) -> Result<(), Self::Error> {
-        self.proposal_work_retired = true;
-        self.locked_candidate_acquisition = None;
-        self.prepared_candidates.clear();
-        self.validation_rejections.clear();
-        self.merge_sidecar_deferrals.retain(|deferred| {
-            deferred.round() == decision_round && deferred.subject() == decision_subject
-        });
-        Ok(())
-    }
-    #[allow(clippy::too_many_lines)]
-    fn broadcast_consensus(
-        &mut self,
-        message: wire::ConsensusMessageV2,
-    ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
-        if self.proposal_work_retired
-            && matches!(
-                &message.payload,
-                wire::ConsensusMessageV2Payload::Proposal(_)
-            )
-        {
-            return Err("Sumeragi v2 Proposal output is terminal after Decision".to_owned());
-        }
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        message
-            .validate_version()
-            .map_err(|error| error.to_string())?;
-        let control_targets = match &message.payload {
-            wire::ConsensusMessageV2Payload::Proposal(_)
-            | wire::ConsensusMessageV2Payload::Vote(_)
-            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-            | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => self.remote_voters(),
-        };
-        if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
-            let manifest_hash = HashOf::new(&proposal.manifest);
-            let chunks = self
-                .outbound_chunks
-                .get(&manifest_hash)
-                .ok_or_else(|| "local proposal has no retained Sumeragi v2 chunks".to_owned())?;
-            if chunks.owner != self.active_tag || chunks.round != proposal.round {
-                return Err(
-                    "local proposal chunks belong to another reducer incarnation".to_owned(),
-                );
-            }
-            let encoded_chunks = chunks
-                .messages
-                .iter()
-                .cloned()
-                .map(Self::preencode_v2_network_message)
-                .collect::<Result<Vec<_>, _>>()?;
-            let committee = self.committee_for_round(proposal.round)?;
-            let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
-            let payload_targets = if first_fast_path_send {
-                self.remote_voters_for_indices(committee.set_a())?
-            } else {
-                self.remote_voters()
-            };
-            let control = PendingExactFanout::claimed(
-                vec![Self::preencode_v2_network_message(message.clone())?],
-                control_targets,
-                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-            )?;
-            let chunks = PendingExactFanout::claimed(
-                encoded_chunks,
-                payload_targets,
-                ExactOutputRolloverClaim::PayloadChunks {
-                    scope: self.exact_output_scope(),
-                    manifest: proposal.manifest.clone(),
-                },
-            )?;
-            let ownership = self.enqueue_atomic_fanout_batch_while_guarded(
-                control.into_iter().chain(chunks).collect(),
-                operation.permit(),
-            )?;
-            if ownership == ExactFanoutOwnership::Owned && first_fast_path_send {
-                self.fast_path_proposals.insert(proposal.round);
-            }
-            if ownership == ExactFanoutOwnership::SourceRetained {
-                iroha_logger::debug!(
-                    "deferred atomic Sumeragi v2 Proposal control/chunk fanout to reducer retransmission"
-                );
-            }
-            operation.complete();
-            return Ok(if ownership == ExactFanoutOwnership::SourceRetained {
-                ConsensusBroadcastDisposition::SourceRetained
-            } else {
-                ConsensusBroadcastDisposition::ExactServiceAccepted
-            });
-        }
-        let control = vec![Self::preencode_v2_network_message(message)?];
-        let source_retained = self.enqueue_exact_fanout_while_guarded(
-            control,
-            control_targets,
-            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-            operation.permit(),
-        )? == ExactFanoutOwnership::SourceRetained;
-        if source_retained {
-            iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
-        }
-        operation.complete();
-        Ok(if source_retained {
-            ConsensusBroadcastDisposition::SourceRetained
-        } else {
-            ConsensusBroadcastDisposition::ExactServiceAccepted
-        })
-    }
-    fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let signature = Signature::try_new(self.key_pair.private_key(), preimage)
-            .map(|signature| signature.payload().to_vec())
-            .map_err(|error| error.to_string())?;
-        operation.complete();
-        Ok(signature)
-    }
-    fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })?;
-        match self.body_fetch_service_owner(task.id())? {
-            BodyFetchServiceOwner::Reconstructed(index) => {
-                let LocalCompletion::Reconstructed {
-                    task: queued_task, ..
-                } = self
-                    .local_completions
-                    .get(index)
-                    .expect("queued reconstruction owner was classified above");
-                if task != *queued_task && !task.monotonically_extends(queued_task) {
-                    return Err(format!(
-                        "conflicting Sumeragi v2 body-fetch retransmission for completed work {}",
-                        task.id().get()
-                    ));
-                }
-                let LocalCompletion::Reconstructed {
-                    task: queued_task, ..
-                } = self
-                    .local_completions
-                    .get_mut(index)
-                    .expect("queued reconstruction owner was classified above");
-                *queued_task = task;
-                operation.complete();
-                return Ok(());
-            }
-            BodyFetchServiceOwner::Live => {
-                let existing_task = self
-                    .fetches
-                    .get(&task.id())
-                    .map(|fetch| fetch.task.clone())
-                    .ok_or_else(|| {
-                        "classified Sumeragi v2 body-fetch owner disappeared".to_owned()
-                    })?;
-                if task != existing_task && !task.monotonically_extends(&existing_task) {
-                    return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
-                }
-                let manifest_upgrade =
-                    existing_task.manifest().is_none() && task.manifest().is_some();
-                let manifest_hash = manifest_upgrade.then(|| {
-                    HashOf::new(task.manifest().expect("manifest upgrade was checked above"))
-                });
-                if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
-                    return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-                }
-                let certified_message = task
-                    .certified_request()
-                    .map(|request| {
-                        Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
-                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-                        ))
-                    })
-                    .transpose()?;
-                let certified_sources = certified_message
-                    .as_ref()
-                    .map(|_| task.sources().to_vec())
-                    .unwrap_or_default();
-                let opened_chunks = manifest_upgrade
-                    .then(|| {
-                        V2ChunkSession::open(
-                            &self.chunk_root,
-                            &self.context,
-                            task.manifest()
-                                .expect("manifest upgrade was checked above")
-                                .clone(),
-                        )
-                    })
-                    .transpose()
-                    .map_err(|error| error.to_string())?;
-                let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
-                    "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
-                })?;
-                if let (Some(chunks), Some(manifest_hash)) = (opened_chunks, manifest_hash) {
-                    self.fetch_by_manifest.insert(manifest_hash, task.id());
-                    fetch.chunks = Some(chunks);
-                }
-                fetch.task = task;
-                let fetch_work_id = fetch.task.id();
-                if let Some(data) = certified_message {
-                    let peers = certified_sources
-                        .into_iter()
-                        .filter(|peer| peer != &self.local_peer)
-                        .collect();
-                    if self.enqueue_exact_fanout_while_guarded(
-                        vec![data],
-                        peers,
-                        ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-                        operation.permit(),
-                    )? == ExactFanoutOwnership::SourceRetained
-                    {
-                        iroha_logger::debug!(
-                            work_id = fetch_work_id.get(),
-                            "deferred certified body request to retained fetch ownership"
-                        );
-                    }
-                }
-                operation.complete();
-                return Ok(());
-            }
-            BodyFetchServiceOwner::None => {}
-        }
-        if task.manifest().is_none() && task.certified_request().is_none() {
-            return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
-        }
-        let manifest_hash = task.manifest().map(HashOf::new);
-        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
-            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-        }
-        let certified_message = task
-            .certified_request()
-            .map(|request| {
-                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-                ))
-            })
-            .transpose()?;
-        let certified_sources = certified_message
-            .as_ref()
-            .map(|_| task.sources().to_vec())
-            .unwrap_or_default();
-        let chunks = task
-            .manifest()
-            .cloned()
-            .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
-            .transpose()
-            .map_err(|error| error.to_string())?;
-        if let Some(hash) = manifest_hash {
-            self.fetch_by_manifest.insert(hash, task.id());
-        }
-        let work_id = task.id();
-        self.fetches.insert(work_id, FetchSession { task, chunks });
-        if let Some(data) = certified_message {
-            let peers = certified_sources
-                .into_iter()
-                .filter(|peer| peer != &self.local_peer)
-                .collect();
-            if self.enqueue_exact_fanout_while_guarded(
-                vec![data],
-                peers,
-                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-                operation.permit(),
-            )? == ExactFanoutOwnership::SourceRetained
-            {
-                iroha_logger::debug!(
-                    work_id = work_id.get(),
-                    "deferred certified body request to retained fetch ownership"
-                );
-            }
-        }
-        operation.complete();
-        Ok(())
-    }
-    fn rebind_body_fetch(
-        &mut self,
-        previous: &BodyFetchTask,
-        rebound: BodyFetchTask,
-    ) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })?;
-        if !rebound.rebinds_consumer_of(previous) {
-            return Err(format!(
-                "Sumeragi v2 body-fetch work {} has an invalid consumer rebind",
-                previous.id().get()
-            ));
-        }
-        match self.body_fetch_service_owner(previous.id())? {
-            BodyFetchServiceOwner::Live => {
-                let fetch = self
-                    .fetches
-                    .get_mut(&previous.id())
-                    .expect("live body-fetch owner was classified above");
-                if fetch.task != *previous {
-                    return Err(format!(
-                        "Sumeragi v2 body-fetch work {} differs from live service ownership",
-                        previous.id().get()
-                    ));
-                }
-                fetch.task = rebound;
-            }
-            BodyFetchServiceOwner::Reconstructed(index) => {
-                let LocalCompletion::Reconstructed { task, .. } = self
-                    .local_completions
-                    .get_mut(index)
-                    .expect("queued body-fetch owner was classified above");
-                if task != previous {
-                    return Err(format!(
-                        "Sumeragi v2 body-fetch work {} differs from queued completion ownership",
-                        previous.id().get()
-                    ));
-                }
-                *task = rebound;
-            }
-            BodyFetchServiceOwner::None => {
-                return Err(format!(
-                    "Sumeragi v2 body-fetch work {} has no service owner to rebind",
-                    previous.id().get()
-                ));
-            }
-        }
-        operation.complete();
-        Ok(())
-    }
-    fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.remove_exact_body_fetch_owner(task)?;
-        operation.complete();
-        Ok(())
-    }
-    fn complete_body_reconstruction_fetch(
-        &mut self,
-        task: &BodyFetchTask,
-    ) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.remove_exact_body_fetch_owner(task)?;
-        operation.complete();
-        Ok(())
-    }
-    fn complete_certified_body_fetch(
-        &mut self,
-        task: &BodyFetchTask,
-    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
-        // Complete every fallible ownership check before arming the fail-stop
-        // boundary. The guarded tail is then one infallible removal, so every
-        // returned error leaves the exact service owner byte-for-byte intact.
-        let output_guard = Arc::clone(&self.output_guard);
-        let prepared = self.prepare_certified_body_fetch_owner_removal(task)?;
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let disposition = prepared.commit(operation.permit());
-        operation.complete();
-        Ok(disposition)
-    }
-    fn accept_authenticated_chunk(
-        &mut self,
-        task: &BodyFetchTask,
-        chunk: AuthenticatedPayloadChunk,
-    ) -> Result<AuthenticatedChunkDisposition, Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
-            return Err("Sumeragi v2 chunk fetch has no exact live owner".to_owned());
-        }
-        let reconstruction = {
-            let fetch = self
-                .fetches
-                .get_mut(&task.id())
-                .expect("live body-fetch owner was classified above");
-            if fetch.task != *task {
-                return Err(format!(
-                    "Sumeragi v2 chunk task {} differs from service ownership",
-                    task.id().get()
-                ));
-            }
-            let session = fetch.chunks.as_mut().ok_or_else(|| {
-                "manifest-less certified body fetch cannot accept chunks".to_owned()
-            })?;
-            session
-                .admit(chunk.chunk())
-                .map_err(|error| error.to_string())?;
-            session.reconstruct()
-        };
-        let body = match reconstruction {
-            Ok(Some(body)) => body,
-            Ok(None) => {
-                operation.complete();
-                return Ok(AuthenticatedChunkDisposition::Accepted);
-            }
-            Err(V2ChunkError::PayloadMismatch | V2ChunkError::ReconstructionFailed) => {
-                operation.complete();
-                return Ok(AuthenticatedChunkDisposition::Rejected);
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        let manifest = task
-            .manifest()
-            .expect("chunk reconstruction requires proposal manifest authority")
-            .clone();
-        let canonical_manifest =
-            encode_payload(&self.context, manifest.round, manifest.subject, &body)
-                .map_err(|error| error.to_string())?
-                .manifest()
-                .clone();
-        if canonical_manifest != manifest {
-            operation.complete();
-            return Ok(AuthenticatedChunkDisposition::Rejected);
-        }
-        if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
-            return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
-        }
-        let removed = self.fetch_by_manifest.remove(&HashOf::new(&manifest));
-        if removed != Some(task.id()) {
-            return Err(format!(
-                "Sumeragi v2 reconstructed work {} lost its manifest index",
-                task.id().get()
-            ));
-        }
-        let fetch = self
-            .fetches
-            .remove(&task.id())
-            .expect("live body-fetch owner was classified above");
-        if fetch.task != *task {
-            return Err(format!(
-                "Sumeragi v2 reconstructed work {} changed task ownership",
-                task.id().get()
-            ));
-        }
-        self.local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: fetch.task,
-                manifest,
-                body: body.into(),
-            });
-        operation.complete();
-        Ok(AuthenticatedChunkDisposition::Accepted)
-    }
-    fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
-        self.enqueue_fail_stop_io(V2IoCommand::Store(task))
-    }
-    fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error> {
-        self.io()?.cancel(work_id, V2IoCancellableKind::Store)
-    }
-    fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
-        self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
-    }
-    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
-        self.io()?.cancel(work_id, V2IoCancellableKind::Validate)?;
-        Ok(())
-    }
-    fn work_deferred_for_merge_sidecar(
-        &mut self,
-        work_id: EffectWorkId,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        reference: &CertifiedMergeLedgerReference,
-    ) -> Result<(), Self::Error> {
-        self.requeue_merge_sidecar_deferral(DeferredMergeSidecarWork {
-            work_id,
-            round,
-            subject,
-            reference: reference.clone(),
-        })
-    }
-    fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
-        self.enqueue_fail_stop_io(V2IoCommand::Apply(task))
-    }
-    fn entered_view(
-        &mut self,
-        tag: EventTag,
-        certificate: wire::TimeoutCertificate,
-    ) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        if tag.height() != self.context.height
-            || certificate.round.context_id != self.context.id()
-            || certificate.round.height != self.context.height
-            || certificate.round.view.checked_add(1) != Some(tag.view())
-            || !tag.strictly_advances(self.active_tag)
-        {
-            return Err(
-                "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
-            );
-        }
-        let next_recovery_authority = self
-            .leader_wire_recovery_authority
-            .advance_view(tag.view())?;
-        self.leader_wire_ingress
-            .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-        self.leader_wire_recovery_authority = next_recovery_authority;
-        // The old view's active Sign command may still complete after its
-        // executor owner is cancelled. Prune first and publish the new owner
-        // second; completion handling classifies the old work ID before it is
-        // ever allowed to restore payload bytes.
-        self.outbound_chunks.clear();
-        self.fast_path_proposals.clear();
-        self.active_tag = tag;
-        iroha_logger::debug!(
-            height = tag.height(),
-            view = tag.view(),
-            generation = tag.generation().get(),
-            "installed certified Sumeragi v2 view"
-        );
-        Ok(())
-    }
-    fn report_equivocation(
-        &mut self,
-        evidence: wire::SumeragiV2Equivocation,
-    ) -> Result<(), Self::Error> {
-        let _permit = self.output_permit()?;
-        if self.state.network_id_ref() != &self.context.network_id {
-            return Err(
-                "Sumeragi v2 equivocation context is not anchored to the active network".to_owned(),
-            );
-        }
-        let inserted = super::evidence::persist_sumeragi_v2_equivocation(
-            self.state.as_ref(),
-            &self.context,
-            &self.validator_set_pops,
-            evidence.clone(),
-        )
-        .map_err(|error| format!("invalid Sumeragi v2 equivocation evidence: {error:?}"))?;
-        if inserted {
-            iroha_logger::warn!(
-                ?evidence,
-                "persisted authenticated Sumeragi v2 equivocation evidence"
-            );
-        }
-        Ok(())
-    }
-    fn report_invalid_certified_body(
-        &mut self,
-        subject: wire::BlockSubject,
-        certificate: wire::QuorumCertificate,
-    ) -> Result<(), Self::Error> {
-        let _permit = self.output_permit()?;
-        iroha_logger::error!(
-            ?subject,
-            ?certificate,
-            "invalid body certified by Sumeragi v2 PrepareQC"
-        );
-        Ok(())
-    }
-    fn validation_rejected(
-        &mut self,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        reason: &str,
-    ) {
-        let output_guard = Arc::clone(&self.output_guard);
-        let Some(_permit) = output_guard.acquire() else {
-            return;
-        };
-        if self.validation_rejections.len() < self.max_orphan_chunks {
-            self.validation_rejections.push_back(RejectedCandidateBody {
-                round,
-                subject,
-                reason: reason.to_owned(),
-            });
-        }
-        iroha_logger::warn!(
-            ?round,
-            ?subject,
-            reason,
-            "Sumeragi v2 proposal validation rejected"
-        );
-    }
-    fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let mut status = status.clone();
-        status.pending_candidate_loads = self
-            .locked_candidate_acquisition
-            .as_ref()
-            .map_or(0, LockedCandidateAcquisition::pending_count);
-        let captured_at = status.captured_at;
-        status.effect_completion_queue = self.io.as_ref().map_or(
-            RuntimeQueueLaneSnapshot {
-                depth: 0,
-                capacity: 1,
-                oldest_age: None,
-                max_service_debt: 0,
-            },
-            |io| io.completion_snapshot(captured_at),
-        );
-        let recovery_changed = self.last_status.as_ref().is_none_or(|previous| {
-            previous.pending_tip_recovery_stage != status.pending_tip_recovery_stage
-                || previous.pending_tip_recovery_last_result
-                    != status.pending_tip_recovery_last_result
-        });
-        if recovery_changed && status.pending_tip_recovery_stage.is_some() {
-            match status.pending_tip_recovery_last_result {
-                Some(PendingTipRecoveryAttemptResult::Completed) => {
-                    iroha_logger::info!(
-                        height = status.height,
-                        stage = ?status.pending_tip_recovery_stage,
-                        attempts = status.pending_tip_recovery_attempts,
-                        result = ?status.pending_tip_recovery_last_result,
-                        "completed bounded Sumeragi v2 interrupted-tip recovery"
-                    );
-                }
-                Some(PendingTipRecoveryAttemptResult::DeadlineExceeded) => {
-                    iroha_logger::warn!(
-                        height = status.height,
-                        stage = ?status.pending_tip_recovery_stage,
-                        attempts = status.pending_tip_recovery_attempts,
-                        result = ?status.pending_tip_recovery_last_result,
-                        "exhausted bounded Sumeragi v2 interrupted-tip recovery"
-                    );
-                }
-                _ => {
-                    iroha_logger::debug!(
-                        height = status.height,
-                        stage = ?status.pending_tip_recovery_stage,
-                        attempts = status.pending_tip_recovery_attempts,
-                        result = ?status.pending_tip_recovery_last_result,
-                        "advanced bounded Sumeragi v2 interrupted-tip recovery"
-                    );
-                }
-            }
-        }
-        self.last_status = Some(status.clone());
-        super::status::set_v2_effect_status(status);
-        Ok(())
-    }
-    fn fail_closed(&mut self, reason: &str) {
-        self.output_guard.activate_restart_required();
-        self.fatal_reason = Some(reason.to_owned());
-        iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
-    }
-}
+include!("v2_worker/effect_services_impl.rs");
 /// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
 pub(super) mod tests {

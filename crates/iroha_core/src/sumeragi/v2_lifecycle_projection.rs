@@ -211,6 +211,13 @@ enum CertifiedServeTerminalSettlementErrorKindV1 {
     },
     RestartRequired(CertifiedServeTerminalSettlementRestartV1),
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first-release worker settlement does not yet consume the retained terminal diagnostic accessors"
+    )
+)]
 impl CertifiedServeTerminalSettlementErrorV1 {
     /// Return the stable failure class.
     pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
@@ -781,7 +788,13 @@ impl super::ProductionLifecycleOwnerV1 {
     /// payload store and its exact retained body-store instance. No receipt,
     /// payload id, candidate, ordinal, digest, or replay parts enter this API.
     #[cfg(any(not(test), feature = "bls"))]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release owner-to-worker terminal completion handoff is not wired yet"
+        )
+    )]
     pub(in crate::sumeragi) fn settle_certified_serve_completed(
         &mut self,
         lease: super::TurnLease,
@@ -835,7 +848,13 @@ impl super::ProductionLifecycleOwnerV1 {
     /// The retained payload store derives the opaque request id from the
     /// authenticated request. No caller-supplied id or terminal receipt is
     /// accepted.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release owner-to-worker terminal negative-outcome handoff is not wired yet"
+        )
+    )]
     pub(in crate::sumeragi) fn settle_certified_serve_negative(
         &mut self,
         lease: super::TurnLease,

@@ -23,6 +23,8 @@ use crate::sorafs::{
         ReserveProviderTermsV1,
     },
 };
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
 isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
@@ -208,10 +210,7 @@ impl crate::seal::Instruction for UnregisterProviderOwner {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct EstablishSorafsProviderOwnerV1 {
     /// Provider identifier that must not already have an owner.
@@ -231,10 +230,7 @@ pub struct EstablishSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct RebindSorafsProviderOwnerV1 {
     /// Provider identifier whose owner will be replaced.
@@ -256,10 +252,7 @@ pub struct RebindSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct RemoveSorafsProviderOwnerV1 {
     /// Provider identifier whose owner will be removed.
@@ -279,10 +272,7 @@ pub struct RemoveSorafsProviderOwnerV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(
@@ -654,10 +644,7 @@ impl crate::seal::Instruction for DecideSorafsReserveAppeal {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairClaimV1 {
     /// Requested lease duration measured from the committing block time.
     pub lease_duration_ms: u64,
@@ -676,10 +663,7 @@ pub struct SorafsRepairClaimV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairRenewV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -700,10 +684,7 @@ pub struct SorafsRepairRenewV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairCompleteV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -725,10 +706,7 @@ pub struct SorafsRepairCompleteV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairFailV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -750,10 +728,7 @@ pub struct SorafsRepairFailV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SorafsRepairEscalateV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
@@ -775,10 +750,7 @@ pub struct SorafsRepairEscalateV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "action", content = "value", rename_all = "snake_case")
@@ -861,10 +833,7 @@ impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SorafsPdpProofOutcomeSubmissionV1 {
     /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
@@ -883,10 +852,7 @@ pub struct SorafsPdpProofOutcomeSubmissionV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SorafsPotrProofOutcomeSubmissionV1 {
     /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
@@ -908,10 +874,7 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     norito::codec::Decode,
     iroha_schema::IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(
@@ -2111,6 +2074,9 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::sorafs::{
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
         reputation::{
@@ -2497,33 +2463,6 @@ mod tests {
             reveal_deadline_unix_ms: 5_000,
             policy_digest: moderation_policy().digest().expect("policy digest"),
         }
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
-    where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let wire_id = std::any::type_name::<T>();
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     fn issue_replication_order_rejects_the_pre_binding_wire_layout() {

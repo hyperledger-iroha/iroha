@@ -1,5 +1,6 @@
 //! [`Metrics`] and [`Status`]-related logic and functions.
 #![allow(clippy::doc_markdown)]
+mod manifest_status;
 /// Low-cardinality metrics for the Musubi V1 package ecosystem.
 pub mod musubi;
 use crate::privacy::PrivacyDrainSnapshot;
@@ -24,6 +25,9 @@ use iroha_data_model::{
     },
 };
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+pub use manifest_status::{
+    NexusLaneManifestValidatorBindingStatus, NexusLaneRuntimeUpgradeHookStatus,
+};
 use norito::{
     core::DecodeFromSlice,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -2341,6 +2345,7 @@ mod tests {
             scheduler_starvation_bound_override: None,
             manifest_path: None,
             manifest_validators: Vec::new(),
+            manifest_validator_bindings: Vec::new(),
             manifest_quorum: None,
             manifest_protected_namespaces: Vec::new(),
             manifest_runtime_upgrade: None,
@@ -3598,6 +3603,9 @@ pub struct NexusLaneTeuStatus {
     pub manifest_path: Option<String>,
     /// Validators declared in the lane's governance manifest.
     pub manifest_validators: Vec<String>,
+    /// Validator-account, peer, and Torii bindings declared by the manifest.
+    #[norito(default)]
+    pub manifest_validator_bindings: Vec<NexusLaneManifestValidatorBindingStatus>,
     /// Validator quorum required by the lane manifest.
     pub manifest_quorum: Option<u32>,
     /// Protected namespaces enforced by the lane manifest.
@@ -3669,6 +3677,8 @@ struct NexusLaneTeuStatusPayload {
     manifest_quorum: Option<u32>,
     manifest_protected_namespaces: Vec<String>,
     manifest_runtime_upgrade: Option<NexusLaneRuntimeUpgradeHookStatus>,
+    #[norito(default)]
+    manifest_validator_bindings: Vec<NexusLaneManifestValidatorBindingStatus>,
 }
 impl From<&NexusLaneTeuStatus> for NexusLaneTeuStatusPayload {
     fn from(value: &NexusLaneTeuStatus) -> Self {
@@ -3718,6 +3728,7 @@ impl From<&NexusLaneTeuStatus> for NexusLaneTeuStatusPayload {
             manifest_quorum: value.manifest_quorum,
             manifest_protected_namespaces: value.manifest_protected_namespaces.clone(),
             manifest_runtime_upgrade: value.manifest_runtime_upgrade.clone(),
+            manifest_validator_bindings: value.manifest_validator_bindings.clone(),
         }
     }
 }
@@ -3769,65 +3780,8 @@ impl From<NexusLaneTeuStatusPayload> for NexusLaneTeuStatus {
             manifest_quorum: payload.manifest_quorum,
             manifest_protected_namespaces: payload.manifest_protected_namespaces,
             manifest_runtime_upgrade: payload.manifest_runtime_upgrade,
+            manifest_validator_bindings: payload.manifest_validator_bindings,
         }
-    }
-}
-/// Snapshot of the runtime-upgrade governance hook declared in a lane manifest.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    IntoSchema,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
-pub struct NexusLaneRuntimeUpgradeHookStatus {
-    /// Whether runtime-upgrade instructions are permitted.
-    pub allow: bool,
-    /// Whether runtime-upgrade instructions must include manifest metadata.
-    pub require_metadata: bool,
-    /// Metadata key enforced by the manifest.
-    #[norito(default)]
-    pub metadata_key: Option<String>,
-    /// Allowed metadata identifiers declared by the manifest.
-    pub allowed_ids: Vec<String>,
-}
-impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (
-            self.allow,
-            self.require_metadata,
-            self.metadata_key.clone(),
-            self.allowed_ids.clone(),
-        );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneRuntimeUpgradeHookStatus {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let (allow, require_metadata, metadata_key, allowed_ids) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
-        Self {
-            allow,
-            require_metadata,
-            metadata_key,
-            allowed_ids,
-        }
-    }
-}
-impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((allow, require_metadata, metadata_key, allowed_ids), used) =
-            <(bool, bool, Option<String>, Vec<String>)>::decode_from_slice(bytes)?;
-        Ok((
-            Self {
-                allow,
-                require_metadata,
-                metadata_key,
-                allowed_ids,
-            },
-            used,
-        ))
     }
 }
 /// Configured dataspace entry exposed through `/status` for preflight checks.

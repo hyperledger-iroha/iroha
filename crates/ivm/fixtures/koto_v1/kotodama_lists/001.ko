@@ -1,0 +1,14 @@
+
+        seiyaku ListMutations {
+            view fn main() -> int {
+                var List<int, 3> values = [1, 2];
+                if values.try_set(index: 8, value: 99) { return -1; }
+                if !values.try_push(3) { return -2; }
+                if values.try_push(4) { return -3; }
+                let popped = values.pop().unwrap_or(0);
+                let first = values.get(0).unwrap_or(0);
+                if !values.contains(2) { return -4; }
+                popped * 100 + first * 10 + values.len()
+            }
+        }
+        

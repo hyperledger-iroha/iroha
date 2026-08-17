@@ -502,7 +502,6 @@ pub mod stream {
     use super::*;
     use derive_more::Constructor;
     use iroha_data_model_derive::model;
-    use iroha_version::prelude::*;
     #[model]
     mod model {
         use super::*;

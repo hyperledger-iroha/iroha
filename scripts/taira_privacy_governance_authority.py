@@ -58,6 +58,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, NoReturn, Sequence
 
+try:
+    from . import taira_authority_client
+except ImportError:
+    import taira_authority_client
+
 
 REQUEST_SCHEMA = "iroha.taira.privacy_governance_authority_request"
 RECEIPT_SCHEMA = "iroha.taira.privacy_governance_authority_receipt"
@@ -75,14 +80,12 @@ LEGACY_VERANGE_REPLAY_NAMESPACE = (
 PROVISIONING_BARRIER = (
     "MissingExactGenesisSourceClosedControllerSetupAuthorityIdentity"
 )
-FIXED_BINDING_PATH = Path(
-    "/private/etc/iroha/privacy-governance-authority/binding-v1.norito"
-)
-FIXED_REQUEST_SOCKET = Path(
-    "/private/var/run/iroha-privacy-governance-authority/request-v1.sock"
-)
-SERVICE_ID = "taira-privacy-governance-authority-primary"
-ROLE = "exact12-privacy-governance"
+GOVERNANCE_ROLE = taira_authority_client.ROLE_REGISTRY["privacy-governance"]
+FIXED_BINDING_PATH = GOVERNANCE_ROLE.binding_path
+FIXED_REQUEST_SOCKET = GOVERNANCE_ROLE.request_socket
+SERVICE_ID = GOVERNANCE_ROLE.service_id
+ADMINISTRATOR_ID = GOVERNANCE_ROLE.administrator_id
+ROLE = GOVERNANCE_ROLE.role
 AUTHORIZED_CONTROLLER_PEER_UID = 0
 REQUEST_ID_DOMAIN = b"iroha.taira.privacy_governance_authority_request.v1\0"
 MAX_ACTIVATION_BYTES = 4 * 1024 * 1024
@@ -130,16 +133,16 @@ def _fail(message: str) -> NoReturn:
     raise PrivacyGovernanceAuthorityError(message)
 
 
-def _require_provisioned_privacy_governance_authority_v1() -> NoReturn:
-    """Keep signing and verification closed until the native service exists."""
+def _require_provisioned_privacy_governance_authority_v1() -> None:
+    """Authenticate the fixed privacy-governance binding and live service."""
 
-    _fail(
-        f"{PROVISIONING_BARRIER}: no independently provisioned native Exact12 "
-        "governance transaction signer broker, root-installed binding, live "
-        "replay journal, or separately pinned semantic receipt verifier exists; "
-        f"authority must use exact envelope {AUTHORITY_ENVELOPE_SCHEMA} and "
-        f"replay namespace {REPLAY_NAMESPACE}"
-    )
+    try:
+        taira_authority_client.preflight("privacy-governance")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyGovernanceAuthorityError(
+            f"{PROVISIONING_BARRIER}: fixed {AUTHORITY_ENVELOPE_SCHEMA} "
+            f"authority and {REPLAY_NAMESPACE} service are unavailable: {error}"
+        ) from error
 
 
 def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
@@ -298,6 +301,15 @@ class UntrustedGovernanceAuthorityReceiptV1:
     request_id: str
     signed_transaction_norito: bytes
     signed_transaction_sha256: str
+
+
+@dataclass(frozen=True)
+class AuthenticatedGovernanceAuthorityResultV1:
+    """Distinct authenticated sidecars plus the decoded signed transaction."""
+
+    authority_envelope: bytes
+    durable_receipt: bytes
+    receipt: UntrustedGovernanceAuthorityReceiptV1
 
 
 def _build_untrusted_governance_authority_request_v1(
@@ -871,7 +883,7 @@ def _validate_untrusted_governance_authority_receipt_structure_v1(
     ):
         _fail("receipt signer identity differs from the exact reset genesis authority")
     if value["service_id"] != SERVICE_ID or value["signer_role"] != ROLE:
-        _fail("receipt service or signer role is not the shared Exact12 authority")
+        _fail("receipt service or signer role differs from the fixed authority")
     transaction = _canonical_base64(
         value["signed_transaction_norito_base64"],
         "signed transaction",
@@ -898,16 +910,63 @@ def _validate_untrusted_governance_authority_receipt_structure_v1(
 
 def request_authenticated_governance_transaction_v1(
     request: UntrustedGovernanceAuthorityRequestV1,
-) -> NoReturn:
-    """Refuse transport until the fixed native signer broker is provisioned."""
+) -> AuthenticatedGovernanceAuthorityResultV1:
+    """Request the exact validated transaction from the fixed native authority."""
 
     _require_provisioned_privacy_governance_authority_v1()
+    subject = _validated_untrusted_request_value_v1(request)
+    try:
+        result = taira_authority_client.authorize(
+            "privacy-governance", subject
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyGovernanceAuthorityError(
+            f"privacy-governance authority refused the exact request: {error}"
+        ) from error
+    receipt = _canonical(result.durable_receipt)
+    structural = _validate_untrusted_governance_authority_receipt_structure_v1(
+        request, receipt
+    )
+    return AuthenticatedGovernanceAuthorityResultV1(
+        authority_envelope=result.authority_envelope_bytes,
+        durable_receipt=receipt,
+        receipt=structural,
+    )
 
 
 def validate_authenticated_governance_receipt_v1(
     request: UntrustedGovernanceAuthorityRequestV1,
     receipt_payload: bytes,
-) -> NoReturn:
-    """Refuse structural acceptance until a pinned native verifier exists."""
+    *,
+    authority_envelope_payload: bytes | None = None,
+) -> UntrustedGovernanceAuthorityReceiptV1:
+    """Historically verify one receipt without replay consumption or re-signing."""
 
     _require_provisioned_privacy_governance_authority_v1()
+    if authority_envelope_payload is None:
+        _fail("governance authority envelope sidecar is required")
+    structural = _validate_untrusted_governance_authority_receipt_structure_v1(
+        request, receipt_payload
+    )
+    subject = _validated_untrusted_request_value_v1(request)
+    receipt = _strict_object(
+        receipt_payload, "governance authority receipt", MAX_RECEIPT_BYTES
+    )
+    try:
+        envelope = taira_authority_client.decode_canonical_json(
+            authority_envelope_payload, "governance authority envelope"
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyGovernanceAuthorityError(str(error)) from error
+    try:
+        taira_authority_client.verify_receipt(
+            "privacy-governance",
+            subject,
+            authority_envelope=envelope,
+            durable_receipt=receipt,
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise PrivacyGovernanceAuthorityError(
+            f"privacy-governance historical receipt verification failed: {error}"
+        ) from error
+    return structural

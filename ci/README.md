@@ -54,6 +54,23 @@ scope, manifest, packages, target selection, workspace/locked mode, budget
 policy, and exact Rust release match the current command. The PR affected lane
 therefore runs the guard with Rust 1.93.1.
 
+## Build-efficiency lineage provenance
+
+`python3 -I -S scripts/check_build_efficiency_provenance.py` verifies the five
+pinned implementation, donor, source-budget, protected-integration, and lock
+anchor commits from local full-history Git objects. It checks their exact
+trees, ordered parents, ancestry, historical Rust counts, the 17 selected path
+states, the anchor and current `HEAD` `Cargo.lock`, and the current 4,540,000
+line ceiling before dependency, source-budget, or release Cargo work.
+
+The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
+pinned commit object. No trusted public key is part of this contract, so the
+guard does **not** claim cryptographic signer authentication. It disables Git
+configuration injection, replacement objects, and lazy fetching; callers must
+provide the required history locally. Production Sumeragi records the result
+with pinned isolated Python between identity checkpoints and seals its log
+read-only.
+
 ## Focused dependency-graph ratchet
 
 `python3 scripts/check_dependency_budget.py` enforces the exact no-growth
@@ -111,8 +128,9 @@ Six fast, read-only checks keep structural and provisioning debt from returning:
   `ci/source_file_budget.json`; unexplained growth must not refresh it. The
   checked-in `aggregate_rust` section pins the reviewed first-party Rust
   baseline, a ceiling requiring at least a 10% reduction, and a lower working
-  target. Until that objective is reached, `ratchet_ceiling` is the exact
-  no-growth cap enforced by CI; JSON reports say whether the objective is met
+  target. The default invocation enforces `ratchet_ceiling` as an exact
+  no-growth cap, while CI and release gates pass `--require-objective` to make
+  the hard ceiling mandatory. JSON reports say whether the objective is met
   and expose the remaining gap. The ratchet may only move downward during the
   transition, and must converge to the hard ceiling. `--write-baseline`
   preserves all reviewed aggregate targets rather than redefining them from
@@ -122,7 +140,7 @@ The aggregate baseline is the task-start tree at
 `cd05eebfc07c9742734b9d684394c4fe89cdb7c5`: 5,067,263 logical Rust lines.
 The checker counts tracked and non-ignored untracked regular `*.rs` files with
 UTF-8 `splitlines()`, excluding only the checked-in `excluded_prefixes`. The
-hard ceiling is 4,560,536 lines (`floor(0.90 * 5,067,263)`), and the 4,500,000
+hard ceiling is 4,540,000 lines, and the 4,500,000
 working target leaves review headroom below it. These values are provenance,
 not a baseline that may be regenerated from a later candidate.
 - `python3 scripts/check_compile_time_table_assets.py` verifies the exact size
@@ -137,6 +155,9 @@ not a baseline that may be regenerated from a later candidate.
 - `python3 scripts/check_workspace_target_inventory.py` keeps ordinary
   workspace builds limited to the first-release shipping executables. Fixture
   generators, probes, benchmarks, and evidence tools require explicit opt-in.
+  The standalone SoraFS software signer is release-only and requires the
+  `irohad/external-software-signer-bin` feature; the shared daemon-side signer
+  protocol remains part of `irohad`'s normal `daemon` feature.
 - `python3 scripts/check_generated_artifacts.py` validates
   `generated-files.toml`, requires reproducible ownership for checked-in
   generated source, and rejects tracked build, cache, package, and `dist`

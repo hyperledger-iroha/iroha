@@ -68,6 +68,50 @@ def test_topology_envelope_dependency_triggers_are_mandatory(
 
 @pytest.mark.parametrize(
     "relative",
+    sorted(automation.SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS),
+)
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_production_promotion_import_triggers_are_exactly_once(
+    tmp_path: Path, relative: str, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    replacement = "" if mutation == "remove" else trigger * 2
+    workflow.write_text(source.replace(trigger, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"must list each production-promotion import trigger exactly once",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS),
+)
+def test_build_efficiency_provenance_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits build-efficiency provenance contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
     sorted(automation.SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS),
 )
 def test_source_file_budget_contract_triggers_are_mandatory(
@@ -127,6 +171,101 @@ def test_source_file_budget_release_gate_fails_closed_before_cargo(
         automation.validate_release_automation(tmp_path)
 
 
+@pytest.mark.parametrize("relative", automation.SORAFS_CLI_L1_QUALIFICATION_TESTS)
+def test_l1_qualification_regression_suites_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    assert source.count(relative) == 1
+    release_gate.write_text(
+        source.replace(relative, "removed-l1-suite", 1), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"must execute L1 qualification regression suite",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative", automation.SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS
+)
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_production_promotion_import_regression_suites_are_exactly_once(
+    tmp_path: Path, relative: str, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    assert source.count(relative) == 1
+    replacement = (
+        "removed-production-promotion-suite"
+        if mutation == "remove"
+        else f"{relative} {relative}"
+    )
+    release_gate.write_text(
+        source.replace(relative, replacement, 1), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"must execute production-promotion import regression suite",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "true",
+            "build-efficiency provenance command must appear exactly once",
+        ),
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND} || true",
+            "build-efficiency provenance command must appear exactly once",
+        ),
+        (
+            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND}\n\n"
+            'echo "[sorafs-release] source-file budget check"\n'
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}",
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}\n\n"
+            'echo "[sorafs-release] source-file budget check"\n'
+            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND}",
+            "build-efficiency provenance command must run before the source-file budget",
+        ),
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "cargo fmt --all -- --check\n"
+            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND}",
+            "build-efficiency provenance command must run before every Cargo command",
+        ),
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST,
+            "scripts/tests/check_source_file_budget_test.py",
+            "must execute the build-efficiency provenance regression suite",
+        ),
+    ),
+)
+def test_build_efficiency_provenance_release_gate_fails_closed_first(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    drifted = source.replace(old, new, 1)
+    assert drifted != source
+    release_gate.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_release_gate_job_must_invoke_strict_cli_gate() -> None:
     relative = ".github/workflows/sorafs-cli-release.yml"
     source = (REPO_ROOT / relative).read_text(encoding="utf-8")
@@ -137,6 +276,29 @@ def test_release_gate_job_must_invoke_strict_cli_gate() -> None:
 
     errors = automation._validate_workflow_source(relative, drifted)
     assert any("release-gate job must run" in error for error in errors)
+
+
+def test_release_gate_checkout_requires_complete_history_exclusively() -> None:
+    relative = ".github/workflows/sorafs-cli-release.yml"
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    full_history = "        with:\n          fetch-depth: 0\n"
+    assert source.count(full_history) == 1
+
+    errors = automation._validate_workflow_source(
+        relative, source.replace(full_history, "", 1)
+    )
+    assert any("release-gate checkout must fetch" in error for error in errors)
+
+    second_checkout = source.find("      - uses: actions/checkout@", source.find(full_history))
+    assert second_checkout >= 0
+    checkout_line_end = source.index("\n", second_checkout) + 1
+    drifted = (
+        source[:checkout_line_end]
+        + full_history
+        + source[checkout_line_end:]
+    )
+    errors = automation._validate_workflow_source(relative, drifted)
+    assert any("release-gate checkout must fetch" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -2139,6 +2301,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         'grep -Fxc -- "${provider_ingest_test}: test"',
         "--exact --include-ignored --nocapture",
         "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py",
+        "scripts/tests/check_sorafs_production_promotion_bundle_test.py",
         'expected_cargo_lock_sha256="$(cargo_lock_sha256)"',
         'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]',
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented",

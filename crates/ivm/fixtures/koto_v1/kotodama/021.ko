@@ -1,0 +1,7 @@
+
+        seiyaku BlobLiteral {
+            view fn get() -> bytes {
+                return b"hello";
+            }
+        }
+    

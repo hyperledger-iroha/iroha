@@ -449,6 +449,16 @@ fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
     );
 }
 #[test]
+fn sumeragi_v2_rejects_retired_byzantine_rbc_debug_fields() {
+    let report = load_config_from_fixtures("bad.sumeragi_retired_debug_rbc_fields.toml")
+        .expect_err("retired Byzantine RBC debug fields must be rejected");
+    let message = strip_ansi_codes(&format!("{report:?}"));
+    assert!(
+        message.contains("sumeragi.debug") || message.contains("sumeragi.debug.rbc"),
+        "diagnostic should identify the retired debug table: {message}",
+    );
+}
+#[test]
 fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
     let report = load_config_from_fixtures("bad.retired_plan_journal_toggle.toml")
         .expect_err("the first release must not expose a journal-disabled runtime path");
@@ -597,6 +607,10 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
     assert_contains!(debug, "greater than zero");
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the profile fixture keeps secret-file substitution and every multilane default assertion in one end-to-end contract"
+)]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

@@ -184,29 +184,38 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .split_once("fn split(mut self) -> Result<(Self, Self), GeneralizedBulletproofErrorV1> {")
         .expect("owned scalar padding boundary")
         .0;
-    assert_source_steps!(padding; [
-            "let source_len = self.len();",
-            "if source_len > len",
-            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-            "if source_len == len",
-            "return Ok(());",
-            "let source_pointer = self.0.as_ptr();",
-            "let source_capacity = self.0.capacity();",
-            "let mut padded = Self(try_exact_capacity_vec_v1(len)?);",
-            "let allocation_pointer = padded.0.as_ptr();",
-            "for _ in 0..len",
-            "padded.0.push(F::ZERO);",
-            "self.0.iter_mut().zip(&mut padded.0[..source_len])",
-            "core::mem::swap(source, destination);",
-            "source.clear_secret();",
-            "self.0.truncate(0);",
-            "core::mem::swap(&mut self.0, &mut padded.0);",
-            "Ok(())",
-    ]);
-    assert_eq!(
-        padding.matches("try_exact_capacity_vec_v1(len)?").count(),
-        1
-    );
+    let mut cursor = 0;
+    for step in [
+        "let source_len = self.len();",
+        "if source_len > len",
+        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+        "if source_len == len",
+        "return Ok(());",
+        "let source_pointer = self.0.as_ptr();",
+        "let source_capacity = self.0.capacity();",
+        "let mut padded = Self(Vec::new());",
+        ".try_reserve_exact(len)",
+        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+        "let allocation_capacity = padded.0.capacity();",
+        "if allocation_capacity < len",
+        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+        "let allocation_pointer = padded.0.as_ptr();",
+        "for _ in 0..len",
+        "padded.0.push(F::ZERO);",
+        "self.0.iter_mut().zip(&mut padded.0[..source_len])",
+        "core::mem::swap(source, destination);",
+        "source.clear_secret();",
+        "self.0.truncate(0);",
+        "core::mem::swap(&mut self.0, &mut padded.0);",
+        "Ok(())",
+    ] {
+        let offset = padding[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing owner-first padding step {step}"));
+        cursor += offset + step.len();
+    }
+    assert_eq!(padding.matches("Vec::new()").count(), 1);
+    assert_eq!(padding.matches(".try_reserve_exact(len)").count(), 1);
     assert_eq!(padding.matches("padded.0.push(F::ZERO);").count(), 1);
     assert_eq!(
         padding
@@ -230,7 +239,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
     );
     assert_eq!(
         padding
-            .matches("debug_assert_eq!(padded.0.capacity(), len);")
+            .matches("debug_assert_eq!(padded.0.capacity(), allocation_capacity);")
             .count(),
         2
     );
@@ -277,15 +286,21 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .expect("generalized prover boundary")
         .0;
     assert_eq!(prover.matches(".pad_with_zeroes(n)?;").count(), 4);
-    assert_source_steps!(prover; [
-            "witness.a_l.pad_with_zeroes(n)?;",
-            "witness.a_r.pad_with_zeroes(n)?;",
-            "witness.a_o.pad_with_zeroes(n)?;",
-            "for opening in &mut witness.vector_commitments",
-            "opening.values.pad_with_zeroes(n)?;",
-            "// Validate every opening and every circuit constraint before emitting",
-            "transcript.push_point(ai.expose_ref())?;",
-    ]);
+    let mut cursor = 0;
+    for step in [
+        "witness.a_l.pad_with_zeroes(n)?;",
+        "witness.a_r.pad_with_zeroes(n)?;",
+        "witness.a_o.pad_with_zeroes(n)?;",
+        "for opening in &mut witness.vector_commitments",
+        "opening.values.pad_with_zeroes(n)?;",
+        "// Validate every opening and every circuit constraint before emitting",
+        "transcript.push_point(ai.expose_ref())?;",
+    ] {
+        let offset = prover[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing scalar-padding prover step {step}"));
+        cursor += offset + step.len();
+    }
     for callsite in [
         "witness.a_l.pad_with_zeroes(n)?;",
         "witness.a_r.pad_with_zeroes(n)?;",
@@ -305,34 +320,40 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .find("let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;")
         .expect("private response-fold boundary");
     let response_fold = &prover[response_fold_start..response_fold_end];
-    assert_source_steps!(response_fold; [
-            "let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);",
-            "for (weight, opening) in scalar_commitment_weights",
-            ".iter()",
-            ".zip(&witness.scalar_commitments)",
-            "*tau_ni.expose_mut() += *weight * opening.mask;",
-            "drop(scalar_commitment_weights);",
-            "let mut tau_x = SecretScalar::new(S::Scalar::ZERO);",
-            "for (index, coefficient) in tau_before.0.iter().enumerate()",
-            "*tau_x.expose_mut() += *coefficient * x[index];",
-            "*tau_x.expose_mut() += *tau_ni.expose_ref() * x[ni];",
-            "for (index, coefficient) in tau_after.0.iter().enumerate()",
-            "*tau_x.expose_mut() += *coefficient * x[ni + 1 + index];",
-            "drop(tau_before);",
-            "drop(tau_after);",
-            "drop(tau_ni);",
-            "let mut u = SecretScalar::new(*alpha.expose_ref() * x[ilr]);",
-            "*u.expose_mut() += *beta.expose_ref() * x[io];",
-            "*u.expose_mut() += *rho.expose_ref() * x[is];",
-            "for (mut index, opening) in witness.vector_commitments.iter().enumerate()",
-            "if index >= ilr",
-            "index += 1;",
-            "*u.expose_mut() += x[index] * opening.mask;",
-            "drop(alpha);",
-            "drop(beta);",
-            "drop(rho);",
-            "drop(witness);",
-    ]);
+    let mut cursor = 0;
+    for step in [
+        "let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);",
+        "for (weight, opening) in scalar_commitment_weights",
+        ".iter()",
+        ".zip(&witness.scalar_commitments)",
+        "*tau_ni.expose_mut() += *weight * opening.mask;",
+        "drop(scalar_commitment_weights);",
+        "let mut tau_x = SecretScalar::new(S::Scalar::ZERO);",
+        "for (index, coefficient) in tau_before.0.iter().enumerate()",
+        "*tau_x.expose_mut() += *coefficient * x[index];",
+        "*tau_x.expose_mut() += *tau_ni.expose_ref() * x[ni];",
+        "for (index, coefficient) in tau_after.0.iter().enumerate()",
+        "*tau_x.expose_mut() += *coefficient * x[ni + 1 + index];",
+        "drop(tau_before);",
+        "drop(tau_after);",
+        "drop(tau_ni);",
+        "let mut u = SecretScalar::new(*alpha.expose_ref() * x[ilr]);",
+        "*u.expose_mut() += *beta.expose_ref() * x[io];",
+        "*u.expose_mut() += *rho.expose_ref() * x[is];",
+        "for (mut index, opening) in witness.vector_commitments.iter().enumerate()",
+        "if index >= ilr",
+        "index += 1;",
+        "*u.expose_mut() += x[index] * opening.mask;",
+        "drop(alpha);",
+        "drop(beta);",
+        "drop(rho);",
+        "drop(witness);",
+    ] {
+        let offset = response_fold[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing borrowed private-response fold step {step}"));
+        cursor += offset + step.len();
+    }
     assert_eq!(
         response_fold.matches("scalar_commitment_weights").count(),
         2
@@ -353,7 +374,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
     );
     assert_eq!(response_fold.matches("*tau_x.expose_mut() +=").count(), 3);
     assert_eq!(response_fold.matches("*u.expose_mut() +=").count(), 3);
-    assert_eq!(response_fold.matches("opening.mask").count(), 1);
+    assert_eq!(response_fold.matches("opening.mask").count(), 2);
     for (borrowed, copied) in [
         ("alpha.expose_ref()", "alpha.expose_copy()"),
         ("beta.expose_ref()", "beta.expose_copy()"),
@@ -408,24 +429,48 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .split_once("/// Sample a secret vector incrementally")
         .expect("owned scalar split boundary")
         .0;
-    assert_source_steps!(split; [
-            "if self.len() <= 1 || !self.len().is_multiple_of(2)",
-            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-            "let half = self.len() / 2;",
-            "let mut left = Self(try_exact_filled_vec_v1(half, F::ZERO)?);",
-            "let mut right = Self(try_exact_filled_vec_v1(half, F::ZERO)?);",
-            "self.0[..half].iter_mut().zip(&mut left.0)",
-            "core::mem::swap(source, destination);",
-            "source.clear_secret();",
-            "self.0[half..].iter_mut().zip(&mut right.0)",
-            "core::mem::swap(source, destination);",
-            "source.clear_secret();",
-            "self.0.truncate(0);",
-            "Ok((left, right))",
-    ]);
+    let mut cursor = 0;
+    for step in [
+        "if self.len() <= 1 || !self.len().is_multiple_of(2)",
+        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+        "let half = self.len() / 2;",
+        "let mut right = Self(Vec::new());",
+        ".try_reserve_exact(half)",
+        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+        "let allocation_capacity = right.0.capacity();",
+        "if allocation_capacity < half",
+        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+        "let allocation_pointer = right.0.as_ptr();",
+        "for _ in 0..half",
+        "right.0.push(F::ZERO);",
+        "self.0[half..].iter_mut().zip(&mut right.0)",
+        "core::mem::swap(source, destination);",
+        "source.clear_secret();",
+        "self.0.truncate(half);",
+        "Ok((self, right))",
+    ] {
+        let offset = split[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing owner-first split step {step}"));
+        cursor += offset + step.len();
+    }
+    assert_eq!(split.matches(".try_reserve_exact(half)").count(), 1);
+    assert_eq!(split.matches("right.0.push(F::ZERO);").count(), 1);
     assert_eq!(
         split
-            .matches("try_exact_filled_vec_v1(half, F::ZERO)?")
+            .matches("debug_assert_eq!(right.0.len(), half);")
+            .count(),
+        2
+    );
+    assert_eq!(
+        split
+            .matches("debug_assert_eq!(right.0.capacity(), allocation_capacity);")
+            .count(),
+        2
+    );
+    assert_eq!(
+        split
+            .matches("debug_assert_eq!(right.0.as_ptr(), allocation_pointer);")
             .count(),
         2
     );
@@ -433,9 +478,9 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         split
             .matches("core::mem::swap(source, destination);")
             .count(),
-        2
+        1
     );
-    assert_eq!(split.matches("source.clear_secret();").count(), 2);
+    assert_eq!(split.matches("source.clear_secret();").count(), 1);
     for forbidden in [
         "Vec::with_capacity",
         "extend_from_slice",
@@ -449,7 +494,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         ".collect",
         "Self::zero(",
         "core::mem::replace",
-        ".push(",
+        "right.0.push(*",
         "*destination = *source",
         "unsafe",
         "callback",
@@ -476,22 +521,6 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         ipa.matches("let (b_left, b_right) = b.split()?;").count(),
         2
     );
-    assert_eq!(
-        ipa.matches("try_collect_public_point_fold_v1::<S, _>")
-            .count(),
-        4
-    );
-    assert_eq!(
-        ipa.matches("try_collect_public_point_fold_pair_v1::<S, _, _>")
-            .count(),
-        2
-    );
-    assert!(!ipa.contains(".split_off(") && !ipa.contains(".collect()"));
-    assert_source_steps!(ipa; [
-        "try_collect_public_point_fold_pair_v1::<S, _, _>(",
-        "drop(h_bold_weights);",
-        "p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());",
-    ]);
     let owned_scaled_pair_call =
         "p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());";
     assert_eq!(ipa.matches(owned_scaled_pair_call).count(), 2);
@@ -551,18 +580,24 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         TrackingScalar(4),
     ]);
     let source_pointer = values.0.as_ptr();
+    let source_capacity = values.0.capacity();
     let (left, right) = values.split().expect("tracking vector splits evenly");
     assert_eq!(left.0.as_slice(), &[TrackingScalar(1), TrackingScalar(2)]);
     assert_eq!(right.0.as_slice(), &[TrackingScalar(3), TrackingScalar(4)]);
-    assert_eq!((left.0.capacity(), right.0.capacity()), (2, 2));
-    assert_ne!(left.0.as_ptr(), source_pointer);
-    assert_ne!(right.0.as_ptr(), source_pointer);
-    assert_ne!(left.0.as_ptr(), right.0.as_ptr());
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+    assert_eq!(left.0.as_ptr(), source_pointer);
+    assert_eq!(left.0.capacity(), source_capacity);
+    let right_pointer = right.0.as_ptr();
+    let right_capacity = right.0.capacity();
+    assert_ne!(right_pointer, source_pointer);
+    assert_eq!(right.len(), 2);
+    assert!(right_capacity >= right.len());
+    assert_eq!(right.0.as_ptr(), right_pointer);
+    assert_eq!(right.0.capacity(), right_capacity);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
     drop(left);
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
     drop(right);
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
     assert!(matches!(
@@ -590,11 +625,11 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             right.0.as_slice(),
             &[TrackingScalar(17), TrackingScalar(19)]
         );
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         panic!("exercise owner-first scalar split unwind");
     }));
     assert!(unwind.is_err());
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
 }
 #[test]
 fn random_vector_clears_success_and_partial_failure() {
@@ -666,25 +701,36 @@ fn random_vector_clears_success_and_partial_failure() {
         .split_once("/// Opening of one Pedersen vector commitment")
         .expect("random scalar vector boundary")
         .0;
-    assert_source_steps!(random_vector; [
-            "let mut result = ScalarVector(try_exact_capacity_vec_v1(len)?);",
-            "let allocation_pointer = result.0.as_ptr();",
-            "for _ in 0..len",
-            "result.0.push(F::ZERO);",
-            "for destination in &mut result.0",
-            "let mut sampled = random_scalar::<F, _>(rng)?;",
-            "core::mem::swap(destination, sampled.expose_mut());",
-            "drop(sampled);",
-            "Ok(result)",
-    ]);
+    let mut cursor = 0;
+    for step in [
+        "let mut result = ScalarVector(Vec::new());",
+        ".try_reserve_exact(len)",
+        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+        "let allocation_capacity = result.0.capacity();",
+        "if allocation_capacity < len",
+        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+        "let allocation_pointer = result.0.as_ptr();",
+        "for _ in 0..len",
+        "result.0.push(F::ZERO);",
+        "for destination in &mut result.0",
+        "let mut sampled = random_scalar::<F, _>(rng)?;",
+        "core::mem::swap(destination, sampled.expose_mut());",
+        "drop(sampled);",
+        "Ok(result)",
+    ] {
+        let offset = random_vector[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing owner-first random-vector step {step}"));
+        cursor += offset + step.len();
+    }
     for (needle, expected) in [
-        ("try_exact_capacity_vec_v1(len)?", 1),
+        (".try_reserve_exact(len)", 1),
         ("result.0.push(F::ZERO);", 1),
         ("let mut sampled = random_scalar::<F, _>(rng)?;", 1),
         ("core::mem::swap(destination, sampled.expose_mut());", 1),
         ("drop(sampled);", 1),
         ("debug_assert_eq!(result.0.len(), len);", 2),
-        ("capacity(), len);", 2),
+        ("capacity(), allocation_capacity);", 2),
         ("as_ptr(), allocation_pointer);", 2),
     ] {
         assert_eq!(random_vector.matches(needle).count(), expected);

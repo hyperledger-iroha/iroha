@@ -15,7 +15,7 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2TimeoutSigningInvariant",
     "SumeragiV2TimeoutViewInvariant",
     "SumeragiV2TimeoutWireAuthorization",
-    "SumeragiV2ChainEpochRefinement",
+    *CHAIN_EPOCH_REFINEMENT_SHARDS,
     "SumeragiV2ChainReceiptAgreementProofs",
     "SumeragiV2SuccessorActivationRefinementProofs",
     "SumeragiV2ChainLivenessProofs",
@@ -142,7 +142,7 @@ PROMOTION_PROOF_TARGET_CONTRACTS = (
         "genesis-height-successor-handoff",
         "tlaps",
         "SumeragiV2ChainEpochRefinement",
-        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainEpochRefinementShard03",
         "GenesisHeightSuccessorHandoffObligation",
     ),
     PromotionProofTargetContract(
@@ -170,7 +170,7 @@ PROMOTION_PROOF_TARGET_CONTRACTS = (
         "successor-activation-exact-recovery-production-refinement",
         "cross_tool",
         "SumeragiV2ChainEpochRefinement",
-        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainEpochRefinementShard16",
         "SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement",
     ),
 )

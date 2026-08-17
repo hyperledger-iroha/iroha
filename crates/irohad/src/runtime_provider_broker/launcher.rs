@@ -644,16 +644,16 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
                 }
                 let address = SocketAddr::from_abstract_name(&raw[1..]).map_err(|_| ())?;
                 socket.connect_addr(&address).map_err(|_| ())?;
+                return Ok(Self { socket });
             }
             #[cfg(not(target_os = "linux"))]
             return Err(());
-        } else {
-            let path = Path::new(notify_socket);
-            if !path.is_absolute() {
-                return Err(());
-            }
-            socket.connect(path).map_err(|_| ())?;
         }
+        let path = Path::new(notify_socket);
+        if !path.is_absolute() {
+            return Err(());
+        }
+        socket.connect(path).map_err(|_| ())?;
         Ok(Self { socket })
     }
     fn publish_ready(self) -> Result<(), RuntimeProviderBrokerReadinessErrorV1> {
@@ -989,17 +989,20 @@ mod tests {
         use std::os::unix::net::UnixDatagram;
         let directory = tempfile::tempdir().expect("systemd notifier socket directory");
         let path = directory.path().join("notify.sock");
-        let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
-        receiver
+        let notification_socket =
+            UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
+        notification_socket
             .set_read_timeout(Some(std::time::Duration::from_secs(1)))
             .expect("bound fake systemd receive timeout");
         let notifier =
             RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(path.as_os_str())
                 .expect("connect systemd notifier");
         notifier.publish_ready().expect("publish READY=1");
-        let mut received = [0_u8; 32];
-        let received_len = receiver.recv(&mut received).expect("receive READY=1");
-        assert_eq!(&received[..received_len], SYSTEMD_READY_MESSAGE_V1);
+        let mut datagram = [0_u8; 32];
+        let byte_count = notification_socket
+            .recv(&mut datagram)
+            .expect("receive READY=1");
+        assert_eq!(&datagram[..byte_count], SYSTEMD_READY_MESSAGE_V1);
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]

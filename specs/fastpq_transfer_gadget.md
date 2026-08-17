@@ -57,7 +57,7 @@ struct TransferSmtWitness {
 
 - `batch_hash` ties the transcript to the transaction entrypoint hash for replay protection.
 - `authority_digest` is the host’s hash over sorted signers/quorum data; the gadget checks equality but does not redo signature verification. Concretely the host Norito-encodes the `AccountId` (which already embeds the canonical multisig controller) and hashes `b"iroha:fastpq:v1:authority|" || encoded_account` with Blake2b-256, storing the resulting `Hash`.
-- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding before passing them through the shared Poseidon2 helper. This digest is present for single-delta transcripts and omitted for multi-delta batches.
+- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding. The shared Poseidon2 byte helper then appends `0x01` and zero-pads to the next 8-byte word before applying its field-sponge padding, so trailing-zero byte extensions cannot collide. This digest is present for single-delta transcripts and omitted for multi-delta batches.
 
 All fields are serialized via Norito so existing determinism guarantees hold.
 Sender and receiver witnesses are required structured SMT paths, not optional

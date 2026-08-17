@@ -1,0 +1,83 @@
+
+seiyaku StagedMintRequest {
+  state int MintRequestNextSequence;
+  state StateMap<Name, int> MintRequestSequenceById;
+  state StateMap<int, int> MintRequestSequences;
+  state StateMap<int, Name> MintRequestRequestIds;
+  state StateMap<int, Name> MintRequestFiIds;
+  state StateMap<int, AccountId> MintRequestFiAuthorities;
+  state StateMap<int, AccountId> MintRequestToAccounts;
+  state StateMap<int, int> MintRequestAmounts;
+  state StateMap<int, Json> MintRequestRequestedBy;
+  state StateMap<int, int> MintRequestStates;
+  state StateMap<int, int> MintRequestCreatedAt;
+  state StateMap<int, int> MintRequestExpiresAt;
+  state StateMap<int, int> MintRequestFinalizedAt;
+  state StateMap<int, int> MintRequestCanceledAt;
+
+  hajimari() { MintRequestNextSequence = 0; }
+
+  fn update_record(int sequence,
+                   Name request_id,
+                   Name fi_id,
+                   AccountId fi_multisig_account_id,
+                   AccountId to_account_id,
+                   int amount_i64,
+                   Json requested_by_actor_id,
+                   int state_code,
+                   int created_at_ms,
+                   int expires_at_ms,
+                   int finalized_at_ms,
+                   int canceled_at_ms) {
+    MintRequestSequences[sequence] = sequence;
+    MintRequestRequestIds[sequence] = request_id;
+    MintRequestFiIds[sequence] = fi_id;
+    MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+    MintRequestToAccounts[sequence] = to_account_id;
+    MintRequestAmounts[sequence] = amount_i64;
+    MintRequestRequestedBy[sequence] = requested_by_actor_id;
+    MintRequestStates[sequence] = state_code;
+    MintRequestCreatedAt[sequence] = created_at_ms;
+    MintRequestExpiresAt[sequence] = expires_at_ms;
+    MintRequestFinalizedAt[sequence] = finalized_at_ms;
+    MintRequestCanceledAt[sequence] = canceled_at_ms;
+  }
+
+  fn run() {
+    let ev = context::trigger_event();
+    let action_key = Name::parse("action");
+    let request_id_key = Name::parse("request_id");
+    let fi_id_key = Name::parse("fi_id");
+    let to_account_id_key = Name::parse("to_account_id");
+    let amount_i64_key = Name::parse("amount_i64");
+    let requested_by_actor_id_key = Name::parse("requested_by_actor_id");
+    let created_at_ms_key = Name::parse("created_at_ms");
+    let expires_at_ms_key = Name::parse("expires_at_ms");
+
+    let action = ev.get_name(action_key).unwrap_or(Name::parse("missing"));
+    if (action == Name::parse("create")) {
+      let request_id = ev.get_name(request_id_key).unwrap_or(Name::parse("missing"));
+      let sequence = MintRequestNextSequence + 1;
+      let fi_id = ev.get_name(fi_id_key).unwrap_or(Name::parse("missing"));
+      let to_account_id = ev.get_account_id(to_account_id_key).unwrap_or(context::authority());
+      let amount_i64 = ev.get_int(amount_i64_key).unwrap_or(0);
+      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key).unwrap_or(Json::parse("{}"));
+      let created_at_ms = ev.get_int(created_at_ms_key).unwrap_or(0);
+      let expires_at_ms = ev.get_int(expires_at_ms_key).unwrap_or(0);
+      update_record(
+        sequence: sequence,
+        request_id: request_id,
+        fi_id: fi_id,
+        fi_multisig_account_id: to_account_id,
+        to_account_id: to_account_id,
+        amount_i64: amount_i64,
+        requested_by_actor_id: requested_by_actor_id,
+        state_code: 0,
+        created_at_ms: created_at_ms,
+        expires_at_ms: expires_at_ms,
+        finalized_at_ms: 0,
+        canceled_at_ms: 0,
+      );
+    }
+  }
+}

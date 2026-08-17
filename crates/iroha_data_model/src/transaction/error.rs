@@ -226,6 +226,17 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn rejection_reason_json_is_canonical_and_ambient_independent() {
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
         let reason = TransactionRejectionReason::IvmExecution(IvmExecutionFail {
             reason: "deterministic failure".to_owned(),
         });
@@ -258,17 +269,6 @@ mod tests {
             .expect("encode alternate rejection frame as JSON string");
         norito::json::from_json::<TransactionRejectionReason>(&alternate_json)
             .expect_err("alternate-layout rejection JSON must be rejected");
-        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
-            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
-            assert_eq!(
-                norito::json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
-                expected
-            );
-            assert_eq!(
-                norito::json::to_json_bounded(value, expected.len() - 1),
-                Err(norito::json::BoundedJsonError::BodyTooLarge)
-            );
-        }
         assert_bounded(&TriggerExecutionFail::MaxDepthExceeded);
         assert_bounded(&TransactionLimitError {
             reason: "limit".to_owned(),

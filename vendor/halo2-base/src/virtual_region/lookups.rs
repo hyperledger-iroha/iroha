@@ -82,7 +82,12 @@ impl<F: Field + Ord, const ADVICE_COLS: usize> LookupAnyManager<F, ADVICE_COLS> 
 
     /// The total number of virtual rows needed to special lookups
     pub fn total_rows(&self) -> usize {
-        self.cells_to_lookup.lock().unwrap().iter().flat_map(|(_, advices)| advices).count()
+        self.cells_to_lookup
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, advices)| advices)
+            .count()
     }
 
     /// The optimal number of `ADVICE_COLS` chunks of advice columns with lookup enabled for this

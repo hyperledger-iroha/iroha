@@ -1,9 +1,6 @@
 /// Soracloud host operation routed through the dedicated runtime syscall block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 pub enum SoracloudHostOperationV1 {
     /// Read committed service-state metadata visible to the active handler.
@@ -29,10 +26,7 @@ pub enum SoracloudHostOperationV1 {
 }
 /// Request envelope decoded from the Soracloud request pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudHostRequestEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -65,10 +59,7 @@ impl SoracloudHostRequestEnvelopeV1 {
 }
 /// Operation-specific Soracloud host request payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
 pub enum SoracloudHostRequestPayloadV1 {
     /// Request to read committed service-state metadata.
@@ -131,10 +122,7 @@ impl SoracloudHostRequestPayloadV1 {
 }
 /// Response envelope encoded into the Soracloud response pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudHostResponseEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -167,10 +155,7 @@ impl SoracloudHostResponseEnvelopeV1 {
 }
 /// Operation-specific Soracloud host response payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
 pub enum SoracloudHostResponsePayloadV1 {
     /// Response to committed service-state metadata lookups.
@@ -232,10 +217,7 @@ impl SoracloudHostResponsePayloadV1 {
 }
 /// Read committed service-state metadata for one binding/key pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadCommittedStateRequestV1 {
     /// Declared binding name to read from.
     pub binding_name: Name,
@@ -253,10 +235,7 @@ impl SoracloudReadCommittedStateRequestV1 {
 }
 /// Response to a committed service-state metadata lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadCommittedStateResponseV1 {
     /// Matching entry when one exists.
     #[norito(default)]
@@ -276,10 +255,7 @@ impl SoracloudReadCommittedStateResponseV1 {
 }
 /// Stage a deterministic service-state mutation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEmitStateMutationRequestV1 {
     /// Binding mutated by the runtime.
     pub binding_name: Name,
@@ -353,10 +329,7 @@ impl SoracloudEmitStateMutationRequestV1 {
 }
 /// Response to a staged service-state mutation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEmitStateMutationResponseV1 {
     /// Stable mutation digest returned by the host after staging the write-back.
     pub mutation_commitment: Hash,
@@ -376,10 +349,7 @@ impl SoracloudEmitStateMutationResponseV1 {
 }
 /// Stage an outbound Soracloud mailbox message.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEmitMailboxMessageRequestV1 {
     /// Destination service name.
     pub to_service: Name,
@@ -422,10 +392,7 @@ impl SoracloudEmitMailboxMessageRequestV1 {
 }
 /// Response to a staged outbound mailbox message.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEmitMailboxMessageResponseV1 {
     /// Deterministic mailbox message identifier.
     pub message_id: Hash,
@@ -453,10 +420,7 @@ impl SoracloudEmitMailboxMessageResponseV1 {
 }
 /// Append deterministic journal material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudAppendJournalRequestV1 {
     /// Runtime-relative journal path for the appended material.
     pub artifact_path: String,
@@ -478,10 +442,7 @@ impl SoracloudAppendJournalRequestV1 {
 }
 /// Response to appended journal material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudAppendJournalResponseV1 {
     /// Content-addressed digest of the materialized journal payload.
     pub artifact_hash: Hash,
@@ -501,10 +462,7 @@ impl SoracloudAppendJournalResponseV1 {
 }
 /// Publish deterministic checkpoint material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudPublishCheckpointRequestV1 {
     /// Runtime-relative checkpoint path for the published material.
     pub artifact_path: String,
@@ -526,10 +484,7 @@ impl SoracloudPublishCheckpointRequestV1 {
 }
 /// Response to published checkpoint material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudPublishCheckpointResponseV1 {
     /// Content-addressed digest of the materialized checkpoint payload.
     pub artifact_hash: Hash,
@@ -549,10 +504,7 @@ impl SoracloudPublishCheckpointResponseV1 {
 }
 /// Read authoritative service config material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadConfigRequestV1 {
     /// Stable config identifier relative to the authoritative service-config set.
     pub config_name: String,
@@ -572,10 +524,7 @@ impl SoracloudReadConfigRequestV1 {
 }
 /// Response to an authoritative service config lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadConfigResponseV1 {
     /// Whether the requested config was found for the active service revision.
     pub found: bool,
@@ -598,10 +547,7 @@ impl SoracloudReadConfigResponseV1 {
 }
 /// Read an authoritative service secret envelope for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadSecretEnvelopeRequestV1 {
     /// Stable secret identifier relative to the authoritative service-secret set.
     pub secret_name: String,
@@ -621,10 +567,7 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
 }
 /// Response to an authoritative service secret-envelope lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadSecretEnvelopeResponseV1 {
     /// Matching authoritative secret envelope when one exists.
     #[norito(default)]
@@ -644,10 +587,7 @@ impl SoracloudReadSecretEnvelopeResponseV1 {
 }
 /// Read node-local secret material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadSecretRequestV1 {
     /// Stable secret identifier relative to the node-local secret root.
     pub secret_name: String,
@@ -667,10 +607,7 @@ impl SoracloudReadSecretRequestV1 {
 }
 /// Response to a node-local secret lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadSecretResponseV1 {
     /// Whether the requested secret was found locally.
     pub found: bool,
@@ -693,10 +630,7 @@ impl SoracloudReadSecretResponseV1 {
 }
 /// Read node-local credential material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadCredentialRequestV1 {
     /// Stable credential identifier relative to the node-local credential root.
     pub credential_name: String,
@@ -716,10 +650,7 @@ impl SoracloudReadCredentialRequestV1 {
 }
 /// Response to a node-local credential lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudReadCredentialResponseV1 {
     /// Whether the requested credential was found locally.
     pub found: bool,
@@ -742,10 +673,7 @@ impl SoracloudReadCredentialResponseV1 {
 }
 /// Perform a bounded, policy-checked egress fetch from an allowlisted host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEgressFetchRequestV1 {
     /// Absolute URL to fetch.
     pub url: String,
@@ -782,10 +710,7 @@ impl SoracloudEgressFetchRequestV1 {
 }
 /// Response to a bounded egress fetch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudEgressFetchResponseV1 {
     /// HTTP status code returned by the fetch.
     pub status_code: u16,

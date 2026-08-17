@@ -258,7 +258,7 @@ test("browser Nexus Torii base URL rejects ambient authority and URL smuggling",
 test("browser Nexus snapshots config descriptors without invoking getters", () => {
   let proxyGets = 0;
   const proxied = new Proxy(
-    { chainId: "snapshot-chain" },
+    { networkId: fixtureNetworkId },
     {
       get(target, key, receiver) {
         proxyGets += 1;
@@ -267,20 +267,22 @@ test("browser Nexus snapshots config descriptors without invoking getters", () =
     },
   );
   const client = new NexusAppClient(proxied);
-  assert.equal(client.config.chainId, "snapshot-chain");
+  assert.equal(client.config.networkId, fixtureNetworkId);
   assert.equal(proxyGets, 0);
 
   let accessorGets = 0;
   const accessor = {};
-  Object.defineProperty(accessor, "chainId", {
+  Object.defineProperty(accessor, "networkId", {
     enumerable: true,
     get() {
       accessorGets += 1;
-      return "getter-chain";
+      return fixtureNetworkId;
     },
   });
   for (const malformed of [
-    Object.assign(Object.create({ inherited: true }), { chainId: "chain" }),
+    Object.assign(Object.create({ inherited: true }), {
+      networkId: fixtureNetworkId,
+    }),
     accessor,
     { unsupported: true },
     { [Symbol("hidden")]: true },
@@ -649,7 +651,7 @@ test("browser Nexus Torii polling fails closed on malformed finality envelopes",
         blockHeight: 0,
         resolvedFrom: "state",
       }),
-      /positive block height/u,
+      /positive safe integer/u,
     ],
   ]) {
     const client = new NexusAppClient({

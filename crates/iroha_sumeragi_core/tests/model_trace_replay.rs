@@ -8,7 +8,6 @@
 //! The mapping is deliberately strict: malformed traces, invalid leaders,
 //! certificates without delivered quorum votes, and out-of-order durability
 //! boundaries are rejected before replay.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use iroha_sumeragi_core::{
     BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
     Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId, OpaqueSignature,
@@ -17,6 +16,7 @@ use iroha_sumeragi_core::{
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
     WalEntry, WalRecord,
 };
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 const TRACE: &str = include_str!("fixtures/tlc_replay_witness.tsv");
 const HEIGHT: u64 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

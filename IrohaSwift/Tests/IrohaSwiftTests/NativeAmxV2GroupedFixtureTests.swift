@@ -301,8 +301,8 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         from: JSONSerialization.data(withJSONObject: execution)
     )
     try require(
-        parsedExecution.mergeCarrier != nil,
-        "merge carrier"
+        parsedExecution.laneFinalityManifest == nil && parsedExecution.mergeCarrier != nil,
+        "lane-finality manifest and merge carrier"
     )
     try require(
         try fixtureUInt(execution, "native_amx_application_manifest_count")

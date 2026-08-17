@@ -353,20 +353,62 @@ def test_repository_verus_evidence_binds_exact_timeout_proposal_corridor() -> No
 
 
 def test_repository_verus_evidence_binds_lexically_included_proof_tail() -> None:
-    """Every file included into the root Verus module is independently sealed."""
+    """Lexically included proof and checked-token providers are sealed."""
 
     module = load_module()
     root_source = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
     included_tail = (
         "crates/iroha_sumeragi_core/src/verus_proofs/production_kernel_tail.rs"
     )
-    assert {root_source, included_tail} <= set(module.REQUIRED_SOURCE_PATHS)
+    checked_token_parent = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    )
+    checked_token_provider = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
+    )
+    assert {
+        root_source,
+        included_tail,
+        checked_token_parent,
+        checked_token_provider,
+    } <= set(module.REQUIRED_SOURCE_PATHS)
     assert (
         ROOT.joinpath(root_source)
         .read_text(encoding="utf-8")
         .count('include!("verus_proofs/production_kernel_tail.rs");')
         == 1
     )
+    assert (
+        ROOT.joinpath(checked_token_parent)
+        .read_text(encoding="utf-8")
+        .count('include!("refinement/first_release_witness.rs");')
+        == 1
+    )
+
+
+def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
+    """Extracted adapter and runtime implementations remain independently sealed."""
+
+    module = load_module()
+    providers = {
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_rebind_impl.rs",
+    }
+    assert providers <= set(module.REQUIRED_SOURCE_PATHS)
+    adapter = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2.rs").read_text(
+        encoding="utf-8"
+    )
+    runtime = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2_runtime.rs").read_text(
+        encoding="utf-8"
+    )
+    assert adapter.count(
+        'include!("v2_authenticated_recovered_adapter_startup_impl.rs");'
+    ) == 1
+    assert runtime.count('include!("v2_runtime_effect_ownership_core_impl.rs");') == 1
+    assert runtime.count(
+        'include!("v2_runtime_effect_ownership_rebind_impl.rs");'
+    ) == 1
 
 
 def test_verus_invocation_without_no_cheating_is_rejected(tmp_path: Path) -> None:

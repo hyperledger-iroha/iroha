@@ -254,6 +254,7 @@ pub(crate) enum LifecycleWorkClass {
     ProducerTurn,
 }
 impl LifecycleWorkClass {
+    #[cfg(test)]
     pub(super) const ALL: [Self; 13] = [
         Self::SignProposal,
         Self::SignVote,
@@ -532,6 +533,7 @@ impl SchedulerRank {
         }
     }
     /// Return the exact eight rank components.
+    #[cfg(test)]
     pub(crate) const fn components(self) -> [u64; 8] {
         [
             self.remaining_stages,
@@ -603,6 +605,7 @@ impl LifecycleWorkClass {
 pub(crate) struct PhysicalSlotId(pub(super) u16, pub(super) u16);
 impl PhysicalSlotId {
     /// Construct a slot address within the frozen capacity geometry.
+    #[cfg(test)]
     pub(super) const fn new(class: u16, index: u16) -> Self {
         Self(class, index)
     }
@@ -643,10 +646,12 @@ impl PhysicalSlot {
         Self { id, digest }
     }
     /// Return the finite slot address.
+    #[cfg(test)]
     pub(crate) const fn id(self) -> PhysicalSlotId {
         self.id
     }
     /// Return the authenticated physical-work digest.
+    #[cfg(test)]
     pub(crate) const fn digest(self) -> LifecycleDigest {
         self.digest
     }
@@ -774,7 +779,6 @@ impl WaitToken {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     variant_size_differences,
-    clippy::large_enum_variant,
     reason = "scheduler tombstones remain Copy and allocation-free; boxing would change lifecycle state semantics"
 )]
 pub(crate) enum TerminalOutcome {
@@ -881,6 +885,7 @@ pub(super) enum DurableServeNegativeOutcome {
     Failed(u16),
 }
 impl DurableServeNegativeOutcome {
+    #[cfg(test)]
     pub(super) const fn from_terminal(outcome: TerminalOutcome) -> Option<Self> {
         match outcome {
             TerminalOutcome::Cancelled => Some(Self::Cancelled),
@@ -907,6 +912,7 @@ impl DurablePayloadReference {
             certificate,
         }
     }
+    #[cfg(test)]
     pub(super) const fn is_certified_serve(self) -> bool {
         matches!(
             self,
@@ -1243,6 +1249,13 @@ pub(crate) enum InitialLifecycleState {
     /// The record is immediately ready.
     Ready,
     /// The record waits on an exact generation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release adapters currently materialize waits after admission; retain the explicit reducer input while its production arms remain authoritative"
+        )
+    )]
     Waiting(WaitToken),
 }
 /// Reserved producer-turn record admitted atomically with Certified Serve.
@@ -1378,6 +1391,13 @@ pub(crate) enum AdmissionRequest {
     /// A lifecycle candidate subject to exact ownership and capacity checks.
     Candidate(CandidateAdmission),
     /// A sealed zero-owner effect minted only by the exhaustive classifier.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release projection filters non-candidates before admission; retain the explicit reducer boundary and its production match arms"
+        )
+    )]
     NonCandidate(NonCandidateEffect),
 }
 /// Sealed proof that an input has no adapter-effect lifecycle class.
@@ -1934,6 +1954,7 @@ impl TurnLease {
         self.stage
     }
     /// Return the exact rank snapshot used to select this lease.
+    #[cfg(test)]
     pub(crate) const fn rank(&self) -> SchedulerRank {
         self.rank
     }
@@ -1952,6 +1973,13 @@ pub(crate) enum TurnOutcome {
     Advanced,
     Terminal(TerminalOutcome),
     Blocked(WaitToken),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release workers do not yet emit replenishment settlements; retain deterministic finite-slot settlement semantics"
+        )
+    )]
     Replenished(PhysicalSlot),
 }
 /// Deterministic result of one scheduler planning call.
@@ -1975,6 +2003,7 @@ pub(crate) enum CoordinatorFault {
     CapacityAccounting,
     LeaseExhausted,
     RecoveryRejected,
+    #[cfg(test)]
     InvalidRollover,
 }
 /// Fixed capacity limits owned by one coordinator.

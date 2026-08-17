@@ -2666,11 +2666,11 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "capture_recovered_decision_apply_capacity",
+            "recovered_completion_worker_capacity",
             (("impl", "V2IoCommandQueue"),),
             "                    if command_ordinal >= reservation.id.0 {\n",
             "                    if command_ordinal > reservation.id.0 {\n",
-            "equal or later causal work must not enter",
+            "recovered completion census must reject the exact target and later owners",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",

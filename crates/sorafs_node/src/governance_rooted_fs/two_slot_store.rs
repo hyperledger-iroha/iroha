@@ -152,7 +152,7 @@ impl TwoSlotStoreConfigV1 {
                 "governance two-slot store name must be canonical UTF-8",
             )
         })?;
-        let name_bytes = store_name.as_bytes().len();
+        let name_bytes = store_name.len();
         if name_bytes == 0
             || name_bytes > TWO_SLOT_STORE_NAME_MAX_BYTES_V1
             || store_name.starts_with('.')
@@ -510,7 +510,7 @@ fn write_exact_file_region(file: &File, offset: u64, bytes: &[u8]) -> io::Result
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileExt as _;
-        return file.write_all_at(bytes, offset);
+        file.write_all_at(bytes, offset)
     }
     #[cfg(windows)]
     {
@@ -533,7 +533,7 @@ fn write_exact_file_region(file: &File, offset: u64, bytes: &[u8]) -> io::Result
                 .checked_add(count)
                 .ok_or_else(|| io::Error::other("governance two-slot write length overflowed"))?;
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(unix, windows)))]
     Err(platform::unsupported())
@@ -1236,6 +1236,7 @@ impl RootedDirectory {
             |directory| directory.sync_all(),
         )
     }
+    #[expect(clippy::too_many_arguments, reason = "durability test seam")]
     fn atomic_write_with_sync<BeforePromote, FileSync, DirectorySync>(
         &self,
         name: &OsStr,
@@ -2110,6 +2111,7 @@ impl RootedDirectory {
         )
     }
     #[cfg(test)]
+    #[expect(clippy::too_many_arguments, reason = "durability test hook")]
     fn atomic_write_with_test_hooks<BeforePromote, FileSync, DirectorySync>(
         &self,
         name: &OsStr,

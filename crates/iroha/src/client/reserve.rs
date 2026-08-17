@@ -144,7 +144,7 @@ fn exact_json_object(response: &Response<Vec<u8>>, kind: &str, keys: &[&str]) ->
     }
     Ok(value)
 }
-fn exact_typed_payload<T>(value: Value, kind: &str, detail: &str) -> Result<T>
+fn exact_typed_payload<T>(value: &Value, kind: &str, detail: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize + norito::json::JsonSerialize,
 {
@@ -152,7 +152,7 @@ where
         norito::json::from_value(value.clone()).map_err(|_| response_error(kind, detail))?;
     let canonical = norito::json::to_value(&decoded)
         .map_err(|_| response_error(kind, "typed payload cannot be re-encoded"))?;
-    if canonical != value {
+    if &canonical != value {
         return Err(response_error(
             kind,
             "typed payload contains noncanonical or unknown fields",
@@ -187,7 +187,6 @@ fn exact_record_payload(
     let cursor = exact_typed_payload(
         object
             .get("finalized_cursor")
-            .cloned()
             .expect("exact record wrapper has finalized_cursor"),
         kind,
         "finalized cursor is not the typed DTO",
@@ -348,6 +347,10 @@ fn validate_event_record(record: &ReserveFinalizedEventV1, kind: &str) -> Result
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared page validator keeps every ordering and continuation binding explicit at each call site"
+)]
 pub(super) fn validate_id_page<T>(
     records: &[T],
     mut previous: Option<[u8; 32]>,
@@ -455,7 +458,7 @@ pub(super) fn validate_policy_response(
     }
     let (cursor, payload) = exact_record_payload(&response, "policy", "policy")?;
     let policy: ReserveAuthorityPolicyRecordV1 =
-        exact_typed_payload(payload, "policy", "payload is not the typed policy DTO")?;
+        exact_typed_payload(&payload, "policy", "payload is not the typed policy DTO")?;
     validate_policy_record(&policy, "policy")?;
     validate_finalized_cursor(cursor, expected, "policy")?;
     Ok(response)
@@ -480,7 +483,7 @@ macro_rules! define_id_page_response_validator {
                 &["finalized_cursor", stringify!($records), "has_more", "next_after"],
             )?;
             let page: $page = exact_typed_payload(
-                value,
+                &value,
                 $kind,
                 "body is not the typed page DTO",
             )?;
@@ -529,8 +532,11 @@ pub(super) fn validate_provider_response(
         return Ok(response);
     }
     let (cursor, payload) = exact_record_payload(&response, "provider", "provider")?;
-    let provider: ReserveProviderAccountV1 =
-        exact_typed_payload(payload, "provider", "payload is not the typed provider DTO")?;
+    let provider: ReserveProviderAccountV1 = exact_typed_payload(
+        &payload,
+        "provider",
+        "payload is not the typed provider DTO",
+    )?;
     validate_provider_record(&provider, "provider")?;
     validate_finalized_cursor(cursor, expected, "provider")?;
     if provider.terms.provider_id
@@ -565,8 +571,11 @@ pub(super) fn validate_movement_response(
         return Ok(response);
     }
     let (cursor, payload) = exact_record_payload(&response, "movement", "movement")?;
-    let movement: ReserveMovementRecordV1 =
-        exact_typed_payload(payload, "movement", "payload is not the typed movement DTO")?;
+    let movement: ReserveMovementRecordV1 = exact_typed_payload(
+        &payload,
+        "movement",
+        "payload is not the typed movement DTO",
+    )?;
     validate_movement_record(&movement, "movement")?;
     validate_finalized_cursor(cursor, expected, "movement")?;
     if movement.movement_id != parse_request_hash(movement_id_hex, "movement")? {
@@ -600,7 +609,7 @@ pub(super) fn validate_appeal_response(
     }
     let (cursor, payload) = exact_record_payload(&response, "appeal", "appeal")?;
     let appeal: ReserveAppealRecordV1 =
-        exact_typed_payload(payload, "appeal", "payload is not the typed appeal DTO")?;
+        exact_typed_payload(&payload, "appeal", "payload is not the typed appeal DTO")?;
     validate_appeal_record(&appeal, "appeal")?;
     validate_finalized_cursor(cursor, expected, "appeal")?;
     if appeal.appeal_id != parse_request_hash(appeal_id_hex, "appeal")? {
@@ -625,7 +634,7 @@ pub(super) fn validate_events_response(
         &["finalized_cursor", "events", "has_more", "next_after"],
     )?;
     let page: ReserveFinalizedEventPageV1 =
-        exact_typed_payload(value, "event page", "body is not the typed page DTO")?;
+        exact_typed_payload(&value, "event page", "body is not the typed page DTO")?;
     validate_encoded_page(&page, "event page")?;
     validate_finalized_cursor(page.finalized_cursor, &filter.finalized, "event page")?;
     if page.events.len() > validate_limit(filter.limit, "event page")? {
@@ -795,7 +804,7 @@ mod tests {
         id[28..].copy_from_slice(&index.to_be_bytes());
         id
     }
-    fn finalized_anchor<'a>(block_hash: &'a str) -> SorafsReserveFinalizedAnchor<'a> {
+    fn finalized_anchor(block_hash: &str) -> SorafsReserveFinalizedAnchor<'_> {
         SorafsReserveFinalizedAnchor {
             expected_finalized_height: Some(7),
             expected_finalized_block_hash_hex: Some(block_hash),
@@ -959,7 +968,7 @@ mod tests {
             .body(vec![0x00, 0xFF, 0x51, 0x00])
             .expect("build non-OK response")
     }
-    fn assert_rejected<T>(result: Result<T>) {
+    fn assert_rejected<T>(result: &Result<T>) {
         assert!(result.is_err());
     }
     fn event_page(events: Vec<ReserveFinalizedEventV1>) -> ReserveFinalizedEventPageV1 {
@@ -974,13 +983,13 @@ mod tests {
         page: &ReserveMovementPageV1,
         filter: &SorafsReserveMovementReadbackFilter<'_>,
     ) {
-        assert_rejected(validate_movements_response(page_response(page), filter));
+        assert_rejected(&validate_movements_response(page_response(page), filter));
     }
     fn assert_events_rejected(
         page: &ReserveFinalizedEventPageV1,
         filter: &SorafsReserveEventsReadbackFilter<'_>,
     ) {
-        assert_rejected(validate_events_response(page_response(page), filter));
+        assert_rejected(&validate_events_response(page_response(page), filter));
     }
     fn assert_exact_read_request(snapshot: &crate::http_default::RequestSnapshot, path: &str) {
         assert_eq!(snapshot.method, crate::http::Method::GET);
@@ -1099,7 +1108,7 @@ mod tests {
         transaction: &SignedTransaction,
     ) {
         super::super::repair::route_test_support::assert_rejected_before_http(
-            format!(
+            &format!(
                 "SoraFS reserve route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
@@ -1380,7 +1389,7 @@ mod tests {
             .headers_mut()
             .insert("content-encoding", "gzip".parse().expect("gzip encoding"));
         for response in [wrong_media, duplicate_media, compressed] {
-            assert_rejected(validate_policy_response(
+            assert_rejected(&validate_policy_response(
                 response,
                 &SorafsReserveFinalizedAnchor::default(),
             ));
@@ -1406,7 +1415,7 @@ mod tests {
             .insert("unexpected".to_owned(), Value::from(true));
         *nested.body_mut() = norito::json::to_vec(&value).expect("encode nested mutant");
         for response in [wrapper, nested] {
-            assert_rejected(validate_policy_response(
+            assert_rejected(&validate_policy_response(
                 response,
                 &SorafsReserveFinalizedAnchor::default(),
             ));
@@ -1424,7 +1433,7 @@ mod tests {
                 .contains("body exceeds the JSON transport bound")
         );
         let wrong_hash = hex::encode([0x72; 32]);
-        assert_rejected(validate_policy_response(
+        assert_rejected(&validate_policy_response(
             record_response("policy", &policy),
             &finalized_anchor(&wrong_hash),
         ));
@@ -1445,7 +1454,7 @@ mod tests {
                 &SorafsReserveFinalizedAnchor::default(),
             ),
         ] {
-            assert_rejected(response);
+            assert_rejected(&response);
         }
     }
     #[test]
@@ -1462,14 +1471,14 @@ mod tests {
         ] {
             let mut policy = policy_record(&client);
             mutate(&mut policy);
-            assert_rejected(validate_policy_response(
+            assert_rejected(&validate_policy_response(
                 record_response("policy", &policy),
                 &finalized,
             ));
         }
         let mut provider = provider_account(&client, [0x20; 32]);
         provider.terms.capacity_gib = 0;
-        assert_rejected(validate_provider_response(
+        assert_rejected(&validate_provider_response(
             record_response("provider", &provider),
             &hex::encode(provider.terms.provider_id.0),
             &finalized,
@@ -1496,21 +1505,21 @@ mod tests {
         ] {
             let mut provider = provider_account(&client, [0x20; 32]);
             mutate(&mut provider);
-            assert_rejected(validate_provider_record(&provider, "provider"));
+            assert_rejected(&validate_provider_record(&provider, "provider"));
         }
         let mut movement = movement_record(&client, [0x20; 32]);
         movement.amount = "0".parse().expect("zero movement amount");
-        assert_rejected(validate_movement_response(
+        assert_rejected(&validate_movement_response(
             record_response("movement", &movement),
             &hex::encode(movement.movement_id),
             &finalized,
         ));
         let mut movement = movement_record(&client, [0x20; 32]);
         movement.decided_by = Some(client.account.clone());
-        assert_rejected(validate_movement_record(&movement, "movement"));
+        assert_rejected(&validate_movement_record(&movement, "movement"));
         let mut movement = movement_record(&client, [0x20; 32]);
         movement.status = ReserveMovementStatusV1::Approved;
-        assert_rejected(validate_movement_record(&movement, "movement"));
+        assert_rejected(&validate_movement_record(&movement, "movement"));
         for mutate in [
             |record: &mut ReserveMovementRecordV1| record.expected_provider_revision = 0,
             |record: &mut ReserveMovementRecordV1| record.policy_digest = [0; 32],
@@ -1518,32 +1527,32 @@ mod tests {
         ] {
             let mut movement = movement_record(&client, [0x20; 32]);
             mutate(&mut movement);
-            assert_rejected(validate_movement_record(&movement, "movement"));
+            assert_rejected(&validate_movement_record(&movement, "movement"));
         }
         let mut appeal = appeal_record(&client, [0x20; 32]);
         appeal.reason.clear();
-        assert_rejected(validate_appeal_response(
+        assert_rejected(&validate_appeal_response(
             record_response("appeal", &appeal),
             &hex::encode(appeal.appeal_id),
             &finalized,
         ));
         let mut appeal = appeal_record(&client, [0x20; 32]);
         appeal.reason = "x".repeat(RESERVE_MAX_REASON_BYTES_V1 + 1);
-        assert_rejected(validate_appeal_record(&appeal, "appeal"));
+        assert_rejected(&validate_appeal_record(&appeal, "appeal"));
         let mut appeal = appeal_record(&client, [0x20; 32]);
         appeal.status = ReserveAppealStatusV1::Accepted;
-        assert_rejected(validate_appeal_record(&appeal, "appeal"));
+        assert_rejected(&validate_appeal_record(&appeal, "appeal"));
         for mutate in [
             |record: &mut ReserveAppealRecordV1| record.expected_provider_revision = 0,
             |record: &mut ReserveAppealRecordV1| record.submitted_at_unix = 0,
         ] {
             let mut appeal = appeal_record(&client, [0x20; 32]);
             mutate(&mut appeal);
-            assert_rejected(validate_appeal_record(&appeal, "appeal"));
+            assert_rejected(&validate_appeal_record(&appeal, "appeal"));
         }
         let mut event = reserve_event(&client, 1, 5, [0x51; 32], 0);
         event.event.occurred_at_unix_ms = 0;
-        assert_rejected(validate_events_response(
+        assert_rejected(&validate_events_response(
             page_response(&event_page(vec![event])),
             &SorafsReserveEventsReadbackFilter::default(),
         ));
@@ -1556,11 +1565,11 @@ mod tests {
         ] {
             let mut event = reserve_event(&client, 1, 5, [0x51; 32], 0);
             mutate(&mut event);
-            assert_rejected(validate_event_record(&event, "event page"));
+            assert_rejected(&validate_event_record(&event, "event page"));
         }
         let mut invalid_kind = reserve_event(&client, 2, 5, [0x51; 32], 1);
         invalid_kind.event.kind = SorafsReserveLedgerEventKind::MovementRequested;
-        assert_rejected(validate_event_record(&invalid_kind, "event page"));
+        assert_rejected(&validate_event_record(&invalid_kind, "event page"));
     }
     #[test]
     fn reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation() {

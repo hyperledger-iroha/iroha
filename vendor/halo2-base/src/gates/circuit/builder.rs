@@ -4,14 +4,15 @@ use getset::{Getters, MutGetters, Setters};
 use itertools::Itertools;
 
 use crate::{
+    AssignedValue, Context,
     gates::{
+        RangeChip,
         circuit::CircuitBuilderStage,
         flex_gate::{
+            MAX_PHASE, MultiPhaseThreadBreakPoints,
             threads::{GateStatistics, MultiPhaseCoreManager, SinglePhaseCoreManager},
-            MultiPhaseThreadBreakPoints, MAX_PHASE,
         },
         range::RangeConfig,
-        RangeChip,
     },
     halo2_proofs::{
         circuit::{Layouter, Region},
@@ -23,7 +24,6 @@ use crate::{
         lookups::LookupAnyManager,
         manager::VirtualRegionManager,
     },
-    AssignedValue, Context,
 };
 
 use super::BaseCircuitParams;
@@ -82,7 +82,12 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
         let core = MultiPhaseCoreManager::new(witness_gen_only);
         let lookup_manager = [(); MAX_PHASE]
             .map(|_| LookupAnyManager::new(witness_gen_only, core.copy_manager.clone()));
-        Self { core, lookup_manager, config_params: Default::default(), assigned_instances: vec![] }
+        Self {
+            core,
+            lookup_manager,
+            config_params: Default::default(),
+            assigned_instances: vec![],
+        }
     }
 
     /// Creates a new [MultiPhaseCoreManager] depending on the stage of circuit building. If the stage is [CircuitBuilderStage::Prover], the [MultiPhaseCoreManager] is used for witness generation only.
@@ -95,7 +100,9 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
         config_params: BaseCircuitParams,
         break_points: MultiPhaseThreadBreakPoints,
     ) -> Self {
-        Self::new(true).use_params(config_params).use_break_points(break_points)
+        Self::new(true)
+            .use_params(config_params)
+            .use_break_points(break_points)
     }
 
     /// Sets the copy manager to the given one in all shared references.
@@ -183,7 +190,13 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
         self.core
             .phase_manager
             .iter()
-            .map(|pm| pm.break_points.borrow().as_ref().expect("break points not set").clone())
+            .map(|pm| {
+                pm.break_points
+                    .borrow()
+                    .as_ref()
+                    .expect("break points not set")
+                    .clone()
+            })
             .collect()
     }
 
@@ -260,11 +273,17 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
     pub fn statistics(&self) -> RangeStatistics {
         let gate = self.core.statistics();
         let total_lookup_advice_per_phase = self.total_lookup_advice_per_phase();
-        RangeStatistics { gate, total_lookup_advice_per_phase }
+        RangeStatistics {
+            gate,
+            total_lookup_advice_per_phase,
+        }
     }
 
     fn total_lookup_advice_per_phase(&self) -> Vec<usize> {
-        self.lookup_manager.iter().map(|lm| lm.total_rows()).collect()
+        self.lookup_manager
+            .iter()
+            .map(|lm| lm.total_rows())
+            .collect()
     }
 
     /// Auto-calculates configuration parameters for the circuit and sets them.
@@ -295,7 +314,9 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
         self.config_params = params.clone();
         #[cfg(feature = "display")]
         {
-            println!("Total range check advice cells to lookup per phase: {total_lookup_advice_per_phase:?}");
+            println!(
+                "Total range check advice cells to lookup per phase: {total_lookup_advice_per_phase:?}"
+            );
             log::debug!("Auto-calculated config params:\n {params:#?}");
         }
         params
@@ -315,8 +336,10 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
                 for (i, instance) in instances.iter().enumerate() {
                     let cell = instance.cell.unwrap();
                     let copy_manager = self.core.copy_manager.lock().unwrap();
-                    let cell =
-                        copy_manager.assigned_advices.get(&cell).expect("instance not assigned");
+                    let cell = copy_manager
+                        .assigned_advices
+                        .get(&cell)
+                        .expect("instance not assigned");
                     layouter.constrain_instance(*cell, *instance_col, i);
                 }
             }
@@ -378,7 +401,10 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
                 .iter()
                 .map(|c| [*c])
                 .collect_vec();
-            assert!(!lookup_cols.is_empty(), "range lookups require lookup advice columns");
+            assert!(
+                !lookup_cols.is_empty(),
+                "range lookups require lookup advice columns"
+            );
             let lookup_rows = lookup_manager.total_rows();
             let assigned_rows = lookup_rows.div_ceil(lookup_cols.len());
             assert!(

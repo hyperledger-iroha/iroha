@@ -13,8 +13,8 @@ use super::{
         scrub, sign_request_digest, sign_response_digest,
     },
     service::{
-        SoftwareSignerServiceV1, native_payload_matches_role, verify_provenance,
-        verify_response_attestation,
+        SoftwareSignerServiceV1, native_payload_matches_role, taira_authority_signing_message,
+        verify_provenance, verify_response_attestation,
     },
 };
 use iroha_crypto::Signature;
@@ -980,8 +980,12 @@ fn verify_payload_signature(
             }
             builder.payload_hash_bytes().to_vec()
         }
+        SoftwareSignerRoleV1::TairaAuthority => {
+            taira_authority_signing_message(binding, payload)
+                .ok_or(ExternalSoftwareSignerClientErrorV1::Rejected)?
+        }
         _ => super::typed_payload::validated_typed_signing_message(binding, payload)
-            .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?,
+            .map_err(|()| ExternalSoftwareSignerClientErrorV1::Rejected)?,
     };
     let signature = Signature::try_from_bytes(signature)
         .map_err(|_| ExternalSoftwareSignerClientErrorV1::Protocol)?;
@@ -1049,7 +1053,7 @@ fn endpoint_identity(
         inode: metadata.ino(),
     })
 }
-struct BoundEndpointV1 {
+pub(super) struct BoundEndpointV1 {
     parent: File,
     name: OsString,
     identity: SocketIdentityV1,
@@ -1074,7 +1078,7 @@ impl BoundEndpointV1 {
         }
         Ok(())
     }
-    fn cleanup(mut self) -> Result<(), SoftwareSignerServerErrorV1> {
+    pub(super) fn cleanup(mut self) -> Result<(), SoftwareSignerServerErrorV1> {
         self.verify()?;
         let quarantine = OsString::from(format!(
             ".signer-cleanup-{}-{}",
@@ -1122,7 +1126,7 @@ impl Drop for BoundEndpointV1 {
         }
     }
 }
-fn bind_endpoint(
+pub(super) fn bind_endpoint(
     path: &Path,
     service_uid: u32,
 ) -> Result<(std::os::unix::net::UnixListener, BoundEndpointV1), SoftwareSignerServerErrorV1> {

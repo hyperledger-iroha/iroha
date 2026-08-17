@@ -79,7 +79,14 @@ from .client_status_models import (
     SumeragiPrfContext,
     SumeragiQcEntry,
     SumeragiQcSnapshot,
+    SumeragiV2BlockSubject,
     SumeragiV2EquivocationEvidenceRecord,
+    SumeragiV2ExecutionCommitment,
+    SumeragiV2LaneFinalityManifestCommitment,
+    SumeragiV2MergeCarrierCommitment,
+    SumeragiV2QcReference,
+    SumeragiV2Round,
+    SumeragiV2TimeoutReference,
     StreamingSoranetConfig,
     StreamingTransportConfig,
     TransportConfig,
@@ -836,6 +843,7 @@ __all__ = [
     "StatusSnapshot",
     "SumeragiV2Round",
     "SumeragiV2BlockSubject",
+    "SumeragiV2LaneFinalityManifestCommitment",
     "SumeragiV2MergeCarrierCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
@@ -1832,6 +1840,7 @@ _OFFLINE_SUMERAGI_PROTOCOL_VERSION = 4
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -3100,6 +3109,7 @@ class OfflineTopUpFinalityExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    lane_finality_manifest: Optional[SumeragiV2LaneFinalityManifestCommitment]
     merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
     executed_block_wire_len: int
     executed_block_wire_hash: str
@@ -3767,6 +3777,26 @@ def _offline_top_up_finality_subject(
     )
 
 
+def _lane_finality_manifest_commitment(
+    value: Any, context: str
+) -> Optional[SumeragiV2LaneFinalityManifestCommitment]:
+    if value is None:
+        return None
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(record, context, required=("root", "leaf_count"))
+    return SumeragiV2LaneFinalityManifestCommitment(
+        root=_offline_hash_literal(
+            _offline_required(record, "root", context), f"{context}.root"
+        ),
+        leaf_count=_offline_unsigned(
+            _offline_required(record, "leaf_count", context),
+            f"{context}.leaf_count",
+            _SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES,
+            positive=True,
+        ),
+    )
+
+
 def _offline_top_up_finality_execution_commitment(
     value: Any,
     context: str,
@@ -3785,6 +3815,7 @@ def _offline_top_up_finality_execution_commitment(
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
             "native_amx_application_manifest_count",
+            "lane_finality_manifest",
             "merge_carrier",
             "executed_block_wire_len",
             "executed_block_wire_hash",
@@ -3839,6 +3870,10 @@ def _offline_top_up_finality_execution_commitment(
             f"{context}.native_amx_application_manifest_count must be zero exactly "
             "for the canonical empty root"
         )
+    lane_finality_manifest = _lane_finality_manifest_commitment(
+        _offline_required(record, "lane_finality_manifest", context),
+        f"{context}.lane_finality_manifest",
+    )
     raw_merge_carrier = _offline_required(record, "merge_carrier", context)
     merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
     if raw_merge_carrier is None:
@@ -3886,6 +3921,7 @@ def _offline_top_up_finality_execution_commitment(
         native_amx_application_manifest_version=native_manifest_version,
         native_amx_application_manifest_root=native_manifest_root,
         native_amx_application_manifest_count=native_manifest_count,
+        lane_finality_manifest=lane_finality_manifest,
         merge_carrier=merge_carrier,
         executed_block_wire_len=_offline_unsigned(
             _offline_required(record, "executed_block_wire_len", context),
@@ -5983,69 +6019,6 @@ class StatusSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiV2Round:
-    """Consensus round bound to one frozen v2 height context."""
-
-    context_id: Tuple[str]
-    height: int
-    view: int
-
-
-@dataclass(frozen=True)
-class SumeragiV2BlockSubject:
-    """Exact block and payload identity certified by Sumeragi v2."""
-
-    parent_block_hash: Optional[str]
-    block_hash: str
-    payload_hash: str
-
-
-@dataclass(frozen=True)
-class SumeragiV2MergeCarrierCommitment:
-    """Exact merge-ledger entry identity authenticated by a v2 QC."""
-
-    version: Literal[1]
-    entry_hash: str
-
-
-@dataclass(frozen=True)
-class SumeragiV2ExecutionCommitment:
-    """Exact deterministic execution commitment authenticated by a v2 QC."""
-
-    parent_state_root: str
-    post_state_root: str
-    ordinary_writes_root: str
-    topup_anchor_root: Optional[str]
-    topup_anchor_count: int
-    native_amx_application_manifest_version: int
-    native_amx_application_manifest_root: str
-    native_amx_application_manifest_count: int
-    merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
-    executed_block_wire_len: int
-    executed_block_wire_hash: str
-
-
-@dataclass(frozen=True)
-class SumeragiV2QcReference:
-    """Stable semantic reference to a v2 quorum certificate."""
-
-    round: SumeragiV2Round
-    proposal_round: SumeragiV2Round
-    phase: str
-    subject: SumeragiV2BlockSubject
-    execution_commitment: SumeragiV2ExecutionCommitment
-
-
-@dataclass(frozen=True)
-class SumeragiV2TimeoutReference:
-    """Stable reference to the latest installed timeout certificate."""
-
-    round: SumeragiV2Round
-    highest_prepare_qc: Optional[SumeragiV2QcReference]
-    certificate_hash: str
-
-
-@dataclass(frozen=True)
 class SumeragiV2HeightContextStatus:
     """Frozen election and dual-quorum inputs governing one height."""
 
@@ -7512,6 +7485,7 @@ class _SumeragiV2StatusParser:
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
             "native_amx_application_manifest_count",
+            "lane_finality_manifest",
             "merge_carrier",
             "executed_block_wire_len",
             "executed_block_wire_hash",
@@ -7519,8 +7493,9 @@ class _SumeragiV2StatusParser:
         unknown = set(record) - allowed_fields
         if unknown:
             raise RuntimeError(f"{context} contains unknown field {sorted(unknown)[0]}")
-        if "merge_carrier" not in record:
-            raise RuntimeError(f"{context}.merge_carrier is required")
+        for required_field in ("lane_finality_manifest", "merge_carrier"):
+            if required_field not in record:
+                raise RuntimeError(f"{context}.{required_field} is required")
         topup_count = cls._unsigned(
             record.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -7563,6 +7538,9 @@ class _SumeragiV2StatusParser:
                 f"{context}.native_amx_application_manifest_count must be zero exactly "
                 "for the canonical empty root"
             )
+        lane_finality_manifest = _lane_finality_manifest_commitment(
+            record["lane_finality_manifest"], f"{context}.lane_finality_manifest"
+        )
         raw_merge_carrier = record["merge_carrier"]
         merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
         if raw_merge_carrier is None:
@@ -7613,6 +7591,7 @@ class _SumeragiV2StatusParser:
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
+            lane_finality_manifest=lane_finality_manifest,
             merge_carrier=merge_carrier,
             executed_block_wire_len=cls._unsigned(
                 record.get("executed_block_wire_len"),
@@ -7728,10 +7707,10 @@ class _SumeragiV2StatusParser:
             or min_signers != validator_count * 2 // 3 + 1
             or signed_power != signer_count
             or total_power != validator_count
-            or signer_count < min_signers
+            or signer_count != min_signers
             or signed_power * 3 <= total_power * 2
         ):
-            raise RuntimeError(f"{context} does not satisfy its frozen dual quorum")
+            raise RuntimeError(f"{context} does not satisfy its exact frozen certificate quorum")
         return SumeragiV2CommitQcStatus(
             certificate=cls._qc(record.get("certificate"), context=f"{context}.certificate"),
             validator_count=validator_count,
@@ -8362,8 +8341,8 @@ class _SumeragiV2StatusParser:
         trailing_bits = len(validators) % 8
         if trailing_bits and bitmap[-1] & ~((1 << trailing_bits) - 1):
             raise RuntimeError(f"{context}.signers_bitmap addresses an unknown validator")
-        if sum(bin(byte).count("1") for byte in bitmap) < expected_quorum:
-            raise RuntimeError(f"{context}.signers_bitmap does not meet quorum")
+        if sum(bin(byte).count("1") for byte in bitmap) != expected_quorum:
+            raise RuntimeError(f"{context}.signers_bitmap does not carry the exact quorum")
         signature = cls._byte_vector(
             record.get("bls_aggregate_signature"),
             96,
@@ -9054,7 +9033,7 @@ class _SumeragiV2StatusParser:
             min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_qc_signer_count"), f"{item_context}.prepare_qc_signer_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_qc_signer_count"), f"{item_context}.commit_qc_signer_count", maximum=cls.MAX_U32)
-            if min_quorum > validator_count or not (min_quorum <= prepare_count <= validator_count) or not (min_quorum <= commit_count <= validator_count):
+            if min_quorum > validator_count or prepare_count != min_quorum or commit_count != min_quorum:
                 raise RuntimeError(f"{item_context} carries an impossible certified quorum")
             execution_status = cls._non_empty_string(
                 record.get("execution_status"), f"{item_context}.execution_status"

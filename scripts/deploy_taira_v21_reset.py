@@ -54,6 +54,7 @@ from typing import Any, Callable, NoReturn, Optional, Sequence
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
     from scripts.operator_http_headers import load_operator_context_from_file
+    from scripts import taira_authority_client
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
@@ -61,6 +62,7 @@ except ModuleNotFoundError as error:
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
     from operator_http_headers import load_operator_context_from_file
+    import taira_authority_client
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
@@ -109,7 +111,9 @@ DEFAULT_MINIMUM_FREE_BYTES = 16 * 1024 * 1024 * 1024
 DEFAULT_MAXIMUM_FSYNC_LATENCY_MS = 250
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 240
 RESTART_PROOF_TIMEOUT_SECONDS = 45
-CONFIG_CHECK_TIMEOUT_SECONDS = 180
+# Config validation is CPU-local and normally completes in seconds. Keep a
+# stuck hostile candidate from consuming 4 x 180 seconds before rollout health.
+CONFIG_CHECK_TIMEOUT_SECONDS = 30
 MAX_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
@@ -124,6 +128,47 @@ EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
 MAX_RESTART_LOG_DELTA_BYTES = 8 * 1024 * 1024
 RESTART_LOG_PREFIX_GUARD_BYTES = 4 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
+KAGEMUSHA_CONFIG_PROJECTION_SCHEMA = "iroha.taira.kagemusha-config-projection.v1"
+KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA = (
+    "iroha.taira.kagemusha-manifest-directory-inventory.v1"
+)
+KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH = Path("policy/release-policy-v1.norito")
+KAGEMUSHA_ARTIFACT_RELATIVE_PATH = Path("catalog")
+KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH = Path(
+    "seals/catalog-qualification-v1.norito"
+)
+KAGEMUSHA_MAX_DECODED_BYTES = 256 * 1024 * 1024
+MAX_KAGEMUSHA_RELEASE_POLICY_BYTES = 64 * 1024
+MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES = 8 * 1024 * 1024
+MAX_KAGEMUSHA_MANIFEST_BYTES = 1024 * 1024
+MAX_KAGEMUSHA_CATALOG_RELEASES = 16
+MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES = 65
+KAGEMUSHA_CONFIG_PROJECTION_KEYS = frozenset(
+    {
+        "schema",
+        "release_root",
+        "release_policy_path",
+        "artifact_dir",
+        "catalog_qualification_seal_path",
+        "max_decoded_bytes",
+    }
+)
+KAGEMUSHA_RESET_MANIFEST_FIELDS = frozenset(
+    {
+        "kagemusha_release_root",
+        "kagemusha_release_policy_sha256",
+        "kagemusha_activation_authority",
+        "kagemusha_config_projection",
+        "kagemusha_config_projection_sha256",
+    }
+)
+KAGEMUSHA_OFFLINE_TABLE = ("settlement", "offline")
+KAGEMUSHA_MANAGED_OFFLINE_FIELDS: dict[str, str] = {
+    "kagemusha_release_policy_path": "string",
+    "kagemusha_artifact_dir": "string",
+    "kagemusha_catalog_qualification_seal_path": "string",
+    "kagemusha_max_decoded_bytes": "integer",
+}
 SNAPSHOT_LOAD_SUCCESS_MARKER = b"Successfully loaded the state from a snapshot"
 SNAPSHOT_LOAD_FALLBACK_MARKERS = (
     b"Snapshot restore is disabled by configuration",
@@ -168,6 +213,11 @@ MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES = 64 * 1024
 DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT = (
     "iroha.taira.deploy-authenticated-run-nonce.v1"
 )
+DEPLOY_AUTHORIZATION_LEASE_CONTRACT = (
+    "iroha.taira.deploy-authorization-lease.v1"
+)
+DEPLOY_RESULT_BINDING_CONTRACT = "iroha.taira.deploy-result-binding.v1"
+DEPLOYMENT_OUTCOME_ATTRIBUTE = "_taira_authority_deployment_outcome"
 COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
     "iroha.taira.complete-source-identity-attestation.v1"
 )
@@ -182,26 +232,29 @@ DEPLOY_ISSUANCE_BARRIER = (
     "both dry-run and apply before identity, admission, or path inspection"
 )
 
-
 class DeploymentError(RuntimeError):
     """Raised when an identity, safety, rollout, or rollback gate fails."""
 
+def _mark_deployment_outcome(
+    error: BaseException, outcome: str
+) -> BaseException:
+    """Carry the authority's terminal rollback classification to the caller."""
+    setattr(error, DEPLOYMENT_OUTCOME_ATTRIBUTE, outcome)
+    return error
 
 def fail(message: str) -> NoReturn:
     """Raise one redaction-safe deployment refusal."""
-
     raise DeploymentError(message)
 
-
-def require_deploy_issuance_contracts() -> NoReturn:
-    """Refuse deployment until run and complete-source authority are installed."""
-
-    fail(DEPLOY_ISSUANCE_BARRIER)
-
+def require_deploy_issuance_contracts() -> None:
+    """Authenticate the fixed deploy-issuance binding and live service."""
+    try:
+        taira_authority_client.preflight("deploy-issuance")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(f"{DEPLOY_ISSUANCE_BARRIER}: {error}") from error
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Decode JSON while rejecting ambiguous duplicate object members."""
-
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -209,21 +262,17 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result[key] = value
     return result
 
-
 def require_sha256(value: object, label: str) -> str:
     """Require a lowercase SHA-256 literal."""
-
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
     return value
-
 
 def require_distinct_signing_fingerprints(
     release_fingerprint: object,
     qualification_fingerprint: object,
 ) -> tuple[str, str]:
     """Require separately pinned release and BOI qualification authorities."""
-
     release = require_sha256(release_fingerprint, "trusted signing fingerprint")
     qualification = require_sha256(
         qualification_fingerprint,
@@ -233,19 +282,15 @@ def require_distinct_signing_fingerprints(
         fail("release and BOI qualification signing identities must be distinct")
     return release, qualification
 
-
 def require_genesis_expected_hash(value: object) -> str:
     """Require one canonical Iroha hash suitable as a genesis trust root."""
-
     value = require_sha256(value, "genesis expected hash")
     if int(value[-2:], 16) & 1 == 0:
         fail("genesis expected hash must carry the Iroha marker bit")
     return value
 
-
 def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
-
     if (
         not isinstance(value, str)
         or COMMIT_RE.fullmatch(value) is None
@@ -254,12 +299,10 @@ def require_commit(value: object, label: str = "expected source commit") -> str:
         fail(f"{label} must be one full nonzero lowercase Git object id")
     return value
 
-
 def _run_bounded_macos_acl_command(
     program: Path, option: str, path: Path, label: str
 ) -> subprocess.CompletedProcess[bytes]:
     """Run one absolute macOS ACL tool with bounded time and retained output."""
-
     if not program.is_absolute() or program not in {
         MACOS_ACL_INSPECTOR,
         MACOS_ACL_CLEARER,
@@ -285,7 +328,6 @@ def _run_bounded_macos_acl_command(
         fail(f"macOS ACL command output exceeded its bound for {label}: {path}")
     return result
 
-
 def require_acl_free_path(
     path: Path,
     label: str,
@@ -293,7 +335,6 @@ def require_acl_free_path(
     descriptor: Optional[int] = None,
 ) -> os.stat_result:
     """Require a stable path, and on macOS prove it has no extended ACL."""
-
     before = path.lstat()
     if descriptor is not None and metadata_identity(
         os.fstat(descriptor)
@@ -319,10 +360,8 @@ def require_acl_free_path(
         fail(f"{label} name changed from its opened inode: {path}")
     return after
 
-
 def clear_owned_temporary_acl(path: Path, descriptor: int, label: str) -> None:
     """Clear inherited macOS ACLs only on one unpublished, owned temp inode."""
-
     before_path = path.lstat()
     before_opened = os.fstat(descriptor)
     if (
@@ -364,10 +403,8 @@ def clear_owned_temporary_acl(path: Path, descriptor: int, label: str) -> None:
         fail(f"{label} changed while its inherited ACL was cleared")
     require_acl_free_path(path, label, descriptor=descriptor)
 
-
 def canonical_path(path: Path, label: str) -> Path:
     """Require an existing absolute canonical path without aliases."""
-
     if not path.is_absolute():
         fail(f"{label} must be absolute")
     try:
@@ -378,10 +415,8 @@ def canonical_path(path: Path, label: str) -> Path:
         fail(f"{label} must be canonical and symlink-free: {path}")
     return path
 
-
 def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
     """Return stable regular-file identity fields used around reads."""
-
     return (
         info.st_dev,
         info.st_ino,
@@ -394,10 +429,8 @@ def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
         info.st_ctime_ns,
     )
 
-
 def growing_file_identity(info: os.stat_result) -> tuple[int, ...]:
     """Return identity fields that remain stable while a regular file grows."""
-
     return (
         info.st_dev,
         info.st_ino,
@@ -407,10 +440,8 @@ def growing_file_identity(info: os.stat_result) -> tuple[int, ...]:
         info.st_nlink,
     )
 
-
 def open_regular(path: Path, maximum_bytes: int) -> tuple[int, os.stat_result]:
     """Open one bounded single-link regular file without following links."""
-
     before = path.lstat()
     if (
         stat.S_ISLNK(before.st_mode)
@@ -429,10 +460,8 @@ def open_regular(path: Path, maximum_bytes: int) -> tuple[int, os.stat_result]:
         fail(f"file changed while it was opened: {path}")
     return descriptor, after
 
-
 def read_regular(path: Path, maximum_bytes: int) -> tuple[bytes, os.stat_result]:
     """Read a bounded regular file and recheck its complete identity."""
-
     descriptor, before = open_regular(path, maximum_bytes)
     try:
         chunks: list[bytes] = []
@@ -445,10 +474,8 @@ def read_regular(path: Path, maximum_bytes: int) -> tuple[bytes, os.stat_result]
         fail(f"file changed while it was read: {path}")
     return b"".join(chunks), after
 
-
 def sha256_regular(path: Path, maximum_bytes: int) -> tuple[str, os.stat_result]:
     """Hash a stable bounded regular file through a no-follow descriptor."""
-
     descriptor, before = open_regular(path, maximum_bytes)
     try:
         digest = hashlib.sha256()
@@ -461,10 +488,8 @@ def sha256_regular(path: Path, maximum_bytes: int) -> tuple[str, os.stat_result]
         fail(f"file changed while it was hashed: {path}")
     return digest.hexdigest(), after
 
-
 def parse_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
     """Decode one canonical JSON object without duplicate members."""
-
     try:
         payload = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
@@ -473,12 +498,10 @@ def parse_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
         fail(f"{label} must be a JSON object")
     return payload
 
-
 def require_private_entry(
     path: Path, owner_uid: int, owner_gid: int, *, directory: bool
 ) -> os.stat_result:
     """Require one owner-private bundle entry with a stable type and owner."""
-
     info = path.lstat()
     expected = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
     if (
@@ -492,20 +515,16 @@ def require_private_entry(
         fail(f"unsafe owner-private bundle entry: {path}")
     return info
 
-
 def require_exact_names(path: Path, expected: set[str], label: str) -> None:
     """Require a directory to contain an exact, alias-free name set."""
-
     actual = {entry.name for entry in path.iterdir()}
     if actual != expected:
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
         fail(f"{label} inventory is not exact (missing={missing}, extra={extra})")
 
-
 def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) -> int:
     """Reject aliases, special files, loose permissions, or an oversized bundle."""
-
     total = 0
     for current, directory_names, file_names in os.walk(bundle, followlinks=False):
         directory_names.sort()
@@ -524,7 +543,6 @@ def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) ->
             if total > MAX_BUNDLE_BYTES:
                 fail("reset bundle exceeds the bounded 64 GiB deployment corridor")
     return total
-
 
 CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
     (): {
@@ -547,16 +565,17 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "expected_hash": "string",
     },
 }
+OPTIONAL_CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
+    KAGEMUSHA_OFFLINE_TABLE: KAGEMUSHA_MANAGED_OFFLINE_FIELDS,
+}
 TOML_TABLE_RE = re.compile(r"^\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]$")
 TOML_ARRAY_TABLE_RE = re.compile(r"^\[\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]\]$")
 TOML_ASSIGNMENT_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$")
 TOML_UNSIGNED_INTEGER_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 TOML_HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
-
 def _strip_toml_comment(line: str, label: str, line_number: int) -> str:
     """Strip a TOML comment without mistaking ``#`` inside a string."""
-
     quote: Optional[str] = None
     escaped = False
     index = 0
@@ -586,10 +605,8 @@ def _strip_toml_comment(line: str, label: str, line_number: int) -> str:
         fail(f"{label} has an unterminated string at line {line_number}")
     return line
 
-
 def _decode_toml_string(value: str, label: str, line_number: int) -> str:
     """Decode one single-line TOML basic or literal string."""
-
     if len(value) < 2 or value[0] not in ('"', "'"):
         fail(f"{label} has a malformed string at line {line_number}")
     quote = value[0]
@@ -637,12 +654,10 @@ def _decode_toml_string(value: str, label: str, line_number: int) -> str:
         index += width + 1
     fail(f"{label} has an unterminated string at line {line_number}")
 
-
 def _decode_projection_value(
     raw: str, value_type: str, label: str, line_number: int
 ) -> object:
     """Decode one required projected TOML scalar with no coercion."""
-
     value = raw.strip()
     if value_type == "string":
         return _decode_toml_string(value, label, line_number)
@@ -656,10 +671,8 @@ def _decode_projection_value(
         fail(f"{label} has a malformed integer at line {line_number}")
     return int(value)
 
-
 def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
-    """Extract exactly the fail-closed validator fields consumed by preflight."""
-
+    """Extract required and managed fail-closed validator fields."""
     projected: dict[str, Any] = {}
     current_table: tuple[str, ...] = ()
     seen_tables: set[tuple[str, ...]] = {()}
@@ -679,41 +692,77 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
                 else table_match.group(1)
             )
             current_table = tuple(table_text.split("."))
-            if current_table in CONFIG_PROJECTION_FIELDS:
+            projected_table = (
+                current_table in CONFIG_PROJECTION_FIELDS
+                or current_table in OPTIONAL_CONFIG_PROJECTION_FIELDS
+            )
+            if projected_table:
+                table_kind = (
+                    "required"
+                    if current_table in CONFIG_PROJECTION_FIELDS
+                    else "managed"
+                )
                 if array_match is not None:
                     fail(
-                        f"{label} declares required table {table_text} as an array "
+                        f"{label} declares {table_kind} table {table_text} as an array "
                         f"at line {line_number}"
                     )
                 if current_table in seen_tables:
                     fail(
-                        f"{label} duplicates required table {table_text} "
+                        f"{label} duplicates {table_kind} table {table_text} "
                         f"at line {line_number}"
                     )
                 seen_tables.add(current_table)
             continue
         assignment = TOML_ASSIGNMENT_RE.fullmatch(line)
         required = CONFIG_PROJECTION_FIELDS.get(current_table)
+        optional = OPTIONAL_CONFIG_PROJECTION_FIELDS.get(current_table)
+        projected_fields = required if required is not None else optional
+        contains_managed_assignment = any(
+            re.search(
+                rf"(?<![A-Za-z0-9_-])[\"']?{re.escape(key)}[\"']?\s*=",
+                line,
+            )
+            is not None
+            for key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS
+        )
         if assignment is None:
-            if required is not None and any(
-                re.match(rf"^{re.escape(key)}(?:\s|=|$)", line) for key in required
+            if projected_fields is not None and any(
+                re.match(rf"^{re.escape(key)}(?:\s|=|$)", line)
+                for key in projected_fields
             ):
                 fail(
-                    f"{label} has a malformed required assignment "
+                    f"{label} has a malformed projected assignment "
+                    f"at line {line_number}"
+                )
+            if contains_managed_assignment:
+                fail(
+                    f"{label} has a noncanonical managed Kagemusha assignment "
                     f"at line {line_number}"
                 )
             continue
         key, raw_value = assignment.groups()
-        if required is None or key not in required:
+        if key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS and (
+            current_table != KAGEMUSHA_OFFLINE_TABLE
+        ):
+            fail(
+                f"{label} places managed Kagemusha field {key} outside "
+                "settlement.offline"
+            )
+        if projected_fields is None or key not in projected_fields:
             continue
         identity = (current_table, key)
         if identity in seen_fields:
             dotted = ".".join((*current_table, key))
-            fail(f"{label} duplicates required field {dotted} at line {line_number}")
+            field_kind = "required" if required is not None else "managed"
+            fail(
+                f"{label} duplicates {field_kind} field {dotted} "
+                f"at line {line_number}"
+            )
         seen_fields.add(identity)
         value = _decode_projection_value(
             raw_value,
-            required[key],
+            projected_fields[key],
             label,
             line_number,
         )
@@ -724,7 +773,6 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
                 fail(f"{label} has an ambiguous required table projection")
             destination = child
         destination[key] = value
-
     missing = [
         ".".join((*table, key))
         for table, fields in CONFIG_PROJECTION_FIELDS.items()
@@ -735,10 +783,8 @@ def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
         fail(f"{label} lacks required fields: {', '.join(sorted(missing))}")
     return projected
 
-
 def parse_toml(path: Path, owner_uid: int, owner_gid: int) -> dict[str, Any]:
     """Extract one bounded private validator config projection."""
-
     require_private_entry(path, owner_uid, owner_gid, directory=False)
     raw, _ = read_regular(path, MAX_CONFIG_BYTES)
     try:
@@ -747,10 +793,8 @@ def parse_toml(path: Path, owner_uid: int, owner_gid: int) -> dict[str, Any]:
         raise DeploymentError(f"validator config is not UTF-8: {path}") from error
     return parse_config_projection_text(text, f"validator config {path}")
 
-
 def address_port(value: object, label: str) -> int:
     """Extract the TCP port from one canonical ``addr:HOST:PORT#CRC`` literal."""
-
     if not isinstance(value, str) or not value.startswith("addr:") or "#" not in value:
         fail(f"{label} is not a canonical address literal")
     address = value[5:].split("#", 1)[0]
@@ -762,12 +806,10 @@ def address_port(value: object, label: str) -> int:
         fail(f"{label} TCP port is out of range")
     return port
 
-
 def require_manifest_hash(
     manifest: dict[str, Any], field: str, path: Path, maximum: int
 ) -> tuple[str, os.stat_result]:
     """Require a file digest to equal its reset-manifest binding."""
-
     expected = manifest.get(field)
     if not isinstance(expected, str):
         fail(f"reset manifest omitted {field}")
@@ -777,11 +819,9 @@ def require_manifest_hash(
         fail(f"reset manifest {field} does not match {path.name}")
     return actual, info
 
-
 @dataclasses.dataclass(frozen=True)
 class PeerPlan:
     """Authenticated per-validator runtime paths and identities."""
-
     number: int
     label: str
     slug: str
@@ -799,11 +839,25 @@ class PeerPlan:
     storage_device: int
     storage_inode: int
 
+@dataclasses.dataclass(frozen=True)
+class KagemushaExternalReleasePlan:
+    """Bounded external Kagemusha inputs observed without reading proving keys."""
+    release_root: Path
+    policy_path: Path
+    artifact_dir: Path
+    qualification_seal_path: Path
+    expected_policy_sha256: str
+    policy_sha256: Optional[str]
+    qualification_seal_sha256: Optional[str]
+    manifest_directory_digests: tuple[str, ...]
+    manifest_directory_inventory_sha256: Optional[str]
+    manifest_files: tuple[Path, ...]
+    manifest_digest_sidecars: tuple[Path, ...]
+    verified: bool
 
 @dataclasses.dataclass(frozen=True)
 class BundlePlan:
     """Complete authenticated dry-run result used by apply."""
-
     root: Path
     owner_uid: int
     owner_gid: int
@@ -818,7 +872,269 @@ class BundlePlan:
     free_bytes: int
     free_bytes_by_device: tuple[tuple[int, int], ...]
     fsync_latency_ms: float
+    kagemusha_config_projection_sha256: Optional[str] = None
+    kagemusha_external_release: Optional[KagemushaExternalReleasePlan] = None
 
+def _canonical_unresolved_absolute_path(value: object, label: str) -> Path:
+    """Require one canonical absolute path without requiring it to exist yet."""
+    if not isinstance(value, str):
+        fail(f"{label} must be one canonical absolute path")
+    path = Path(value)
+    if (
+        not path.is_absolute()
+        or path == Path("/")
+        or value.startswith("//")
+        or os.path.normpath(value) != value
+        or any(ord(character) < 0x20 for character in value)
+    ):
+        fail(f"{label} must be one canonical non-root absolute path")
+    return path
+
+def _validate_kagemusha_manifest_projection(
+    manifest: dict[str, Any], bundle: Path
+) -> tuple[Optional[dict[str, object]], Optional[str], Optional[str]]:
+    """Authenticate the optional reset-manifest Kagemusha config projection."""
+    named_fields = {
+        key for key in manifest if isinstance(key, str) and key.startswith("kagemusha_")
+    }
+    present = named_fields & KAGEMUSHA_RESET_MANIFEST_FIELDS
+    unexpected = named_fields - KAGEMUSHA_RESET_MANIFEST_FIELDS
+    if unexpected:
+        fail(
+            "reset manifest contains unsupported Kagemusha fields: "
+            + ", ".join(sorted(unexpected))
+        )
+    if not present:
+        return None, None, None
+    if present != KAGEMUSHA_RESET_MANIFEST_FIELDS:
+        missing = sorted(KAGEMUSHA_RESET_MANIFEST_FIELDS - present)
+        fail(
+            "reset manifest contains a partial Kagemusha projection; missing: "
+            + ", ".join(missing)
+        )
+    release_root = _canonical_unresolved_absolute_path(
+        manifest["kagemusha_release_root"],
+        "reset manifest Kagemusha release root",
+    )
+    if (
+        release_root == bundle
+        or release_root.is_relative_to(bundle)
+        or bundle.is_relative_to(release_root)
+    ):
+        fail("Kagemusha release root and validator reset bundle must be disjoint")
+    expected_policy_sha256 = require_sha256(
+        manifest["kagemusha_release_policy_sha256"],
+        "reset manifest Kagemusha release policy SHA-256",
+    )
+    authority = manifest["kagemusha_activation_authority"]
+    if (
+        not isinstance(authority, str)
+        or not authority
+        or authority.strip() != authority
+        or len(authority.encode("utf-8")) > 1024
+        or any(ord(character) < 0x20 for character in authority)
+    ):
+        fail("reset manifest Kagemusha activation authority is noncanonical")
+    projection = manifest["kagemusha_config_projection"]
+    if not isinstance(projection, dict) or set(projection) != set(
+        KAGEMUSHA_CONFIG_PROJECTION_KEYS
+    ):
+        fail("reset manifest Kagemusha config projection keys are not exact")
+    expected_projection: dict[str, object] = {
+        "schema": KAGEMUSHA_CONFIG_PROJECTION_SCHEMA,
+        "release_root": str(release_root),
+        "release_policy_path": str(
+            release_root / KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+        ),
+        "artifact_dir": str(release_root / KAGEMUSHA_ARTIFACT_RELATIVE_PATH),
+        "catalog_qualification_seal_path": str(
+            release_root / KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+        ),
+        "max_decoded_bytes": KAGEMUSHA_MAX_DECODED_BYTES,
+    }
+    if projection != expected_projection:
+        fail("reset manifest Kagemusha config projection is not canonical")
+    projection_sha256 = require_sha256(
+        manifest["kagemusha_config_projection_sha256"],
+        "reset manifest Kagemusha config projection SHA-256",
+    )
+    canonical_projection_sha256 = hashlib.sha256(
+        taira_authority_client.canonical_json_bytes(expected_projection)
+    ).hexdigest()
+    if projection_sha256 != canonical_projection_sha256:
+        fail("reset manifest Kagemusha config projection SHA-256 is not canonical")
+    return expected_projection, projection_sha256, expected_policy_sha256
+
+def _managed_kagemusha_offline_projection(
+    projection: Optional[dict[str, object]],
+) -> dict[str, object]:
+    """Project reset-manifest field names onto settlement.offline names."""
+    if projection is None:
+        return {}
+    return {
+        "kagemusha_release_policy_path": projection["release_policy_path"],
+        "kagemusha_artifact_dir": projection["artifact_dir"],
+        "kagemusha_catalog_qualification_seal_path": projection[
+            "catalog_qualification_seal_path"
+        ],
+        "kagemusha_max_decoded_bytes": projection["max_decoded_bytes"],
+    }
+
+def _optional_external_lstat(path: Path) -> Optional[os.stat_result]:
+    """Return metadata, or ``None`` when an external staging path is unavailable."""
+    try:
+        return path.lstat()
+    except (FileNotFoundError, PermissionError):
+        return None
+
+def _optional_bounded_external_digest(
+    path: Path, maximum_bytes: int, label: str
+) -> Optional[str]:
+    """Hash one available canonical nonempty external regular file."""
+    info = _optional_external_lstat(path)
+    if info is None:
+        return None
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_size <= 0
+        or info.st_size > maximum_bytes
+    ):
+        fail(f"{label} is not one bounded nonempty regular file")
+    canonical_path(path, label)
+    digest, after = sha256_regular(path, maximum_bytes)
+    if metadata_identity(after) != metadata_identity(info):
+        fail(f"{label} changed during external release validation")
+    return digest
+
+def _inspect_kagemusha_manifest_directories(
+    artifact_dir: Path,
+) -> tuple[tuple[str, ...], Optional[str], tuple[Path, ...], tuple[Path, ...]]:
+    """Bind only bounded manifests and sidecars, never recursive artifact payloads."""
+    info = _optional_external_lstat(artifact_dir)
+    if info is None:
+        return (), None, (), ()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail("Kagemusha artifact root is not one real directory")
+    canonical_path(artifact_dir, "Kagemusha artifact root")
+    names: list[str] = []
+    try:
+        with os.scandir(artifact_dir) as entries:
+            for entry in entries:
+                names.append(entry.name)
+                if len(names) > MAX_KAGEMUSHA_CATALOG_RELEASES:
+                    fail("Kagemusha artifact root exceeds the 16-release bound")
+    except PermissionError:
+        return (), None, (), ()
+    names.sort()
+    if not names:
+        fail("available Kagemusha artifact root contains no release directories")
+    manifest_files: list[Path] = []
+    digest_sidecars: list[Path] = []
+    for name in names:
+        if SHA256_RE.fullmatch(name) is None:
+            fail("Kagemusha artifact root contains a noncanonical release directory")
+        release_dir = artifact_dir / name
+        release_info = release_dir.lstat()
+        if stat.S_ISLNK(release_info.st_mode) or not stat.S_ISDIR(
+            release_info.st_mode
+        ):
+            fail("Kagemusha catalog release entry is not one real directory")
+        canonical_path(release_dir, "Kagemusha catalog release directory")
+        manifest_path = release_dir / "manifest.norito"
+        manifest_sha256 = _optional_bounded_external_digest(
+            manifest_path,
+            MAX_KAGEMUSHA_MANIFEST_BYTES,
+            "Kagemusha canonical release manifest",
+        )
+        if manifest_sha256 is None:
+            fail("available Kagemusha release directory lacks manifest.norito")
+        if manifest_sha256 != name:
+            fail("Kagemusha release directory does not equal manifest.norito SHA-256")
+        sidecar_path = release_dir / "manifest.norito.sha256"
+        try:
+            sidecar, _ = read_regular(
+                sidecar_path, MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES
+            )
+        except (FileNotFoundError, PermissionError) as error:
+            raise DeploymentError(
+                "available Kagemusha release directory lacks a readable digest sidecar"
+            ) from error
+        if sidecar != f"{name}\n".encode("ascii"):
+            fail("Kagemusha manifest digest sidecar is not canonical")
+        manifest_files.append(manifest_path)
+        digest_sidecars.append(sidecar_path)
+    inventory = {
+        "schema": KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA,
+        "manifest_sha256": names,
+    }
+    inventory_sha256 = hashlib.sha256(
+        taira_authority_client.canonical_json_bytes(inventory)
+    ).hexdigest()
+    return (
+        tuple(names),
+        inventory_sha256,
+        tuple(manifest_files),
+        tuple(digest_sidecars),
+    )
+
+def _inspect_kagemusha_external_release(
+    projection: Optional[dict[str, object]],
+    expected_policy_sha256: Optional[str],
+) -> Optional[KagemushaExternalReleasePlan]:
+    """Hash bounded external inputs when present; preserve unavailable as blocked."""
+    if projection is None:
+        return None
+    assert expected_policy_sha256 is not None
+    release_root = Path(str(projection["release_root"]))
+    policy_path = Path(str(projection["release_policy_path"]))
+    artifact_dir = Path(str(projection["artifact_dir"]))
+    qualification_seal_path = Path(
+        str(projection["catalog_qualification_seal_path"])
+    )
+    root_info = _optional_external_lstat(release_root)
+    if root_info is not None:
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            fail("Kagemusha release root is not one real directory")
+        canonical_path(release_root, "Kagemusha release root")
+    policy_sha256 = _optional_bounded_external_digest(
+        policy_path,
+        MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
+        "Kagemusha release policy",
+    )
+    if policy_sha256 is not None and policy_sha256 != expected_policy_sha256:
+        fail("Kagemusha release policy differs from the reset-manifest digest")
+    qualification_seal_sha256 = _optional_bounded_external_digest(
+        qualification_seal_path,
+        MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
+        "Kagemusha catalog qualification seal",
+    )
+    (
+        manifest_digests,
+        manifest_inventory_sha256,
+        manifest_files,
+        manifest_digest_sidecars,
+    ) = _inspect_kagemusha_manifest_directories(artifact_dir)
+    verified = (
+        policy_sha256 is not None
+        and qualification_seal_sha256 is not None
+        and manifest_inventory_sha256 is not None
+    )
+    return KagemushaExternalReleasePlan(
+        release_root=release_root,
+        policy_path=policy_path,
+        artifact_dir=artifact_dir,
+        qualification_seal_path=qualification_seal_path,
+        expected_policy_sha256=expected_policy_sha256,
+        policy_sha256=policy_sha256,
+        qualification_seal_sha256=qualification_seal_sha256,
+        manifest_directory_digests=manifest_digests,
+        manifest_directory_inventory_sha256=manifest_inventory_sha256,
+        manifest_files=manifest_files,
+        manifest_digest_sidecars=manifest_digest_sidecars,
+        verified=verified,
+    )
 
 def validate_config_projection(
     config: dict[str, Any],
@@ -828,9 +1144,9 @@ def validate_config_projection(
     p2p_port: int,
     genesis_public_key: str,
     genesis_expected_hash: str,
+    kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
-
     if (
         config.get("chain") != CHAIN_ID
         or config.get("chain_discriminant") != CHAIN_DISCRIMINANT
@@ -867,7 +1183,19 @@ def validate_config_projection(
             "validator config does not bind the reset bundle signed genesis, "
             "public key, and exact expected hash"
         )
-
+    settlement = config.get("settlement")
+    offline = settlement.get("offline") if isinstance(settlement, dict) else None
+    actual_kagemusha = {
+        key: offline[key]
+        for key in KAGEMUSHA_MANAGED_OFFLINE_FIELDS
+        if isinstance(offline, dict) and key in offline
+    }
+    expected_kagemusha = kagemusha_offline_projection or {}
+    if actual_kagemusha != expected_kagemusha:
+        fail(
+            "validator config managed Kagemusha projection differs from the "
+            "reset manifest"
+        )
 
 def measure_read_only_fsync(path: Path, maximum_ms: int) -> float:
     """Measure a read-only directory fsync barrier without creating any file."""
@@ -890,7 +1218,6 @@ def measure_read_only_fsync(path: Path, maximum_ms: int) -> float:
         )
     return elapsed
 
-
 def existing_ancestor(path: Path) -> Path:
     """Return the nearest existing ancestor of one absolute deployment path."""
 
@@ -900,7 +1227,6 @@ def existing_ancestor(path: Path) -> Path:
             fail(f"deployment path has no existing ancestor: {path}")
         current = current.parent
     return current
-
 
 def require_filesystem_headroom(
     paths: Sequence[Path], minimum_free_bytes: int
@@ -921,7 +1247,6 @@ def require_filesystem_headroom(
                 f"{minimum_free_bytes} are required"
             )
     return tuple(sorted(free_by_device.items()))
-
 
 def validate_bundle(
     bundle: Path,
@@ -977,6 +1302,14 @@ def validate_bundle(
         fail("reset manifest DPN release commit does not match verified admission")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
         fail("reset manifest binary does not match the verified admission receipt")
+    (
+        kagemusha_projection,
+        kagemusha_projection_sha256,
+        kagemusha_policy_sha256,
+    ) = _validate_kagemusha_manifest_projection(manifest, bundle)
+    kagemusha_offline_projection = _managed_kagemusha_offline_projection(
+        kagemusha_projection
+    )
     genesis_public_key = manifest.get("genesis_public_key")
     if (
         not isinstance(genesis_public_key, str)
@@ -1053,6 +1386,7 @@ def validate_bundle(
             p2p_port=p2p_port,
             genesis_public_key=genesis_public_key,
             genesis_expected_hash=genesis_expected_hash,
+            kagemusha_offline_projection=kagemusha_offline_projection,
         )
         peers.append(
             PeerPlan(
@@ -1075,6 +1409,10 @@ def validate_bundle(
             )
         )
 
+    kagemusha_external_release = _inspect_kagemusha_external_release(
+        kagemusha_projection,
+        kagemusha_policy_sha256,
+    )
     free_by_device = require_filesystem_headroom(
         [
             bundle,
@@ -1103,8 +1441,9 @@ def validate_bundle(
         free_bytes=free_bytes,
         free_bytes_by_device=free_by_device,
         fsync_latency_ms=max(latencies),
+        kagemusha_config_projection_sha256=kagemusha_projection_sha256,
+        kagemusha_external_release=kagemusha_external_release,
     )
-
 
 def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_result:
     """Require a root-owned path no runtime user can replace or rewrite."""
@@ -1130,7 +1469,6 @@ def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_res
             fail(f"root-controlled ancestor is not a directory: {component}")
         require_acl_free_path(component, "root-controlled path component")
     return path.lstat()
-
 
 def require_system_python_launcher(path: Path) -> os.stat_result:
     """Require the exact immutable macOS launcher, permitting its system hardlinks."""
@@ -1164,7 +1502,6 @@ def require_system_python_launcher(path: Path) -> os.stat_result:
         fail("system Python launcher changed during validation")
     return after
 
-
 @dataclasses.dataclass(frozen=True)
 class AdmissionPlan:
     """One complete archive verification bound to immutable deployment bytes."""
@@ -1195,7 +1532,6 @@ class AdmissionPlan:
     signer_fingerprint_sha256: str
     release_manifest_verifier_sha256: str
 
-
 @dataclasses.dataclass(frozen=True)
 class SourcePlan:
     """Authenticated release binary and supervisor source identities."""
@@ -1206,7 +1542,6 @@ class SourcePlan:
     supervisor_sha256: str
     python: Path
     python_identity: tuple[int, ...]
-
 
 def validate_supervisor_python(path: Path) -> tuple[Path, tuple[int, ...]]:
     """Resolve the system launcher to its root-controlled Python.app executable."""
@@ -1305,7 +1640,6 @@ def validate_supervisor_python(path: Path) -> tuple[Path, tuple[int, ...]]:
         fail("supervisor Python identity changed during validation")
     return runtime, metadata_identity(runtime_after)
 
-
 def validate_sources(
     args: argparse.Namespace,
     bundle: BundlePlan,
@@ -1344,7 +1678,6 @@ def validate_sources(
         python_identity=python_identity,
     )
 
-
 def _stable_admission_file(
     path: Path, label: str
 ) -> rollout_admission.StableFile:
@@ -1354,7 +1687,6 @@ def _stable_admission_file(
         return rollout_admission.stable_hash_path(path)
     except rollout_admission.ReleaseArtifactError as error:
         raise DeploymentError(f"cannot stably read {label}: {error}") from error
-
 
 def require_protected_replay_ledger(
     path: Path,
@@ -1388,7 +1720,6 @@ def require_protected_replay_ledger(
     ):
         fail("deployment admission replay ledger changed during validation")
     return snapshot
-
 
 def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     """Run the archive-only verifier with every independent trust input."""
@@ -1611,7 +1942,6 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         ),
     )
 
-
 def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
     """Reject candidate or qualified-BOI changes after successful verification."""
 
@@ -1644,7 +1974,6 @@ def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
             f"verified BOI admission evidence changed before rollout: {error}"
         ) from error
 
-
 def require_inputs_match_admission(
     bundle: BundlePlan,
     sources: SourcePlan,
@@ -1663,7 +1992,6 @@ def require_inputs_match_admission(
         != admission.dpn_validator_release_commit
     ):
         fail("deployment executable inputs do not match the verified qualification receipt")
-
 
 def require_admission_bound_inputs_unchanged(
     bundle: BundlePlan,
@@ -1684,7 +2012,6 @@ def require_admission_bound_inputs_unchanged(
         fail("receipt-bound binary, supervisor, or Python changed after admission")
     require_inputs_match_admission(bundle, sources, admission)
 
-
 @dataclasses.dataclass(frozen=True)
 class ProcessInfo:
     """Redaction-safe process identity used for exact parent/owner checks."""
@@ -1693,7 +2020,6 @@ class ProcessInfo:
     ppid: int
     uid: int
     argv: tuple[str, ...]
-
 
 def parse_darwin_procargs2(raw: bytes) -> tuple[str, ...]:
     """Parse one bounded ``KERN_PROCARGS2`` payload into its exact argv."""
@@ -1736,7 +2062,6 @@ def parse_darwin_procargs2(raw: bytes) -> tuple[str, ...]:
         fail("managed process native executable path differs from argv[0]")
     return argv
 
-
 def read_darwin_process_argv(pid: int) -> tuple[str, ...]:
     """Read one process argv through bounded, NUL-delimited Darwin sysctl data."""
 
@@ -1777,7 +2102,6 @@ def read_darwin_process_argv(pid: int) -> tuple[str, ...]:
         fail(f"native managed process argument payload grew during capture: pid {pid}")
     return parse_darwin_procargs2(buffer.raw[: actual.value])
 
-
 @dataclasses.dataclass(frozen=True)
 class RestartLogCursor:
     """Bounded append-only cursor for one authenticated supervisor log inode."""
@@ -1787,7 +2111,6 @@ class RestartLogCursor:
     offset: int
     guard_offset: int
     guard_sha256: str
-
 
 @dataclasses.dataclass(frozen=True)
 class OldManagedIdentity:
@@ -1801,7 +2124,6 @@ class OldManagedIdentity:
     pid_file_gid: int
     child_was_present: bool
 
-
 @dataclasses.dataclass(frozen=True)
 class PlistSnapshot:
     """Exact old LaunchDaemon bytes, ownership, and managed process identity."""
@@ -1812,7 +2134,6 @@ class PlistSnapshot:
     uid: int
     gid: int
     managed: OldManagedIdentity
-
 
 class SystemOps:
     """Small injectable boundary around launchd and process operations."""
@@ -1926,7 +2247,6 @@ class SystemOps:
         result = self.run(["/bin/ps", "-p", str(pid), "-o", "pid="])
         return result.returncode == 0 and bool(result.stdout.strip())
 
-
 def launchd_pid(record: Optional[str], label: str) -> int:
     """Extract one positive supervisor PID from launchd's printed record."""
 
@@ -1936,7 +2256,6 @@ def launchd_pid(record: Optional[str], label: str) -> int:
     if len(matches) != 1 or int(matches[0]) <= 1:
         fail(f"launchd job has no unique running supervisor PID: {label}")
     return int(matches[0])
-
 
 def required_option(argv: tuple[str, ...], option: str, label: str) -> str:
     """Return one exact option value from a managed supervisor command."""
@@ -1949,7 +2268,6 @@ def required_option(argv: tuple[str, ...], option: str, label: str) -> str:
     ):
         fail(f"{label} supervisor lacks one exact {option} argument")
     return argv[indices[0] + 1]
-
 
 def framework_python_argv0_rewrite_matches(
     plist_argv: tuple[str, ...],
@@ -2025,7 +2343,6 @@ def framework_python_argv0_rewrite_matches(
     ):
         return False
     return True
-
 
 def inspect_old_managed_identity(
     payload: dict[str, Any],
@@ -2103,7 +2420,6 @@ def inspect_old_managed_identity(
         child_was_present=child_was_present,
     )
 
-
 def verify_old_managed_child(
     label: str,
     supervisor_pid: int,
@@ -2157,7 +2473,6 @@ def verify_old_managed_child(
         )
     return True
 
-
 def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
     """Require a restored old job to own its exact supervisor and child."""
 
@@ -2181,7 +2496,6 @@ def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
         ops,
         allow_absent=not expected.child_was_present,
     )
-
 
 def capture_old_cohort(
     ops: SystemOps,
@@ -2230,7 +2544,6 @@ def capture_old_cohort(
         )
     return tuple(snapshots)
 
-
 def wait_launchd_cohort_running(
     labels: Sequence[str], ops: SystemOps, timeout_seconds: float
 ) -> list[str]:
@@ -2249,7 +2562,6 @@ def wait_launchd_cohort_running(
             time.sleep(0.25)
     return sorted(pending)
 
-
 def fsync_directory(path: Path) -> None:
     """Durably flush one directory after a publication rename."""
 
@@ -2258,7 +2570,6 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
 
 def ensure_root_directory(path: Path, mode: int) -> None:
     """Create or validate a root-owned non-writable installation directory."""
@@ -2297,7 +2608,6 @@ def ensure_root_directory(path: Path, mode: int) -> None:
         fail(f"unsafe root installation directory: {path}")
     require_acl_free_path(path, "root installation directory")
 
-
 def ensure_runtime_directory(path: Path, uid: int, gid: int) -> None:
     """Create or validate one owner-private runtime state directory."""
 
@@ -2316,7 +2626,6 @@ def ensure_runtime_directory(path: Path, uid: int, gid: int) -> None:
     os.chown(path, uid, gid)
     os.chmod(path, 0o700)
     fsync_directory(path.parent)
-
 
 @contextlib.contextmanager
 def exclusive_deployment_lock() -> Any:
@@ -2357,7 +2666,6 @@ def exclusive_deployment_lock() -> Any:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
-
 
 def install_immutable(
     source: Path, destination: Path, expected_sha256: str
@@ -2431,7 +2739,6 @@ def install_immutable(
         )
     return published
 
-
 def atomic_replace_owned(
     path: Path, body: bytes, *, mode: int, uid: int, gid: int
 ) -> None:
@@ -2473,7 +2780,6 @@ def atomic_replace_owned(
         if temporary_created:
             temporary.unlink(missing_ok=True)
 
-
 @dataclasses.dataclass
 class AdmissionReceiptConsumption:
     """One protected receipt publication awaiting the irreversible cutover."""
@@ -2493,7 +2799,6 @@ class AdmissionReceiptConsumption:
         if published.payload != self.consumed_payload:
             fail("consumed admission receipt changed before rollout start")
         self.rollout_started = True
-
 
 def _restore_unstarted_receipt_consumption(
     transaction: AdmissionReceiptConsumption,
@@ -2518,7 +2823,6 @@ def _restore_unstarted_receipt_consumption(
     restored = require_protected_replay_ledger(transaction.admission.replay_ledger)
     if restored.payload != transaction.prior_payload:
         fail("admission replay ledger restoration did not persist exact prior bytes")
-
 
 @contextlib.contextmanager
 def consume_admission_receipt(
@@ -2583,6 +2887,7 @@ def consume_admission_receipt(
                 combined = DeploymentError(
                     "deployment did not begin and admission receipt rollback failed"
                 )
+                _mark_deployment_outcome(combined, "rollback-failed")
                 if hasattr(combined, "add_note"):
                     combined.add_note(
                         "deployment failure: "
@@ -2590,7 +2895,6 @@ def consume_admission_receipt(
                     )
                 raise combined from rollback_error
         raise
-
 
 def render_plist(
     peer: PeerPlan,
@@ -2687,7 +2991,6 @@ def render_plist(
     }
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True)
 
-
 def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None:
     """Recheck every mutable manifest, genesis, config, and runtime identity."""
 
@@ -2734,12 +3037,10 @@ def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None
         ):
             fail(f"fresh-reset runtime path changed {phase}: {peer.slug}")
 
-
 def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
     """Recheck all mutable bundle inputs after preflight."""
 
     require_mutable_bundle_identities(bundle, phase="after preflight")
-
 
 def _drop_config_check_privileges(uid: int, gid: int) -> Callable[[], None]:
     """Return the sole child setup permitted for hostile binary config checks."""
@@ -2754,7 +3055,6 @@ def _drop_config_check_privileges(uid: int, gid: int) -> Callable[[], None]:
         os.umask(0o077)
 
     return drop
-
 
 def validate_installed_peer_configs(
     installed_binary: Path,
@@ -2800,7 +3100,6 @@ def validate_installed_peer_configs(
                 f"(peer={peer.slug}, status={result.returncode})"
             )
 
-
 def http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
     """Fetch one bounded JSON response without retaining error bodies."""
 
@@ -2820,7 +3119,6 @@ def http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
         fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
     return parse_json_bytes(body, f"health response from {url}")
 
-
 def http_ok(url: str, timeout: float = 2.0) -> None:
     """Require one bounded HTTP 200 response without parsing or retaining its body."""
 
@@ -2839,14 +3137,12 @@ def http_ok(url: str, timeout: float = 2.0) -> None:
     if len(body) > MAX_HTTP_BYTES:
         fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
 
-
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
     """Prevent replay of a fresh operator signature at a redirected target."""
 
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         del request, file_pointer, code, message, headers, new_url
         return None
-
 
 def build_operator_http_getter(network_id: str, private_key_file: Path) -> HttpGetter:
     """Build a token-free, no-redirect getter with a fresh signature per request."""
@@ -2888,14 +3184,12 @@ def build_operator_http_getter(network_id: str, private_key_file: Path) -> HttpG
 
     return operator_http_json
 
-
 def require_uint(value: object, label: str, *, positive: bool = False) -> int:
     """Require one non-boolean unsigned JSON integer."""
 
     if not isinstance(value, int) or isinstance(value, bool) or value < int(positive):
         fail(f"{label} is not a valid unsigned integer")
     return value
-
 
 def normalized_block_hash(value: object, label: str) -> str:
     """Normalize a canonical Iroha block hash to lowercase hexadecimal."""
@@ -2907,7 +3201,6 @@ def normalized_block_hash(value: object, label: str) -> str:
         fail(f"{label} is not a canonical block hash")
     return match.group(1).lower()
 
-
 def nested(payload: dict[str, Any], *keys: str) -> object:
     """Return a nested mapping value, or ``None`` on a missing object."""
 
@@ -2917,7 +3210,6 @@ def nested(payload: dict[str, Any], *keys: str) -> object:
             return None
         current = current.get(key)
     return current
-
 
 def tagged_unit(value: object, key: str, label: str, allowed: set[str]) -> str:
     """Decode one canonical tagged-unit status value."""
@@ -2934,7 +3226,6 @@ def tagged_unit(value: object, key: str, label: str, allowed: set[str]) -> str:
     assert isinstance(tag, str)
     return tag
 
-
 def published_source_commit(status: dict[str, Any]) -> str:
     """Read the exact full build commit from public node status."""
 
@@ -2947,7 +3238,6 @@ def published_source_commit(status: dict[str, Any]) -> str:
             return value.lower()
     fail("/status omitted one full build Git commit")
 
-
 def published_dpn_validator_release_commit(status: dict[str, Any]) -> str:
     """Read the exact DPN validator release commit from public node status."""
 
@@ -2958,7 +3248,6 @@ def published_dpn_validator_release_commit(status: dict[str, Any]) -> str:
     if not isinstance(value, str) or COMMIT_RE.fullmatch(value) is None:
         fail("/status omitted one full DPN validator release commit")
     return value
-
 
 @dataclasses.dataclass(frozen=True)
 class PeerSample:
@@ -2973,7 +3262,6 @@ class PeerSample:
     config: str
     nexus_topology: str
 
-
 @dataclasses.dataclass(frozen=True)
 class FleetSample:
     """One exact four-validator common-commit sample."""
@@ -2986,7 +3274,6 @@ class FleetSample:
     nexus_topology: str
     nodes: tuple[str, ...]
 
-
 @dataclasses.dataclass(frozen=True)
 class RestartProofResult:
     """Validated post-restart fleet state and bounded measured recovery time."""
@@ -2994,15 +3281,12 @@ class RestartProofResult:
     fleet: FleetSample
     duration_ms: int
 
-
 HttpGetter = Callable[[str, float], dict[str, Any]]
 HealthGetter = Callable[[str, float], None]
 TerminalChecker = Callable[[], None]
 
-
 def no_terminal_check() -> None:
     """Default no-op for focused read-path tests without a runtime layout."""
-
 
 def supervisor_terminal_binding(
     binary_sha256: str,
@@ -3034,7 +3318,6 @@ def supervisor_terminal_binding(
         ).encode("ascii")
     ).hexdigest()
 
-
 def terminal_unhealthy_path(runtime_root: Path, peer: PeerPlan, binding: str) -> Path:
     """Return the identity-scoped private marker for one peer supervisor."""
 
@@ -3043,7 +3326,6 @@ def terminal_unhealthy_path(runtime_root: Path, peer: PeerPlan, binding: str) ->
         / "terminal"
         / f"validator-{peer.number}-{binding}-terminal-unhealthy.json"
     )
-
 
 def require_terminal_marker(
     path: Path,
@@ -3138,7 +3420,6 @@ def require_terminal_marker(
         fail(f"{peer.label} terminal-unhealthy marker is unsafe")
     fail(f"{peer.label} entered terminal-unhealthy state")
 
-
 def require_no_terminal_unhealthy(
     bundle: BundlePlan,
     runtime_root: Path,
@@ -3157,7 +3438,6 @@ def require_no_terminal_unhealthy(
             bundle.owner_gid,
             binding,
         )
-
 
 def validate_peer_health(
     peer: PeerPlan,
@@ -3406,7 +3686,6 @@ def validate_peer_health(
         ),
     )
 
-
 def capture_fleet(
     bundle: BundlePlan,
     expected_source_commit: str,
@@ -3453,7 +3732,6 @@ def capture_fleet(
         nodes=nodes,
     )
 
-
 def wait_for_fleet_sample(
     bundle: BundlePlan,
     expected_source_commit: str,
@@ -3484,7 +3762,6 @@ def wait_for_fleet_sample(
         terminal_checker()
         return sample
     raise DeploymentError(f"four-validator readiness did not converge: {last_error}")
-
 
 def wait_for_advancement(
     bundle: BundlePlan,
@@ -3533,7 +3810,6 @@ def wait_for_advancement(
         time.sleep(1)
     raise DeploymentError(f"four-validator consensus did not advance: {last_error}")
 
-
 def parse_pid_file(path: Path, uid: int, gid: int) -> int:
     """Read one private managed-child PID file through a no-follow descriptor."""
 
@@ -3548,7 +3824,6 @@ def parse_pid_file(path: Path, uid: int, gid: int) -> int:
         fail(f"managed PID file is invalid: {path}")
     return int(text)
 
-
 def expected_supervisor_argv(plist_body: bytes) -> tuple[str, ...]:
     """Return the exact generated supervisor argv from a plist."""
 
@@ -3562,7 +3837,6 @@ def expected_supervisor_argv(plist_body: bytes) -> tuple[str, ...]:
     ):
         fail("generated LaunchDaemon plist lacks exact ProgramArguments")
     return tuple(arguments)
-
 
 def verify_managed_peer(
     peer: PeerPlan,
@@ -3591,7 +3865,6 @@ def verify_managed_peer(
     ):
         fail(f"{peer.label} PID file does not name its exact managed validator child")
     return supervisor_pid, child_pid
-
 
 def _open_growing_regular(path: Path) -> tuple[int, os.stat_result]:
     """Open one single-link growing regular file without following aliases."""
@@ -3628,7 +3901,6 @@ def _open_growing_regular(path: Path) -> tuple[int, os.stat_result]:
         raise
     return descriptor, opened
 
-
 def _require_safe_restart_log_owner_mode(
     info: os.stat_result, owner_uid: int, owner_gid: int
 ) -> None:
@@ -3640,7 +3912,6 @@ def _require_safe_restart_log_owner_mode(
         or stat.S_IMODE(info.st_mode) not in {0o600, 0o640, 0o644}
     ):
         fail("restart supervisor log has an unsafe owner or mode")
-
 
 def _pread_exact(descriptor: int, offset: int, length: int) -> bytes:
     """Read exactly one bounded region without changing a shared file offset."""
@@ -3661,7 +3932,6 @@ def _pread_exact(descriptor: int, offset: int, length: int) -> bytes:
         chunks.append(chunk)
         consumed += len(chunk)
     return b"".join(chunks)
-
 
 def bind_restart_log_cursor(
     path: Path, owner_uid: int, owner_gid: int
@@ -3691,7 +3961,6 @@ def bind_restart_log_cursor(
         )
     finally:
         os.close(descriptor)
-
 
 def read_restart_log_delta(cursor: RestartLogCursor) -> bytes:
     """Read a bounded post-cursor delta from the same append-only log inode."""
@@ -3726,7 +3995,6 @@ def read_restart_log_delta(cursor: RestartLogCursor) -> bytes:
     finally:
         os.close(descriptor)
 
-
 def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
     """Require exactly one snapshot restore and forbid empty-state fallback."""
 
@@ -3735,7 +4003,6 @@ def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
         fail("managed validator restart entered a snapshot fallback path")
     if delta.count(SNAPSHOT_LOAD_SUCCESS_MARKER) != 1:
         fail("managed validator restart did not load exactly one state snapshot")
-
 
 def restart_proof(
     bundle: BundlePlan,
@@ -3827,7 +4094,6 @@ def restart_proof(
         fail("managed validator snapshot-backed restart exceeded 45 seconds")
     return RestartProofResult(fleet=advanced, duration_ms=duration_ms)
 
-
 def rollback_cohort(snapshots: Sequence[PlistSnapshot], ops: SystemOps) -> None:
     """Unload any new jobs, restore every old plist, and reload all four old jobs."""
 
@@ -3870,7 +4136,6 @@ def rollback_cohort(snapshots: Sequence[PlistSnapshot], ops: SystemOps) -> None:
     if errors:
         fail("four-job rollback was incomplete: " + ", ".join(errors))
 
-
 def install_runtime_layout(bundle: BundlePlan) -> Path:
     """Create the root-controlled parent and owner-private reset runtime leaf."""
 
@@ -3885,7 +4150,6 @@ def install_runtime_layout(bundle: BundlePlan) -> Path:
         runtime_root / "terminal", bundle.owner_uid, bundle.owner_gid
     )
     return runtime_root
-
 
 def apply_reset(
     args: argparse.Namespace,
@@ -4104,11 +4368,13 @@ def apply_reset(
                 combined = DeploymentError(
                     "Taira reset failed and the exact four-validator cohort rollback did not complete"
                 )
+                _mark_deployment_outcome(combined, "rollback-failed")
                 if hasattr(combined, "add_note"):
                     combined.add_note(
                         f"rollout failure: {type(rollout_error).__name__}: {rollout_error}"
                     )
                 raise combined from rollback_error
+        _mark_deployment_outcome(rollout_error, "rolled-back")
         raise
     finally:
         for signum, handler in previous_handlers.items():
@@ -4137,7 +4403,6 @@ def apply_reset(
         "supervisor": str(installed_supervisor),
         "supervisor_sha256": sources.supervisor_sha256,
     }
-
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the exact single-command dry-run/apply interface."""
@@ -4222,7 +4487,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--apply", action="store_true")
     return parser
 
-
 def validate_arguments(args: argparse.Namespace) -> None:
     """Validate scalar inputs before reading deployment paths."""
 
@@ -4275,7 +4539,6 @@ def validate_arguments(args: argparse.Namespace) -> None:
         if not operator_private_key_file.is_absolute():
             fail("--operator-private-key-file must be an absolute runtime-only path")
 
-
 def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     """Require the controller-provided non-root identity before root verification."""
 
@@ -4303,6 +4566,257 @@ def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
         fail("sealed external-tool identity differs from the current identity")
     return None if os.geteuid() != 0 else (uid, gid)
 
+def _kagemusha_authority_subject(bundle: BundlePlan) -> dict[str, object]:
+    """Return the digest-only Kagemusha deployment authority projection."""
+
+    projection_sha256 = getattr(bundle, "kagemusha_config_projection_sha256", None)
+    external = getattr(bundle, "kagemusha_external_release", None)
+    if projection_sha256 is None:
+        return {"configured": False}
+    return {
+        "configured": True,
+        "config_projection_sha256": projection_sha256,
+        "external_release_verified": bool(external and external.verified),
+        "manifest_directory_digests": (
+            list(external.manifest_directory_digests) if external else []
+        ),
+        "manifest_directory_inventory_sha256": (
+            external.manifest_directory_inventory_sha256 if external else None
+        ),
+        "policy_sha256": external.expected_policy_sha256 if external else None,
+        "qualification_seal_sha256": (
+            external.qualification_seal_sha256 if external else None
+        ),
+    }
+
+def _kagemusha_authority_artifacts(
+    bundle: BundlePlan,
+) -> tuple[taira_authority_client.Artifact, ...]:
+    """Expose only bounded external Kagemusha bytes to deploy authority."""
+
+    external = getattr(bundle, "kagemusha_external_release", None)
+    if external is None:
+        return ()
+    artifacts: list[taira_authority_client.Artifact] = []
+    if external.policy_sha256 is not None:
+        artifacts.append(
+            taira_authority_client.Artifact(
+                "kagemusha/policy/release-policy-v1.norito",
+                external.policy_path,
+                maximum=MAX_KAGEMUSHA_RELEASE_POLICY_BYTES,
+            )
+        )
+    if external.qualification_seal_sha256 is not None:
+        artifacts.append(
+            taira_authority_client.Artifact(
+                "kagemusha/seals/catalog-qualification-v1.norito",
+                external.qualification_seal_path,
+                maximum=MAX_KAGEMUSHA_QUALIFICATION_SEAL_BYTES,
+            )
+        )
+    for digest, manifest_path, sidecar_path in zip(
+        external.manifest_directory_digests,
+        external.manifest_files,
+        external.manifest_digest_sidecars,
+    ):
+        artifacts.extend(
+            (
+                taira_authority_client.Artifact(
+                    f"kagemusha/catalog/{digest}/manifest.norito",
+                    manifest_path,
+                    maximum=MAX_KAGEMUSHA_MANIFEST_BYTES,
+                ),
+                taira_authority_client.Artifact(
+                    f"kagemusha/catalog/{digest}/manifest.norito.sha256",
+                    sidecar_path,
+                    maximum=MAX_KAGEMUSHA_MANIFEST_DIGEST_SIDECAR_BYTES,
+                ),
+            )
+        )
+    return tuple(artifacts)
+
+def _kagemusha_report_fields(
+    bundle: BundlePlan, *, exact_binary_config_verified: bool
+) -> dict[str, object]:
+    """Return non-ambiguous Kagemusha readiness fields for controller reports."""
+
+    projection_sha256 = getattr(bundle, "kagemusha_config_projection_sha256", None)
+    external = getattr(bundle, "kagemusha_external_release", None)
+    configured = projection_sha256 is not None
+    external_verified = bool(external and external.verified)
+    if not configured:
+        status = "not-configured"
+    elif external_verified:
+        status = "bounded-external-release-verified"
+    else:
+        status = "blocked-external-release-unavailable"
+    return {
+        "kagemusha_config_projection_sha256": projection_sha256,
+        "kagemusha_exact_binary_config_verified": bool(
+            configured and exact_binary_config_verified
+        ),
+        "kagemusha_external_release_status": status,
+        "kagemusha_external_release_verified": external_verified,
+        "kagemusha_manifest_directory_inventory_sha256": (
+            external.manifest_directory_inventory_sha256 if external else None
+        ),
+        "kagemusha_qualification_seal_sha256": (
+            external.qualification_seal_sha256 if external else None
+        ),
+    }
+
+def _deploy_authority_subject(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+) -> dict[str, object]:
+    """Build the stable digest-only subject shared by every lease phase."""
+
+    return {
+        "admission": {
+            "archive_sha256": admission.archive_sha256,
+            "artifact_handoff_sha256": admission.artifact_handoff_sha256,
+            "boi_qualified_inventory_sha256": (
+                admission.boi_qualified_inventory_sha256
+            ),
+            "receipt_id": admission.receipt_id,
+            "release_manifest_sha256": admission.release_manifest_sha256,
+            "reset_manifest_sha256": admission.reset_manifest_sha256,
+        },
+        "bundle": {
+            "kagemusha": _kagemusha_authority_subject(bundle),
+            "manifest_sha256": bundle.manifest_sha256,
+            "peer_config_sha256": {
+                peer.slug: peer.config_sha256 for peer in bundle.peers
+            },
+        },
+        "contracts": {
+            "complete_source": COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+            "run_assignment": DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
+        },
+        "lease": {
+            "authorization": DEPLOY_AUTHORIZATION_LEASE_CONTRACT,
+            "result_binding": DEPLOY_RESULT_BINDING_CONTRACT,
+        },
+        "source": {
+            "cargo_lock_sha256": admission.cargo_lock_sha256,
+            "commit": admission.source_commit,
+            "dpn_validator_release_commit": (
+                admission.dpn_validator_release_commit
+            ),
+            "workspace_source_manifest_sha256": (
+                admission.workspace_source_manifest_sha256
+            ),
+        },
+        "runtime": {
+            "binary_sha256": sources.binary_sha256,
+            "restart_generation": admission.restart_generation,
+            "supervisor_sha256": sources.supervisor_sha256,
+        },
+    }
+
+def _deploy_authority_artifacts(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+) -> tuple[taira_authority_client.Artifact, ...]:
+    artifacts = [
+        taira_authority_client.Artifact(
+            "admission/archive",
+            admission.archive,
+            maximum=admission.archive_state.size,
+        ),
+        taira_authority_client.Artifact(
+            "qualified/handoff-inventory-v1.json",
+            admission.boi_qualified_handoff.root
+            / boi_handoff.QUALIFIED_HANDOFF_MANIFEST,
+            maximum=boi_handoff.MAX_HANDOFF_MANIFEST_BYTES,
+        ),
+        taira_authority_client.Artifact(
+            "runtime/iroha3d", sources.binary, maximum=MAX_BINARY_BYTES
+        ),
+        taira_authority_client.Artifact(
+            "runtime/supervisor", sources.supervisor, maximum=4 * 1024 * 1024
+        ),
+        taira_authority_client.Artifact(
+            "bundle/reset-manifest.json",
+            bundle.root / "reset-manifest.json",
+            maximum=MAX_MANIFEST_BYTES,
+        ),
+    ]
+    artifacts.extend(
+        taira_authority_client.Artifact(
+            f"admission/authority/{relative}",
+            admission.authority_dir / relative,
+            maximum=MAX_MANIFEST_BYTES,
+        )
+        for relative, _state in admission.authority_state
+    )
+    artifacts.extend(
+        taira_authority_client.Artifact(
+            f"bundle/config/{peer.slug}", peer.config, maximum=MAX_CONFIG_BYTES
+        )
+        for peer in bundle.peers
+    )
+    artifacts.extend(_kagemusha_authority_artifacts(bundle))
+    return tuple(artifacts)
+
+def _authorize_deploy_lease(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    *,
+    apply: bool,
+) -> taira_authority_client.AuthorityResult:
+    try:
+        return taira_authority_client.authorize(
+            "deploy-issuance",
+            _deploy_authority_subject(admission, bundle, sources),
+            artifacts=_deploy_authority_artifacts(admission, bundle, sources),
+            disposition="apply" if apply else "dry-run",
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(
+            f"deploy-issuance authority refused the exact deployment: {error}"
+        ) from error
+
+def _deploy_result_sha256(
+    outcome: str, result: dict[str, object]
+) -> str:
+    """Digest the exact terminal result without creating a circular sidecar."""
+
+    payload = {
+        "outcome": outcome,
+        "result": result,
+        "schema": DEPLOY_RESULT_BINDING_CONTRACT,
+    }
+    return hashlib.sha256(
+        taira_authority_client.canonical_json_bytes(payload)
+    ).hexdigest()
+
+def _finalize_deploy_lease(
+    admission: AdmissionPlan,
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    lease: taira_authority_client.AuthorityResult,
+    *,
+    outcome: str,
+    result: dict[str, object],
+) -> taira_authority_client.AuthorityResult:
+    """Bind a consumed lease to success or the completed rollback outcome."""
+
+    try:
+        return taira_authority_client.finalize_deployment(
+            _deploy_authority_subject(admission, bundle, sources),
+            lease=lease,
+            outcome=outcome,
+            result_sha256=_deploy_result_sha256(outcome, result),
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise DeploymentError(
+            "deploy-issuance authority could not persist the terminal result: "
+            f"{error}"
+        ) from error
 
 def _execute_after_provisioned_authority_contracts(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
@@ -4337,6 +4851,7 @@ def _execute_after_provisioned_authority_contracts(
     if not args.apply:
         old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_archive_unchanged(admission)
+        lease = _authorize_deploy_lease(admission, bundle, sources, apply=False)
         return {
             "admission_archive_sha256": admission.archive_sha256,
             "admission_receipt_consumed": False,
@@ -4362,6 +4877,8 @@ def _execute_after_provisioned_authority_contracts(
             "free_bytes": bundle.free_bytes,
             "fsync_latency_ms": round(bundle.fsync_latency_ms, 3),
             "mode": "verified-read-only-dry-run",
+            "deploy_authority_operation_id": lease.operation_id,
+            "deploy_authority_status": lease.status,
             "peer_count": PEER_COUNT,
             "restart_generation": args.restart_generation,
             "source_commit": args.expected_source_commit,
@@ -4383,16 +4900,57 @@ def _execute_after_provisioned_authority_contracts(
         )
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         require_admission_archive_unchanged(locked_admission)
-        with consume_admission_receipt(locked_admission) as consumption:
-            report = apply_reset(
-                args,
-                bundle,
-                sources,
-                old_cohort,
-                rollout_starter=consumption.mark_rollout_started,
-                ops=system_ops,
-                getter=operator_getter,
+        lease = _authorize_deploy_lease(
+            locked_admission, bundle, sources, apply=True
+        )
+        try:
+            with consume_admission_receipt(locked_admission) as consumption:
+                report = apply_reset(
+                    args,
+                    bundle,
+                    sources,
+                    old_cohort,
+                    rollout_starter=consumption.mark_rollout_started,
+                    ops=system_ops,
+                    getter=operator_getter,
+                )
+        except BaseException as deployment_error:
+            outcome = getattr(
+                deployment_error,
+                DEPLOYMENT_OUTCOME_ATTRIBUTE,
+                "rolled-back",
             )
+            if outcome not in {"rolled-back", "rollback-failed"}:
+                outcome = "rollback-failed"
+            failure_result = {
+                "error": str(deployment_error),
+                "error_type": type(deployment_error).__name__,
+            }
+            try:
+                _finalize_deploy_lease(
+                    locked_admission,
+                    bundle,
+                    sources,
+                    lease,
+                    outcome=outcome,
+                    result=failure_result,
+                )
+            except DeploymentError as finalization_error:
+                if hasattr(finalization_error, "add_note"):
+                    finalization_error.add_note(
+                        "deployment result before authority finalization: "
+                        f"{type(deployment_error).__name__}: {deployment_error}"
+                    )
+                raise finalization_error from deployment_error
+            raise
+        finalization = _finalize_deploy_lease(
+            locked_admission,
+            bundle,
+            sources,
+            lease,
+            outcome="success",
+            result=report,
+        )
         report.update(
             {
                 "admission_archive_sha256": locked_admission.archive_sha256,
@@ -4407,19 +4965,23 @@ def _execute_after_provisioned_authority_contracts(
                 "boi_qualification_receipt_id": (
                     locked_admission.boi_qualification_receipt_id
                 ),
+                "deploy_authority_operation_id": lease.operation_id,
+                "deploy_authority_status": lease.status,
+                "deploy_authority_final_status": finalization.status,
+                "deploy_authority_result_receipt_sha256": hashlib.sha256(
+                    finalization.durable_receipt_bytes
+                ).hexdigest(),
             }
         )
         return report
 
-
 def execute(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
-    """Refuse dry-run and apply before any identity, path, or admission read."""
+    """Authenticate issuance before any identity, path, or admission read."""
 
-    del args, ops
     require_deploy_issuance_contracts()
-
+    return _execute_after_provisioned_authority_contracts(args, ops=ops)
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Run the controller and emit only one redaction-safe JSON summary."""
@@ -4432,7 +4994,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     print(json.dumps(report, ensure_ascii=True, sort_keys=True))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

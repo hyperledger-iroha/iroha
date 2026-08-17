@@ -894,17 +894,28 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
         )
         .expect("construct the restarted serialized runtime");
     assert!(startup.is_empty());
-    assert_eq!(
-        runtime.remaining_completion_capacity(),
-        6,
-        "the non-FIFO timeout root cannot consume completion capacity"
-    );
+    let completion_capacity_before_clock_arm = runtime.remaining_completion_capacity();
     runtime
         .arm_live_clocks(started_at)
         .expect("arm the restarted runtime");
+    assert_eq!(
+        runtime.remaining_completion_capacity(),
+        completion_capacity_before_clock_arm,
+        "arming non-FIFO clock roots cannot consume completion capacity"
+    );
+    let retransmit_due = started_at + runtime.retransmit_interval();
+    assert!(
+        runtime
+            .try_step_pacemaker_escape(retransmit_due)
+            .expect("freeze the newer post-restart retransmit")
+            .is_none(),
+        "a periodic timer alone is not a pacemaker escape"
+    );
+    let timeout_due = started_at + runtime.round_timeout();
     let step = runtime
-        .step(started_at + Duration::from_secs(4))
-        .expect("replayed timeout reuses and crosses the exact runtime handoff");
+        .try_step_pacemaker_escape(timeout_due)
+        .expect("replayed timeout supersedes the newer frozen retransmit")
+        .expect("the due absolute timeout owns the pacemaker step");
     let super::super::v2_runtime::RuntimeStep::Advanced(effects) = step else {
         panic!("the exact replayed timeout must advance");
     };

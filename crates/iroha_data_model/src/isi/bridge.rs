@@ -1,11 +1,10 @@
 //! Bridge proof ingestion instructions.
 use super::*;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// Activation update for one exact governed SCCP route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpSetRouteActivationV1 {
     /// Exact route to update.
@@ -20,10 +19,7 @@ pub struct SccpSetRouteActivationV1 {
 }
 /// Append-only native trust-anchor update for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpAdvanceLaneTrustAnchorV1 {
     /// Exact lane whose current checkpoint advances.
@@ -35,10 +31,7 @@ pub struct SccpAdvanceLaneTrustAnchorV1 {
 }
 /// First native trust-anchor installation for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpInitializeLaneTrustAnchorV1 {
     /// Exact lane whose absent checkpoint is initialized.
@@ -50,10 +43,7 @@ pub struct SccpInitializeLaneTrustAnchorV1 {
 }
 /// Atomic registration input for one exact staged route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpRegisterRouteV1 {
     /// Complete immutable route, necessarily staged at registration.
@@ -63,10 +53,7 @@ pub struct SccpRegisterRouteV1 {
 }
 /// Atomic cutover from one immutable route revision to its staged successor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpSwitchRouteRevisionV1 {
     /// Currently selected immutable revision.
@@ -85,10 +72,7 @@ pub struct SccpSwitchRouteRevisionV1 {
 }
 /// Closed atomic SCCP route-governance action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "action", content = "route")]
 #[expect(
@@ -121,10 +105,7 @@ pub enum SccpRouteGovernanceActionV1 {
 /// preimage, so an approval cannot be replayed on a network with the same
 /// display label or rebound to a different registry action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
@@ -695,6 +676,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         bridge::{
             BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
@@ -703,7 +687,6 @@ mod tests {
         nexus::LaneId,
         proof::ProofBox,
     };
-    use norito::core::DecodeFromSlice;
     fn proof() -> BridgeProof {
         BridgeProof {
             range: BridgeProofRange {
@@ -750,33 +733,6 @@ mod tests {
             asset_key: "xor".to_owned(),
             revision: 1,
         })
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
-    where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let wire_id = std::any::type_name::<T>();
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     fn bridge_decode_from_slice_roundtrips() {

@@ -828,7 +828,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         );
     }
     for caller_source in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),
@@ -928,9 +928,8 @@ fn certified_fetch_dequeue_commit_requires_the_durable_token() {
 #[test]
 fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() {
     let registry = reviewed_lifecycle_work_registry_source_for_test();
-    let adapter = include_str!("../v2.rs");
-    let recovery =
-        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
+    let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
     let boundary = include_str!("../v2_lifecycle_concrete_admission.rs");
     let scheduler = include_str!("../v2_lifecycle_scheduler_inputs.rs");
     let declaration = registry
@@ -1081,10 +1080,12 @@ fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() 
 #[test]
 fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallible() {
     let registry = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
-    let adapter = include_str!("../v2.rs");
-    let runtime = include_str!("../v2_runtime.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let executor = include_str!("../v2_effects.rs");
     let launch = include_str!("../v2_lifecycle_launch.rs");
+    let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
+    let worker = include_str!("../v2_worker.rs");
     let lane = include_str!("../v2_lane_work.rs");
     let completion_projection = adapter
         .split_once("pub(in crate::sumeragi) fn project_recovered_apply_completion(")
@@ -1189,15 +1190,48 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
     assert!(!adapter_preview.contains("self.step("));
     assert!(runtime.contains("fn prepare_recovered_decision_apply_completion("));
     assert!(executor.contains("fn commit_recovered_decision_apply_finality("));
+    let classifier = worker
+        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .expect("the worker has one unified lifecycle completion classifier")
+        .1
+        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .expect("the classifier stays bounded before the retained Sign fixture seam")
+        .0;
+    for required in [
+        "V2IoCompletion::RecoveredDecisionApply(guarded)",
+        "prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))",
+        "RecoveredLifecycleCompletionTakeV1::Apply(",
+    ] {
+        assert!(
+            classifier.contains(required),
+            "unified completion classifier omitted {required}"
+        );
+    }
+    let driver = turn_driver
+        .split_once("match self.services.take_next_recovered_lifecycle_completion()")
+        .expect("the Completion turn uses the unified physical-head classifier")
+        .1
+        .split_once("let selected = match self.owner.classify_completion_ready_work()")
+        .expect("completion draining precedes fresh Ready-work planning")
+        .0;
+    for required in [
+        "RecoveredLifecycleCompletionTakeV1::Apply(completion)",
+        ".settle_recovered_decision_apply_completion_owner(completion, lane_work)",
+        "ProductionRecoveredDecisionApplyCompletionV1::Applied",
+    ] {
+        assert!(
+            driver.contains(required),
+            "Completion driver omitted {required}"
+        );
+    }
     let settlement = launch
-        .split_once("pub(in crate::sumeragi) fn settle_recovered_decision_apply_completion(")
+        .split_once("fn settle_recovered_decision_apply_completion_owner(")
         .expect("the launched owner has one terminal settlement")
         .1
         .split_once("/// Fail-stop failure while consuming the recovered lifecycle owner")
         .expect("terminal settlement ends before launch errors")
         .0;
     for required in [
-        "drain_recovered_decision_apply_completion()",
         "RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }",
         "completion.authorizes_sidecar_owner(services, lane_work)",
         "sidecar.register(lane_work)",
@@ -1235,7 +1269,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
         .split_once("fn drive_recovered_decision_apply_deferred(")
         .expect("the launched owner has one sealed sidecar drive")
         .1
-        .split_once("/// Exercise recovered Apply dispatch")
+        .split_once("/// Settle one already-classified recovered Apply completion.")
         .expect("the sidecar drive stays bounded")
         .0;
     for required in [
@@ -1401,8 +1435,7 @@ fn recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair() 
     assert!(combined.contains("DurableRecoveredLifecycleNextWalVoteSign(sign)"));
     assert!(combined.contains("project_recovered_next_wal_vote_signed_broadcast_and_sign("));
     assert!(registry.contains("DurableRecoveredLifecycleSignParentV1::NextWalVote(sign)"));
-    let recovery =
-        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+    let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
     let pair = recovery
         .split_once("fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(")
         .expect("cold Ready pair attestation exists")

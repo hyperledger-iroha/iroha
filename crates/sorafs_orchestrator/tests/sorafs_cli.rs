@@ -5,7 +5,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::{decode as hex_decode, encode as hex_encode};
-use httpmock::{Mock, prelude::*};
+use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};

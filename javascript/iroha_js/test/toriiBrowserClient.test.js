@@ -36,6 +36,14 @@ const BROWSER_OPERATOR_CONTEXT = new browserSdk.OperatorSigningContext(
     sign: async () => Buffer.alloc(64, 0x22),
   },
 );
+const DIST_BROWSER_OPERATOR_CONTEXT = new browserDistSdk.OperatorSigningContext(
+  browserDistSdk.NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  {
+    publicKey:
+      "ed012066BE7E332C7A453332BD9D0A7F7DB055F5C5EF1A06ADA66D98B39FB6810C473A",
+    sign: async () => Buffer.alloc(64, 0x22),
+  },
+);
 const FIXTURE_ALICE_ID = AccountAddress.fromAccount({
   publicKey: Buffer.from(
     "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
@@ -1595,12 +1603,12 @@ test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits
 });
 
 const typedSumeragiBrowserClients = Object.freeze([
-  ["source", ToriiBrowserClient],
-  ["dist", browserDistSdk.ToriiBrowserClient],
+  ["source", ToriiBrowserClient, BROWSER_OPERATOR_CONTEXT],
+  ["dist", browserDistSdk.ToriiBrowserClient, DIST_BROWSER_OPERATOR_CONTEXT],
 ]);
 
 test("ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preserve u64 tokens", async (t) => {
-  for (const [label, Client] of typedSumeragiBrowserClients) {
+  for (const [label, Client, operatorSigningContext] of typedSumeragiBrowserClients) {
     await t.test(label, async () => {
       const diagnosticsText = JSON.stringify(
         browserSumeragiDiagnosticsFixture(),
@@ -1615,7 +1623,7 @@ test("ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preser
         );
       const requests = [];
       const client = new Client("https://torii.example", {
-        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
+        operatorSigningContext,
         fetchImpl: async (url, init) => {
           requests.push([String(url), init]);
           if (String(url).endsWith("/v1/sumeragi/status")) {
@@ -1658,7 +1666,7 @@ test("ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preser
 });
 
 test("ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JSON media", async (t) => {
-  for (const [label, Client] of typedSumeragiBrowserClients) {
+  for (const [label, Client, operatorSigningContext] of typedSumeragiBrowserClients) {
     await t.test(label, async () => {
       const validStatus = JSON.stringify(browserSumeragiStatusFixture());
       const responses = [
@@ -1676,7 +1684,7 @@ test("ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JS
         }),
       ];
       const client = new Client("https://torii.example", {
-        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
+        operatorSigningContext,
         fetchImpl: async () => responses.shift(),
       });
 
@@ -1705,11 +1713,11 @@ test("ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JS
 });
 
 test("ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte bounds", async (t) => {
-  for (const [label, Client] of typedSumeragiBrowserClients) {
+  for (const [label, Client, operatorSigningContext] of typedSumeragiBrowserClients) {
     await t.test(label, async () => {
       const declaredLengths = [1024 * 1024 + 1, 16 * 1024 * 1024 + 1];
       const client = new Client("https://torii.example", {
-        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
+        operatorSigningContext,
         fetchImpl: async () => new Response("{}", {
           headers: {
             "content-length": String(declaredLengths.shift()),

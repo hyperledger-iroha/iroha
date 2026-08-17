@@ -1,4 +1,6 @@
 //! Durable execution routing context committed by a block header.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     block::{
@@ -20,10 +22,7 @@ pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
 /// Role of one route leg in an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "detail", rename_all = "snake_case")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub enum ExternalExecutionRouteRole {
     /// The route coordinates final admission and commit ordering for the plan.
     Coordinator,
@@ -32,10 +31,7 @@ pub enum ExternalExecutionRouteRole {
 }
 /// Lane/dataspace leg committed as part of an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ExternalExecutionRouteLeg {
     /// Lane selected for this leg.
     pub lane_id: LaneId,
@@ -61,10 +57,7 @@ impl ExternalExecutionRouteLeg {
 }
 /// Routing context used to execute one external block entrypoint.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ExternalExecutionContext {
     /// Hash of the external entrypoint this context belongs to.
@@ -142,10 +135,7 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 /// order as ordinary block transactions without duplicating a potentially multi-megabyte transcript
 /// in consensus frames.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CertifiedMergeLedgerReference {
     /// Reference schema version. Version one is the only valid value.
     pub version: u8,
@@ -221,10 +211,7 @@ impl CertifiedMergeLedgerReference {
 /// for lane-local execution. A finalized global block hint is attached only after this envelope has
 /// been committed, so the payload never has to contain the hash of its own carrier.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct AutonomousLanePayloadEnvelopeV1 {
     /// Envelope schema version.
@@ -258,10 +245,7 @@ pub struct AutonomousLanePayloadEnvelopeV1 {
 }
 /// Ordered execution context for external entrypoints in a block payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct BlockExecutionContextBundle {
     /// Exact first-release bundle layout. Only version one is supported.

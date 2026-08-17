@@ -29,6 +29,21 @@ def budget(**exceptions: int):
     )
 
 
+def test_parse_args_exposes_strict_objective_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(MODULE_PATH), "--require-objective"],
+    )
+
+    parsed = MODULE.parse_args()
+
+    assert parsed.require_objective is True
+    assert parsed.write_baseline is False
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
@@ -77,7 +92,7 @@ def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     )[0].message
 
 
-def test_evaluate_enforces_the_optional_aggregate_rust_ceiling() -> None:
+def test_evaluate_enforces_the_default_aggregate_rust_ratchet() -> None:
     aggregate = MODULE.AggregateRustBudget(
         baseline=1_000,
         ceiling=900,
@@ -115,6 +130,89 @@ def test_evaluate_enforces_the_optional_aggregate_rust_ceiling() -> None:
         {"crates/a/src/lib.rs": 599, "crates/b/tests/cases.rs": 301},
         configured,
     ) == []
+
+
+def test_evaluate_can_require_the_aggregate_rust_objective() -> None:
+    aggregate = MODULE.AggregateRustBudget(
+        baseline=1_000,
+        ceiling=900,
+        ratchet_ceiling=950,
+        working_target=850,
+    )
+    configured = MODULE.Budget(
+        production_limit=5_000,
+        test_limit=3_000,
+        excluded_prefixes=("vendor/",),
+        exceptions={},
+        aggregate_rust=aggregate,
+    )
+
+    assert MODULE.evaluate(
+        {"crates/a/src/lib.rs": 599, "crates/b/tests/cases.rs": 301},
+        configured,
+        require_objective=True,
+    ) == []
+    findings = MODULE.evaluate(
+        {"crates/a/src/lib.rs": 600, "crates/b/tests/cases.rs": 301},
+        configured,
+        require_objective=True,
+    )
+    assert [(item.path, item.message) for item in findings] == [
+        (
+            "<aggregate Rust>",
+            "901 lines exceeds the aggregate objective ceiling 900",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("require_objective", "expected_exit_code"),
+    [(False, 0), (True, 1)],
+)
+def test_main_applies_requested_aggregate_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    require_objective: bool,
+    expected_exit_code: int,
+) -> None:
+    aggregate = MODULE.AggregateRustBudget(
+        baseline=1_000,
+        ceiling=900,
+        ratchet_ceiling=950,
+        working_target=850,
+    )
+    configured = MODULE.Budget(
+        production_limit=5_000,
+        test_limit=3_000,
+        excluded_prefixes=(),
+        exceptions={},
+        aggregate_rust=aggregate,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "parse_args",
+        lambda: MODULE.argparse.Namespace(
+            root=tmp_path,
+            baseline=Path("budget.json"),
+            write_baseline=False,
+            require_objective=require_objective,
+            json_out=None,
+        ),
+    )
+    monkeypatch.setattr(MODULE, "load_budget", lambda _path: configured)
+    monkeypatch.setattr(MODULE, "tracked_paths", lambda _root: ["lib.rs"])
+    monkeypatch.setattr(
+        MODULE,
+        "collect_counts",
+        lambda _root, _paths, _excluded: {"lib.rs": 901},
+    )
+
+    assert MODULE.main() == expected_exit_code
+    output = capsys.readouterr().out
+    assert ("exceeds the aggregate objective ceiling 900" in output) is (
+        require_objective
+    )
 
 
 def test_evaluate_rejects_stale_and_missing_exceptions() -> None:

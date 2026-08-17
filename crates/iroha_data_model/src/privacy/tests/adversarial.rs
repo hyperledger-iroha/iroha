@@ -489,6 +489,10 @@ fn assert_bootle_lantern_policy_roundtrip(record: &BootleLanternIssuerPolicyV1) 
         "unknown JSON fields must not create an alternate first-release policy encoding"
     );
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "all matrix-shape and coefficient boundaries are checked in one helper"
+)]
 fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1) {
     let mut invalid = record.clone();
     invalid.issuer_public_matrix.entries.pop();
@@ -629,6 +633,10 @@ fn negacyclic_basis_shift(coefficients: &[u16], shift: usize) -> Vec<u16> {
     shifted
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the R512 constructor mutation corpus is one cohesive algebraic matrix"
+)]
 fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     let first_column = dense_bootle_first_column();
     let mut short_first_column = first_column.clone();
@@ -1037,6 +1045,10 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         .validate(limits)
         .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the non-Orchard private-transfer boundary cases form one protocol matrix"
+)]
 fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimitsV1) {
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
@@ -1056,7 +1068,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.output_set_root.layers = 0;
     assert!(matches!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::InvalidFcmpTreeRoot(
             PrivacyFcmpTreeRootValidationErrorV1::InvalidLayerCount { layers: 0, .. }
         ))
@@ -1067,7 +1079,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.inputs[0].rerandomization_commitment = [0; 32];
     assert_eq!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::InvalidFcmpInput {
             index: 0,
             source: PrivacyFcmpInputValidationErrorV1::ZeroComponent {
@@ -1084,13 +1096,13 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         if duplicate_key_image {
             statement.inputs[1].key_image = statement.inputs[0].key_image;
             assert_eq!(
-                fcmp.validate(&limits),
+                fcmp.validate(limits),
                 Err(PrivacyStatementValidationError::DuplicateFcmpKeyImage { index: 1 })
             );
         } else {
             statement.inputs[1].pseudo_out = statement.inputs[0].pseudo_out;
             assert_eq!(
-                fcmp.validate(&limits),
+                fcmp.validate(limits),
                 Err(PrivacyStatementValidationError::DuplicateFcmpPseudoOut { index: 1 })
             );
         }
@@ -1101,7 +1113,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.outputs[0].amount_commitment = [0; 32];
     assert_eq!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::InvalidFcmpOutput {
             index: 0,
             source: PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
@@ -1118,7 +1130,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         .encrypted_outputs
         .push(statement.encrypted_outputs[0].clone());
     assert_eq!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateFcmpOutputId { index: 1 })
     );
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
@@ -1127,7 +1139,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.encrypted_outputs[0].output_id = fcmp_output(222).output_id();
     assert_eq!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::FcmpEncryptedOutputIdMismatch { index: 0 })
     );
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
@@ -1136,7 +1148,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.encrypted_outputs.clear();
     assert_eq!(
-        fcmp.validate(&limits),
+        fcmp.validate(limits),
         Err(PrivacyStatementValidationError::MissingEncryptedOutput)
     );
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
@@ -1145,7 +1157,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
     assert_eq!(
-        ivm.validate(&limits),
+        ivm.validate(limits),
         Err(PrivacyStatementValidationError::ZeroTypedField {
             field: PrivacyTypedFieldV1::ActionDigest,
         })
@@ -1156,7 +1168,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.action_digest.0[0] ^= 1;
     assert_eq!(
-        ivm.validate(&limits),
+        ivm.validate(limits),
         Err(PrivacyStatementValidationError::ActionDigestMismatch)
     );
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
@@ -1168,7 +1180,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         .computed_action_digest()
         .expect("recompute mismatched-epoch action digest");
     assert_eq!(
-        ivm.validate(&limits),
+        ivm.validate(limits),
         Err(PrivacyStatementValidationError::EpochBindingMismatch {
             field: PrivacyEpochFieldV1::Execution,
             root_epoch: 15,
@@ -1208,7 +1220,7 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
     };
     statement.authorization_epoch += 1;
     assert_eq!(
-        pq.validate(&limits),
+        pq.validate(limits),
         Err(PrivacyStatementValidationError::EpochBindingMismatch {
             field: PrivacyEpochFieldV1::Authorization,
             root_epoch: 17,

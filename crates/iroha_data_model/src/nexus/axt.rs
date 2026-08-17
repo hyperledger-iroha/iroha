@@ -2,6 +2,8 @@
 //!
 //! These structures mirror the IVM syscall surface while providing Norito-compatible
 //! schemas for WSV/block persistence and gossip replication.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     block::BlockHeader,
@@ -16,10 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
 pub struct AxtBinding([u8; 32]);
 impl AxtBinding {
@@ -41,10 +40,7 @@ impl AxtBinding {
 }
 /// Canonical descriptor for an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtDescriptor {
     /// List of dataspace identifiers touched by the transaction.
     pub dsids: Vec<DataSpaceId>,
@@ -54,10 +50,7 @@ pub struct AxtDescriptor {
 }
 /// Declared access set for a dataspace touched by an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtTouchSpec {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -70,10 +63,7 @@ pub struct AxtTouchSpec {
 }
 /// Runtime manifest supplied via `AXT_TOUCH`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TouchManifest {
     /// Keys read within the dataspace during execution.
     #[norito(default)]
@@ -119,9 +109,10 @@ impl TouchManifest {
 /// Compute the canonical descriptor binding used by asset handles and manifests.
 ///
 /// The descriptor's bare Norito payload is prefixed with a domain separator and
-/// hashed using Poseidon2 (rate 2, capacity 1, +1 padding) to produce a 32-byte
-/// digest. The header-framed encoding is intentionally excluded so the binding
-/// stays stable across feature-sensitive schema hashes.
+/// hashed using Poseidon2 (rate 2, capacity 1) to produce a 32-byte digest. Byte
+/// packing appends `0x01` and zero-pads to an eight-byte boundary before the
+/// sponge's field-level +1 padding. The header-framed encoding is intentionally
+/// excluded so the binding stays stable across feature-sensitive schema hashes.
 ///
 /// # Errors
 /// Returns an error if the descriptor cannot be encoded using Norito.
@@ -196,10 +187,7 @@ impl AxtDescriptorBuilder {
 }
 /// Touch fragment emitted for a particular dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtTouchFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -208,10 +196,7 @@ pub struct AxtTouchFragment {
 }
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ProofBlob {
     /// Norito-encoded AXT proof envelope bytes.
     pub payload: Vec<u8>,
@@ -278,10 +263,7 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 /// Norito envelope used to bind dataspace proofs to manifest roots and DA state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtProofEnvelope {
     /// Dataspace the proof is intended for.
     pub dsid: DataSpaceId,
@@ -309,10 +291,7 @@ pub struct AxtProofEnvelope {
 }
 /// Structured FASTPQ receipt/effect binding embedded in AXT proof envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtFastpqBinding {
     /// Canonical FASTPQ parameter set.
     pub parameter: String,
@@ -352,10 +331,7 @@ pub struct AxtFastpqBinding {
 }
 /// Business-effect bindings committed by a FASTPQ proof envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtEffectBinding {
     /// Destination dataspace/domain label when applicable.
     #[norito(default)]
@@ -390,10 +366,7 @@ pub struct AxtEffectBinding {
 }
 /// Proof fragment associated with a dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtProofFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -402,10 +375,7 @@ pub struct AxtProofFragment {
 }
 /// Dataspace composability group binding advertised by the capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct GroupBinding {
     /// Domain or composability group identifier.
     pub composability_group_id: Vec<u8>,
@@ -414,10 +384,7 @@ pub struct GroupBinding {
 }
 /// Handle budget parameters.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
     pub remaining: Quantity,
@@ -427,10 +394,7 @@ pub struct HandleBudget {
 }
 /// Capability subject metadata.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct HandleSubject {
     /// Account identifier of the spender (string form for now).
     pub account: String,
@@ -446,10 +410,7 @@ pub const AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:axt:asset-handl
 /// reconstruct the context from the exact network, committed issuer policy,
 /// and currently executing IVM image before checking the signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtHandleIssuerContextV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -488,10 +449,7 @@ impl Default for AxtHandleIssuerContextV1 {
 }
 /// Canonical V1 statement authenticated by an AXT capability issuer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AssetHandleIssuerPayloadV1 {
     /// Immutable admission context reconstructed by the validating host.
     pub context: AxtHandleIssuerContextV1,
@@ -523,10 +481,7 @@ pub struct AssetHandleIssuerPayloadV1 {
 /// This type cannot enter an AXT envelope. Signing consumes it and returns the
 /// admission-ready [`AssetHandle`] whose signature is mandatory on the wire.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AssetHandleDraft {
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
@@ -609,10 +564,7 @@ impl AssetHandleDraft {
 }
 /// Admission-ready AXT capability with a mandatory issuer signature.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AssetHandle {
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
@@ -730,6 +682,12 @@ pub enum AxtHandleSequenceError {
 ///
 /// This deliberately rejects both stale values and caller-selected future values. The active
 /// manifest controls the era; accepted handles advance only the per-dataspace counter by one.
+///
+/// # Errors
+///
+/// Returns [`AxtHandleSequenceError::EraMismatch`] or
+/// [`AxtHandleSequenceError::SubNonceMismatch`] when the handle does not match the active policy,
+/// and [`AxtHandleSequenceError::CounterExhausted`] when the accepted counter cannot advance.
 pub fn next_axt_handle_sub_nonce(
     policy: &AxtPolicyEntry,
     handle: &AssetHandle,
@@ -753,10 +711,7 @@ pub fn next_axt_handle_sub_nonce(
 }
 /// Simplified representation of spend operations.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SpendOp {
     /// Operation kind (e.g., "transfer").
     pub kind: String,
@@ -770,10 +725,7 @@ pub struct SpendOp {
 }
 /// Intent forwarded to a dataspace via `USE_ASSET_HANDLE`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RemoteSpendIntent {
     /// Target asset dataspace identifier.
     pub asset_dsid: DataSpaceId,
@@ -782,10 +734,7 @@ pub struct RemoteSpendIntent {
 }
 /// Recorded handle usage for commit validation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtHandleFragment {
     /// Handle presented by the caller.
     pub handle: AssetHandle,
@@ -803,10 +752,7 @@ pub struct AxtHandleFragment {
 }
 /// Canonical fingerprint for a handle usage recorded in the replay ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtHandleReplayKey {
     /// Descriptor binding that minted the handle.
     pub binding: AxtBinding,
@@ -846,10 +792,7 @@ impl AxtHandleReplayKey {
 }
 /// Ledger entry capturing when a handle was consumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtReplayRecord {
     /// Dataspace referenced by the handle.
     pub dataspace: DataSpaceId,
@@ -874,10 +817,7 @@ impl AxtReplayRecord {
 }
 /// Aggregate record used to persist and replicate AXT envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtEnvelopeRecord {
     /// Binding derived from the descriptor.
     pub binding: AxtBinding,
@@ -899,10 +839,7 @@ pub struct AxtEnvelopeRecord {
 }
 /// Per-dataspace policy snapshot sourced from the Space Directory/WSV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtPolicyEntry {
     /// Manifest root the handle must reference.
     pub manifest_root: [u8; 32],
@@ -917,10 +854,7 @@ pub struct AxtPolicyEntry {
 }
 /// Binding between a dataspace id and its AXT policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtPolicyBinding {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -929,10 +863,7 @@ pub struct AxtPolicyBinding {
 }
 /// Collection of AXT policy bindings for deterministic replication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtPolicySnapshot {
     /// Hash-derived snapshot version (truncated to u64 for gauges/telemetry).
     pub version: u64,
@@ -1025,10 +956,7 @@ impl AxtPolicySnapshot {
 }
 /// Context captured when an AXT envelope fails policy checks.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AxtRejectContext {
     /// Classified reason for the rejection.
     pub reason: AxtRejectReason,
@@ -1072,10 +1000,7 @@ impl core::fmt::Display for AxtRejectContext {
 }
 /// Canonical reason codes for AXT policy rejections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "reason", content = "detail"))]
 #[repr(u8)]
 pub enum AxtRejectReason {
@@ -1818,6 +1743,10 @@ mod tests {
         assert_eq!(AxtRejectReason::from_label("unknown"), None);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one canonical envelope fixture verifies the full nested wire shape and required commit height"
+    )]
     fn envelope_roundtrips_through_norito() {
         #[derive(Encode)]
         struct EnvelopeWithoutCommitHeight {
@@ -1935,6 +1864,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one policy-snapshot matrix covers canonical order, required fields, duplicates, and version binding"
+    )]
     fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
         #[derive(Encode)]
         struct SnapshotWithoutVersion {

@@ -4,7 +4,7 @@
 //!   cargo run -p `iroha_torii_shared` --example `connect_wallet` -- \
 //!     --node <http://127.0.0.1:8080> --sid <base64url> \
 //!     --network-id <hash:...#....> --app-pk <base64url> --nonce <base64url> \
-//!     --token <token_wallet> --relay <token_relay> \
+//!     --token <`token_wallet`> --relay <`token_relay`> \
 //!     [--action ok|reject|close]
 //!
 //! Supply the signing seed at runtime through

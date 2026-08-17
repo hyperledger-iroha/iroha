@@ -321,6 +321,7 @@ impl DurableCertifiedServeNegativeReceipt {
     }
 }
 /// Body-independent reference recovered for one completed response.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredCertifiedServeCompletedPayload<'a> {
     response_hash: HashOf<wire::CertifiedBodyResponse>,
@@ -328,6 +329,7 @@ pub(crate) struct RecoveredCertifiedServeCompletedPayload<'a> {
     responder: wire::ValidatorIndex,
     signature: &'a [u8],
 }
+#[cfg(test)]
 impl RecoveredCertifiedServeCompletedPayload<'_> {
     /// Hash of the original complete response.
     pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
@@ -347,6 +349,7 @@ impl RecoveredCertifiedServeCompletedPayload<'_> {
     }
 }
 /// Closed recovered state of one Certified-Serve payload.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     variant_size_differences,
@@ -362,11 +365,13 @@ pub(crate) enum RecoveredCertifiedServePayloadState<'a> {
     Negative(CertifiedServePayloadNegativeOutcome),
 }
 /// Borrowed view of one entry in a startup recovery cut.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 #[must_use]
 pub(crate) struct RecoveredCertifiedServePayload<'a> {
     payload: &'a PersistedCertifiedServePayloadV1,
 }
+#[cfg(test)]
 impl RecoveredCertifiedServePayload<'_> {
     /// Exact signed-request identity.
     pub(crate) fn id(&self) -> CertifiedServePayloadId {
@@ -531,10 +536,12 @@ impl AuthenticatedCertifiedServePayloadRecoveryCut {
         self.height
     }
     /// Number of independently authenticated payloads.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.payloads.len()
     }
     /// Whether no payload survived authenticated recovery.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.payloads.is_empty()
     }
@@ -569,22 +576,27 @@ pub(crate) struct CertifiedServePayloadRecoveryCut {
 }
 impl CertifiedServePayloadRecoveryCut {
     /// Frozen height-context identity owning this cut.
+    #[cfg(test)]
     pub(crate) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
     /// Exact consensus height owning this cut.
+    #[cfg(test)]
     pub(crate) const fn height(&self) -> wire::Height {
         self.height
     }
     /// Number of recovered exact requests.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.payloads.len()
     }
     /// Whether no Certified-Serve payload was recovered.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.payloads.is_empty()
     }
     /// Resolve one recovered request by its exact signed-request hash.
+    #[cfg(test)]
     pub(crate) fn get(
         &self,
         id: CertifiedServePayloadId,
@@ -594,6 +606,7 @@ impl CertifiedServePayloadRecoveryCut {
             .map(|payload| RecoveredCertifiedServePayload { payload })
     }
     /// Iterate in canonical request-hash order.
+    #[cfg(test)]
     pub(crate) fn iter(
         &self,
     ) -> impl ExactSizeIterator<Item = RecoveredCertifiedServePayload<'_>> + '_ {
@@ -956,6 +969,7 @@ pub(crate) enum CertifiedServePayloadStoreError {
     #[error("terminal Certified-Serve payload has no lifecycle-ledger owner")]
     OrphanTerminalPayload,
     /// A pending admission attempted to resurrect a terminal request.
+    #[cfg(test)]
     #[error("terminal Certified-Serve payload cannot return to pending")]
     TerminalResurrection,
     /// A terminal state differs from an already durable terminal result.

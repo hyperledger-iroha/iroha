@@ -11,11 +11,6 @@ type ValidatedFixture = (
 );
 #[path = "microsoft_mc/sha256.rs"]
 mod sha256;
-#[cfg(test)]
-/// Hash bounded test input with the crate-owned dependency-free implementation.
-pub(super) fn dependency_free_sha256_for_tests(input: &[u8]) -> [u8; 32] {
-    sha256::sha256(input).expect("bounded unit-test input")
-}
 #[path = "microsoft_mc/verifier_key.rs"]
 mod verifier_key;
 #[path = "microsoft_mc/verify.rs"]

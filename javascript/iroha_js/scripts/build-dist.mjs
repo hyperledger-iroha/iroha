@@ -38,6 +38,7 @@ const REQUIRED_OUTPUTS = [
   "strictLosslessJson.js",
   "sorafsOrderbookSubmission.js",
   "sorafsOrderbookSubmission.d.ts",
+  "smartContractDeploymentSubmit.js",
   "sumeragiTyped.js",
   "toriiBrowserClient.js",
   "toriiClient.js",

@@ -5,7 +5,6 @@
 //! boundary. When finalized replay archival is configured, the same bounded
 //! worker also uses the archive already qualified and installed in
 //! [`sorafs_node::NodeHandle`].
-use std::{sync::Arc, time::Duration};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_node::{
     NodeHandle, PorReputationReconcileOutcomeV1,
@@ -13,6 +12,7 @@ use sorafs_node::{
         ReputationNativeOutcomeAdmissionApiV1, ReputationNativeOutcomeAdmissionStateV1,
     },
 };
+use std::{sync::Arc, time::Duration};
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Payload-free worker failure category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +48,7 @@ enum PorReputationWorkerModeV1 {
 pub(crate) struct PorReplayArchiveTickOutcomeV1 {
     /// Whether reconciliation is intentionally idle until runtime activation.
     pub reputation_deferred: bool,
-    /// Number of exact PoR terminals admitted and acknowledged.
+    /// Number of exact `PoR` terminals admitted and acknowledged.
     pub reconciled_records: u32,
     /// Number of acknowledged finalized records durably archived and compacted.
     pub compacted_records: u32,
@@ -224,7 +224,6 @@ pub(crate) fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::sorafs::{
         capacity::ProviderId,
@@ -241,6 +240,7 @@ mod tests {
             StreamTokenReputationAdmissionOutcomeV1,
         },
     };
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use tempfile::TempDir;
     #[derive(Debug)]
     struct RejectingAdmission;
@@ -304,7 +304,7 @@ mod tests {
         binding: PorFinalizedReplayArchiveBindingV1,
     }
     impl PorFinalizedReplayArchiveV1 for IdleReplayArchive {
-        fn runtime_handle(&self) -> &str {
+        fn runtime_handle(&self) -> &'static str {
             "hsm://sorafs/por-replay-archive/worker"
         }
         fn binding(
@@ -351,7 +351,7 @@ mod tests {
             KeyPair::try_from_seed(vec![0xA4; 32], Algorithm::Ed25519).expect("archive key");
         let public_key = key_pair.public_key().to_bytes().1;
         let mut signing_public_key = [0_u8; 32];
-        signing_public_key.copy_from_slice(&public_key);
+        signing_public_key.copy_from_slice(public_key);
         let binding = PorFinalizedReplayArchiveBindingV1::try_new(
             [0xA1; 32],
             1,

@@ -1,11 +1,15 @@
 //! Wire-parity and allocation regressions for block-signature serialization.
+// This isolated integration test is the narrow exception that needs `GlobalAlloc`
+// to observe steady-state heap traffic in the production serialization path.
+#![allow(unsafe_code)]
+
+use iroha_crypto::{Signature, SignatureOf};
+use iroha_data_model::block::{BlockHeader, BlockSignature, header::wire::BlockSignatureWire};
+use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, header_flags};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
 };
-use iroha_crypto::{Signature, SignatureOf};
-use iroha_data_model::block::{BlockHeader, BlockSignature, header::wire::BlockSignatureWire};
-use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, header_flags};
 struct TrackingAllocator;
 thread_local! {
     static TRACKING: Cell<bool> = const { Cell::new(false) };

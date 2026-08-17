@@ -42231,7 +42231,6 @@ mod advert_tests {
     async fn car_range_emits_gateway_headers() {
         let context = token_test_context();
         let manifest = context.manifest();
-        let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let headers = alias_bound_car_range_headers(
             manifest.chunk_profile_handle(),
@@ -42270,7 +42269,6 @@ mod advert_tests {
     async fn car_range_enforces_request_quota() {
         let context = token_test_context();
         let manifest = context.manifest();
-        let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(
             &context,
             TokenOverrides {
@@ -42885,7 +42883,7 @@ mod advert_tests {
         let response_unknown = kind
             .request(
                 &context,
-                chunk_digest_hex,
+                chunk_digest_hex.clone(),
                 headers(unknown_nonce),
                 unknown_port,
             )
@@ -43177,7 +43175,6 @@ mod advert_tests {
     async fn car_range_enforces_rate_limit_bytes() {
         let context = token_test_context();
         let manifest = context.manifest();
-        let end = manifest.content_length().saturating_sub(1);
         let limited_bytes = manifest.content_length().saturating_sub(1);
         let overrides = TokenOverrides {
             rate_limit_bytes: Some(limited_bytes),

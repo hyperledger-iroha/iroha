@@ -858,6 +858,10 @@ REPORT_KEYS = frozenset(
         "source_commit",
         "source_tree_sha256",
         "source_repo_dirty",
+        "reviewed_source_closure_descriptor_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "generation",
         "generation_memory_limit_bytes",
         "generation_memory_enforcement_profile",
@@ -951,6 +955,19 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
     if not isinstance(report["source_commit"], str) or not COMMIT_RE.fullmatch(report["source_commit"]):
         raise StageError("candidate source commit is not canonical")
     _digest(report["source_tree_sha256"], "candidate source-tree digest")
+    for key, label in (
+        (
+            "reviewed_source_closure_descriptor_sha256",
+            "reviewed source-closure descriptor digest",
+        ),
+        (
+            "authenticated_source_seal_projection_sha256",
+            "authenticated source-seal projection digest",
+        ),
+        ("reviewed_cargo_binary_sha256", "reviewed Cargo binary digest"),
+        ("reviewed_rustc_binary_sha256", "reviewed rustc binary digest"),
+    ):
+        _digest(report[key], label)
     if report["source_repo_dirty"] is not False:
         raise StageError("candidate does not report a clean source repository")
     if not isinstance(report["generation"], str) or not PORTABLE_ID_RE.fullmatch(report["generation"]):

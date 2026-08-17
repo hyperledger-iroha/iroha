@@ -120,7 +120,10 @@ fn recover_pending_canonical_bodies(
                     bounded_needs.to_vec(),
                 )?;
                 let mut next_retry = Instant::now();
-                while body_recovery.has_pending() {
+                while canonical_recovery_source_work_remains(
+                    body_recovery.has_pending(),
+                    body_recovery.effect_count(),
+                ) {
                     if output_guard.restart_required() {
                         return Err(V2RunnerError::RestartRequired);
                     }
@@ -128,30 +131,56 @@ fn recover_pending_canonical_bodies(
                         return Ok(PendingCanonicalRecoveryControlV1::Shutdown);
                     }
                     let now = Instant::now();
-                    if now >= next_retry {
-                        body_recovery.service_next()?;
-                        next_retry = deadline_after(now, retransmit_interval);
+                    if body_recovery.has_pending() && now >= next_retry {
+                        let request_queued = body_recovery.service_next()?;
+                        let serviced_at = Instant::now();
+                        refresh_canonical_recovery_retry_deadline(
+                            &mut next_retry,
+                            serviced_at,
+                            retransmit_interval,
+                            request_queued,
+                        );
                     }
-                    let drained = drain_canonical_executed_block_recovery_ingress(
-                        aperture.ingress(),
-                        &mut body_recovery,
-                        control_queue_capacity,
-                    )?;
-                    if drained != 0 && body_recovery.has_pending() {
-                        body_recovery.service_next()?;
+                    let ingress = if body_recovery.has_pending() {
+                        drain_canonical_executed_block_recovery_ingress(
+                            aperture.ingress(),
+                            &mut body_recovery,
+                            control_queue_capacity,
+                        )?
+                    } else {
+                        CanonicalRecoveryIngressDrain::default()
+                    };
+                    if ingress.exact_response_progress && body_recovery.has_pending() {
+                        let request_queued = body_recovery.service_next()?;
+                        let serviced_at = Instant::now();
+                        refresh_canonical_recovery_retry_deadline_after_progress(
+                            &mut next_retry,
+                            serviced_at,
+                            retransmit_interval,
+                            request_queued,
+                        );
                     }
-                    let dispatched = dispatch_canonical_executed_block_recovery_effects(
+                    let dispatch = dispatch_canonical_executed_block_recovery_effects(
                         &mut body_recovery,
                         services,
                         control_queue_capacity,
                     )?;
-                    if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
-                        let wait = next_retry
-                            .saturating_duration_since(Instant::now())
-                            .min(IDLE_POLL);
-                        if !wait.is_zero() {
-                            let _ = wake_rx.recv_timeout(wait);
-                        }
+                    if dispatch.request_dispatched {
+                        refresh_canonical_recovery_retry_deadline(
+                            &mut next_retry,
+                            Instant::now(),
+                            retransmit_interval,
+                            true,
+                        );
+                    }
+                    if canonical_recovery_source_work_remains(
+                        body_recovery.has_pending(),
+                        body_recovery.effect_count(),
+                    ) && ingress.drained == 0
+                        && dispatch.handled == 0
+                    {
+                        let wait = canonical_recovery_idle_wait(next_retry, Instant::now());
+                        let _ = wake_rx.recv_timeout(wait);
                     }
                 }
             }

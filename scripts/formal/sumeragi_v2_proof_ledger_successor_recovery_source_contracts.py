@@ -448,7 +448,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "let Self { owner, retirement } = self",
                     "let launched = owner.launch(inputs)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
-                    "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: super::launch::LaunchedProductionLifecycleV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
+                    "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: Box<super::launch::LaunchedProductionLifecycleV1>, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
                     "fn initialize_recovered_local_proposal( &mut self, runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1, )",
                     "self.launched.initialize_recovered_local_proposal(runner)",
@@ -857,6 +857,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
         launch_path, launch_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
         )
+        turn_driver_path, turn_driver_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+        )
         kura_path, kura_source = load("crates/iroha_core/src/kura.rs")
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
@@ -924,6 +927,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
         )
         if (
             launch_source
+            and turn_driver_source
             and kura_source
             and owner_source
             and worker_source
@@ -966,7 +970,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let staged_predecessor = if fetch_is_present",
                         "predecessor.clone()",
                         ".stage_authenticated_wal_decision_fetch(projection.fetch())",
-                        "staged_predecessor .stage_recovered_decision_apply(&projection)",
+                        "staged_predecessor .stage_recovered_decision_apply(projection.as_ref())",
                         "LifecycleCoordinator::prepare_with_authenticated_successor_store_borrowed(",
                         "authority, ledger_store, predecessor, successor.clone()",
                     ),
@@ -1338,12 +1342,22 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "owner.live_fetch_count_for_test()",
                 ),
             )
-            lifecycle_launch = region(
+            lifecycle_launch_item = _require_qualified_rust_item(
                 launch_path,
                 launch_source,
+                "ProductionLifecycleOwnerV1",
+                "launch",
+                errors,
                 "Kura-bound production lifecycle launch",
-                "pub(in crate::sumeragi) fn launch(\n        mut self,",
-                "\n}\n#[cfg(test)]\nmod tests {",
+                expected_attributes=(
+                    "#[allow(clippy::result_large_err)]",
+                    "#[inline(never)]",
+                ),
+            )
+            lifecycle_launch = (
+                lifecycle_launch_item.source
+                if lifecycle_launch_item is not None
+                else ""
             )
             require_order(
                 launch_path,
@@ -2017,7 +2031,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_source,
                 "lifecycle-owned recovered Sign dispatch",
                 "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-                "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
+                "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
             )
             require_order(
                 scheduler_path,
@@ -2629,7 +2643,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "sealed recovered Proposal reservation methods",
                 "impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
-                "/// Result of reserving exact output for one recovered Decision Fetch request.",
+                "pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {",
             )
             require_order(
                 worker_path,
@@ -3369,7 +3383,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-                "/// Refanout one durable recovered signed Broadcast",
+                "pub(in crate::sumeragi) fn drive_recovered_decision_apply_deferred(",
             )
             require_order(
                 launch_path,
@@ -3422,7 +3436,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_source,
                 "restart-safe recovered signed-Broadcast refanout",
                 "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+                "fn persist_recovered_decision_fetch_response_after_runner(",
             )
             require_order(
                 scheduler_path,
@@ -3571,26 +3585,93 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "cold recovered phase Broadcast-and-Sign registry join",
                 registry_source,
                 (
-                    "fn prepare_cold_adapter_startup(",
+                    "#[inline(never)] pub(in crate::sumeragi) fn prepare_cold_adapter_startup(",
+                    "Self::prepare_cold_sign_branch(",
+                    "Self::prepare_cold_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_sign_branch(",
+                    "#[inline(never)] fn prepare_cold_signed_broadcast_branch(",
+                    "let pair_hint = matching.next()",
+                    "if matching.next().is_some()",
+                    "drop(matching)",
+                    "Self::prepare_cold_signed_broadcast_and_next_vote_branch(",
+                    "Self::prepare_cold_single_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_single_signed_broadcast_branch(",
+                    "#[inline(never)] fn prepare_cold_signed_broadcast_and_next_vote_branch(",
                     "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
                     "project_authenticated_cold_signed_broadcast_and_sign(verified, seal)",
                     "authenticate_recovered_phase_signed_broadcast_and_sign(",
                     "advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                    "#[inline(never)] pub(crate) fn install_recovered_wal_sign(",
+                    "Self::install_recovered_sign_branch(",
+                    "Self::install_recovered_broadcast_branch(",
+                    "Self::install_recovered_broadcast_and_next_vote_branch(",
+                    "#[inline(never)] fn install_recovered_sign_branch(",
+                    "#[inline(never)] fn install_recovered_broadcast_branch(",
+                    "#[inline(never)] fn install_recovered_broadcast_and_next_vote_branch(",
                     "fn install_recovered_broadcast_and_next_vote(",
                     "paired_next_sign: Some((next_sign_address, next_sign_digest))",
                     "fn phase_broadcast_and_next_vote_projection(",
                     "owns_recovered_phase_broadcast_and_next_sign(",
                 ),
             )
+            pair_install = _require_rust_item(
+                registry_path,
+                registry_source,
+                "install_recovered_broadcast_and_next_vote",
+                errors,
+            )
+            if pair_install is not None:
+                require_tokens(
+                    registry_path,
+                    "cold recovered phase Broadcast-and-Sign registry join",
+                    pair_install.source,
+                    (
+                        "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+                    ),
+                )
             require_tokens(
                 adapter_path,
                 "cold recovered phase owner handoff",
                 adapter_source,
                 (
-                    "install_recovered_sign(&body_store)",
+                    "#[inline(never)] fn authenticate_recovered_phase_vote_stage<'registry>(",
+                    "Ok(Box::new(authenticated))",
+                    "#[inline(never)] fn persist_recovered_phase_vote_stage<'registry>(",
+                    "(*authenticated).persist_repair()",
+                    "Ok(persisted)",
+                    "#[inline(never)] fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(",
                     "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                    "ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup { adapter_startup, verified, persisted, }",
+                    "#[inline(never)] fn install_recovered_phase_vote_sign_stage<'registry>(",
+                    "(*prepared).install_recovered_sign()",
+                    "#[inline(never)] fn open_recovered_phase_vote_seals_stage(",
+                    "(*installed).open_production_owner_seals(",
+                    "#[inline(never)] fn finish_recovered_phase_vote_owner_stage(",
+                    "(*paired).into_owner(registry, payload_store, body_store)",
                 ),
             )
+            phase_branch = _require_rust_item(
+                adapter_path,
+                adapter_source,
+                "open_recovered_phase_vote_branch",
+                errors,
+            )
+            if phase_branch is not None:
+                require_order(
+                    adapter_path,
+                    "cold recovered phase owner handoff",
+                    phase_branch.source,
+                    (
+                        "Self::ensure_recovered_body_store_context(&body_store, &verified)",
+                        "Self::open_recovered_non_apply_stores(",
+                        "Self::authenticate_recovered_phase_vote_stage(",
+                        "Self::persist_recovered_phase_vote_stage(authenticated)",
+                        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+                        "Self::install_recovered_phase_vote_sign_stage(prepared)",
+                        "Self::open_recovered_phase_vote_seals_stage(",
+                        "Self::finish_recovered_phase_vote_owner_stage(",
+                    ),
+                )
             recovered_phase_broadcast_assembly = region(
                 lifecycle_open_path,
                 lifecycle_open_source,
@@ -3709,8 +3790,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_decision_fetch_with_runner_debt(",
-                "/// Persist one selected recovered Decision Fetch response",
+                "fn dispatch_recovered_completion_with_runner_debt(",
+                "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
                 scheduler_path,
@@ -3718,11 +3799,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 recovered_fetch_dispatch,
                 (
                     "attest_ready_recovered_decision_fetch",
+                    "authenticate_recovered_decision_fetch_request(",
                     "take_request_authority()",
-                    "authenticate_recovered_decision_fetch_request(authority)",
-                    "capture_recovered_decision_fetch_exact_output(&owner)",
-                    "prepare_recovered_decision_fetch_request_registration(owner)",
+                    "capture_recovered_completion_capacity_census(probes)",
                     "self.coordinator.plan_turn(inputs)",
+                    "census.select_fetch(ordinal)",
+                    "prepare_recovered_decision_fetch_request_registration(owner)",
                     "prepare_recovered_decision_fetch_dispatch",
                     "registration.commit(prepared)",
                     "output.commit()",
@@ -3736,9 +3818,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "services.matches_lifecycle_executor_output_guard(executor)",
                     "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
-                    "output.abort_before_claim()",
-                    "self.coordinator.rollback_unpublished_turn(&lease)",
-                    "assert_eq!(installed, dispatch_key)",
+                    "RecoveredCompletionCapacityProbeV1::Fetch",
+                    "authenticated_capacity(ordinal, &factory)",
+                    "prepared.dispatch_key() != registration.dispatch_key()",
+                    "installed != dispatch_key",
                 ),
             )
             reject_tokens(
@@ -3775,38 +3858,47 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))",
                 ),
             )
-            require_tokens(
-                scheduler_path,
-                "recovered Decision Fetch response persistence Phase A",
-                scheduler_source,
+            recovered_fetch_ingress = region(
+                turn_driver_path,
+                turn_driver_source,
+                "unified recovered Decision Fetch ingress driver",
+                "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+                "fn drive_recovered_ingress_selector<'cursor>(",
+            )
+            require_order(
+                turn_driver_path,
+                "unified recovered Decision Fetch ingress driver",
+                recovered_fetch_ingress,
                 (
-                    "runner.target() != LifecycleRunnerRankTarget::Ingress",
-                    "ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation",
+                    "if !self.runner_turn_matches(",
+                    "LifecycleRunnerRankTarget::Ingress",
+                    "return ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+                    "self.drive_recovered_ingress_selector(selector, runner)",
                 ),
             )
-            require_tokens(
-                effects_path,
-                "recovered Decision Fetch foreign-cursor owner regression",
-                effects_source,
-                (
-                    "fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once()",
-                    "owner.persist_recovered_decision_fetch_response(",
-                    "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)",
-                ),
+            recovered_fetch_ingress_handoff = region(
+                turn_driver_path,
+                turn_driver_source,
+                "validated recovered Decision Fetch Phase-A handoff",
+                "fn drive_recovered_ingress_selector<'cursor>(",
+                "fn settle_parked_recovered_sign_completion(",
             )
-            require_literal_count(
-                effects_path,
-                "recovered Decision Fetch foreign-cursor owner regression",
-                effects_source,
-                '"a foreign Ingress cursor cannot change the recovered Fetch lease or registry row"',
-                1,
+            require_order(
+                turn_driver_path,
+                "validated recovered Decision Fetch Phase-A handoff",
+                recovered_fetch_ingress_handoff,
+                (
+                    "persist_recovered_decision_fetch_response_after_runner(",
+                    "drop(runner)",
+                    "ProductionLifecycleIngressTurnV1::Selected(selected)",
+                ),
             )
             require_tokens(
                 launch_path,
                 "recovered Decision Fetch source-order regression",
                 launch_source,
                 (
-                    "fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation()",
+                    "fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation()",
                 ),
             )
             recovered_fetch_ready = region(
@@ -4126,7 +4218,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "recovered Decision Fetch mixed completion head fence",
                 "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
-                "fn take_recovered_decision_apply_completion(",
+                "fn take_recovered_lifecycle_sign_completion(",
             )
             require_order(
                 worker_path,
@@ -4140,16 +4232,33 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "io.try_recv_completion_unacknowledged()",
                 ),
             )
+            recovered_fetch_classifier = region(
+                worker_path,
+                worker_source,
+                "unified recovered Decision Fetch completion classifier",
+                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
+                "/// Drain only the oldest lifecycle-owned recovered Sign completion.",
+            )
+            require_order(
+                worker_path,
+                "unified recovered Decision Fetch completion classifier",
+                recovered_fetch_classifier,
+                (
+                    "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
+                    "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
+                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                ),
+            )
             require_tokens(
                 worker_path,
-                "dedicated recovered Decision Fetch worker ownership",
+                "unified recovered Decision Fetch worker ownership",
                 worker_source,
                 (
                     "PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1)",
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn drain_recovered_decision_fetch_body_completion(",
+                    "fn take_next_recovered_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )

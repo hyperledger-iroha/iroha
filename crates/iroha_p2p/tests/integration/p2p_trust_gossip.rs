@@ -154,7 +154,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     let (net_a, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -170,7 +170,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     let (net_b, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_b.clone()),
         make_config(&addr_b, false),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -247,7 +247,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     let (net_a, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -263,7 +263,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     let (net_b, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_b.clone()),
         make_config(&addr_b, TRUST_GOSSIP),
-        chain_id.clone(),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),

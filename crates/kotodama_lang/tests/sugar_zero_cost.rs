@@ -2,6 +2,7 @@
 use kotodama_lang::{
     compiler::Compiler, ir, metadata::ProgramMetadata, parser::parse, semantic::analyze,
 };
+use std::collections::BTreeSet;
 fn executable_code(source: &str) -> Vec<u8> {
     let artifact = Compiler::new()
         .compile_source(source)
@@ -16,14 +17,53 @@ fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) 
         "{description} must be erased before executable code generation"
     );
 }
-fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
-    let lower = |source| {
-        let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
-        let typed = analyze(&parsed).expect("analyze Kotodama V1 source for IR comparison");
-        ir::lower(&typed).expect("lower Kotodama V1 source for IR comparison")
-    };
-    let sugar = lower(sugar);
-    let explicit = lower(explicit);
+fn lowered_ir(source: &str) -> ir::Program {
+    let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
+    let typed = analyze(&parsed).expect("analyze Kotodama V1 source for IR comparison");
+    ir::lower(&typed).expect("lower Kotodama V1 source for IR comparison")
+}
+fn all_blocks(function: &ir::Function) -> Vec<&ir::BasicBlock> {
+    function.blocks.iter().collect()
+}
+fn reachable_blocks(function: &ir::Function) -> Vec<&ir::BasicBlock> {
+    let mut pending = vec![function.entry];
+    let mut reachable = BTreeSet::new();
+    while let Some(label) = pending.pop() {
+        if !reachable.insert(label.0) {
+            continue;
+        }
+        let block = function
+            .blocks
+            .iter()
+            .find(|block| block.label == label)
+            .expect("lowered terminator target must exist");
+        match &block.terminator {
+            ir::Terminator::Jump(target) => pending.push(*target),
+            ir::Terminator::Branch {
+                then_bb, else_bb, ..
+            } => {
+                pending.push(*then_bb);
+                pending.push(*else_bb);
+            }
+            ir::Terminator::Return(_)
+            | ir::Terminator::Return2(_, _)
+            | ir::Terminator::ReturnN(_) => {}
+        }
+    }
+    function
+        .blocks
+        .iter()
+        .filter(|block| reachable.contains(&block.label.0))
+        .collect()
+}
+fn assert_ir_equivalent_with(
+    sugar: &str,
+    explicit: &str,
+    description: &str,
+    blocks: for<'a> fn(&'a ir::Function) -> Vec<&'a ir::BasicBlock>,
+) {
+    let sugar = lowered_ir(sugar);
+    let explicit = lowered_ir(explicit);
     assert_eq!(
         sugar.functions.len(),
         explicit.functions.len(),
@@ -37,32 +77,26 @@ fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
         );
         assert_eq!(sugar.entry, explicit.entry, "{description}: entry block");
         assert_eq!(
-            sugar.blocks, explicit.blocks,
+            blocks(sugar),
+            blocks(explicit),
             "{description} must be erased during IR lowering"
         );
     }
 }
+fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
+    assert_ir_equivalent_with(sugar, explicit, description, all_blocks);
+}
+fn assert_reachable_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
+    assert_ir_equivalent_with(sugar, explicit, description, reachable_blocks);
+}
 #[test]
 fn result_propagation_matches_the_exhaustive_early_return_form() {
-    let propagated = r#"
-        seiyaku ResultPropagation {
-            view fn main(Result<int, bool> value) -> Result<(int, int), bool> {
-                let payload = value?;
-                Result::ok((payload, payload))
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku ResultPropagation {
-            view fn main(Result<int, bool> value) -> Result<(int, int), bool> {
-                let payload = match value {
-                    Result::ok(payload) => payload,
-                    Result::err(failure) => { return Result::err(failure); },
-                };
-                Result::ok((payload, payload))
-            }
-        }
-    "#;
+    let propagated = include_str!("../fixtures/koto_v1/sugar_zero_cost/001.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/002.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(
         propagated,
         explicit,
@@ -76,25 +110,12 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
 }
 #[test]
 fn option_propagation_matches_the_exhaustive_early_return_form() {
-    let propagated = r#"
-        seiyaku OptionPropagation {
-            view fn main(Option<int> value) -> Option<(int, int)> {
-                let payload = value?;
-                Option::some((payload, payload))
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku OptionPropagation {
-            view fn main(Option<int> value) -> Option<(int, int)> {
-                let payload = match value {
-                    Option::some(payload) => payload,
-                    Option::none => { return Option::none; },
-                };
-                Option::some((payload, payload))
-            }
-        }
-    "#;
+    let propagated = include_str!("../fixtures/koto_v1/sugar_zero_cost/003.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/004.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(
         propagated,
         explicit,
@@ -108,159 +129,69 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
 }
 #[test]
 fn function_tail_matches_explicit_return() {
-    let tail = r#"
-        seiyaku TailExpression {
-            view fn main(int value) -> int { value + 1 }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku TailExpression {
-            view fn main(int value) -> int { return value + 1; }
-        }
-    "#;
-    assert_ir_equivalent(tail, explicit, "function tail expression");
+    let tail = include_str!("../fixtures/koto_v1/sugar_zero_cost/005.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/006.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    // Explicit returns retain a dead continuation in raw lowering IR so the
+    // strict SSA budget covers source after a terminator before pruning it.
+    assert_reachable_ir_equivalent(tail, explicit, "function tail expression");
     assert_executable_equivalent(tail, explicit, "function tail expression");
 }
 #[test]
 fn if_block_expression_matches_the_existing_ternary() {
-    let block = r#"
-        seiyaku IfExpression {
-            view fn main(bool condition, int yes, int no) -> int {
-                if condition { yes } else { no }
-            }
-        }
-    "#;
-    let ternary = r#"
-        seiyaku IfExpression {
-            view fn main(bool condition, int yes, int no) -> int {
-                condition ? yes : no
-            }
-        }
-    "#;
+    let block = include_str!("../fixtures/koto_v1/sugar_zero_cost/007.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let ternary = include_str!("../fixtures/koto_v1/sugar_zero_cost/008.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(block, ternary, "expression-valued if block");
     assert_executable_equivalent(block, ternary, "expression-valued if block");
 }
 #[test]
 fn if_let_matches_the_exhaustive_match_form() {
-    let if_let = r#"
-        seiyaku IfLetExpression {
-            view fn main(Option<int> value, int fallback) -> int {
-                if let Option::some(payload) = value { payload } else { fallback }
-            }
-        }
-    "#;
-    let exhaustive = r#"
-        seiyaku IfLetExpression {
-            view fn main(Option<int> value, int fallback) -> int {
-                match value {
-                    Option::some(payload) => payload,
-                    Option::none => fallback,
-                }
-            }
-        }
-    "#;
+    let if_let = include_str!("../fixtures/koto_v1/sugar_zero_cost/009.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let exhaustive = include_str!("../fixtures/koto_v1/sugar_zero_cost/010.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(if_let, exhaustive, "if let expression");
     assert_executable_equivalent(if_let, exhaustive, "if let expression");
 }
 #[test]
 fn result_if_let_matches_the_exhaustive_match_form() {
-    let if_let = r#"
-        seiyaku ResultIfLetExpression {
-            view fn main(Result<int, bool> value, int fallback) -> int {
-                if let Result::ok(payload) = value { payload } else { fallback }
-            }
-        }
-    "#;
-    let exhaustive = r#"
-        seiyaku ResultIfLetExpression {
-            view fn main(Result<int, bool> value, int fallback) -> int {
-                match value {
-                    Result::ok(payload) => payload,
-                    Result::err(_) => fallback,
-                }
-            }
-        }
-    "#;
+    let if_let = include_str!("../fixtures/koto_v1/sugar_zero_cost/011.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let exhaustive = include_str!("../fixtures/koto_v1/sugar_zero_cost/012.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(if_let, exhaustive, "Result if let expression");
     assert_executable_equivalent(if_let, exhaustive, "Result if let expression");
 }
 #[test]
 fn named_call_matches_explicit_source_order_and_positional_abi_order() {
-    let named = r#"
-        seiyaku NamedCall {
-            fn first() -> int { 1 }
-            fn second() -> bool { true }
-            fn combine(int left, bool right) -> int {
-                if right { left } else { 0 }
-            }
-            view fn main() -> int {
-                combine(right: second(), left: first())
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku NamedCall {
-            fn first() -> int { 1 }
-            fn second() -> bool { true }
-            fn combine(int left, bool right) -> int {
-                if right { left } else { 0 }
-            }
-            view fn main() -> int {
-                let bool right_value = second();
-                let int left_value = first();
-                combine(left_value, right_value)
-            }
-        }
-    "#;
+    let named = include_str!("../fixtures/koto_v1/sugar_zero_cost/013.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/014.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(named, explicit, "out-of-order named call");
     assert_executable_equivalent(named, explicit, "out-of-order named call");
 }
 #[test]
 fn named_struct_matches_explicit_source_order_and_declaration_layout() {
-    let named = r#"
-        seiyaku NamedStruct {
-            struct Pair { int first, int second }
-            state int trace;
-
-            hajimari() { trace = 0; }
-
-            fn record(int value) -> int {
-                trace = trace * 10 + value;
-                value
-            }
-
-            kotoage fn main() -> int authorize("WriteState") {
-                let pair = Pair {
-                    second: record(2),
-                    first: record(1),
-                };
-                trace * 100 + pair.first * 10 + pair.second
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku NamedStruct {
-            struct Pair { int first, int second }
-            state int trace;
-
-            hajimari() { trace = 0; }
-
-            fn record(int value) -> int {
-                trace = trace * 10 + value;
-                value
-            }
-
-            kotoage fn main() -> int authorize("WriteState") {
-                let int second_value = record(2);
-                let int first_value = record(1);
-                let pair = Pair {
-                    first: first_value,
-                    second: second_value,
-                };
-                trace * 100 + pair.first * 10 + pair.second
-            }
-        }
-    "#;
+    let named = include_str!("../fixtures/koto_v1/sugar_zero_cost/015.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/016.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(
         named,
         explicit,
@@ -274,23 +205,12 @@ fn named_struct_matches_explicit_source_order_and_declaration_layout() {
 }
 #[test]
 fn exhaustive_option_match_matches_eager_unwrap_or() {
-    let matched = r#"
-        seiyaku MatchExpression {
-            view fn main(Option<int> value, int fallback) -> int {
-                match value {
-                    Option::some(payload) => payload,
-                    Option::none => fallback,
-                }
-            }
-        }
-    "#;
-    let explicit = r#"
-        seiyaku MatchExpression {
-            view fn main(Option<int> value, int fallback) -> int {
-                value.unwrap_or(fallback)
-            }
-        }
-    "#;
+    let matched = include_str!("../fixtures/koto_v1/sugar_zero_cost/017.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
+    let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/018.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline");
     assert_ir_equivalent(matched, explicit, "exhaustive Option match");
     assert_executable_equivalent(matched, explicit, "exhaustive Option match");
 }

@@ -1,0 +1,22 @@
+
+        seiyaku C {
+            struct Tranche {
+                int status,
+                quantity remaining,
+                List<string, 4> merchant_aliases,
+                List<AccountId, 4> merchant_accounts,
+            }
+            state StateMap<Name, Tranche> Tranches;
+
+            kotoage fn main() authorize("WriteState") {
+                let List<string, 4> aliases = ["merchant@sbp"];
+                let List<AccountId, 4> accounts = [context::authority()];
+                Tranches[Name::parse("t1")] = Tranche {
+                    status: 7,
+                    remaining: 42,
+                    merchant_aliases: aliases,
+                    merchant_accounts: accounts,
+                };
+            }
+        }
+    

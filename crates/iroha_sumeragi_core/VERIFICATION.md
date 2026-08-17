@@ -401,7 +401,8 @@ acknowledgement, allowing that exact authenticated vote to cross once after the
 lock exists. Retained outbound Commit control serves peers, but is not a
 sufficient local progress witness because broadcast excludes the sender. These
 source-linked reducer constraints preserve the fixed-width cardinality gate;
-they do not by themselves promote the still-incomplete TLAPS liveness ledger.
+they do not by themselves supply the fresh strict evidence required for the
+promoted TLAPS liveness targets.
 
 The source-shared locked-Commit progress kernel additionally models validation
 finishing after a TC-promoted lock's active finality view has durably timed
@@ -686,7 +687,8 @@ production reducer can be described as deductively verified:
 6. **Temporal liveness.** This module proves safety-style transition
    preservation only. Fair delivery, timeout-certificate progress, rotating
    honest leaders, repeated runtime invocation, terminating body service, and
-   the post-GST commit bound remain TLAPS liveness obligations plus executable
+   the post-GST commit bound have promoted TLAPS target statuses but still
+   require fresh exact-source strict evidence plus executable
    simulation/integration evidence. The exact three-class cycle and immutable
    body-owner rebind theorem do not by themselves discharge this gap.
 

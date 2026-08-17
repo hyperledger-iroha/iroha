@@ -34,6 +34,8 @@ const REQUIRED_OUTPUTS = [
   "address.js",
   "curveRegistry.js",
   "ivmArtifact.js",
+  "smartContractDeploymentSubmit.js",
+  "sumeragiTyped.js",
   "toriiClient.js",
   "kotodamaCompiler/index.js",
 ];

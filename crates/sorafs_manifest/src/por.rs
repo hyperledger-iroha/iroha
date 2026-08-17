@@ -3286,11 +3286,11 @@ mod tests {
     #[test]
     fn proof_bounds_accept_boundaries_and_reject_one_over() {
         let mut proof = proof_fixture();
-        let sample = proof.samples[0].clone();
+        let sample = proof.samples[0];
         proof.samples = vec![sample; POR_PROOF_MAX_SAMPLES_V1];
         proof.auth_path = vec![[6; 32]; POR_PROOF_MAX_AUTH_PATH_NODES_V1];
         assert!(proof.validate().is_ok());
-        proof.samples.push(proof.samples[0].clone());
+        proof.samples.push(proof.samples[0]);
         assert_eq!(
             proof.validate(),
             Err(PorProofValidationError::TooManySamples {

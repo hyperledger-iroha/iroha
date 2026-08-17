@@ -29,6 +29,31 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignCompletionSelection
     RestartRequired,
 }
 
+impl ProductionRecoveredLifecycleSignCompletionSelectionV1 {
+    /// Return whether the selected settlement lost authority or crossed publication.
+    fn restart_required(&self) -> bool {
+        match self {
+            Self::Broadcast(settlement) => matches!(
+                settlement,
+                ProductionRecoveredLifecycleSignBroadcastSettlementV1::None
+                    | ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired
+            ),
+            Self::ProposalPrepareWal(settlement)
+            | Self::ProposalBroadcastAndSign(settlement) => matches!(
+                settlement,
+                ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None
+                    | ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired
+            ),
+            Self::VoteBroadcastAndSign(settlement) => matches!(
+                settlement,
+                ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None
+                    | ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired
+            ),
+            Self::RestartRequired => true,
+        }
+    }
+}
+
 /// Closed diagnostic for one lifecycle-selected Completion turn.
 ///
 /// Guarded completions, deferred Apply state, and capacity waits remain inside
@@ -69,6 +94,32 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     ),
     /// An exact lifecycle completion was selected but its service owner changed.
     RestartRequired,
+}
+
+impl ProductionLifecycleCompletionSelectionV1 {
+    /// Return whether the consumed Completion turn requires a cold restart.
+    pub(in crate::sumeragi) fn restart_required(&self) -> bool {
+        match self {
+            Self::RecoveredDecisionApplyRestartRequired
+            | Self::RecoveredDecisionApplyCompletionRestartRequired
+            | Self::RestartRequired => true,
+            Self::RecoveredLifecycleSignCompletion(selection) => selection.restart_required(),
+            Self::RecoveredIoDispatch(result) => result.is_err(),
+            Self::RecoveredDecisionFetchCompletion(settlement) => matches!(
+                settlement,
+                ProductionRecoveredDecisionFetchStoreSettlementV1::None
+                    | ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired
+            ),
+            Self::RecoveredLifecycleBroadcastRefanout(result) => matches!(
+                result,
+                Err(_) | Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired)
+            ),
+            Self::RecoveredDecisionApplyDeferred
+            | Self::RecoveredDecisionApplyRequeued
+            | Self::RecoveredDecisionApplyApplied
+            | Self::RecoveredDecisionApplyCompletionDeferred => false,
+        }
+    }
 }
 /// Outcome of one borrow-bound outer Completion turn.
 ///
@@ -505,7 +556,7 @@ impl LaunchedProductionLifecycleV1 {
                         self.recovered_decision_apply_deferred = Some(deferred);
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred
                     }
-                    Ok(ProductionRecoveredDecisionApplyCompletionV1::None) | Err(_) => {
+                    Err(_) => {
                         self.close_output_for_restart();
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionRestartRequired
                     }
@@ -725,7 +776,12 @@ impl LaunchedProductionLifecycleV1 {
             FairIngressTurnContextCut::Lifecycle(cut) => {
                 let recovered = match self.executor.selected_cut_is_recovered_decision_fetch(&cut) {
                     Ok(recovered) => recovered,
-                    Err(_) => {
+                    Err(error) => {
+                        let reason = error.detail();
+                        iroha_logger::error!(
+                            %reason,
+                            "Sumeragi v2 recovered Fetch selection failed closed"
+                        );
                         self.close_output_for_restart();
                         drop(cut);
                         drop(runner);
@@ -749,7 +805,12 @@ impl LaunchedProductionLifecycleV1 {
                     .prepare_recovered_decision_fetch_from_selected_cut(cut)
                 {
                     Ok(selector) => selector,
-                    Err(_) => {
+                    Err(error) => {
+                        let reason = error.detail();
+                        iroha_logger::error!(
+                            %reason,
+                            "Sumeragi v2 recovered Fetch preparation failed closed"
+                        );
                         self.close_output_for_restart();
                         drop(runner);
                         return ProductionLifecycleIngressTurnV1::Selected(
@@ -780,29 +841,92 @@ impl LaunchedProductionLifecycleV1 {
                 self.recovered_ingress_capacity_wait = Some(wait);
                 ProductionLifecycleIngressSelectionV1::CapacityPending
             }
-            Ok(ProductionRecoveredDecisionFetchPersistenceV1::Queued { .. }) => {
-                ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
+            Ok(ProductionRecoveredDecisionFetchPersistenceV1::Queued { ordinal }) => {
+                if self
+                    .owner
+                    .coordinator
+                    .active_lease
+                    .as_ref()
+                    .map(|lease| lease.ordinal())
+                    != Some(ordinal)
+                {
+                    iroha_logger::error!(
+                        ordinal,
+                        "queued recovered Fetch lost its active lifecycle lease"
+                    );
+                    self.close_output_for_restart();
+                    ProductionLifecycleIngressSelectionV1::RestartRequired
+                } else {
+                    ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
+                }
             }
-            Err(
-                ProductionRecoveredDecisionFetchPersistenceErrorV1::CommandPreparation(prepared)
-                | ProductionRecoveredDecisionFetchPersistenceErrorV1::InFlightSelectedWork(prepared),
-            ) => {
+            Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::CommandPreparation {
+                failure,
+                prepared,
+            }) => {
+                let reason = failure.detail();
+                iroha_logger::warn!(
+                    %reason,
+                    "recovered Fetch persistence preparation retained its selector for retry"
+                );
+                drop(prepared);
+                ProductionLifecycleIngressSelectionV1::Retry
+            }
+            Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InFlightSelectedWork(
+                prepared,
+            )) => {
                 drop(prepared);
                 ProductionLifecycleIngressSelectionV1::Retry
             }
             Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Service {
-                prepared, ..
+                failure,
+                prepared,
             }) => {
+                let reason = match failure {
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::InvalidTarget => {
+                        "invalid persistence target"
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::ForeignContext => {
+                        "foreign lifecycle context"
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::OutputClosed => {
+                        "consensus output closed"
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::Disconnected => {
+                        "lifecycle I/O worker disconnected"
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::PositionOverflow => {
+                        "persistence queue position overflow"
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityCaptureFailure::GenerationExhausted => {
+                        "capacity generation exhausted"
+                    }
+                };
+                iroha_logger::error!(reason, "recovered Fetch capacity capture failed closed");
                 drop(prepared);
                 self.close_output_for_restart();
                 ProductionLifecycleIngressSelectionV1::RestartRequired
             }
+            Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Claim(error)) => {
+                let reason = match error {
+                    crate::sumeragi::v2_effects::RecoveredDecisionFetchResponseClaimErrorV1::InvalidOwnerIndex => {
+                        "invalid request owner index"
+                    }
+                    crate::sumeragi::v2_effects::RecoveredDecisionFetchResponseClaimErrorV1::ForeignOwner => {
+                        "foreign request owner"
+                    }
+                    crate::sumeragi::v2_effects::RecoveredDecisionFetchResponseClaimErrorV1::ConflictingClaim => {
+                        "conflicting response-family claim"
+                    }
+                };
+                iroha_logger::error!(reason, "recovered Fetch claim failed closed");
+                self.close_output_for_restart();
+                ProductionLifecycleIngressSelectionV1::RestartRequired
+            }
             Err(
-                ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation
-                | ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier
+                ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier
                 | ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignOwner
-                | ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidReservedCommand
-                | ProductionRecoveredDecisionFetchPersistenceErrorV1::Claim(_),
+                | ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidReservedCommand,
             ) => {
                 self.close_output_for_restart();
                 ProductionLifecycleIngressSelectionV1::RestartRequired

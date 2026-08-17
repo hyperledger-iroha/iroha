@@ -306,14 +306,18 @@ they are mounted. The mounted projection is evaluated for the active
 build, while the SDK projection is the canonical supported-build superset.
 OpenAPI-derived MCP generation is fail-closed: an operation is emitted only
 when its exact HTTP method/path pair is enabled in the catalog's MCP projection
-for the compiled feature set. An uncatalogued operation, a catalogued operation
-without the MCP bit, or a feature-disabled operation is not a tool. Purpose-built
-`iroha.*` tools are a separately reviewed, explicit allowlist and remain subject
-to read-only/writer/operator policy. `tools/call` accepts only exact names from
-`tools/list`; OpenAPI `operationId` values and retired convenience spellings are
-not hidden aliases. Listener metadata records the intended exposure boundary,
-while the current single-listener implementation continues to enforce operator
-and diagnostic restrictions through authentication and ingress policy.
+for the compiled feature set. An uncatalogued OpenAPI operation, a catalogued
+operation without the MCP bit, or a feature-disabled operation is not generated
+as a tool. Purpose-built `connect.*` and `iroha.*` tools are a separately
+reviewed, explicit allowlist. When such an alias targets a catalogued route, the
+route's compiled feature gate still applies; designated diagnostic and
+ledger/proof mirrors additionally require the exact MCP projection. The tools
+remain subject to read-only/writer/operator policy. `tools/call` accepts only
+exact names from `tools/list`; OpenAPI `operationId` values and retired
+convenience spellings are not hidden aliases. Listener metadata records the
+intended exposure boundary, while the current single-listener implementation
+continues to enforce operator and diagnostic restrictions through
+authentication and ingress policy.
 
 ## Transaction status privacy
 

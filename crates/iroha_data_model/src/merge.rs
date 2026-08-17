@@ -5,6 +5,8 @@
 //! These DTOs provide the on-wire and persistence representations of merge
 //! entries. See `specs/merge_ledger.md` for the normative behaviour the
 //! runtime must enforce when producing and validating these records.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     block::{
@@ -112,10 +114,7 @@ pub fn merge_queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool
 }
 /// Proof of possession for one signer selected by a merge QC bitmap.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeSignerProof {
     /// Signer index in [`MergeQuorumCertificate::validator_set`].
     pub signer: ValidatorIndex,
@@ -130,10 +129,7 @@ pub struct MergeSignerProof {
 /// This is control evidence only; economic effects were executed by the named
 /// canonical global application block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainNativeFrontierEvidenceV1 {
     /// Exact evidence layout version. Only version one is valid.
@@ -183,10 +179,7 @@ impl LaneDrainNativeFrontierEvidenceV1 {
 /// must be the canonical empty root at every signing and retirement boundary;
 /// local blocker predicates still decide which work contributes to the root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainFrontierV1 {
     /// Exact frontier layout version. Only version one is valid.
@@ -255,10 +248,7 @@ pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
 /// lane committee must subsequently certify a final contiguous lane frontier,
 /// and that certificate must be carried and applied by the global merge ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainIntentV1 {
     /// Schema version. Only version one is valid.
@@ -309,10 +299,7 @@ impl LaneDrainIntentV1 {
 /// lane-block commit for the closed incarnation. Quorum intersection therefore
 /// prevents a certificate from coexisting with a higher certified lane block.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainCertificateBodyV1 {
     /// Schema version. Only version one is valid.
@@ -338,10 +325,7 @@ impl LaneDrainCertificateBodyV1 {
 /// Self-contained quorum certificate closing one lane incarnation at an exact
 /// globally applied frontier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneDrainCertificateV1 {
     /// Body signed by the authoritative lane committee.
     pub body: LaneDrainCertificateBodyV1,
@@ -369,10 +353,7 @@ impl LaneDrainCertificateV1 {
 /// Globally carried proof that an exact lane drain certificate was accepted at
 /// a specific canonical carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainCommitmentV1 {
     /// Exact commitment layout version. Only version one is valid.
@@ -393,10 +374,7 @@ impl LaneDrainCommitmentV1 {
 /// Consensus-persisted two-phase drain state embedded in an autoscale-managed
 /// lane's reserved metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainStateV1 {
     /// Schema version. Only version one is valid.
@@ -416,10 +394,7 @@ impl LaneDrainStateV1 {
 }
 /// Canonical active lane incarnation and first eligible proposal height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeLaneBinding {
     /// Active lane identifier.
     pub lane_id: LaneId,
@@ -434,10 +409,7 @@ pub struct MergeLaneBinding {
 }
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeQuorumCertificate {
     /// View number in which the merge committee formed the certificate.
     pub view: u64,
@@ -502,10 +474,7 @@ impl MergeQuorumCertificate {
 }
 /// Signature share emitted by a merge-committee member.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct MergeCommitteeSignature {
     /// Current-only first-release wire layout version.
@@ -532,10 +501,7 @@ pub struct MergeCommitteeSignature {
 }
 /// Canonical per-lane snapshot recorded inside a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct MergeLaneSnapshot {
     /// Numeric lane identifier.
@@ -568,10 +534,7 @@ pub struct MergeLaneSnapshot {
 }
 /// Proof of possession retained for a signer of an embedded lane-local QC.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeLaneSignerProof {
     /// BLS public key whose ownership is proven.
     pub public_key: PublicKey,
@@ -580,10 +543,7 @@ pub struct MergeLaneSignerProof {
 }
 /// One commit-certified lane block and its deterministic execution transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeLaneExecution {
     /// Canonical framed Norito bytes of the complete producer-authenticated
     /// payload, availability certificate, `NewView` chain, and lane QCs.
@@ -642,10 +602,7 @@ pub struct MergeLaneExecution {
 /// but before WSV publication can replay the exact transition without trusting
 /// lane sidecars or local QC arrival order.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MergeExecutionBatch {
     /// Schema version. Version one is the only currently valid value.
     pub version: u8,
@@ -678,10 +635,7 @@ pub struct MergeExecutionBatch {
 }
 /// Ordered log entry produced by the merge ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerEntry {
     /// Exact first-release entry layout. Only version two is supported.
@@ -1441,6 +1395,10 @@ mod tests {
         assert!(MergeLaneSnapshot::decode(&mut legacy_snapshot.as_slice()).is_err());
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one consensus-binding matrix mutates every lane-drain intent and certificate field"
+    )]
     fn lane_drain_intent_and_certificate_hash_every_consensus_field() {
         let intent = sample_lane_drain_intent();
         let intent_hash = intent.canonical_hash();

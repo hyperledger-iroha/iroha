@@ -1,4 +1,6 @@
 //! Generic asset escrow records and identifiers.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 use core::num::{NonZeroU32, NonZeroU64};
 use iroha_crypto::Hash;
@@ -89,10 +91,7 @@ impl JsonDeserialize for EscrowId {
 }
 /// Lifecycle state for a native asset escrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[repr(u8)]
 pub enum AssetEscrowStatus {
@@ -121,10 +120,7 @@ pub enum AssetEscrowStatus {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 #[repr(u8)]
 pub enum AssetEscrowKind {
@@ -138,10 +134,7 @@ pub enum AssetEscrowKind {
 }
 /// Typed value supplied by an attestor for a conditional escrow predicate.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ConditionalEscrowValue {
     /// Boolean value, such as whether an event occurred.
@@ -153,10 +146,7 @@ pub enum ConditionalEscrowValue {
 }
 /// Predicate evaluated by the ledger against a typed conditional-escrow attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ConditionalEscrowPredicate {
     /// Require exact typed equality.
@@ -166,10 +156,7 @@ pub enum ConditionalEscrowPredicate {
 }
 /// Attestor-bound predicate in an ordered conditional-escrow release policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ConditionalEscrowOracleCondition {
     /// Caller-selected canonical condition identifier.
     pub id: Name,
@@ -182,10 +169,7 @@ pub struct ConditionalEscrowOracleCondition {
 }
 /// Ledger-time window that bounds all attestations for one conditional escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ConditionalEscrowWithinCondition {
     /// Caller-selected canonical condition identifier.
     pub id: Name,
@@ -194,10 +178,7 @@ pub struct ConditionalEscrowWithinCondition {
 }
 /// One immutable first-class condition in a conditional escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ConditionalEscrowCondition {
     /// Attestor-signed predicate.
@@ -217,10 +198,7 @@ impl ConditionalEscrowCondition {
 }
 /// Consensus-bound evidence for one satisfied oracle condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ConditionalEscrowAttestation {
     /// Exact account that authorized the attestation transaction.
     pub attestor: AccountId,
@@ -233,10 +211,7 @@ pub struct ConditionalEscrowAttestation {
 }
 /// Query-visible satisfaction state for one conditional-escrow condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ConditionalEscrowConditionState {
     /// Immutable condition definition.
     pub condition: ConditionalEscrowCondition,
@@ -247,10 +222,7 @@ pub struct ConditionalEscrowConditionState {
 }
 /// Court resolution details for a disputed escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AssetEscrowResolution {
     /// Account that resolved the dispute.
     pub resolver: AccountId,
@@ -265,10 +237,7 @@ pub struct AssetEscrowResolution {
 }
 /// Ledger-managed numeric asset escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AssetEscrowRecord {
     /// Escrow identifier.
     pub id: EscrowId,

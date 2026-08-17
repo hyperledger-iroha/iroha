@@ -132,7 +132,9 @@ impl<F: ScalarField> BaseConfig<F> {
     pub fn initialize(&self, layouter: &mut impl Layouter<F>) {
         // only load lookup table if we are actually doing lookups
         if let MaybeRangeConfig::WithRange(config) = &self.base {
-            config.load_lookup_table(layouter).expect("load lookup table should not fail");
+            config
+                .load_lookup_table(layouter)
+                .expect("load lookup table should not fail");
         }
     }
 }
@@ -168,10 +170,14 @@ impl<F: ScalarField> Circuit<F> for BaseCircuitBuilder<F> {
     ) -> Result<(), Error> {
         // only load lookup table if we are actually doing lookups
         if let MaybeRangeConfig::WithRange(config) = &config.base {
-            config.load_lookup_table(&mut layouter).expect("load lookup table should not fail");
+            config
+                .load_lookup_table(&mut layouter)
+                .expect("load lookup table should not fail");
         } else {
             assert!(
-                self.lookup_manager.iter().all(|lookup_manager| lookup_manager.total_rows() == 0),
+                self.lookup_manager
+                    .iter()
+                    .all(|lookup_manager| lookup_manager.total_rows() == 0),
                 "range lookups were queued but the circuit was configured without a RangeConfig"
             );
         }
@@ -191,7 +197,9 @@ impl<F: ScalarField> Circuit<F> for BaseCircuitBuilder<F> {
                     }
                     // Impose equality constraints
                     if !self.core.witness_gen_only() {
-                        self.core.copy_manager.assign_raw(config.constants(), &mut region);
+                        self.core
+                            .copy_manager
+                            .assign_raw(config.constants(), &mut region);
                     }
                     Ok(())
                 },

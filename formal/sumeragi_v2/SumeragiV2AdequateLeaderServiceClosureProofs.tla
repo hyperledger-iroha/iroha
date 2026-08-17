@@ -1600,7 +1600,8 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesFormPrepareQCReady ==
 BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
    DEF ExactLeaderSchedulerReadinessFrame,
        ExecuteFormPrepareQCReady, FormPrepareQCReady,
-       VoteSignersAt, QcWireValid, QcOutbox,
+       ProjectedVoteSignersAt, VoteSignersAt,
+       QcWireValid, QcOutbox,
        CurrentVoters, CurrentEpoch, vars
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesSignTimeoutReady ==
@@ -2155,7 +2156,7 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesFormCommitQCReady ==
             <=> FormCommitQCReady(node, roundView, subject))
 BY IsaT(120)
    DEF ExactLeaderSchedulerReadinessFrame,
-       FormCommitQCReady, VoteSignersAt,
+       FormCommitQCReady, ProjectedVoteSignersAt, VoteSignersAt,
        CommitRoundAdmissible, LockedPrepareRound,
        QcWireValid, NodeIdle, PendingNodes, SigningNodes,
        CurrentVoters, CurrentEpoch, QC, vars

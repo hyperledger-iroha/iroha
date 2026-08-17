@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
-
 set -euo pipefail
 umask 077
 
@@ -11,6 +10,7 @@ if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; th
 fi
 
 readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
+readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 # A production release is launched only by the externally authenticated
 # bootstrap.  Validate that capability before changing the bootstrap's closed
 # environment or executing any other candidate helper.  The sealed child is
@@ -185,7 +185,6 @@ fi
 # authenticated bytes are lexically loaded; it does not claim same-UID defense.
 source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"
 unset release_runner_support_path release_runner_support_observed_sha256
-
 
 if [[ "$profile" != "--release" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
   pr_rustup_bin="$(canonical_executable rustup)" || {
@@ -1602,7 +1601,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 527/527 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1770,6 +1769,31 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
+# Prove that the sealed candidate descends from the protected build-efficiency
+# lineage before consulting any mutable budget or starting the first build.
+# The pinned isolated Python, read-only log, and identity checkpoints keep this
+# structural-only provenance result inside the sealed-manifest boundary.
+if [[ "$profile" == "--release" ]]; then
+  readonly build_efficiency_provenance_log="${release_source_bound_root}/build-efficiency-provenance.log"
+  mkdir -m 700 -p -- "$release_source_bound_root"
+  verify_release_identity "before build-efficiency provenance guard"
+  release_gate_boundary "build-efficiency-provenance:before" || exit $?
+  set +e
+  "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_build_efficiency_provenance.py \
+    2>&1 | tee "$build_efficiency_provenance_log"
+  build_efficiency_provenance_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_gate_boundary "build-efficiency-provenance:after-natural-completion" \
+    || exit $?
+  if ((build_efficiency_provenance_pipeline_status[0] != 0 \
+    || build_efficiency_provenance_pipeline_status[1] != 0)); then
+    echo "production build-efficiency provenance guard failed closed" >&2
+    exit 1
+  fi
+  chmod 0400 "$build_efficiency_provenance_log"
+  verify_release_identity "after build-efficiency provenance guard"
+fi
+
 # Reject an oversized or newly unbudgeted production source before the first
 # build command. The log and both identity checkpoints are sealed-manifest-bound.
 if [[ "$profile" == "--release" ]]; then
@@ -1779,6 +1803,7 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "source-file-budget:before" || exit $?
   set +e
   "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py \
+    --require-objective \
     2>&1 | tee "$source_budget_log"
   source_budget_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -1850,6 +1875,7 @@ required_production_liveness_tests=(
   kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation
   kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart
   kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal
+  kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -2227,6 +2253,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
   sumeragi::v2_lane_work::tests::planner_view_one_binds_rotated_global_leader_to_fresh_lane_view
   sumeragi::v2_lane_work::tests::enabled_nexus_binds_independent_lane_author_distinct_from_global_leader
+  sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag
+  sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts
   sumeragi::v2_lane_work::tests::lane_work_stays_quiescent_until_the_exact_global_prepare_lock
   sumeragi::v2_lane_work::tests::global_body_lock_replacement_requires_higher_prepare_round_and_exact_subject
   sumeragi::v2_lane_work::tests::superseded_commit_protected_lane_session_cannot_retransmit
@@ -2691,7 +2719,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=857
+readonly expected_production_liveness_test_count=860
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2719,10 +2747,10 @@ production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
 )"
 production_irohad_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list
+  run_cargo test --locked --offline -p irohad --lib --features test-network-message-control -- --list
 )"
 production_irohad_ignored_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list --ignored
+  run_cargo test --locked --offline -p irohad --lib --features test-network-message-control -- --list --ignored
 )"
 production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --lib -- --list)"
 production_config_ignored_unit_list="$(
@@ -2782,7 +2810,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 857-test liveness inventory above. The later
+# not belong to the canonical 860-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2843,6 +2871,8 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
   sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
+  sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag
+  sumeragi::v2_lane_work::tests::unfinished_historical_lane_session_crosses_a_second_rollover_without_later_pops
   sumeragi::v2_core::refinement::tests::in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps
   sumeragi::v2_core::refinement::tests::in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
@@ -3329,7 +3359,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=525
+readonly expected_multilane_focus_test_count=527
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3459,7 +3489,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-  # unambiguous one-test Cargo transcript per entry. The canonical 525-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 527-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3567,8 +3597,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 526 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 525 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 528 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 527 focused tests" >&2
     exit 1
   fi
 fi
@@ -3783,10 +3813,10 @@ for module_index in "${!production_liveness_modules[@]}"; do
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
     || "$module" == tests::relay_fairness ]]; then
-    module_command="cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p irohad --lib --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control \
+      run_cargo test --locked --offline -p irohad --lib --features test-network-message-control \
         "$module" -- --test-threads=1
   elif [[ "$module" == parameters::* ]]; then
     module_command="cargo test --locked --offline -p iroha_config --lib ${module} -- --test-threads=1"
@@ -3856,8 +3886,8 @@ run_final_workspace_verification() {
     run_cargo test --locked --offline --workspace
   run_corridor_leg \
     source-sealed-irohad-tests command 0 \
-    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \
-    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --lib --features test-network-message-control" \
+    run_cargo test --locked --offline -p irohad --lib --features test-network-message-control
   run_corridor_leg \
     source-sealed-workspace-clippy command 0 \
     "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
@@ -3998,8 +4028,8 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
-    62
-    60
+    63
+    61
     4
     6
     5
@@ -4074,11 +4104,11 @@ if [[ "$profile" == "--release" ]]; then
     java
   )
   sumeragi_v2_sdk_diagnostics_test_counts=(
-    121
+    129
     88
-    33
+    34
+    43
     42
-    41
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4308,16 +4338,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^367 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^368 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 367 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 368 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 367 \
+  preflight-release-receipt pytest 368 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -4384,8 +4414,8 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,189 ledger/checker cases (including the
-# lexically executed case components), 28 pinned-Verus evidence cases,
+# Collection is source-bound as 5,410 ledger/checker cases (including the
+# lexically executed case components), 29 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
 # multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
@@ -4397,15 +4427,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5291 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5513 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5291 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5513 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5291 \
+  preflight-proof-fidelity pytest 5513 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -4518,6 +4548,13 @@ publish_corridor_completion() {
     return 1
   fi
   corridor_cargo_version="$(run_cargo --version)"
+  corridor_cargo_version_size_bytes="$(
+    printf '%s\n' "$corridor_cargo_version" | wc -c | tr -d '[:space:]'
+  )"
+  corridor_rustc_version="$("$corridor_rustc_path" --version)"
+  corridor_rustc_version_size_bytes="$(
+    "$corridor_rustc_path" -vV | wc -c | tr -d '[:space:]'
+  )"
   corridor_cargo_cache_final_inventory="${IROHA_RELEASE_ARTIFACT_ROOT}/cargo-cache-final.json"
   "$IROHA_RELEASE_PYTHON_BIN" -I -S \
     "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" \
@@ -4551,9 +4588,11 @@ publish_corridor_completion() {
     cargo_path "$corridor_cargo_path" \
     cargo_sha256 "$(sha256_file "$corridor_cargo_path")" \
     cargo_version "$corridor_cargo_version" \
+    cargo_version_size_bytes "$corridor_cargo_version_size_bytes" \
     rustc_path "$corridor_rustc_path" \
     rustc_sha256 "$(sha256_file "$corridor_rustc_path")" \
-    rustc_version "$("$corridor_rustc_path" --version)" \
+    rustc_version "$corridor_rustc_version" \
+    rustc_version_size_bytes "$corridor_rustc_version_size_bytes" \
     python3_path "$corridor_python_path" \
     python3_sha256 "$(sha256_file "$corridor_python_path")" \
     node_path "$corridor_node_path" \
@@ -4583,7 +4622,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 55 \
+    native_amx_grouped_negative_control_count 56 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"

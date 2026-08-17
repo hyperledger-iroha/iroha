@@ -157,16 +157,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -1071,6 +1071,56 @@ def _require_unchanged(
     )
     if current != snapshot:
         raise BootstrapError(f"{label} changed during the release bootstrap")
+
+
+def _require_sdk_source_manifest_pruned(
+    evidence_fd: int, snapshot: FileSnapshot
+) -> None:
+    """Require the bootstrap-private SDK source manifest to remain absent."""
+
+    name = "sdk-dependency-bundle-manifest.json"
+    if snapshot.path.name != name:
+        raise BootstrapError("SDK source manifest archive binding is invalid")
+    try:
+        os.stat(name, dir_fd=evidence_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise BootstrapError(
+            "bootstrap-private SDK source manifest pruning is indeterminate"
+        ) from error
+    raise BootstrapError(
+        "bootstrap-private SDK source manifest survived acknowledgment pruning"
+    )
+
+
+def _prune_authenticated_sdk_source_manifest(
+    evidence_fd: int, snapshot: FileSnapshot
+) -> None:
+    """Prune the exact SDK source manifest after its authenticated handoff."""
+
+    name = "sdk-dependency-bundle-manifest.json"
+    if snapshot.path.name != name:
+        raise BootstrapError("SDK source manifest archive binding is invalid")
+    current = _read_file_at(
+        evidence_fd,
+        name,
+        snapshot.path,
+        "bootstrap-private SDK source manifest",
+        maximum_bytes=_MAX_SDK_MANIFEST_BYTES,
+    )
+    if current != snapshot:
+        raise BootstrapError(
+            "bootstrap-private SDK source manifest changed before pruning"
+        )
+    try:
+        os.unlink(name, dir_fd=evidence_fd)
+        os.fsync(evidence_fd)
+    except OSError as error:
+        raise BootstrapError(
+            "could not prune bootstrap-private SDK source manifest"
+        ) from error
+    _require_sdk_source_manifest_pruned(evidence_fd, snapshot)
 
 
 def _protected_snapshot(
@@ -4334,6 +4384,9 @@ def bootstrap(args: argparse.Namespace) -> int:
             retained_failure_cleanup = _private_directory_snapshot(
                 retained_release_root, "retained release cleanup root"
             )
+        _prune_authenticated_sdk_source_manifest(
+            evidence_fd, archives["sdk_dependency_bundle_manifest"]
+        )
         (
             terminal_receipt,
             terminal_receipt_value,
@@ -4561,6 +4614,9 @@ def bootstrap(args: argparse.Namespace) -> int:
                 executable=label in executable_labels,
             )
         for label, snapshot in archives.items():
+            if label == "sdk_dependency_bundle_manifest":
+                _require_sdk_source_manifest_pruned(evidence_fd, snapshot)
+                continue
             maximum = _protected_size_limit(label, executable_labels)
             _require_unchanged(
                 snapshot,

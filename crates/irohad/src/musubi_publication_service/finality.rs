@@ -1,10 +1,9 @@
 //! Authoritative read-only finality checks for private Musubi storage coordination.
 //!
-//! This module deliberately owns no listener, queue submission, SoraFS mutation, or service
+//! This module deliberately owns no listener, queue submission, `SoraFS` mutation, or service
 //! activation. It only derives one current archive record from daemon-owned finalized state and
 //! exact Kura history; the stock publication service remains unavailable without deployment
 //! injection.
-use std::{num::NonZeroUsize, sync::Arc};
 use iroha_core::{
     smartcontracts::isi::musubi::validate_musubi_registry_snapshot_history_v1,
     state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
@@ -19,6 +18,7 @@ use iroha_data_model::{
     transaction::{Executable, TransactionEntrypoint},
 };
 use mv::storage::StorageReadOnly as _;
+use std::{num::NonZeroUsize, sync::Arc};
 /// Exact immutable evidence needed to recover a finalized archive registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
@@ -261,7 +261,6 @@ fn validate_registration_transaction(
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
     use super::*;
     use iroha_core::{
         block::BlockBuilder,
@@ -269,7 +268,9 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
+    };
     use iroha_data_model::{
         ChainId, Registrable as _, ValidationFail,
         account::{Account, AccountId},
@@ -301,6 +302,7 @@ mod tests {
         },
     };
     use iroha_primitives::time::TimeSource;
+    use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
     struct RegistrationMaterial {
         network_id: NetworkId,
         publisher_key: KeyPair,

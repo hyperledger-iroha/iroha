@@ -3,7 +3,7 @@ use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Roo
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-use std::path::PathBuf;
+use std::{fmt::Write as _, path::PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -34,7 +34,7 @@ fn native_signer_bindings() -> String {
         ("orderbook", "orderbook", 0x55),
     ]
     .into_iter()
-    .map(|(role, handle_role, seed)| {
+    .fold(String::new(), |mut bindings, (role, handle_role, seed)| {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test Ed25519 keypair");
         let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
@@ -42,7 +42,8 @@ fn native_signer_bindings() -> String {
             .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
             .expect("test authority must encode as I105");
         let policy_digest_hex = hex::encode([seed; 32]);
-        format!(
+        write!(
+            bindings,
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
 handle = "software://sorafs/{handle_role}/stream-token-primary"
@@ -50,12 +51,12 @@ authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
 revision = 1
-policy_digest_hex = "{policy_digest_hex}"
-"#
+policy_digest_hex = "{policy_digest_hex}""#
         )
+        .expect("writing to a String cannot fail");
+        bindings.push('\n');
+        bindings
     })
-    .collect::<Vec<_>>()
-    .join("")
 }
 fn enabled_overlay(handle: &str, public_key_hex: &str) -> String {
     let native_signers = native_signer_bindings();

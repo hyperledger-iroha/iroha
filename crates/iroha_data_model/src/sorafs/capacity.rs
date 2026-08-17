@@ -4,6 +4,8 @@
 //! the runtime registry that tracks provider capacity declarations, telemetry snapshots, and fee
 //! accrual ledgers.
 use crate::metadata::Metadata;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use core::fmt;
 use hex;
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
@@ -16,10 +18,7 @@ use thiserror::Error;
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ProviderId(pub [u8; 32]);
 impl ProviderId {
     /// Construct a new provider identifier.
@@ -40,10 +39,7 @@ impl fmt::Display for ProviderId {
 }
 /// Stored capacity declaration along with metadata required for registry queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityDeclarationRecord {
     /// Provider that authored the capacity declaration.
     pub provider_id: ProviderId,
@@ -108,10 +104,7 @@ impl Ord for CapacityDeclarationRecord {
 }
 /// Telemetry snapshot reported by a provider for a given epoch window.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityTelemetryRecord {
     /// Provider identifier.
     pub provider_id: ProviderId,
@@ -220,10 +213,7 @@ impl Ord for CapacityTelemetryRecord {
 }
 /// Aggregated fee ledger entry for a provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityFeeLedgerEntry {
     /// Provider identifier.
     pub provider_id: ProviderId,
@@ -460,10 +450,7 @@ pub enum CapacityLedgerMutationError {
 /// Unique identifier for a capacity dispute (BLAKE3-256 digest of the payload).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityDisputeId(pub [u8; 32]);
 impl CapacityDisputeId {
     /// Construct a dispute identifier from raw bytes.
@@ -479,10 +466,7 @@ impl CapacityDisputeId {
 }
 /// Evidence metadata recorded alongside a dispute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityDisputeEvidence {
     /// Deterministic digest (BLAKE3-256) of the evidence bundle.
     pub digest: [u8; 32],
@@ -510,10 +494,7 @@ pub enum CapacityDisputeOutcome {
 }
 /// Resolution metadata captured when a dispute leaves the pending queue.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityDisputeResolution {
     /// Epoch (inclusive) when the dispute was resolved.
     pub resolved_epoch: u64,
@@ -544,10 +525,7 @@ impl CapacityDisputeStatus {
 }
 /// Registry record for disputes raised against a capacity provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CapacityDisputeRecord {
     /// Unique identifier derived from the canonical payload.
     pub dispute_id: CapacityDisputeId,

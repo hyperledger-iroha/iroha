@@ -48,3 +48,25 @@ fn test_merkle_path_matches_root() {
     current[31] |= 1;
     assert_eq!(current, root);
 }
+
+#[test]
+fn final_partial_stack_chunk_is_committed_and_provable() {
+    let stack_limit = 64 * 1024 + Memory::STACK_ALIGNMENT;
+    let mut mem = Memory::new_with_stack_limit(0, stack_limit);
+    assert_eq!(mem.stack_top() % 32, Memory::STACK_ALIGNMENT);
+
+    let baseline = mem.current_root();
+    let final_chunk = mem.stack_top() - Memory::STACK_ALIGNMENT;
+    mem.store_u128(final_chunk, u128::MAX)
+        .expect("final aligned stack bytes are writable");
+
+    assert_ne!(
+        mem.current_root(),
+        baseline,
+        "the final partial stack chunk must be covered by the memory commitment"
+    );
+    assert!(
+        !mem.merkle_path(final_chunk).is_empty(),
+        "a valid address in the final partial stack chunk must have a Merkle path"
+    );
+}

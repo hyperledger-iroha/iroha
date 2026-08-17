@@ -23,12 +23,14 @@ const PUBLIC_KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.public-key.v1
 const PUBLIC_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.binding.v1";
 const REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.request.v1";
 const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
-/// Exact prefix of the SoraFS V1 foundational-promotion signing payload.
+/// Exact prefix of the `SoraFS` V1 foundational-promotion signing payload.
 ///
 /// The promotion key signs the complete byte string beginning with this prefix; the signer never
 /// hashes, decodes, or reserializes the JSON suffix in place of those reviewed bytes.
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
+/// Exact prefix signed only by an isolated Taira release-authority key.
+pub const TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1: &[u8] = b"iroha:taira:release-authority:v1\0";
 /// Provider implementation class carried by external-signer provenance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -104,13 +106,13 @@ pub enum SoftwareSignerRoleV1 {
     Reserve = 3,
     /// Native orderbook transaction signing.
     Orderbook = 4,
-    /// SoraFS V1 foundational promotion-envelope signing.
+    /// `SoraFS` V1 foundational promotion-envelope signing.
     Promotion = 5,
     /// Governance DAG publisher signing.
     GovernanceDag = 6,
-    /// PoTR gateway receipt signing.
+    /// `PoTR` gateway receipt signing.
     PotrGateway = 7,
-    /// PoTR provider receipt signing.
+    /// `PoTR` provider receipt signing.
     PotrProvider = 8,
     /// Governed billing-statement digest signing.
     BillingStatement = 9,
@@ -118,8 +120,10 @@ pub enum SoftwareSignerRoleV1 {
     EvidenceViewer = 10,
     /// Stream-token issuance signing.
     StreamToken = 11,
-    /// PoP credential, commitment-root, and revocation signing.
+    /// `PoP` credential, commitment-root, and revocation signing.
     PopCredentials = 12,
+    /// Purpose-separated signing owned by one Taira release-authority role.
+    TairaAuthority = 13,
 }
 impl SoftwareSignerRoleV1 {
     /// Stable role label.
@@ -138,6 +142,7 @@ impl SoftwareSignerRoleV1 {
             Self::EvidenceViewer => "evidence_viewer",
             Self::StreamToken => "stream_token",
             Self::PopCredentials => "pop_credentials",
+            Self::TairaAuthority => "taira_authority",
         }
     }
     /// Exact signing domain enforced before any key operation.
@@ -156,6 +161,7 @@ impl SoftwareSignerRoleV1 {
             Self::EvidenceViewer => "sorafs.evidence-viewer.signing.v1",
             Self::StreamToken => "sorafs.stream-token.signature.v1",
             Self::PopCredentials => "sorafs.pop.issuer-signature.v1",
+            Self::TairaAuthority => "iroha.taira.release-authority.v1",
         }
     }
     /// Whether this isolated role admits the requested key algorithm.
@@ -170,7 +176,8 @@ impl SoftwareSignerRoleV1 {
             | Self::BillingStatement
             | Self::EvidenceViewer
             | Self::StreamToken
-            | Self::PopCredentials => {
+            | Self::PopCredentials
+            | Self::TairaAuthority => {
                 matches!(algorithm, SoftwareSignerKeyAlgorithmV1::Ed25519)
             }
         }
@@ -192,7 +199,8 @@ impl SoftwareSignerRoleV1 {
             | Self::BillingStatement
             | Self::EvidenceViewer
             | Self::StreamToken
-            | Self::PopCredentials => None,
+            | Self::PopCredentials
+            | Self::TairaAuthority => None,
         }
     }
 }
@@ -222,6 +230,7 @@ impl FromStr for SoftwareSignerRoleV1 {
             "evidence_viewer" => Ok(Self::EvidenceViewer),
             "stream_token" => Ok(Self::StreamToken),
             "pop_credentials" => Ok(Self::PopCredentials),
+            "taira_authority" => Ok(Self::TairaAuthority),
             _ => Err(SoftwareSignerValueParseErrorV1),
         }
     }
@@ -246,12 +255,12 @@ pub enum SoftwareSignerPurposeBindingV1 {
         /// Canonical publisher peer identifier bytes.
         publisher_peer_id: Vec<u8>,
     },
-    /// Exact independently administered PoTR gateway signer identity.
+    /// Exact independently administered `PoTR` gateway signer identity.
     PotrGateway {
         /// Public gateway signer identifier.
         signer_id: [u8; 32],
     },
-    /// Exact independently administered PoTR provider signer and provider.
+    /// Exact independently administered `PoTR` provider signer and provider.
     PotrProvider {
         /// Public provider-side signer identifier.
         signer_id: [u8; 32],
@@ -267,10 +276,15 @@ pub enum SoftwareSignerPurposeBindingV1 {
     EvidenceViewer,
     /// Stream-token authority is the binding handle and Ed25519 key.
     StreamToken,
-    /// Exact governed PoP issuer identity.
+    /// Exact governed `PoP` issuer identity.
     PopCredentials {
-        /// Stable public PoP credential issuer identity.
+        /// Stable public `PoP` credential issuer identity.
         issuer_id: String,
+    },
+    /// Exact Taira release-authority role owned by this isolated key.
+    TairaAuthority {
+        /// Stable kebab-case role label from the closed eight-role registry.
+        role: String,
     },
 }
 impl SoftwareSignerPurposeBindingV1 {
@@ -306,6 +320,9 @@ impl SoftwareSignerPurposeBindingV1 {
             }
             (SoftwareSignerRoleV1::PopCredentials, Self::PopCredentials { issuer_id }) => {
                 valid_identity(issuer_id)
+            }
+            (SoftwareSignerRoleV1::TairaAuthority, Self::TairaAuthority { role }) => {
+                valid_taira_authority_role_label(role)
             }
             _ => false,
         }
@@ -361,6 +378,10 @@ impl SoftwareSignerPublicBindingV1 {
     /// # Errors
     ///
     /// Returns `()` for malformed, substituted, test-marked, or non-software bindings.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the public binding exposes only valid versus invalid and carries no attacker-controlled detail"
+    )]
     pub fn validate(&self) -> Result<(), ()> {
         if self.magic != SIGNER_PUBLIC_BINDING_MAGIC_V1
             || self.version != SIGNER_PROTOCOL_VERSION_V1
@@ -395,6 +416,10 @@ impl SoftwareSignerPublicBindingV1 {
     /// # Errors
     ///
     /// Returns `()` when the binding is invalid or cannot be encoded.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the canonical digest contract intentionally exposes only success versus invalid binding"
+    )]
     pub fn digest(&self) -> Result<[u8; 32], ()> {
         self.validate()?;
         digest_canonical(PUBLIC_BINDING_DIGEST_DOMAIN_V1, self)
@@ -559,6 +584,19 @@ pub(super) fn valid_identity(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
         && !value.to_ascii_lowercase().contains("test")
 }
+pub(super) fn valid_taira_authority_role_label(value: &str) -> bool {
+    matches!(
+        value,
+        "native-evidence"
+            | "privacy-protocol-origin"
+            | "privacy-governance"
+            | "qualification"
+            | "deploy-issuance"
+            | "rollout-observation"
+            | "public-soak-observation"
+            | "public-soak-replay-admission"
+    )
+}
 pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &str) -> bool {
     let (role_segment, instance_prefix) = match role {
         SoftwareSignerRoleV1::ProofOutcome => ("proof-outcome", None),
@@ -573,6 +611,7 @@ pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &s
         SoftwareSignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
         SoftwareSignerRoleV1::StreamToken => ("stream-token", None),
         SoftwareSignerRoleV1::PopCredentials => ("pop-credentials", None),
+        SoftwareSignerRoleV1::TairaAuthority => ("taira-authority", None),
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()
@@ -586,7 +625,7 @@ pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> 
     let (algorithm, payload) = public_key.try_to_bytes().map_err(|_| ())?;
     Ok(digest_parts(
         PUBLIC_KEY_DIGEST_DOMAIN_V1,
-        &[&[algorithm as u8], payload.as_ref()],
+        &[&[algorithm as u8], payload],
     ))
 }
 pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {

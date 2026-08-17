@@ -367,6 +367,10 @@ fn request_auth_header_fields(
         .map(|(name, value)| (name.to_owned(), value.into_bytes()))
         .collect()
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "request-authentication test backend seam"
+)]
 fn verify_request_before_test_backend(
     request: &GovernanceDagCanonicalRequestV1,
     headers: &[(String, Vec<u8>)],
@@ -1813,8 +1817,11 @@ fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
             .signature_payload_bytes()
             .expect("encode attributed head signing payload"),
     );
-    validate_governance_dag_head_against_chain_v1(&source.head, &[source_block.block.clone()])
-        .expect("attributed source head validates");
+    validate_governance_dag_head_against_chain_v1(
+        &source.head,
+        std::slice::from_ref(&source_block.block),
+    )
+    .expect("attributed source head validates");
     source.head_bytes = norito::to_bytes(&source.head).expect("encode attributed source head");
     source.chain_blake3 = source_chain_blake3_v1(&source.head_bytes, &source.blocks);
     source

@@ -1,0 +1,19 @@
+
+        seiyaku C {
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> Foo;
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
+                Foo[key] = 1;
+
+                var value = 0;
+                if (Foo.contains(key)) {
+                    value = Foo.get(key).unwrap_or(0);
+                }
+
+                Counter[1] = value + 1;
+                return Counter.get(1).unwrap_or(0);
+            }
+        }
+    

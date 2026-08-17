@@ -94,6 +94,10 @@ fn derive_connect_direction_keys_py(
 #[pyo3::pyfunction]
 #[pyo3(name = "build_connect_approve_preimage")]
 /// Build the canonical approval preimage for wallet signatures.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 binding preserves the field-level Python approval API"
+)]
 fn build_connect_approve_preimage_py(
     py: Python<'_>,
     network_id: &PyNetworkId,
@@ -166,6 +170,10 @@ fn connect_relay_auth_hash_py(
 #[pyo3::pyfunction]
 #[pyo3(name = "verify_connect_approval_signature")]
 /// Verify one approval against the exact session identity and account key.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 binding preserves the field-level Python verification API"
+)]
 fn verify_connect_approval_signature_py(
     network_id: &PyNetworkId,
     sid: &[u8],

@@ -57,7 +57,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=857
+readonly canonical_production_test_count=860
 
 for release_support_component in \
   "$release_runner_support" \
@@ -219,7 +219,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=525"
+  "readonly expected_multilane_focus_test_count=527"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -252,21 +252,21 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 55 \\"
+  "    native_amx_grouped_negative_control_count 56 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=55"
-for grouped_test_count in 7 62 60 4 6 5; do
+  "readonly expected_negative_control_count=56"
+for grouped_test_count in 7 63 61 4 6 5; do
   require_exact_token \
     "$grouped_parity_harness" \
     "    observed_test_count=${grouped_test_count}"
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 525"
+  "_G_UNIT_TEST_COUNT = 527"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -299,22 +299,22 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 62),' \
-  '    ("javascript", 60),' \
+  '    ("python", 63),' \
+  '    ("javascript", 61),' \
   '    ("swift", 4),' \
   '    ("kotlin", 6),' \
   '    ("java", 5),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
-  '    ("python", 121),' \
+  '    ("python", 129),' \
   '    ("javascript", 88),' \
-  '    ("swift", 33),' \
-  '    ("kotlin", 42),' \
-  '    ("java", 41),'; do
+  '    ("swift", 34),' \
+  '    ("kotlin", 43),' \
+  '    ("java", 42),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 121 88 33 42 41; do
+for sdk_diagnostics_test_count in 129 88 34 43 42; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
@@ -715,6 +715,7 @@ expected_receipt_corridor_component_symbols = (
     "_sdk_suite_source_manifest",
     "_test_count_from_log",
     "_prebuilt_artifact_root",
+    "_require_pruned_private_root",
     "_prebuilt_release_roots",
     "_prebuilt_directory",
     "_publish_receipt_validation_ack",
@@ -744,7 +745,8 @@ expected_receipt_gate_component_symbols = (
     "_runtime_tool_probe_evidence",
 )
 expected_receipt_publication_component_symbols = (
-    "build_receipt", "_iter_artifact_records", "_capture_path_contract",
+    "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
+    "_capture_path_contract",
     "_snapshot_receipt_inputs", "_capture_directory_contract",
     "_revalidate_receipt_inputs", "_fsync_receipt_inputs",
     "_existing_receipt_contract", "_complete_write",
@@ -944,7 +946,7 @@ if (
         "plus the one layout-only result"
     )
 expected_changed_module_counts = {
-    "kura::tests": 17,
+    "kura::tests": 18,
     "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 72,
@@ -952,7 +954,7 @@ expected_changed_module_counts = {
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
-    "sumeragi::v2_lane_work::tests": 61,
+    "sumeragi::v2_lane_work::tests": 63,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
     "sumeragi::v2_worker::tests": 135,
@@ -982,8 +984,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "fc038b30180549cc6002db8ec5630ebf"
-    "8ad5bb04a06be6dd19774d2b6ea5f433"
+    "d34132eb817e08216180c7db186826f1"
+    "860b6703608d4f8862d956eda258dfd5"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1073,8 +1075,8 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
-    62
-    60
+    63
+    61
     4
     6
     5
@@ -1327,8 +1329,8 @@ source_sealed_blocks = (
     """\
   run_corridor_leg \\
     source-sealed-irohad-tests command 0 \\
-    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \\
-    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control""",
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --lib --features test-network-message-control" \\
+    run_cargo test --locked --offline -p irohad --lib --features test-network-message-control""",
     """\
   run_corridor_leg \\
     source-sealed-workspace-clippy command 0 \\
@@ -1357,7 +1359,7 @@ if source_sealed_positions != sorted(source_sealed_positions):
     )
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 319,
+    "required_multilane_core_focus_tests": 321,
     "required_multilane_queue_journal_focus_tests": 143,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
@@ -1401,9 +1403,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 525 or len(set(all_focus_entries)) != 525:
+if len(all_focus_entries) != 527 or len(set(all_focus_entries)) != 527:
     reject(
-        "multilane focus-test arrays must contain 525 globally distinct tests; "
+        "multilane focus-test arrays must contain 527 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1413,7 +1415,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        319,
+        321,
         "--lib",
     ),
     (
@@ -1485,7 +1487,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 525 count is not published exactly once")
+        reject("G-UNIT expected 527 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -2684,4 +2686,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 88 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 525/525 G-UNIT (319 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 88 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 527/527 G-UNIT (321 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

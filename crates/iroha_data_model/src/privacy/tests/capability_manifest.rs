@@ -1,5 +1,9 @@
 // Focused canonical Exact12 public capability-manifest tests.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the capability rows form one closed Exact12 manifest matrix"
+)]
 fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     let manifest = exact12_capability_manifest();
     assert_eq!(

@@ -326,6 +326,10 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
     /// adapter publication. Failure reconstructs the complete dual-borrow
     /// preview, while success remains publication-inert.
     #[allow(clippy::result_large_err)]
+    #[cfg_attr(
+        test,
+        expect(dead_code, reason = "invalid-body atomic-publication gap")
+    )]
     pub(super) fn seal_invalid_body_report_replay(
         self,
     ) -> Result<
@@ -467,16 +471,6 @@ impl PreparedInvalidBodyReportReplayPreAdmission<'_, '_> {
             candidate,
             parent_payload,
         ))
-    }
-    /// Compare one retained lease without exposing registry or report parts.
-    #[cfg(test)]
-    fn exactly_matches_lease_for_test(&self, lease: &TurnLease) -> bool {
-        self.validates() && self.registry.matches_exact_lease(lease)
-    }
-    /// Compare one retained body receipt without exposing the canonical frame.
-    #[cfg(test)]
-    fn exactly_matches_receipt_for_test(&self, receipt: &DurableBodyReceipt) -> bool {
-        self.validates() && self.registry.matches_exact_durable_receipt(receipt)
     }
 }
 impl PreparedReadyDurableValidatePersistedSignPreAdmission<'_, '_> {
@@ -857,12 +851,11 @@ pub(super) struct PreparedValidatedBodyCompletion<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
 }
-/// Closed live-WAL replay preflight retained until future exact admission.
+/// Closed Apply-WAL replay preflight retained until future exact admission.
 ///
-/// Payload-free stages own the canonical source seal immediately. `Apply`
-/// additionally owns the exact receipt-bound Validate completion that supplied
-/// its body frame. No field, effect, pending binding, receipt, or replay parts
-/// can be extracted, and dropping the token publishes no lifecycle work.
+/// The exact receipt-bound Validate completion that supplied the Apply body
+/// frame remains attached. No field, effect, pending binding, receipt, or
+/// replay parts can be extracted, and dropping the token publishes no work.
 #[must_use = "live WAL replay evidence has not entered lifecycle admission"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct PreparedLiveWalReplayPreAdmission<'a> {
@@ -871,14 +864,10 @@ pub(super) struct PreparedLiveWalReplayPreAdmission<'a> {
 }
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum LiveWalReplayPreAdmissionOrigin<'a> {
-    PayloadFree,
     Apply(PreparedValidatedBodyCompletion<'a>),
 }
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LiveWalReplayPreAdmissionFailure<'a> {
-    PayloadFree {
-        _persisted: SealedLiveWalPersistedEffectV1,
-    },
     Apply {
         _completion: PreparedValidatedBodyCompletion<'a>,
         _persisted: SealedLiveWalPersistedEffectV1,
@@ -888,26 +877,6 @@ enum LiveWalReplayPreAdmissionFailure<'a> {
 /// Ownership-preserving failure from exact live-WAL replay preflight.
 pub(super) struct LiveWalReplayPreAdmissionError<'a> {
     _failure: LiveWalReplayPreAdmissionFailure<'a>,
-}
-#[cfg_attr(not(test), allow(dead_code))]
-impl PreparedLiveWalReplayPreAdmission<'static> {
-    /// Seal one of the five payload-free WAL continuations with its exact pending owner.
-    #[allow(clippy::result_large_err)]
-    pub(super) fn seal_payload_free(
-        persisted: SealedLiveWalPersistedEffectV1,
-    ) -> Result<Self, LiveWalReplayPreAdmissionError<'static>> {
-        if !persisted.exactly_binds_payload_free_pending() {
-            return Err(LiveWalReplayPreAdmissionError {
-                _failure: LiveWalReplayPreAdmissionFailure::PayloadFree {
-                    _persisted: persisted,
-                },
-            });
-        }
-        Ok(Self {
-            _persisted: persisted,
-            _origin: LiveWalReplayPreAdmissionOrigin::PayloadFree,
-        })
-    }
 }
 /// Move-only Validate projection sealed under its closed durable Store parent.
 ///
@@ -1677,6 +1646,12 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_END
 include!("v2_lifecycle_work_registry_validate_recovery_parent.rs");
 // RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN
+#[must_use = "a prepared recovered WAL Validate join still owns its detached authority"]
+struct PreparedRecoveredWalValidateRegistryJoin<'registry> {
+    cut: RecoveredWalValidateRegistryCut<'registry>,
+    completion: DetachedRecoveredValidateCompletion,
+    successor: Option<crate::sumeragi::v2_runtime::RecoveredWalVoteSuccessor>,
+}
 impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// Convert the existing restorable recovery cut into the sole fail-stop
     /// live parent/child reservation after WAL fsync.
@@ -1723,11 +1698,23 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// failure retains every move-only input and requires restart.
     #[allow(clippy::result_large_err)]
     pub(crate) fn join_recovered_vote(
-        mut self,
+        self,
         verified: &VerifiedHeightContext,
         recovered: RecoveredWalVoteSign,
     ) -> Result<
         AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        RecoveredWalValidateRegistryJoinError<'registry>,
+    > {
+        let prepared = self.prepare_recovered_vote_join(recovered)?;
+        prepared.authenticate(verified)
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn prepare_recovered_vote_join(
+        mut self,
+        recovered: RecoveredWalVoteSign,
+    ) -> Result<
+        Box<PreparedRecoveredWalValidateRegistryJoin<'registry>>,
         RecoveredWalValidateRegistryJoinError<'registry>,
     > {
         let recovered_commitment = recovered.vote().execution_commitment;
@@ -1746,10 +1733,10 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
         });
         if !valid {
             return Err(RecoveredWalValidateRegistryJoinError {
-                failure: RecoveredWalValidateRegistryJoinFailure::InvalidCarrier {
+                failure: Box::new(RecoveredWalValidateRegistryJoinFailure::InvalidCarrier {
                     _cut: self,
                     _recovered: recovered,
-                },
+                }),
             });
         }
         let work = self
@@ -1792,26 +1779,54 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
             Err((pending, recovered)) => {
                 self.work = Some(completion.restore(effect, pending));
                 return Err(RecoveredWalValidateRegistryJoinError {
-                    failure: RecoveredWalValidateRegistryJoinFailure::Projection {
+                    failure: Box::new(RecoveredWalValidateRegistryJoinFailure::Projection {
                         _cut: self,
                         _recovered: recovered,
-                    },
+                    }),
                 });
             }
         };
+        Ok(Box::new(PreparedRecoveredWalValidateRegistryJoin {
+            cut: self,
+            completion,
+            successor: Some(successor),
+        }))
+    }
+}
+impl<'registry> PreparedRecoveredWalValidateRegistryJoin<'registry> {
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn authenticate(
+        mut self: Box<Self>,
+        verified: &VerifiedHeightContext,
+    ) -> Result<
+        AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        RecoveredWalValidateRegistryJoinError<'registry>,
+    > {
+        let successor = self
+            .successor
+            .take()
+            .expect("prepared recovered WAL join retains one successor");
         let DetachedValidateReplayEvidenceV1::Retained(replay_evidence) =
-            &completion.replay_evidence
+            &self.completion.replay_evidence
         else {
             unreachable!("a live detached Validate completion retains its replay origin")
         };
-        match authenticate_recovered_wal_vote_lifecycle_from_durable_body(
+        let authenticated = authenticate_recovered_wal_vote_lifecycle_from_durable_body(
             verified,
-            &completion.durable_receipt,
+            &self.completion.durable_receipt,
             replay_evidence,
             successor,
-        ) {
+        );
+        let Self {
+            mut cut,
+            completion,
+            successor,
+        } = *self;
+        debug_assert!(successor.is_none());
+        match authenticated {
             Ok(repair) => {
-                let registry = self.registry.take();
+                let registry = cut.registry.take();
                 let registry =
                     registry.expect("recovered WAL join retains its exclusive registry borrow");
                 Ok(AuthenticatedRecoveredWalValidateLifecycleRepair {
@@ -1819,17 +1834,17 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
                     validation: completion,
                     reservation: RecoveredWalValidateRegistryReservation {
                         registry,
-                        parent_address: self.address,
+                        parent_address: cut.address,
                         child: None,
                     },
                 })
             }
             Err(error) => Err(RecoveredWalValidateRegistryJoinError {
-                failure: RecoveredWalValidateRegistryJoinFailure::Lifecycle {
-                    _cut: self,
+                failure: Box::new(RecoveredWalValidateRegistryJoinFailure::Lifecycle {
+                    _cut: cut,
                     _error: error,
                     _completion: completion,
-                },
+                }),
             }),
         }
     }

@@ -181,6 +181,10 @@ pub(super) fn governance_request_ingress_binding_from_service(
     )
     .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the binding collector mirrors the cohesive storage-security configuration surface"
+)]
 fn collect_storage_security_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -795,6 +799,10 @@ fn collect_reputation_billing_bindings(
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the binding collector validates one cohesive provider-ingest configuration projection"
+)]
 fn collect_provider_ingest_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,

@@ -132,7 +132,7 @@ def owner_command() -> list[str]:
         "-p",
         "iroha_data_model",
         "--features",
-        "dev-tools,test-fixtures,json",
+        "dev-tools,test-fixtures,json,transparent_api",
         "--bin",
         "musubi_fixtures",
     ]

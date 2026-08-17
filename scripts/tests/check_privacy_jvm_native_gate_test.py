@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 FROZEN_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
+TRACKED_ROOT_LOCK_SHA256 = (
+    "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+)
 
 
 def read(relative: str) -> str:
@@ -79,6 +82,7 @@ def require_fail_closed_tests(kotlin: str, java: str) -> None:
 def test_privacy_jvm_gate_builds_and_authenticates_native_abi22() -> None:
     gate = read("ci/check_privacy_jvm_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
+    assert f'TRACKED_ROOT_CARGO_LOCK_SHA256="{TRACKED_ROOT_LOCK_SHA256}"' in gate
     assert '[[ "${RUSTC_VERSION}" == rustc\\ 1.93.1\\ * ]]' in gate
     assert '"${CARGO_BIN}" build --locked -p connect_norito_bridge --lib' in gate
     assert 'export NORITO_SKIP_BINDINGS_SYNC=1' in gate
@@ -92,13 +96,12 @@ def test_privacy_jvm_gate_builds_and_authenticates_native_abi22() -> None:
     assert 'PRIVACY_JVM_NATIVE_EXPORT_DIR' in gate
 
     build = gate.index('"${CARGO_BIN}" build --locked')
-    materialize = gate.index(
-        'install -m 600 "${SELECTED_CARGO_LOCK}" "${ROOT_DIR}/Cargo.lock"'
-    )
     record = gate.index('"${ABI22_CHECKER}" record')
     tests = gate.index('./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test')
     final_verify = gate.rindex('"${ABI22_CHECKER}" verify')
-    assert build < materialize < record < tests < final_verify
+    assert build < record < tests < final_verify
+    assert 'install -m 600 "${SELECTED_CARGO_LOCK}" "${ROOT_DIR}/Cargo.lock"' not in gate
+    assert 'install -m 400 "${SELECTED_CARGO_LOCK}"' in gate
 
 
 def test_privacy_jvm_workflow_provisions_exact_native_build_lane() -> None:
@@ -132,6 +135,8 @@ def test_csharp_lane_consumes_the_same_authenticated_native_bytes() -> None:
     assert "native-sdk-abi22-csharp.json" in job
     assert job.count("check_native_sdk_abi22_artifact.py verify") == 2
     assert FROZEN_LOCK_SHA256 in job
+    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert 'install -m 600 "$input/Cargo.lock" Cargo.lock' not in job
     assert "run: ci/check_privacy_csharp_sdk.sh" in job
 
     tests = read(
@@ -155,6 +160,9 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert '"1.93.1-x86_64-unknown-linux-gnu"' in job
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
+    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert "not yet requalified" in job
+    assert "install -m 600" not in job
     assert "cargo fetch --locked" in job
     assert "run: ci/check_privacy_js_sdk.sh" in job
 
@@ -186,8 +194,8 @@ def test_python_lane_authenticates_and_executes_real_pyo3_abi22() -> None:
     assert gate.count('"${ABI22_CHECKER}" verify') == 2
     assert '--sdk python' in gate
     assert '--python "${VENV_DIR}/bin/python"' in gate
-    assert 'materialize_workspace_lock_for_native_evidence' in gate
-    assert 'remove_workspace_lock_after_native_evidence' in gate
+    assert 'materialize_workspace_lock_for_native_evidence' not in gate
+    assert 'remove_workspace_lock_after_native_evidence' not in gate
     assert 'tests/privacy_native_integration_test.py' in gate
 
     integration = read(
@@ -218,6 +226,9 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() ->
     assert "python3 -I -S" not in job
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
+    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert "not yet requalified" in job
+    assert "install -m 600" not in job
     assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
     assert "NORITO_BRIDGE_OUT_DIR=" in job
     assert "NORITO_BRIDGE_BUILD_DIR=" in job
@@ -230,13 +241,13 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() ->
 
     gate = read("ci/check_privacy_swift_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
-    assert 'MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" == "1"' in gate
+    assert 'MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1"' in gate
     assert "must remain outside the source tree" in gate
     assert "xcode-select -p" in gate
     assert "xcodebuild -version" in gate
-    assert "scripts/check_mobile_sdk_artifacts.sh --apple-only" in gate
+    assert 'bash "${APPLE_ARTIFACT_CHECKER}" --apple-only' in gate
     assert "--disable-automatic-resolution" in gate
-    assert '--scratch-path "${MOBILE_SDK_SWIFT_SCRATCH_DIR}"' in gate
+    assert '--scratch-path "${SWIFT_SCRATCH_DIRECTORY}"' in gate
 
     tests = read(
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"

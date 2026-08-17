@@ -1202,7 +1202,7 @@ fn token_issuer_from_config(
     let expected_secret_bytes = suite.secret_key_len();
     let secret_key_bytes = if let Some(path) = secret_path {
         let maximum = secret_file_max_bytes(expected_secret_bytes)
-            .map_err(|error| TokenInitError::InvalidSecretKey(error))?;
+            .map_err(TokenInitError::InvalidSecretKey)?;
         let contents =
             read_bounded_utf8_file(path, maximum, "SoraNet admission-token issuer secret key")
                 .map_err(|error| TokenInitError::SecretKeyIo {

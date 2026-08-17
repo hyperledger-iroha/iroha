@@ -11,16 +11,17 @@ refinement live in separate modules so that safety never depends on fairness.
 proof_coverage.json remains the authoritative record of backend evidence.
 ***************************************************************************)
 
-THEOREM QcValidityCarriesDualQuorum ==
+THEOREM QcValidityCarriesExactCertificateQuorum ==
   \A qc \in QcRecordSet:
-    QcValid(qc) => DualQuorum(CurrentEpoch, qc.signers)
+    QcValid(qc) => ExactCertificateQuorum(CurrentEpoch, qc.signers)
 BY DEF QcValid, QcWireValid
 
-THEOREM TcValidityCarriesDisjointDualQuorum ==
+THEOREM TcValidityCarriesDisjointExactCertificateQuorum ==
   \A tc \in TcRecordSet:
     TCValid(tc)
       => /\ TimeoutVotesDisjoint(tc.votes)
-         /\ DualQuorum(CurrentEpoch, TimeoutSignerSet(tc.votes))
+         /\ ExactCertificateQuorum(
+              CurrentEpoch, TimeoutSignerSet(tc.votes))
 BY DEF TCValid
 
 THEOREM SafePrepareOnLockedSubject ==

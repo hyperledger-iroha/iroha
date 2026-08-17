@@ -126,6 +126,10 @@ fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindi
     message
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the purpose-separation matrix validates all external signer roles in one cohesive test"
+)]
 fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let peer = b"12D3KooWPhaseOneGovernancePublisher".to_vec();
     let (_parent, governance_service) = direct_signer(
@@ -339,7 +343,7 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
 #[derive(Debug)]
 struct OverlapGovernanceSigner;
 impl sorafs_node::GovernanceDagRuntimeSigner for OverlapGovernanceSigner {
-    fn handle(&self) -> &str {
+    fn handle(&self) -> &'static str {
         "software://sorafs/governance-dag/overlap"
     }
     fn qualification(
@@ -379,8 +383,10 @@ impl crate::RuntimeProviderBrokerBackendRegistryV1 for RecordingBaseRegistry {
         bindings: &crate::IrohaRuntimeProviderBindingsV1,
     ) -> Result<crate::RuntimeProviderBrokerBackendsV1, crate::IrohaRuntimeProviderRegistryErrorV1>
     {
-        *self.observed.lock().expect("observed catalog lock") =
-            bindings.iter().map(|binding| binding.slot()).collect();
+        *self.observed.lock().expect("observed catalog lock") = bindings
+            .iter()
+            .map(crate::IrohaRuntimeProviderBindingV1::slot)
+            .collect();
         let backends = crate::RuntimeProviderBrokerBackendsV1::new();
         Ok(if self.overlap {
             backends.with_governance_dag_signer(Arc::new(OverlapGovernanceSigner))

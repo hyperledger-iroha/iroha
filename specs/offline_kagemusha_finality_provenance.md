@@ -66,12 +66,12 @@ peer-envelope proof budget.
 ## Trust and rotation
 
 An attacker-supplied validator set is not a trust anchor. Offline setup
-downloads the canonical V3 release manifest and its content-addressed consensus
+downloads the canonical V4 release manifest and its content-addressed consensus
 roster artifact. Each non-overlapping roster window contains the exact ordered
-`ValidatorPower` entries, consensus mode, aligned BLS proofs of possession, and
-inclusive/exclusive activation bounds. The expected manifest SHA-256 must come
-from the authenticated release envelope; the manifest then selects the exact
-roster byte length and SHA-256.
+unit-power `ValidatorPower` entries, consensus mode, aligned BLS proofs of
+possession, and inclusive/exclusive activation bounds. The expected manifest
+SHA-256 must come from the authenticated release envelope; the manifest then
+selects the exact roster byte length and SHA-256.
 
 Verification requires the proof height to fall inside exactly one manifest
 release window and exactly one roster window. It reconstructs the full height
@@ -126,6 +126,12 @@ Receiver verification is ordered fail-closed:
 
 No marker, note, nullifier, commitment, or acknowledgement may be written before
 all checks through step 7 succeed.
+
+Recursive-init model validation and every C/JNI builder use this same public
+binding boundary: the anchor digest is recomputed, the finalized height must
+select exactly one roster window, and the compact Commit QC must satisfy that
+window's canonical context and quorum. Redemption builders additionally reject
+provenance finalized after their declared evaluation height.
 
 ## Durability and payload gate
 

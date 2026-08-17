@@ -1,0 +1,19 @@
+
+        seiyaku Demo {
+            state int counter;
+
+            hajimari() {
+                counter = 0;
+            }
+
+            kotoage fn run() authorize("Admin") {
+                let current = counter;
+                let next = current + 1;
+                if current > 0 {
+                    debug::info("counter tick");
+                } else {
+                    debug::info("counter fresh");
+                }
+            }
+        }
+    

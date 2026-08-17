@@ -16,7 +16,6 @@
 //! the archive record is opened, their exclusive cursor is resolved against
 //! that immutable row here, and the reputation worker independently validates
 //! the returned anchor and continuation before consuming the page.
-use std::{fmt, sync::Arc};
 use eyre::{Result, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_core::{
@@ -81,6 +80,7 @@ use sorafs_node::reputation::{
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeProviderV1,
     },
 };
+use std::{fmt, sync::Arc};
 const FAILURE_INVALID_REQUEST: u8 = 0xA1;
 const FAILURE_ARCHIVE_READ: u8 = 0xA2;
 const FAILURE_MISSING_ANCHOR: u8 = 0xA3;
@@ -150,6 +150,10 @@ impl std::error::Error for ReputationFinalizedArchiveStartupErrorV1 {
 }
 /// Recovery mode authenticated while opening the reputation archive.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "startup retains the authenticated reconciliation value without heap indirection"
+)]
 pub(crate) enum ReputationFinalizedArchiveStartupModeV1 {
     /// Fresh height-zero State/Kura with a completely empty archive namespace.
     BootstrapAwaitingGenesisCapture,
@@ -391,6 +395,10 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         }
         Ok(())
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the snapshot authenticates one cohesive finalized retention boundary"
+    )]
     fn authorization_snapshot(
         &self,
     ) -> std::result::Result<
@@ -558,7 +566,7 @@ fn classify_retention_request(
             );
         }
         return Ok(ReputationRetentionDecisionV1::AlreadyApplied(
-            activation_floor.clone(),
+            *activation_floor,
         ));
     }
     if activation_floor.height > target.height {
@@ -1477,42 +1485,39 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        let source_view = match query.expected_finalized_cursor() {
-            Some(cursor) => {
-                cursor
-                    .validate()
-                    .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
-                if cursor.height > maximum_height {
-                    return Err(external_failure(FAILURE_PAGE_BOUNDS));
-                }
-                self.ensure_at_or_above_activation_floor(network_id, cursor.height)?;
-                let key = ReputationFinalizedArchiveKeyV1::try_new(
-                    *network_id,
-                    cursor.height,
-                    cursor.block_hash,
-                )
+        let source_view = if let Some(cursor) = query.expected_finalized_cursor() {
+            cursor
+                .validate()
                 .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
-                let source_view = self
-                    .archive
-                    .journal_event_by_source_at_exact(&key, query.source_id())
-                    .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-                    .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?;
-                if source_view.finalized_at_unix_ms != cursor.finalized_at_unix_ms {
-                    return Err(external_failure(FAILURE_ANCHOR_MISMATCH));
-                }
-                source_view
+            if cursor.height > maximum_height {
+                return Err(external_failure(FAILURE_PAGE_BOUNDS));
             }
-            None => {
-                self.ensure_at_or_above_activation_floor(network_id, maximum_height)?;
-                self.archive
-                    .latest_journal_event_by_source_at_or_before(
-                        network_id,
-                        maximum_height,
-                        query.source_id(),
-                    )
-                    .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-                    .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?
+            self.ensure_at_or_above_activation_floor(network_id, cursor.height)?;
+            let key = ReputationFinalizedArchiveKeyV1::try_new(
+                *network_id,
+                cursor.height,
+                cursor.block_hash,
+            )
+            .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
+            let source_view = self
+                .archive
+                .journal_event_by_source_at_exact(&key, query.source_id())
+                .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+                .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?;
+            if source_view.finalized_at_unix_ms != cursor.finalized_at_unix_ms {
+                return Err(external_failure(FAILURE_ANCHOR_MISMATCH));
             }
+            source_view
+        } else {
+            self.ensure_at_or_above_activation_floor(network_id, maximum_height)?;
+            self.archive
+                .latest_journal_event_by_source_at_or_before(
+                    network_id,
+                    maximum_height,
+                    query.source_id(),
+                )
+                .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+                .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?
         };
         let view = ReputationJournalSourceFinalizedViewV1 {
             anchor: ReputationFinalizedAnchorV1 {
@@ -1766,7 +1771,7 @@ fn external_failure(marker: u8) -> ReputationExternalFailureV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use super::*;
     use iroha_config::base::util::Bytes;
     use iroha_core::{
         query::{
@@ -1785,8 +1790,8 @@ mod tests {
             ReputationJournalPayloadV1,
         },
     };
+    use std::path::PathBuf;
     use tempfile::TempDir;
-    use super::*;
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
@@ -2419,7 +2424,7 @@ mod tests {
         let block_hash = [0x71; 32];
         let event = journal_event(1, 0, 0x45, 7, block_hash);
         let exact = projection(7, block_hash, vec![event.clone()]);
-        let key = exact.key.clone();
+        let key = exact.key;
         let (_directory, adapter) = adapter_with([exact]);
         let path = adapter
             .archive

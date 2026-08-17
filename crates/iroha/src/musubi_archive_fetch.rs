@@ -2273,6 +2273,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the operator-header audit keeps every signed network, path, body, and freshness binding together"
+    )]
     fn operator_headers_bind_network_path_body_and_single_freshness_tuple() {
         let operator_key_pair = KeyPair::try_random().expect("operator key");
         let runtime = ProviderRuntimeV1 {
@@ -2753,7 +2757,7 @@ operator_private_key_file = "provider.key"
             content_length: payload.len() as u64,
             chunks: vec![CarChunk {
                 offset: 0,
-                length: payload.len() as u32,
+                length: u32::try_from(payload.len()).expect("fixture payload length fits u32"),
                 digest: *blake3::hash(&payload).as_bytes(),
                 taikai_segment_hint: None,
             }],

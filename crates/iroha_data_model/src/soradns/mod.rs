@@ -4,6 +4,8 @@
 //! records and pub/sub event payloads outlined in the SoraDNS roadmap. These types are shared
 //! between governance tooling, Torii APIs, SDKs, and the resolver implementation so all components
 //! agree on the canonical Norito encoding.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, ipfs::IpfsPath};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_primitives::soradns::GatewayHostBindings;
@@ -19,10 +21,7 @@ pub type ResolverId = [u8; 32];
 pub type DirectoryId = [u8; 32];
 /// Deterministic host bindings derived from a resolver's canonical FQDN.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct GatewayHostSet {
     /// Base32-encoded BLAKE3 label used for canonical hosts.
     pub canonical_label: String,
@@ -53,10 +52,7 @@ impl From<&GatewayHostBindings> for GatewayHostSet {
 }
 /// Transport capabilities and endpoints exposed by a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolverTransportBundle {
     /// HTTPS `DoH` endpoint (RFC8484).
     pub doh: Option<HttpTransportV1>,
@@ -75,10 +71,7 @@ pub struct ResolverTransportBundle {
 }
 /// HTTP-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct HttpTransportV1 {
     /// Fully-qualified HTTPS endpoint.
     pub endpoint: String,
@@ -91,10 +84,7 @@ pub struct HttpTransportV1 {
 }
 /// TLS-based DNS transport metadata (`DoT`/`DoH3`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TlsTransportV1 {
     /// Endpoint (e.g., `tls://resolver.sora.net:853`).
     pub endpoint: String,
@@ -105,10 +95,7 @@ pub struct TlsTransportV1 {
 }
 /// QUIC-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct QuicTransportV1 {
     /// Endpoint (e.g., `quic://resolver.sora.net:784`).
     pub endpoint: String,
@@ -119,10 +106,7 @@ pub struct QuicTransportV1 {
 }
 /// Oblivious `DoH` relay preview metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OdohRelayV1 {
     /// Relay endpoint.
     pub endpoint: String,
@@ -133,10 +117,7 @@ pub struct OdohRelayV1 {
 }
 /// Configuration for bridging requests over `SoraNet` circuits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoranetBridgeConfigV1 {
     /// Multiaddr entry point (e.g., `/dns4/resolver.sora.net/tcp/7000/quic`).
     pub multiaddr: String,
@@ -145,10 +126,7 @@ pub struct SoranetBridgeConfigV1 {
 }
 /// Padding configuration applied to DNS responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PaddingPolicyV1 {
     /// Minimum padding bytes appended to each response.
     pub min_bytes: u16,
@@ -159,10 +137,7 @@ pub struct PaddingPolicyV1 {
 }
 /// TLS provisioning material associated with a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolverTlsBundle {
     /// ACME/issuance profiles authorised for the resolver.
     pub provisioning_profiles: Vec<TlsProvisioningProfile>,
@@ -175,10 +150,7 @@ pub struct ResolverTlsBundle {
 }
 /// Supported TLS provisioning strategies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "profile", content = "payload")]
 pub enum TlsProvisioningProfile {
     /// ACME DNS-01 issuance.
@@ -190,10 +162,7 @@ pub enum TlsProvisioningProfile {
 }
 /// Rotation policy attached to a resolver attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RotationPolicyV1 {
     /// Maximum allowed lifetime for a RAD (days).
     pub max_lifetime_days: u16,
@@ -204,10 +173,7 @@ pub struct RotationPolicyV1 {
 }
 /// Resolver Attestation Document (RAD) signed by the operator and governance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolverAttestationDocumentV1 {
     /// RAD schema version (currently `RAD_VERSION_V1`).
     pub version: u8,
@@ -244,10 +210,7 @@ pub struct ResolverAttestationDocumentV1 {
 }
 /// Directory record anchoring the active RAD set in the ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolverDirectoryRecordV1 {
     /// Merkle root hash of the active RAD set.
     pub root_hash: DirectoryId,
@@ -275,10 +238,7 @@ pub struct ResolverDirectoryRecordV1 {
 }
 /// Pending resolver directory draft awaiting council publication.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PendingDirectoryDraftV1 {
     /// Directory record submitted for approval.
     pub record: ResolverDirectoryRecordV1,
@@ -295,10 +255,7 @@ pub struct PendingDirectoryDraftV1 {
 }
 /// Record describing a resolver revocation hotfix entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolverRevocationRecordV1 {
     /// Resolver identifier that was revoked.
     pub resolver_id: ResolverId,
@@ -309,10 +266,7 @@ pub struct ResolverRevocationRecordV1 {
 }
 /// Rotation policy enforced for directory publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryRotationPolicyV1 {
     /// Minimum interval (milliseconds) between two publishes.
     pub min_interval_ms: u64,
@@ -335,10 +289,7 @@ impl Default for DirectoryRotationPolicyV1 {
 }
 /// Pub/sub events emitted whenever the resolver directory changes.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "event", content = "payload")]
 pub enum ResolverDirectoryEventV1 {
     /// Draft submitted by an authorized release signer.
@@ -358,10 +309,7 @@ pub enum ResolverDirectoryEventV1 {
 }
 /// Reasons for revoking a RAD entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "reason", content = "payload")]
 pub enum RadRevokeReason {
     /// Operator-requested revocation (e.g., compromise).
@@ -373,10 +321,7 @@ pub enum RadRevokeReason {
 }
 /// Payload for `ResolverDirectoryEventV1::DraftSubmitted`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryDraftSubmittedEventV1 {
     /// Directory identifier (Merkle root) referenced by the draft.
     pub directory_id: DirectoryId,
@@ -387,10 +332,7 @@ pub struct DirectoryDraftSubmittedEventV1 {
 }
 /// Payload for `ResolverDirectoryEventV1::Published`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryPublishedEventV1 {
     /// Directory identifier (Merkle root) that became active.
     pub directory_id: DirectoryId,
@@ -405,10 +347,7 @@ pub struct DirectoryPublishedEventV1 {
 }
 /// Payload for `ResolverDirectoryEventV1::Revoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryRevokedEventV1 {
     /// Resolver identifier that was revoked.
     pub resolver_id: ResolverId,
@@ -419,10 +358,7 @@ pub struct DirectoryRevokedEventV1 {
 }
 /// Payload for `ResolverDirectoryEventV1::Unrevoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryUnrevokedEventV1 {
     /// Resolver identifier that was restored.
     pub resolver_id: ResolverId,
@@ -431,20 +367,14 @@ pub struct DirectoryUnrevokedEventV1 {
 }
 /// Payload for release signer modifications.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryReleaseSignerEventV1 {
     /// Public key that was added or removed.
     pub public_key: PublicKey,
 }
 /// Payload for `ResolverDirectoryEventV1::PolicyUpdated`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DirectoryPolicyUpdatedEventV1 {
     /// Updated directory rotation policy.
     pub policy: DirectoryRotationPolicyV1,

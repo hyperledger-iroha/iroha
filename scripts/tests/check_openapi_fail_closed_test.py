@@ -11,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 and older
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XTASK = REPO_ROOT / "xtask" / "src" / "main.rs"
+XTASK_OPENAPI_GIT = REPO_ROOT / "xtask" / "src" / "openapi_git.rs"
 TORII_OPENAPI = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 OPENAPI_AUTHORITIES = (
     REPO_ROOT / "artifacts" / "openapi" / "torii.json",
@@ -157,6 +158,7 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "artifacts/openapi/versions.json",
     ]
     assert "artifacts/openapi/allowed_signers.json" in owner["inputs"]
+    assert "Cargo.lock" in owner["inputs"]
     assert "artifacts/openapi/allowed_signers.json" not in owner["outputs"]
     assert "bash ci/run_openapi_generator.sh" in owner["generator"]
     assert (
@@ -179,6 +181,9 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "ci/run_openapi_generator.sh",
         "scripts/seal_workspace_source.py",
         "scripts/sumeragi_v2_release_process_policy.sh",
+        "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
+        "tools/openapi/scripts/verify-openapi-release-inputs.mjs",
+        "xtask/src/openapi_git.rs",
     } <= set(owner["generator_sources"])
     assert owner["check"] == "bash ci/check_openapi_spec.sh"
 
@@ -198,13 +203,17 @@ def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
     assert len(owners) == 1
     owner = owners[0]
     assert owner["outputs"] == ["release/openapi-cargo-lock-v1.txt"]
-    assert owner["inputs"] == ["release/openapi-generator-inputs-v1.txt"]
+    assert owner["inputs"] == [
+        "Cargo.lock",
+        "release/openapi-generator-inputs-v1.txt",
+    ]
     assert "provision-openapi-cargo-lock.mjs pin" in owner["generator"]
     assert "--source=\"$PWD/Cargo.lock\"" in owner["generator"]
     assert "IROHA_OPENAPI_CARGO_LOCK_PIN_STAGE" in owner["generator"]
     assert "--check=\"$PWD/release/openapi-cargo-lock-v1.txt\"" in owner["check"]
 
     xtask = XTASK.read_text(encoding="utf-8")
+    xtask_git = XTASK_OPENAPI_GIT.read_text(encoding="utf-8")
     provisioner = OPENAPI_LOCK_PROVISIONER.read_text(encoding="utf-8")
     pin_fields = dict(
         line.split("=", 1)
@@ -217,7 +226,25 @@ def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
         assert pinned_digest not in source
     assert "outside the repository" in provisioner
     assert "assertOpenApiCargoLockSnapshotStable" in provisioner
-    assert "absent OpenAPI Cargo.lock requires an explicit existing --source" in provisioner
+    assert "tracked root lock is the sole lock authority" in provisioner
+    assert "never writes the checkout" in provisioner
+    assert "validateOpenApiCargoLockGitPolicy" in provisioner
+    assert "openapi_git::command()" in xtask
+    assert "env::vars_os()" in xtask_git
+    assert "command.env_remove(name)" in xtask_git
+    for name, value in (
+        ("GIT_OPTIONAL_LOCKS", "0"),
+        ("GIT_NO_LAZY_FETCH", "1"),
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "core.hooksPath"),
+        ("GIT_CONFIG_VALUE_0", "/dev/null"),
+        ("GIT_CONFIG_KEY_1", "core.fsmonitor"),
+        ("GIT_CONFIG_VALUE_1", "false"),
+    ):
+        assert f'("{name}", "{value}")' in xtask_git
     for forbidden in (
         "generate-lockfile",
         "--lockfile-path",
@@ -233,7 +260,26 @@ def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
 
 def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
+    generator = OPENAPI_GENERATOR_WRAPPER.read_text(encoding="utf-8")
     harness = GROUPED_PARITY_HARNESS.read_text(encoding="utf-8")
+
+    for wrapper in (gate, generator):
+        assert "compgen -e" in wrapper
+        assert 'unset "${openapi_git_variable}"' in wrapper
+        for setting in (
+            "GIT_OPTIONAL_LOCKS=0",
+            "GIT_NO_LAZY_FETCH=1",
+            "GIT_NO_REPLACE_OBJECTS=1",
+            "GIT_CONFIG_NOSYSTEM=1",
+            "GIT_CONFIG_GLOBAL=/dev/null",
+            "GIT_CONFIG_COUNT=2",
+            "GIT_CONFIG_KEY_0=core.hooksPath",
+            "GIT_CONFIG_VALUE_0=/dev/null",
+            "GIT_CONFIG_KEY_1=core.fsmonitor",
+            "GIT_CONFIG_VALUE_1=false",
+        ):
+            assert setting in wrapper
+        assert wrapper.index("compgen -e") < wrapper.index("git -C")
 
     assert gate.count(
         '"${OPENAPI_NODE_BIN}" \\\n    tools/openapi/scripts/verify-musubi-v1-contract.mjs'
@@ -274,8 +320,8 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "provisionOpenApiCargoLock," in gate
     assert "const summary = await provisionOpenApiCargoLock({" in gate
     assert "repoRoot: replaySourceRoot," in gate
-    assert "summary.status !== 'installed'" in gate
-    assert "summary.source !== 'operator'" in gate
+    assert "summary.status !== 'verified'" in gate
+    assert "summary.source !== 'tracked'" in gate
     assert 'summary.path !== \'Cargo.lock\'' in gate
     assert '"${REPO_ROOT}/Cargo.lock"' in gate
     assert 'cp "${REPO_ROOT}/Cargo.lock"' not in gate

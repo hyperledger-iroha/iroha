@@ -3346,7 +3346,7 @@ mod tests {
         for backend_len in [1, 126, 127, 128, 255, 256, 4_094] {
             let backend = "a".repeat(backend_len);
             for proof_len in [0, 1, 118, 119, 120, 121, 16_374, 16_375, 16_376, 16_377] {
-                let proof = ProofBox::new(backend.clone().into(), vec![0xC3; proof_len]);
+                let proof = ProofBox::new(backend.clone(), vec![0xC3; proof_len]);
                 assert_eq!(
                     proof.canonical_encoded_len_v1(),
                     Some(
@@ -3370,7 +3370,7 @@ mod tests {
             );
         }
         let largest_backend = "c".repeat(4_094);
-        let proof = ProofBox::new(largest_backend.clone().into(), vec![0x5A]);
+        let proof = ProofBox::new(largest_backend.clone(), vec![0x5A]);
         assert!(proof.canonical_encoded_len_v1().is_some());
         assert!(proof_box_max_proof_bytes_v1(&largest_backend).is_some());
         let encoded = norito::to_bytes(&proof).expect("encode maximum backend field");
@@ -3379,7 +3379,7 @@ mod tests {
         assert_eq!(decoded, proof);
         for backend_len in [4_095, 4_096] {
             let backend = "d".repeat(backend_len);
-            let proof = ProofBox::new(backend.clone().into(), vec![0x5A]);
+            let proof = ProofBox::new(backend.clone(), vec![0x5A]);
             assert_eq!(proof.canonical_encoded_len_v1(), None);
             assert_eq!(proof_box_max_proof_bytes_v1(&backend), None);
             let encoded = norito::to_bytes(&proof).expect("encoding remains infallible");
@@ -3717,7 +3717,9 @@ mod tests {
         // The production decoder uses the multi-million-byte V1 ceiling. A
         // small const-generic limit exercises the identical boundary without
         // constructing an adversarial 64 MiB fixture in a unit test.
-        assert!(PROOF_BOX_MAX_ENCODED_BYTES_V1 > 1_000_000);
+        assert!(
+            proof_box_max_proof_bytes_v1("halo2/ipa").is_some_and(|maximum| maximum > 1_000_000)
+        );
         let at_limit = norito::json::from_str::<ProofAttachmentJsonProofBoxV1<4>>(
             r#"{ "backend": "halo2/ipa", "bytes": [0, 1, 2, 3] }"#,
         )
@@ -3817,7 +3819,7 @@ mod tests {
     #[test]
     fn proof_attachment_json_value_preflight_rejects_wrong_shapes() {
         for json in [
-            r#"[]"#,
+            "[]",
             r#"{
                 "backend": 7,
                 "proof": { "backend": "halo2/ipa", "bytes": [1] },

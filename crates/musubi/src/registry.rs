@@ -296,6 +296,7 @@ impl RegistryReadClientV1 {
         timeout: Duration,
         account_chain_discriminant: u16,
     ) -> Result<Self, RegistryErrorV1> {
+        let torii_url: String = torii_url.into();
         let timeout_ms = u64::try_from(timeout.as_millis()).map_err(|_| invalid_public_config())?;
         let source = format!(
             r#"

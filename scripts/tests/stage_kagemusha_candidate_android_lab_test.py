@@ -144,6 +144,10 @@ class Fixture:
             "source_commit": SOURCE.commit,
             "source_tree_sha256": SOURCE.tree_sha256,
             "source_repo_dirty": False,
+            "reviewed_source_closure_descriptor_sha256": "5" * 64,
+            "authenticated_source_seal_projection_sha256": "6" * 64,
+            "reviewed_cargo_binary_sha256": "7" * 64,
+            "reviewed_rustc_binary_sha256": "8" * 64,
             "generation": "candidate.test.v4",
             "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
             "generation_memory_enforcement_profile": (
@@ -343,6 +347,36 @@ class CandidateStagerTests(unittest.TestCase):
 
         self.fixture.report["qualified_candidate_sha256"] = "f" * 64
         with self.assertRaisesRegex(stage.StageError, "qualified-candidate identity"):
+            stage.parse_validation_report(self.report_bytes())
+
+    def test_report_parser_rejects_noncanonical_reviewed_provenance_digests(self) -> None:
+        fields = (
+            "reviewed_source_closure_descriptor_sha256",
+            "authenticated_source_seal_projection_sha256",
+            "reviewed_cargo_binary_sha256",
+            "reviewed_rustc_binary_sha256",
+        )
+        stage.parse_validation_report(self.report_bytes())
+        for field in fields:
+            with self.subTest(field=field, value="missing"):
+                original = self.fixture.report.pop(field)
+                with self.assertRaisesRegex(
+                    stage.StageError,
+                    "incomplete or excessive schema",
+                ):
+                    stage.parse_validation_report(self.report_bytes())
+                self.fixture.report[field] = original
+            with self.subTest(field=field, value="zero"):
+                original = self.fixture.report[field]
+                self.fixture.report[field] = "0" * 64
+                with self.assertRaisesRegex(
+                    stage.StageError,
+                    "nonzero lowercase SHA-256",
+                ):
+                    stage.parse_validation_report(self.report_bytes())
+                self.fixture.report[field] = original
+        self.fixture.report[fields[0]] = "A" * 64
+        with self.assertRaisesRegex(stage.StageError, "nonzero lowercase SHA-256"):
             stage.parse_validation_report(self.report_bytes())
 
     def test_report_parser_accepts_exact_artifact_limit_and_rejects_next_byte(self) -> None:

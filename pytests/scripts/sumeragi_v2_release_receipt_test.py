@@ -589,7 +589,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "3e87cffe611d61fb2e9a7a6d921cc263794238c57c3d22121025b74423b6468d"
+        "0dc98e8799acf15729f4cb42c79b754232fbda6091558ec87c2bd2765a6ffc48"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -1272,19 +1272,16 @@ def make_runtime_tool_probe_evidence(
 ) -> dict[str, object]:
     """Copy the synthetic 41-tool closure and bind its path-free result."""
 
-    evidence_dir = bootstrap["bootstrap_evidence_dir"]
-    assert isinstance(evidence_dir, Path)
-    runtime_root = invocation_root / "runtime"
-    runtime_bin = runtime_root / "bin"
-    runtime_bin.mkdir(parents=True, mode=0o700)
-    runtime_bin.chmod(0o700)
+    evidence_dir = bootstrap["bootstrap_evidence_dir"]; assert isinstance(evidence_dir, Path)
+    runtime_root = invocation_root / "runtime"; runtime_bin = runtime_root / "bin"
+    runtime_bin.mkdir(parents=True, mode=0o700); runtime_bin.chmod(0o700)
     runtime_tools: dict[str, Path] = {}
     for name in sorted(FIXTURE_TOOL_PROBE_OPERATION_IDS):
         source = evidence_dir / "runner-tools" / name
-        destination = runtime_bin / name
-        shutil.copyfile(source, destination)
-        destination.chmod(0o500)
-        runtime_tools[name] = destination
+        relative = {"cargo": "rust-toolchain/bin/cargo", "rustc": "rust-toolchain/bin/rustc", "java": "java-runtime/bin/java", "swift": "swift-toolchain/bin/swift-frontend", "tlapm": "tlapm-distribution/bin/tlapm", "verus": "verus-distribution/verus", "cargo-verus": "verus-distribution/cargo-verus"}.get(name, f"bin/{name}")
+        destination = runtime_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700); destination.parent.chmod(0o700)
+        shutil.copyfile(source, destination); destination.chmod(0o500); runtime_tools[name] = destination
     manifest_value = {
         "schema_version": 1,
         "tools": {
@@ -1296,21 +1293,17 @@ def make_runtime_tool_probe_evidence(
             for name, path in sorted(runtime_tools.items())
         },
     }
-    manifest = invocation_root / "runtime-tool-probe-manifest.json"
-    manifest.write_bytes(canonical_json(manifest_value))
-    manifest.chmod(0o400)
+    manifest = invocation_root / "runtime-tool-probe-manifest.json"; manifest.write_bytes(canonical_json(manifest_value)); manifest.chmod(0o400)
     result_value = fixture_tool_probe_result(
         manifest_value,
         archive_id_prefix="release-runtime-tool",
     )
-    result = invocation_root / "runtime-tool-probe-result.json"
-    result.write_bytes(canonical_json(result_value))
-    result.chmod(0o400)
-    return {
-        "runtime_tool_probe_manifest": manifest,
-        "runtime_tool_probe_result": result,
-        "runtime_tool_probe_tools": runtime_tools,
-    }
+    result = invocation_root / "runtime-tool-probe-result.json"; result.write_bytes(canonical_json(result_value)); result.chmod(0o400)
+    for name in ("python3", "bash", "git"):
+        destination = runtime_bin / name
+        shutil.copyfile(evidence_dir / name, destination); destination.chmod(0o500); runtime_tools[name] = destination
+    tla2tools = runtime_root / "tla2tools.jar"; tla2tools.write_bytes(b"fixture TLA2Tools jar\n"); tla2tools.chmod(0o600)
+    return {"runtime_tool_probe_manifest": manifest, "runtime_tool_probe_result": result, "runtime_tool_probe_tools": runtime_tools, "runtime_tla2tools": tla2tools}
 
 
 def make_scaling_evidence(
@@ -2530,7 +2523,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_output.chmod(0o700)
     release_artifact_root = release_output
     runtime_inventory = release_invocation_root / "runtime-input.json"
-    runtime_inventory.write_bytes(canonical_json({"format": "iroha-sumeragi-v2-private-runtime", "schema_version": 1, "runtime_root": str(release_invocation_root / "runtime"), "record_count": 0, "file_bytes": 0, "records": [], "source_disclosure": "withheld", "input_record_count": 0, "input_file_bytes": 0, "input_records": []})); runtime_inventory.chmod(0o400)
+    runtime_tla2tools = runtime_tool_probes["runtime_tla2tools"]; assert isinstance(runtime_tla2tools, Path); runtime_tla2tools_stat = runtime_tla2tools.stat()
+    runtime_inventory.write_bytes(canonical_json({"format": "iroha-sumeragi-v2-private-runtime", "schema_version": 1, "runtime_root": str(release_invocation_root / "runtime"), "record_count": 1, "file_bytes": runtime_tla2tools_stat.st_size, "records": [{"path": "tla2tools.jar", "kind": "file", "device": runtime_tla2tools_stat.st_dev, "inode": runtime_tla2tools_stat.st_ino, "mode": "0600", "size": runtime_tla2tools_stat.st_size, "sha256": sha256(runtime_tla2tools)}], "source_disclosure": "withheld", "input_record_count": 0, "input_file_bytes": 0, "input_records": []})); runtime_inventory.chmod(0o400)
     release_output_directory = release_output / "release"
     release_output_directory.mkdir(mode=0o700)
     release_output_directory.chmod(0o700)
@@ -2566,7 +2560,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     )
 
     writer_symbols = runpy.run_path(str(SCRIPT))
-    corridor_legs = fixture_corridor_legs(writer_symbols, bootstrap)
+    runtime_tool_paths = runtime_tool_probes["runtime_tool_probe_tools"]; assert isinstance(runtime_tool_paths, dict)
+    runtime_cargo = runtime_tool_paths["cargo"]; assert isinstance(runtime_cargo, Path)
+    corridor_legs = fixture_corridor_legs(writer_symbols, runtime_cargo)
     production_modules = writer_symbols["_PRODUCTION_MODULES"]
     canonical_production_tests = writer_symbols["_canonical_production_tests"](
         ROOT_DIR
@@ -2802,11 +2798,12 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "verus",
         "cargo_verus",
     ):
-        if name in {"cargo", "rustc"}:
-            bootstrap_key = f"bootstrap_runner_{name}"
-            bootstrap_tool = bootstrap[bootstrap_key]
-            assert isinstance(bootstrap_tool, Path)
-            path = bootstrap_tool
+        runtime_name = "cargo-verus" if name == "cargo_verus" else name
+        if runtime_name in runtime_tool_paths:
+            path = runtime_tool_paths[runtime_name]
+            assert isinstance(path, Path)
+        elif name == "tla2tools":
+            path = runtime_tla2tools
         else:
             path = tool_dir / name
             path.write_text(f"fixture {name}\n", encoding="utf-8")
@@ -2848,9 +2845,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "cargo_path": str(tool_paths["cargo"].resolve()),
             "cargo_sha256": sha256(tool_paths["cargo"]),
             "cargo_version": "cargo 1.93.1 (083ac5135 2025-12-15)",
+            "cargo_version_size_bytes": str(len(CARGO_VERSION_OUTPUT)),
             "rustc_path": str(tool_paths["rustc"].resolve()),
             "rustc_sha256": sha256(tool_paths["rustc"]),
             "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+            "rustc_version_size_bytes": str(len(RUSTC_VERSION_OUTPUT)),
             "python3_path": str(tool_paths["python3"].resolve()),
             "python3_sha256": sha256(tool_paths["python3"]),
             "node_path": str(tool_paths["node"].resolve()),
@@ -4109,7 +4108,7 @@ def test_receipt_rejects_self_consistent_forged_rustc_verbose_semantics(
     tmp_path: Path, rustc_output: bytes
 ) -> None:
     evidence = make_evidence(tmp_path)
-    rustc = evidence["corridor_rustc_tool"]
+    rustc = evidence["bootstrap_runner_rustc"]
     corridor = evidence["corridor_completion"]
     manifest = evidence["prebuilt_manifest"]
     assert isinstance(rustc, Path)
@@ -4126,12 +4125,11 @@ def test_receipt_rejects_self_consistent_forged_rustc_verbose_semantics(
     rustc.chmod(0o500)
     rebind_bootstrap_runner_tool(evidence, "rustc")
     corridor_fields = read_tsv_fields(corridor)
-    corridor_fields["rustc_sha256"] = sha256(rustc)
+    corridor_fields["rustc_sha256"] = sha256(evidence["corridor_rustc_tool"])
+    corridor_fields["rustc_version_size_bytes"] = str(len(rustc_output))
     write_tsv(corridor, corridor_fields)
     manifest_fields = read_tsv_fields(manifest)
-    manifest_fields["rustc_version_sha256"] = hashlib.sha256(
-        rustc_output
-    ).hexdigest()
+    manifest_fields["rustc_version_sha256"] = hashlib.sha256(rustc_output).hexdigest()
     rewrite_prebuilt_manifest(
         evidence,
         "".join(

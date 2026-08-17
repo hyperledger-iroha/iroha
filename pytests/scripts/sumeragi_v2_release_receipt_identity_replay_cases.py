@@ -663,14 +663,14 @@ def test_receipt_rejects_cross_source_completion(
         ("formal_toolchain", "formal toolchain digest mismatch"),
         ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
         ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
-        ("formal_verus_tool", "formal verus tool digest mismatch"),
+        ("formal_verus_tool", "runtime tool probe verus differs from bootstrap closure"),
         ("corridor_summary", "corridor summary digest mismatch"),
         ("corridor_required", "corridor production inventory digest mismatch"),
         ("corridor_g_unit", "corridor G-UNIT inventory digest mismatch"),
         ("corridor_log", "corridor log 0 digest mismatch"),
         (
             "corridor_cargo_tool",
-            "bootstrap runner tool cargo integrity binding is wrong",
+            "runtime tool probe cargo differs from bootstrap closure",
         ),
         ("seed_summary", "summary digest mismatch"),
         ("seed_log", "seed run log 17 digest mismatch"),
@@ -956,7 +956,7 @@ def test_receipt_rejects_noncanonical_rust_tool_version(
 
         assert cross_result.returncode == 1
         assert (
-            f"corridor {tool} is not the authenticated bootstrap runner tool"
+            f"corridor {tool} is not the authenticated private runtime tool"
             in cross_result.stderr
         )
 

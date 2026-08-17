@@ -13,7 +13,6 @@ import {
   realpath,
   rename,
   rm,
-  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -24,8 +23,6 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 
 import {
-  OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-  OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
   OPENAPI_CARGO_LOCK_PIN_OWNER_SCHEMA,
   OPENAPI_CARGO_LOCK_PIN_PATH,
   OPENAPI_CARGO_LOCK_PIN_SCHEMA,
@@ -54,12 +51,7 @@ let pin;
 test.before(async () => {
   canonicalTempRoot = await realpath(tmpdir());
   const trackedPinBytes = await readFile(pinPath);
-  const trackedPin = parseOpenApiCargoLockPin(trackedPinBytes);
-  assert.equal(OPENAPI_CARGO_LOCK_EXPECTED_BYTES, trackedPin.bytes);
-  assert.equal(
-    OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
-    trackedPin.sha256Hex,
-  );
+  parseOpenApiCargoLockPin(trackedPinBytes);
   fixtureBytes = Buffer.from(
     '# synthetic OpenAPI Cargo.lock fixture\nversion = 4\n',
     'utf8',
@@ -131,6 +123,67 @@ test('V1 pin and CLI are exact and canonical', async () => {
       /pin|schema|size|SHA-256|LF/i,
     );
   }
+});
+
+test('Git environment isolation removes routing, object, and config inputs', () => {
+  const isolated = isolateGitRepositoryEnvironment({
+    PATH: '/safe/bin',
+    GIT_DIR: '/sentinel/.git',
+    GIT_INDEX_FILE: '/sentinel/index',
+    GIT_OBJECT_DIRECTORY: '/sentinel/objects',
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: '/sentinel/alternate',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_0: 'malicious',
+  });
+  assert.deepEqual(isolated, {
+    PATH: '/safe/bin',
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_NO_LAZY_FETCH: '1',
+    GIT_NO_REPLACE_OBJECTS: '1',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_KEY_1: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_1: 'false',
+  });
+});
+
+test('Git environment isolation disables repository-local replace refs', async (context) => {
+  const root = await makeTempDirectory('openapi-lock-replace-ref-');
+  context.after(() => rm(root, {recursive: true, force: true}));
+  const valuePath = path.join(root, 'value.txt');
+  await gitText(root, ['init', '--quiet']);
+  await gitText(root, ['config', 'user.email', 'openapi-test@example.invalid']);
+  await gitText(root, ['config', 'user.name', 'OpenAPI Test']);
+  await writeFile(valuePath, 'original\n');
+  await gitText(root, ['add', 'value.txt']);
+  await gitText(root, ['commit', '--quiet', '-m', 'original']);
+  const originalBlob = (await gitText(root, ['rev-parse', 'HEAD:value.txt'])).trim();
+  await writeFile(valuePath, 'replacement\n');
+  await gitText(root, ['add', 'value.txt']);
+  await gitText(root, ['commit', '--quiet', '-m', 'replacement']);
+  const replacementBlob = (await gitText(root, ['rev-parse', 'HEAD:value.txt'])).trim();
+  await gitText(root, [
+    'update-ref',
+    `refs/replace/${originalBlob}`,
+    replacementBlob,
+  ]);
+
+  const replacementEnabled = isolateGitRepositoryEnvironment();
+  delete replacementEnabled.GIT_NO_REPLACE_OBJECTS;
+  const replaced = await execFileAsync(
+    'git',
+    ['cat-file', 'blob', originalBlob],
+    {cwd: root, encoding: 'utf8', env: replacementEnabled},
+  );
+  assert.equal(replaced.stdout, 'replacement\n');
+  assert.equal(
+    await gitText(root, ['cat-file', 'blob', originalBlob]),
+    'original\n',
+  );
 });
 
 test('pin-owner CLI requires one absolute source and one explicit mode', () => {
@@ -300,6 +353,33 @@ test(
       /symbolic link|without following links/i,
     );
 
+    const fifoRace = path.join(root, 'fifo-race.lock');
+    const fifoOriginal = path.join(root, 'fifo-race-original.lock');
+    await writeFile(fifoRace, 'lock');
+    await assert.rejects(
+      () =>
+        readOpenApiCargoLockStable(fifoRace, {
+          beforeOpen: async () => {
+            await rename(fifoRace, fifoOriginal);
+            await execFileAsync('mkfifo', [fifoRace]);
+          },
+        }),
+      /must be a regular file/i,
+    );
+
+    const oversizedPin = path.join(root, 'oversized-pin');
+    await writeFile(oversizedPin, Buffer.alloc(1025, 1));
+    await assert.rejects(
+      () => readOpenApiCargoLockStable(oversizedPin, {maxBytes: 1024}),
+      /exceeds the 1024-byte limit/i,
+    );
+    const special = path.join(root, 'special');
+    await mkdir(special);
+    await assert.rejects(
+      () => readOpenApiCargoLockStable(special, {maxBytes: 1024}),
+      /must be a regular file/i,
+    );
+
     const replaced = path.join(root, 'replaced.lock');
     const replacedOld = path.join(root, 'replaced-old.lock');
     await writeFile(replaced, 'same-size');
@@ -326,56 +406,57 @@ test(
   },
 );
 
-test('operator source installs atomically and exact root locks are reused', async (context) => {
-  const root = await makeRepository({ignoreRootLock: true});
+test('tracked root authority verifies without writing the checkout', async (context) => {
+  const root = await makeRepository();
   context.after(() => rm(root, {recursive: true, force: true}));
-  const source = await realpath(fixturePath);
+  const target = path.join(root, 'Cargo.lock');
+  const before = await readFile(target);
+  let hookEvidence;
 
-  const installed = await provisionOpenApiCargoLock({
+  const verified = await provisionOpenApiCargoLock({
     repoRoot: root,
-    sourcePath: source,
+    sourcePath: await realpath(fixturePath),
+    beforeVerify: (evidence) => {
+      hookEvidence = evidence;
+    },
   });
-  assert.deepEqual(installed, {
+  assert.deepEqual(verified, {
     schema: 'iroha.openapi.cargo-lock.provision.v1',
-    status: 'installed',
-    source: 'operator',
+    status: 'verified',
+    source: 'tracked',
     path: 'Cargo.lock',
     bytes: pin.bytes,
     sha256_hex: pin.sha256Hex,
   });
-  assert.deepEqual(await readFile(path.join(root, 'Cargo.lock')), fixtureBytes);
-  if (process.platform !== 'win32') {
-    assert.equal((await stat(path.join(root, 'Cargo.lock'))).mode & 0o777, 0o644);
-  }
-  assert.equal(await gitText(root, ['status', '--porcelain=v1']), '');
-
-  const reused = await provisionOpenApiCargoLock({
-    repoRoot: root,
+  assert.deepEqual(hookEvidence, {
+    sourcePath: await realpath(fixturePath),
+    trackedPath: target,
   });
-  assert.equal(reused.status, 'reused');
-  assert.equal(reused.source, 'existing');
+  assert.deepEqual(await readFile(target), before);
+  assert.equal(await gitText(root, ['status', '--porcelain=v1']), '');
 });
 
-test('an absent root lock without a source fails closed without installation', async (context) => {
-  const root = await makeRepository({ignoreRootLock: true});
-  context.after(() => rm(root, {recursive: true, force: true}));
-  let beforeInstallCalled = false;
-
-  await assert.rejects(
-    () =>
-      provisionOpenApiCargoLock({
-        repoRoot: root,
-        beforeInstall: async () => {
-          beforeInstallCalled = true;
-        },
-      }),
-    /requires an explicit existing --source.*never runs Cargo/i,
-  );
-  assert.equal(beforeInstallCalled, false);
-  await assert.rejects(
-    () => access(path.join(root, 'Cargo.lock')),
-    {code: 'ENOENT'},
-  );
+test('an absent or untracked root lock fails closed without adopting a source', async (context) => {
+  for (const withWorkingLock of [false, true]) {
+    const root = await makeRepository({trackRootLock: false});
+    context.after(() => rm(root, {recursive: true, force: true}));
+    if (withWorkingLock) {
+      await writeFile(path.join(root, 'Cargo.lock'), fixtureBytes);
+    }
+    let beforeVerifyCalled = false;
+    await assert.rejects(
+      () =>
+        provisionOpenApiCargoLock({
+          repoRoot: root,
+          sourcePath: fixturePath,
+          beforeVerify: () => {
+            beforeVerifyCalled = true;
+          },
+        }),
+      /stage-zero 100644 Git blob/i,
+    );
+    assert.equal(beforeVerifyCalled, false);
+  }
 });
 
 test('provisioner has no Cargo execution or lock generation surface', async () => {
@@ -395,9 +476,10 @@ test('provisioner has no Cargo execution or lock generation surface', async () =
   }
   assert.equal(Array.from(source.matchAll(/\bspawn\(/g)).length, 1);
   assert.match(source, /const child = spawn\('git', arguments_/);
+  assert.doesNotMatch(source, /readFileSync|OPENAPI_CARGO_LOCK_EXPECTED_/);
 });
 
-test('wrong-size and wrong-digest candidates never install', async (context) => {
+test('wrong-size and wrong-digest comparison candidates never alter the authority', async (context) => {
   for (const candidate of [
     fixtureBytes.subarray(0, fixtureBytes.length - 1),
     Buffer.concat([
@@ -405,7 +487,7 @@ test('wrong-size and wrong-digest candidates never install', async (context) => 
       fixtureBytes.subarray(1),
     ]),
   ]) {
-    const root = await makeRepository({ignoreRootLock: true});
+    const root = await makeRepository();
     context.after(() => rm(root, {recursive: true, force: true}));
     const sourceDirectory = await makeTempDirectory('openapi-lock-invalid-');
     context.after(() => rm(sourceDirectory, {recursive: true, force: true}));
@@ -420,56 +502,43 @@ test('wrong-size and wrong-digest candidates never install', async (context) => 
         }),
       /expected exactly|SHA-256/i,
     );
+    assert.deepEqual(await readFile(path.join(root, 'Cargo.lock')), fixtureBytes);
+    assert.equal(await gitText(root, ['status', '--porcelain=v1']), '');
+  }
+});
+
+test('root worktree, index, and mode substitutions are rejected', async (context) => {
+  const dirty = await makeRepository();
+  context.after(() => rm(dirty, {recursive: true, force: true}));
+  await writeFile(path.join(dirty, 'Cargo.lock'), 'dirty root lock\n');
+  await assert.rejects(
+    () => provisionOpenApiCargoLock({repoRoot: dirty}),
+    /working file must exactly match its HEAD blob/i,
+  );
+
+  const staged = await makeRepository();
+  context.after(() => rm(staged, {recursive: true, force: true}));
+  await writeFile(path.join(staged, 'Cargo.lock'), 'staged root lock\n');
+  await gitText(staged, ['add', '--', 'Cargo.lock']);
+  await assert.rejects(
+    () => provisionOpenApiCargoLock({repoRoot: staged}),
+    /index and HEAD entries must reference the same blob/i,
+  );
+
+  if (process.platform !== 'win32') {
+    const executable = await makeRepository();
+    context.after(() => rm(executable, {recursive: true, force: true}));
+    await chmod(path.join(executable, 'Cargo.lock'), 0o755);
+    await gitText(executable, ['add', '--', 'Cargo.lock']);
     await assert.rejects(
-      () => access(path.join(root, 'Cargo.lock')),
-      {code: 'ENOENT'},
+      () => provisionOpenApiCargoLock({repoRoot: executable}),
+      /stage-zero 100644 Git blob/i,
     );
   }
 });
 
-test('an invalid existing root lock is rejected without replacement', async (context) => {
-  const root = await makeRepository({ignoreRootLock: true});
-  context.after(() => rm(root, {recursive: true, force: true}));
-  const target = path.join(root, 'Cargo.lock');
-  const invalid = Buffer.from('invalid existing lock\n');
-  await writeFile(target, invalid);
-
-  await assert.rejects(
-    () =>
-      provisionOpenApiCargoLock({
-        repoRoot: root,
-        sourcePath: fixturePath,
-      }),
-    /expected exactly/i,
-  );
-  assert.deepEqual(await readFile(target), invalid);
-});
-
-test('tracked and unignored root locks are rejected', async (context) => {
-  const unignored = await makeRepository({ignoreRootLock: false});
-  context.after(() => rm(unignored, {recursive: true, force: true}));
-  await assert.rejects(
-    () =>
-      provisionOpenApiCargoLock({
-        repoRoot: unignored,
-        sourcePath: fixturePath,
-      }),
-    /must be ignored/i,
-  );
-
-  const tracked = await makeRepository({
-    ignoreRootLock: true,
-    trackRootLock: true,
-  });
-  context.after(() => rm(tracked, {recursive: true, force: true}));
-  await assert.rejects(
-    () => provisionOpenApiCargoLock({repoRoot: tracked}),
-    /must remain untracked/i,
-  );
-});
-
 test('staged Cargo.lock pin substitution is rejected', async (context) => {
-  const root = await makeRepository({ignoreRootLock: true});
+  const root = await makeRepository();
   context.after(() => rm(root, {recursive: true, force: true}));
   const repositoryPinPath = path.join(
     root,
@@ -500,7 +569,7 @@ test('staged Cargo.lock pin substitution is rejected', async (context) => {
 });
 
 test('unstaged Cargo.lock pin substitution is rejected', async (context) => {
-  const root = await makeRepository({ignoreRootLock: true});
+  const root = await makeRepository();
   context.after(() => rm(root, {recursive: true, force: true}));
   const repositoryPinPath = path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH);
   await writeFile(
@@ -519,10 +588,10 @@ test('unstaged Cargo.lock pin substitution is rejected', async (context) => {
 });
 
 test(
-  'operator sources reject aliases, hard links, and executable files',
+  'comparison sources reject aliases, hard links, and executable files',
   {skip: process.platform === 'win32'},
   async (context) => {
-    const root = await makeRepository({ignoreRootLock: true});
+    const root = await makeRepository();
     context.after(() => rm(root, {recursive: true, force: true}));
     const sourceDirectory = await makeTempDirectory('openapi-lock-source-');
     context.after(() => rm(sourceDirectory, {recursive: true, force: true}));
@@ -564,8 +633,8 @@ test(
   },
 );
 
-test('candidate mutation and target replacement fail closed', async (context) => {
-  const mutationRoot = await makeRepository({ignoreRootLock: true});
+test('comparison mutation and tracked-target replacement fail closed', async (context) => {
+  const mutationRoot = await makeRepository();
   context.after(() => rm(mutationRoot, {recursive: true, force: true}));
   const sourceDirectory = await makeTempDirectory('openapi-lock-race-');
   context.after(() => rm(sourceDirectory, {recursive: true, force: true}));
@@ -577,7 +646,7 @@ test('candidate mutation and target replacement fail closed', async (context) =>
       provisionOpenApiCargoLock({
         repoRoot: mutationRoot,
         sourcePath: source,
-        beforeInstall: async () => {
+        beforeVerify: async () => {
           const mutated = Buffer.from(fixtureBytes);
           mutated[0] ^= 0xff;
           await writeFile(source, mutated);
@@ -585,12 +654,12 @@ test('candidate mutation and target replacement fail closed', async (context) =>
       }),
     /replaced or mutated after read/i,
   );
-  await assert.rejects(
-    () => access(path.join(mutationRoot, 'Cargo.lock')),
-    {code: 'ENOENT'},
+  assert.deepEqual(
+    await readFile(path.join(mutationRoot, 'Cargo.lock')),
+    fixtureBytes,
   );
 
-  const replacementRoot = await makeRepository({ignoreRootLock: true});
+  const replacementRoot = await makeRepository();
   context.after(() => rm(replacementRoot, {recursive: true, force: true}));
   await writeFile(source, fixtureBytes);
   await assert.rejects(
@@ -598,10 +667,10 @@ test('candidate mutation and target replacement fail closed', async (context) =>
       provisionOpenApiCargoLock({
         repoRoot: replacementRoot,
         sourcePath: source,
-        beforeInstall: () =>
+        beforeVerify: () =>
           writeFile(path.join(replacementRoot, 'Cargo.lock'), fixtureBytes),
       }),
-    /appeared or was replaced/i,
+    /replaced or mutated/i,
   );
 });
 
@@ -773,10 +842,7 @@ async function makeTempDirectory(prefix) {
   return mkdtemp(path.join(canonicalTempRoot, prefix));
 }
 
-async function makeRepository({
-  ignoreRootLock,
-  trackRootLock = false,
-}) {
+async function makeRepository({trackRootLock = true} = {}) {
   const root = await makeTempDirectory('openapi-lock-repository-');
   await mkdir(path.join(root, 'release'));
   await Promise.all([
@@ -787,7 +853,7 @@ async function makeRepository({
     writeFile(path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH), pinBytes),
     writeFile(
       path.join(root, '.gitignore'),
-      ignoreRootLock ? 'Cargo.lock\n' : '# Cargo.lock is not ignored\n',
+      '**/Cargo.lock\n!/Cargo.lock\n',
     ),
   ]);
   if (trackRootLock) {
@@ -797,9 +863,6 @@ async function makeRepository({
   await gitText(root, ['config', 'user.email', 'openapi-test@example.invalid']);
   await gitText(root, ['config', 'user.name', 'OpenAPI Test']);
   await gitText(root, ['add', '.']);
-  if (trackRootLock) {
-    await gitText(root, ['add', '--force', 'Cargo.lock']);
-  }
   await gitText(root, ['commit', '--quiet', '-m', 'fixture']);
   return realpath(root);
 }

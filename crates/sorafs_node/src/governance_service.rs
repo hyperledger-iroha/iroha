@@ -2371,6 +2371,7 @@ impl Service {
             GovernanceDagAuthenticationScope::Ipfs,
             "IPFS authenticator",
         )?;
+        #[expect(clippy::large_enum_variant, reason = "by-value preflight ownership")]
         enum QualifiedHeadMode {
             SignedHttp {
                 url: String,
@@ -7950,20 +7951,19 @@ fn require_public_matches_checkpoint(
         )),
     }
 }
-fn retained_source_suffix<'a, S: SourceChainView + ?Sized>(
-    source: &'a S,
-) -> Result<Vec<&'a SourceBlock>, GovernanceDagServiceError> {
+type SourceSuffix<'a> = Result<Vec<&'a SourceBlock>, GovernanceDagServiceError>;
+fn retained_source_suffix<S: SourceChainView + ?Sized>(source: &S) -> SourceSuffix<'_> {
     retained_source_suffix_with_limits(
         source,
         GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1,
         GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1,
     )
 }
-fn retained_source_suffix_with_limits<'a, S: SourceChainView + ?Sized>(
-    source: &'a S,
+fn retained_source_suffix_with_limits<S: SourceChainView + ?Sized>(
+    source: &S,
     max_entries: usize,
     max_bytes: u64,
-) -> Result<Vec<&'a SourceBlock>, GovernanceDagServiceError> {
+) -> SourceSuffix<'_> {
     if max_entries == 0 || max_bytes == 0 {
         return Err(GovernanceDagServiceError::State(
             "mirror retention bounds must be non-zero".to_owned(),

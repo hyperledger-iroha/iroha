@@ -4,7 +4,8 @@ This checklist pins required golden tests/vectors and their locations to keep im
 
 - Decoder/Encoder
   - IVM 32‑bit encodings and 16‑bit compressed forms roundtrip.
-  - Files: `crates/ivm/tests/decoder_roundtrip.rs`
+  - Deployable-artifact admission rejects undefined and noncanonical opcode forms before control-flow analysis, and the configured predecode cap is inclusive: exactly `max_decoded_ops` instructions are accepted while the first excess instruction is rejected.
+  - Files: `crates/ivm/tests/decoder_roundtrip.rs`, `crates/ivm/tests/contract_artifact.rs`, `crates/ivm/tests/predecode_max_ops.rs`
 
 - Opcode Semantics
   - Arithmetic/bit/branch/memory ops including overflow and alignment traps.

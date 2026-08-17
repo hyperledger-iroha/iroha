@@ -99,6 +99,10 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     .pop()
     .expect("one Store retry owns one candidate");
     assert_ne!(retry_store.owner(), body_effect_ownership[0].owner());
+    let retry_store = body_effect_ownership[0]
+        .adopt_incumbent_body_stage_for_retry_or_authority(&retry_store, &store_effect)
+        .expect("the exact Store retry adopts the incumbent physical task owner");
+    assert_eq!(retry_store.owner(), body_effect_ownership[0].owner());
     runtime
         .enqueue_body_stored_with_owner(
             source_tag,
@@ -138,6 +142,13 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     let certified_store_owner = certified_fetch_owner
         .rebind_as_inherited_adapter_effect(&store_effect)
         .expect("certified Fetch passes its authority to Store");
+    let certified_store_owner = body_effect_ownership[0]
+        .adopt_incumbent_body_stage_for_retry_or_authority(&certified_store_owner, &store_effect)
+        .expect("the certified Store carrier upgrades the incumbent physical task owner");
+    assert_eq!(
+        certified_store_owner.owner(),
+        body_effect_ownership[0].owner()
+    );
     runtime
         .enqueue_body_stored_with_owner(
             source_tag,
@@ -734,7 +745,7 @@ fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
     assert!(validate.exactly_authorizes_body_pipeline_successor(&validate_effect, tag, &evidence,));
 }
 #[test]
-fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
+fn body_available_rejects_second_persistent_lifecycle_before_mutation() {
     let directory = TempDir::new().expect("temporary persistent-root conflict directory");
     let (mut runtime, context, _keys) = authenticated_network_runtime_with_local_validator(
         &directory,
@@ -777,23 +788,8 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
         &mut runtime,
         source_tag,
         &manifest,
-        b"persistent-body-source",
+        b"persistent-body-source-root",
     );
-    let rebound = EventTag::new(
-        source_tag.height(),
-        source_tag.view() + 1,
-        Generation::new(source_tag.generation().get() + 1),
-    );
-    observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
-    let (destination_ordinal, destination_owner) =
-        defer_persistent_body_available_with_owner_for_test(
-            &mut runtime,
-            rebound,
-            &manifest,
-            source_owner.clone(),
-        );
-    assert_ne!(source_ordinal, destination_ordinal);
-    assert_eq!(source_owner, destination_owner);
     let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
         manifest: manifest.clone(),
     };
@@ -803,38 +799,37 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
             .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
         (1, 1)
     );
-    assert_eq!(
-        runtime
-            .driver
-            .deferred_body_pipeline_completion_ownership(rebound, &evidence),
-        (1, 1)
-    );
     let adapter_ordinals_before = runtime.driver.all_deferred_admission_ordinals();
-    let wrapper_ordinals_before = runtime
-        .deferred_lifecycle_ownership
-        .keys()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        runtime
-            .rebind_body_available(source_tag, rebound, &manifest)
-            .expect_err("two persistent roots must fail before either owner is retired"),
-        "Sumeragi v2 body completion has two persistent producer roots"
+    let wrapper_ownership_before = runtime.deferred_lifecycle_ownership.clone();
+    let second_owner = mint_local_lifecycle_owner_for_test(
+        &mut runtime,
+        b"independent-persistent-body-source-root",
     );
-    assert!(runtime.fail_closed);
+    assert_ne!(source_owner, second_owner);
+    runtime
+        .driver
+        .bind_selected_producer_lifecycle(
+            second_owner.causal_origin().lifecycle_key.clone(),
+            second_owner.lifecycle_ordinal(),
+        )
+        .expect("bind an independently admitted producer lifecycle");
+    let error = runtime
+        .driver
+        .body_available(source_tag, manifest.clone())
+        .expect_err("one durable body candidate cannot acquire a second producer lifecycle");
+    runtime.driver.clear_selected_producer_lifecycle();
+    assert_eq!(
+        error.to_string(),
+        "Sumeragi v2 serviced-candidate store failed: replayed producer lifecycle changed its immutable key or ordinal"
+    );
     assert_eq!(
         runtime.driver.all_deferred_admission_ordinals(),
         adapter_ordinals_before,
-        "persistent-root preflight cannot mutate either adapter occurrence"
+        "the rejected producer cannot create another Busy occurrence"
     );
     assert_eq!(
-        runtime
-            .deferred_lifecycle_ownership
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>(),
-        wrapper_ordinals_before,
-        "persistent-root preflight cannot retire either runtime wrapper"
+        runtime.deferred_lifecycle_ownership, wrapper_ownership_before,
+        "the rejected producer cannot replace the original runtime wrapper"
     );
     assert_eq!(
         runtime
@@ -842,23 +837,18 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
             .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
         (1, 1)
     );
-    assert_eq!(
-        runtime
-            .driver
-            .deferred_body_pipeline_completion_ownership(rebound, &evidence),
-        (1, 1)
-    );
     assert!(
         runtime
             .driver
             .deferred_body_available_has_persistent_producer(source_tag, &manifest)
-            .expect("source persistent root remains exact")
+            .expect("the original persistent root remains exact")
     );
-    assert!(
+    assert_eq!(
         runtime
-            .driver
-            .deferred_body_available_has_persistent_producer(rebound, &manifest)
-            .expect("destination persistent root remains exact")
+            .deferred_lifecycle_ownership
+            .get(&source_ordinal)
+            .map(RuntimeDeferredLifecycleOwnership::owner),
+        Some(&source_owner)
     );
 }
 #[test]
@@ -1756,15 +1746,32 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
     runtime
         .enqueue_body_stored(tag, manifest.round, manifest.subject, durable.clone())
         .expect("enqueue durable-store completion");
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(now)
-            .expect("dispatch durable-store completion"),
-        RuntimeStep::Advanced(ref effects)
-            if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
-    ));
+    let validation_step = runtime
+        .step(now)
+        .expect("dispatch durable-store completion");
     runtime
-        .enqueue_validation_failed(tag, manifest.round, manifest.subject)
+        .take_last_scheduler_ownership()
+        .expect("durable-store completion retains exact scheduler ownership");
+    let RuntimeStep::Advanced(validation_effects) = validation_step else {
+        panic!("durable-store completion unexpectedly idled")
+    };
+    assert!(matches!(
+        validation_effects.as_slice(),
+        [AdapterEffect::ValidateBody { .. }]
+    ));
+    let validation_effect_ownership = runtime
+        .take_effect_ownership(validation_effects.len())
+        .expect("ValidateBody retains its physical task owner");
+    let [validation_effect_ownership] = validation_effect_ownership.as_slice() else {
+        panic!("ValidateBody has one exact physical owner")
+    };
+    runtime
+        .enqueue_validation_failed_with_owner(
+            tag,
+            manifest.round,
+            manifest.subject,
+            validation_effect_ownership,
+        )
         .expect("enqueue deterministic validation failure");
     assert!(matches!(
         runtime
@@ -1778,29 +1785,9 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
         .expect("an applied failed-validation retry is a monotone stutter");
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-    // A ValidateBody effect can have been authorized while the reducer was
-    // still Durable but reach the executor only after another exact task
-    // records the same deterministic terminal. Its bound owner is
-    // consumed by that monotone fact; it must not fail-stop the peer or
-    // allocate a replacement FIFO lifecycle.
-    let late_validation = AdapterEffect::ValidateBody {
-        tag,
-        round: manifest.round,
-        subject: manifest.subject,
-    };
-    let late_owner = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&late_validation),
-        vec![RuntimeEffectOwnership::fresh_for_test(
-            tag,
-            next_ordinal
-                .expect("live validation flow retains an unused lifecycle ordinal")
-                .checked_add(100)
-                .expect("test lifecycle ordinal remains finite"),
-        )],
-    )
-    .expect("bind one late exact validation owner")
-    .pop()
-    .expect("one validation owner");
+    // The live terminal is owner-scoped. An exact retry from the same
+    // ValidateBody task is consumed by that monotone fact without allocating
+    // a replacement FIFO lifecycle.
     assert_eq!(
         runtime.driver.preflight_runtime_command_admission(
             tag,
@@ -1809,11 +1796,23 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
                 subject: manifest.subject,
             },
         ),
-        RuntimeCommandAdmissionPreflight::Coalesce,
+        RuntimeCommandAdmissionPreflight::CoalesceOwned {
+            causal_lifecycle_key: validation_effect_ownership
+                .owner()
+                .causal_origin()
+                .lifecycle_key
+                .clone(),
+            admission_ordinal: validation_effect_ownership.owner().lifecycle_ordinal(),
+        },
     );
     runtime
-        .enqueue_validation_failed_with_owner(tag, manifest.round, manifest.subject, &late_owner)
-        .expect("late exact validation owner terminates against the recorded rejection");
+        .enqueue_validation_failed_with_owner(
+            tag,
+            manifest.round,
+            manifest.subject,
+            validation_effect_ownership,
+        )
+        .expect("the exact validation owner terminates against the recorded rejection");
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert!(!runtime.fail_closed);

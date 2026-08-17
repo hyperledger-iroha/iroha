@@ -1293,6 +1293,7 @@ enum SealedBodyStageSuccessor<'registry> {
 /// and exposes no commit, candidate, receipt, or state-extraction surface.
 #[must_use = "a sealed body-pipeline coordinator cut has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
 pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _successor: SealedBodyStageSuccessor<'registry>,
@@ -1536,6 +1537,10 @@ fn map_sealed_successor_projection_error(
 /// exclusively borrowed, and this inert tranche exposes no publication API.
 #[must_use = "a sealed no-successor Validate cut has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    test,
+    expect(dead_code, reason = "no-successor atomic-publication gap")
+)]
 pub(super) struct PreparedSealedValidateNoSuccessorTransition<'coordinator, 'registry, 'adapter> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
@@ -1563,6 +1568,10 @@ pub(super) struct SealedValidateNoSuccessorTransitionError<'registry, 'adapter> 
 /// commit, persistence, or installation surface exists on this value.
 #[must_use = "a sealed invalid-body report cut has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    test,
+    expect(dead_code, reason = "invalid-body atomic-publication gap")
+)]
 pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry, 'adapter> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
@@ -1587,7 +1596,6 @@ pub(super) struct PreparedSealedValidateSignTransition<'coordinator, 'registry, 
     publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
     lease: TurnLease,
-    edge: DurableContinuationEdge,
     parent_ordinal: u128,
     child_ordinal: u128,
     child_slot: PhysicalSlotId,
@@ -1839,7 +1847,6 @@ impl LifecycleCoordinator {
             publication,
             staged: transition.staged,
             lease: projected_lease,
-            edge,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
             child_slot: transition.child_slot,
@@ -1853,6 +1860,10 @@ impl LifecycleCoordinator {
     /// completion. Busy, Apply, Persist, and Report branches cannot construct
     /// the opaque projection, and no receipt crosses this production seam.
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        test,
+        expect(dead_code, reason = "no-successor atomic-publication gap")
+    )]
     #[allow(clippy::result_large_err)]
     pub(super) fn prepare_sealed_validate_no_successor_transition<
         'coordinator,
@@ -1906,6 +1917,7 @@ impl LifecycleCoordinator {
     /// frame, child effect and pending binding, projected digest, and mandatory
     /// replay authority. No raw successor input crosses this production seam.
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
     pub(super) fn prepare_sealed_fetch_store_transition<'coordinator, 'registry>(
         &'coordinator mut self,
         lease: &TurnLease,
@@ -1942,6 +1954,7 @@ impl LifecycleCoordinator {
     /// from the exact certified family and BodyFrame. The candidate's sealed
     /// payload is also the required parent payload and is never overwritten.
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
     pub(super) fn prepare_sealed_store_validate_transition<'coordinator, 'registry>(
         &'coordinator mut self,
         lease: &TurnLease,
@@ -1979,6 +1992,10 @@ impl LifecycleCoordinator {
     /// The claimed lease must retain the Consensus reservation authenticated by
     /// that same rejected completion.
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        test,
+        expect(dead_code, reason = "invalid-body atomic-publication gap")
+    )]
     #[allow(clippy::result_large_err)]
     pub(super) fn prepare_sealed_validate_report_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
@@ -2050,7 +2067,6 @@ impl<'coordinator, 'registry, 'adapter>
             publication,
             staged,
             lease,
-            edge: _,
             parent_ordinal,
             child_ordinal,
             child_slot,

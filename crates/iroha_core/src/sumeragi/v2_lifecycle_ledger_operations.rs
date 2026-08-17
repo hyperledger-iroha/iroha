@@ -735,6 +735,7 @@ impl LifecycleLedgerV1 {
         Some(changed)
     }
     /// Borrow the canonical Serve-to-producer debts.
+    #[cfg(test)]
     pub(super) fn producer_debts(&self) -> &[LifecycleProducerDebtV1] {
         &self.producer_debts
     }

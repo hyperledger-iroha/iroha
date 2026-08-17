@@ -246,7 +246,10 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
 
-    assert 'IROHAD_RELEASE_FEATURES="embedded-soracloud-runtime,zk-stark"' in source
+    assert (
+        'IROHAD_RELEASE_FEATURES="embedded-soracloud-runtime,'
+        'external-software-signer-bin,zk-stark"' in source
+    )
     assert 'PRIVACY_RELEASE_EVIDENCE_FEATURE="privacy-release-evidence"' in source
     assert 'PRIVACY_RELEASE_RUNNER_PACKAGE="iroha_test_network"' in source
     assert 'PRIVACY_RELEASE_RUNNER_BIN="taira_privacy_release_runner"' in source
@@ -293,10 +296,16 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert '"privacy_release":' not in source
 
     assert "build_taira_rollout_bundle.sh" in workflow
-    assert "--features embedded-soracloud-runtime,zk-stark" in workflow
+    assert (
+        "--features embedded-soracloud-runtime,external-software-signer-bin,zk-stark"
+        in workflow
+    )
     assert "capture-four-peer" in workflow
     assert "docker/build-push-action@" not in workflow
-    assert 'test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark"' in dockerfile
+    assert (
+        'test "${FEATURES}" = "embedded-soracloud-runtime,'
+        'external-software-signer-bin,zk-stark"' in dockerfile
+    )
     assert "Taira irohad must not contain privacy-release-evidence" in dockerfile
     assert (
         "Taira irohad must not contain deterministic privacy test fixtures"
@@ -1101,8 +1110,10 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
     )
     assert "checkout_ref" not in workflow
     assert "permissions:\n  actions: read\n  contents: read" in workflow
-    assert workflow.count("ref: ${{ github.sha }}") == 2
-    assert workflow.count("persist-credentials: false") == 2
+    # Hosted readiness plus the two native builders each inspect the immutable
+    # workflow commit; no dispatch input selects executable source.
+    assert workflow.count("ref: ${{ github.sha }}") == 3
+    assert workflow.count("persist-credentials: false") == 3
     assert (
         workflow.count('[[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]')
         == 3

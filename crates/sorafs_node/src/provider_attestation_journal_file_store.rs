@@ -1112,16 +1112,21 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     const CLOCK_SEAL_HANDLE: &str = "sealed://musubi/provider-attestation/journal-clock-primary";
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    type CheckpointKey = ([u8; 32], [u8; 32]);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    type CheckpointBlobs = BTreeMap<CheckpointKey, Vec<u8>>;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    type CheckpointHeadRecords =
+        BTreeMap<CheckpointKey, MusubiProviderAttestationJournalCheckpointHeadRecordV1>;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Debug)]
     struct LocalClockSeal {
         qualification: MusubiProviderAttestationClockSealQualificationV1,
         record: StdMutex<Option<([u8; 32], MusubiProviderAttestationClockSealRecordV1)>>,
-        checkpoint_blobs: StdMutex<BTreeMap<([u8; 32], [u8; 32]), Vec<u8>>>,
+        checkpoint_blobs: StdMutex<CheckpointBlobs>,
         checkpoint_heads:
             StdMutex<BTreeMap<[u8; 32], MusubiProviderAttestationJournalCheckpointHeadRecordV1>>,
-        checkpoint_head_records: StdMutex<
-            BTreeMap<([u8; 32], [u8; 32]), MusubiProviderAttestationJournalCheckpointHeadRecordV1>,
-        >,
+        checkpoint_head_records: StdMutex<CheckpointHeadRecords>,
         next_checkpoint_head_error: StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]

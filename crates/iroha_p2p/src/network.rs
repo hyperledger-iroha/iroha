@@ -7351,7 +7351,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
-        Self::start_with_crypto(
+        Box::pin(Self::start_with_crypto(
             identity_keys,
             config,
             network_id,
@@ -7359,7 +7359,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             confidential_caps,
             None,
             shutdown_signal,
-        )
+        ))
         .await
     }
     /// Construct a closed network handle for tests that cannot bind sockets.
@@ -7524,13 +7524,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         )
         .await
     }
-    /// Launch with both protected-source authority and the configured validator
-    /// roster that owns pairwise initial dials.
+    /// Launch with protected-source authority and the configured validator roster.
+    /// The roster is installed before topology processing to prevent a startup race.
     ///
-    /// The validator roster is installed before the actor can process topology
-    /// or address snapshots, closing the zero-delay startup race that would
-    /// otherwise permit both endpoints to begin the expensive mandatory-PQ
-    /// handshake.
+    /// # Errors
+    ///
+    /// Returns an error for invalid network bounds, authority, transport policy, or listeners.
     #[log(skip(
         identity_keys,
         initial_trusted_sources,
@@ -9543,10 +9542,9 @@ include!("network/handle_update_tests.rs");
 #[cfg(test)]
 mod accept_stream_tests {
     use super::*;
-    use crate::peer::{
-        SoranetHandshakeConfig,
-        test_support::{SpawnPath, snapshot},
-    };
+    #[cfg(any(feature = "p2p_tls", feature = "quic"))]
+    use crate::peer::SoranetHandshakeConfig;
+    use crate::peer::test_support::{SpawnPath, snapshot};
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
@@ -9564,8 +9562,7 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
-    use std::{collections::HashSet, sync::Arc, time::Duration};
-    use tokio::{net::TcpListener, sync::mpsc};
+    use std::time::Duration;
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     fn test_node_key_pair() -> KeyPair {
@@ -18564,7 +18561,7 @@ mod tests {
             .retry_backoff
             .get(peer.id())
             .and_then(|by_address| by_address.get(&key))
-            .cloned()
+            .copied()
             .expect("configured dial target receives one reconnect schedule");
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
@@ -18574,7 +18571,7 @@ mod tests {
             .retry_backoff
             .get(peer.id())
             .and_then(|by_address| by_address.get(&key))
-            .cloned()
+            .copied()
             .expect("the original reconnect schedule remains installed");
         assert_eq!(
             after_duplicate, first_schedule,

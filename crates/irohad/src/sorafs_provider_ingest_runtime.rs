@@ -5,15 +5,8 @@
 //! authentication and governed HSM/KMS signing remain deployment-injected
 //! boundaries: config contains only identity-pinned opaque handles and public
 //! revision/policy-digest qualifications.
-use std::{
-    cell::Cell,
-    fmt,
-    io::{self, Read},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
+use crate::sorafs_provider_ingest_finalized_query::{
+    ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
 };
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{
@@ -104,8 +97,15 @@ use sorafs_node::{
     store::{StorageError, StoredManifest},
     validate_musubi_provider_attestation_inventory_binding_v1,
 };
-use crate::sorafs_provider_ingest_finalized_query::{
-    ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
+use std::{
+    cell::Cell,
+    fmt,
+    io::{self, Read},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
@@ -193,7 +193,7 @@ pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
 ///
 /// The reader may stream from a bounded authenticated transport or a
 /// deployment-owned temporary object. Its manifest, plan, declared length,
-/// PoR root, and governed advert have already been authenticated. Payload
+/// `PoR` root, and governed advert have already been authenticated. Payload
 /// digest, exact length, zero trailing bytes, and any post-stream provider
 /// qualification are finalized only when the reader reaches authenticated
 /// EOF; dropping or failing the reader before EOF invalidates the stream.
@@ -793,7 +793,9 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         let expected_controller_policy_digest =
             musubi_provider_attestation_controller_policy_digest_v1(&binding.completed_by)
                 .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?;
-        if qualification.authority != binding.completed_by
+        let qualification_matches_completion_authority =
+            qualification.authority == binding.completed_by;
+        if !qualification_matches_completion_authority
             || qualification.signer_policy != request.signer_policy
             || qualification.controller_policy_digest != expected_controller_policy_digest
             || self.signer.authority() != &binding.completed_by
@@ -992,10 +994,11 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         key: MusubiProviderBundleAttestationKeyV1,
     ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
         self.validate_scope(scope)?;
+        let key_targets_expected_provider = key.provider_id == self.expected_provider_id;
         if key.validate().is_err()
             || key.archive_id != scope.archive_id
             || key.replication_order != scope.replication_order
-            || key.provider_id != self.expected_provider_id
+            || !key_targets_expected_provider
         {
             return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
         }
@@ -1067,10 +1070,10 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
         }
         Ok(after)
     }
-    fn check_readiness<'a>(
-        &'a self,
+    fn check_readiness(
+        &self,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>,
     > {
         Box::pin(async move {
@@ -1085,11 +1088,11 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
     }
 }
 impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
-    fn put<'a>(
-        &'a self,
+    fn put(
+        &self,
         item: MusubiProviderAttestationInventoryItemV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>,
     > {
         Box::pin(async move {
@@ -1292,6 +1295,10 @@ impl DeadlineBoundedReaderV1 {
         }
     }
     #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the production and test clock paths share one reader method"
+    )]
     fn current_time(&self) -> Instant {
         Instant::now()
     }
@@ -1465,7 +1472,7 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                                 Ok(Some(stored)) if stored.manifest_id() == manifest_id => {
                                     Ok(stored)
                                 }
-                                Ok(Some(_)) | Ok(None) => {
+                                Ok(Some(_) | None) => {
                                     Err(ProviderIngestLocalStorageErrorV1::Permanent)
                                 }
                                 Err(error) => Err(error),
@@ -1489,7 +1496,7 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
 }
 /// Finish verification after this provider-ingest call admitted a manifest.
 ///
-/// Admission may deduplicate into a generic SoraFS object that another reference already uses, so
+/// Admission may deduplicate into a generic `SoraFS` object that another reference already uses, so
 /// a permanent verification failure cannot safely evict the object. `Quarantined` instead requires
 /// the provider-ingest runtime to retain the object, durably dead-letter the exact authorization,
 /// and make the completion path unreachable. Transient verification failures remain retryable.
@@ -1504,14 +1511,13 @@ fn finish_newly_admitted_manifest_verification(
 ) -> std::result::Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1> {
     match verification {
         Ok(Some(stored)) if stored.manifest_id() == manifest_id => Ok(stored),
-        Ok(Some(_)) | Ok(None) | Err(ProviderIngestLocalStorageErrorV1::Permanent) => {
-            Err(ProviderIngestLocalStorageErrorV1::Quarantined)
-        }
+        Ok(Some(_) | None)
+        | Err(
+            ProviderIngestLocalStorageErrorV1::Permanent
+            | ProviderIngestLocalStorageErrorV1::Quarantined,
+        ) => Err(ProviderIngestLocalStorageErrorV1::Quarantined),
         Err(ProviderIngestLocalStorageErrorV1::Retryable) => {
             Err(ProviderIngestLocalStorageErrorV1::Retryable)
-        }
-        Err(ProviderIngestLocalStorageErrorV1::Quarantined) => {
-            Err(ProviderIngestLocalStorageErrorV1::Quarantined)
         }
     }
 }
@@ -1630,9 +1636,9 @@ fn verify_admitted_musubi_bundle(
     match verification {
         (Ok(verified), _) => Ok(verified),
         (Err(_), Some(kind)) if admitted_payload_read_error_is_retryable(kind) => {
-            return Err(ProviderIngestLocalStorageErrorV1::Retryable);
+            Err(ProviderIngestLocalStorageErrorV1::Retryable)
         }
-        (Err(_), _) => return Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        (Err(_), _) => Err(ProviderIngestLocalStorageErrorV1::Permanent),
     }
 }
 fn validate_musubi_claim_binding(
@@ -1668,10 +1674,8 @@ const fn classify_admitted_payload_lease_error(
     error: AdmittedPayloadReadLeaseErrorV1,
 ) -> ProviderIngestLocalStorageErrorV1 {
     match error {
-        AdmittedPayloadReadLeaseErrorV1::StorageUnavailable => {
-            ProviderIngestLocalStorageErrorV1::Retryable
-        }
-        AdmittedPayloadReadLeaseErrorV1::NotAdmitted => {
+        AdmittedPayloadReadLeaseErrorV1::StorageUnavailable
+        | AdmittedPayloadReadLeaseErrorV1::NotAdmitted => {
             ProviderIngestLocalStorageErrorV1::Retryable
         }
         AdmittedPayloadReadLeaseErrorV1::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
@@ -2690,6 +2694,10 @@ fn validate_startup_dependency_qualifications(
         eyre::eyre!("completion signer binding does not match SoraFS provider-ingest configuration")
     })
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "startup atomically revalidates the complete provider-ingest dependency set"
+)]
 fn revalidate_startup_dependencies_after_probe(
     config: &SorafsProviderIngestRuntime,
     authenticated_source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,

@@ -16073,7 +16073,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert_eq!(output_name, name, "manifest function order");
             assert_eq!(output.len(), expected_len, "{name} byte length");
             assert_eq!(
-                hex::encode(Sha256::digest(output.as_bytes())),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(output.as_bytes())),
                 expected_digest,
                 "{name} digest"
             );

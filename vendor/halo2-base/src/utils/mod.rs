@@ -207,11 +207,7 @@ pub fn bigint_to_fe<F: BigPrimeField>(e: &BigInt) -> F {
     {
         let (sign, bytes) = e.to_bytes_le();
         let f_abs = F::from_bytes_le(&bytes);
-        if sign == Sign::Minus {
-            -f_abs
-        } else {
-            f_abs
-        }
+        if sign == Sign::Minus { -f_abs } else { f_abs }
     }
 }
 
@@ -247,7 +243,10 @@ pub fn decompose<F: BigPrimeField>(e: &F, number_of_limbs: usize, bit_len: usize
     if bit_len >= 64 {
         decompose_biguint(&fe_to_biguint(e), number_of_limbs, bit_len)
     } else {
-        decompose_fe_to_u64_limbs(e, number_of_limbs, bit_len).into_iter().map(F::from).collect()
+        decompose_fe_to_u64_limbs(e, number_of_limbs, bit_len)
+            .into_iter()
+            .map(F::from)
+            .collect()
     }
 }
 
@@ -327,7 +326,10 @@ pub fn decompose_biguint<F: BigPrimeField>(
 /// * `bit_len`: number of bits in each limb
 pub fn decompose_bigint<F: BigPrimeField>(e: &BigInt, num_limbs: usize, bit_len: usize) -> Vec<F> {
     if e.is_negative() {
-        decompose_biguint::<F>(e.magnitude(), num_limbs, bit_len).into_iter().map(|x| -x).collect()
+        decompose_biguint::<F>(e.magnitude(), num_limbs, bit_len)
+            .into_iter()
+            .map(|x| -x)
+            .collect()
     } else {
         decompose_biguint(e.magnitude(), num_limbs, bit_len)
     }
@@ -344,7 +346,9 @@ pub fn decompose_bigint_option<F: BigPrimeField>(
     number_of_limbs: usize,
     bit_len: usize,
 ) -> Vec<Value<F>> {
-    value.map(|e| decompose_bigint(e, number_of_limbs, bit_len)).transpose_vec(number_of_limbs)
+    value
+        .map(|e| decompose_bigint(e, number_of_limbs, bit_len))
+        .transpose_vec(number_of_limbs)
 }
 
 /// Wraps the internal value of `value` in an [Option].
@@ -364,7 +368,10 @@ pub fn value_to_option<V>(value: Value<V>) -> Option<V> {
 /// * `input`: Limb values of the integer.
 /// * `bit_len`: Length of limb in bits
 pub fn compose(input: Vec<BigUint>, bit_len: usize) -> BigUint {
-    input.iter().rev().fold(BigUint::zero(), |acc, val| (acc << bit_len) + val)
+    input
+        .iter()
+        .rev()
+        .fold(BigUint::zero(), |acc, val| (acc << bit_len) + val)
 }
 
 /// Helper trait
@@ -380,7 +387,7 @@ pub trait CurveAffineExt: CurveAffine {
 impl<C: CurveAffine> CurveAffineExt for C {}
 
 mod scalar_field_impls {
-    use super::{decompose_u64_digits_to_limbs, ScalarField};
+    use super::{ScalarField, decompose_u64_digits_to_limbs};
     use crate::ff::PrimeField;
     use crate::halo2_proofs::halo2curves::{
         bn256::{Fq as bn254Fq, Fr as bn254Fr},
@@ -499,15 +506,15 @@ pub mod fs {
 
     use crate::halo2_proofs::{
         halo2curves::{
-            bn256::{Bn256, G1Affine},
             CurveAffine,
+            bn256::{Bn256, G1Affine},
         },
         poly::{
             commitment::{Params, ParamsProver},
             kzg::commitment::ParamsKZG,
         },
     };
-    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 
     /// Reads the srs from a file found in `./params/kzg_bn254_{k}.srs` or `{dir}/kzg_bn254_{k}.srs` if `PARAMS_DIR` env var is specified.
     /// * `k`: degree that expresses the size of circuit (i.e., 2^<sup>k</sup> is the number of rows in the circuit)
@@ -541,7 +548,9 @@ pub mod fs {
                 println!("creating params for {k}");
                 fs::create_dir_all(dir).unwrap();
                 let params = setup(k);
-                params.write(&mut BufWriter::new(File::create(path).unwrap())).unwrap();
+                params
+                    .write(&mut BufWriter::new(File::create(path).unwrap()))
+                    .unwrap();
                 params
             }
         }
@@ -561,8 +570,8 @@ mod tests {
     use crate::halo2_proofs::halo2curves::bn256::Fr;
     use num_bigint::RandomBits;
     use rand::{
-        rngs::{OsRng, StdRng},
         Rng, SeedableRng,
+        rngs::{OsRng, StdRng},
     };
     use std::ops::Shl;
 
@@ -571,7 +580,10 @@ mod tests {
     #[test]
     fn test_signed_roundtrip() {
         use crate::halo2_proofs::halo2curves::bn256::Fr;
-        assert_eq!(fe_to_bigint(&bigint_to_fe::<Fr>(&-BigInt::one())), -BigInt::one());
+        assert_eq!(
+            fe_to_bigint(&bigint_to_fe::<Fr>(&-BigInt::one())),
+            -BigInt::one()
+        );
     }
 
     #[test]

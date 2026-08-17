@@ -5,6 +5,8 @@
 //! (e.g., Torii, genesis tooling, or test harnesses) can construct and inspect consensus payloads
 //! without depending on the core runtime crate.
 use super::{BlockSignature, Header as BlockHeader};
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -169,10 +171,7 @@ impl NposGenesisParams {
 /// Consensus certificate phases (BLS-only).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
 pub enum CertPhase {
     /// Prepare/lock certificate for a proposal.
@@ -214,10 +213,7 @@ impl IntoSchema for CertPhase {
 }
 /// Reference to an existing QC header for embedding in proposals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct QcRef {
     /// Height of the certified block.
     pub height: Height,
@@ -260,10 +256,7 @@ pub struct Proposal {
 }
 /// QC vote over a specific block and phase (BLS-only).
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct QcVote {
     /// Target phase (`Prepare`, `Commit`, `NewView`).
     pub phase: CertPhase,
@@ -294,10 +287,7 @@ pub struct QcVote {
 }
 /// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct QcAggregate {
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
@@ -306,10 +296,7 @@ pub struct QcAggregate {
 }
 /// QC certifying a phase for a block.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct Qc {
     /// Phase certified by this certificate.
     pub phase: CertPhase,
@@ -367,10 +354,7 @@ pub enum EvidenceKind {
 /// Production persistence additionally compares this context and `PoP` vector with the locally
 /// verified immutable context record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiV2EquivocationEvidence {
     /// Immutable context which governed both conflicting artifacts.
     pub context: super::consensus_v2::HeightContext,
@@ -599,10 +583,7 @@ pub struct EvidenceRecord {
 }
 /// Membership snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiMembershipStatus {
     /// Height associated with the snapshot.
     #[norito(default)]
@@ -620,10 +601,7 @@ pub struct SumeragiMembershipStatus {
 }
 /// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiMembershipMismatchStatus {
     /// Peers currently flagged for membership mismatches.
     #[norito(default)]
@@ -655,10 +633,7 @@ pub struct SumeragiMembershipMismatchStatus {
 }
 /// Aggregated per-lane commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiLaneCommitment {
     /// Block height associated with the commitment.
     pub block_height: u64,
@@ -677,10 +652,7 @@ pub struct SumeragiLaneCommitment {
 }
 /// Aggregated per-dataspace commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiDataspaceCommitment {
     /// Block height associated with the commitment.
     pub block_height: u64,
@@ -749,10 +721,7 @@ pub fn committed_lane_block_status_counts_as_progress(
 }
 /// Certified standalone lane-local block summary reported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiCommittedLaneBlock {
     /// Lane whose local block is committed.
     pub lane_id: LaneId,
@@ -791,10 +760,7 @@ pub struct SumeragiCommittedLaneBlock {
 }
 /// Planned lane-local payload ownership exported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiLanePayloadOwnership {
     /// Global proposal height that planned this lane-local payload.
     pub proposal_height: u64,
@@ -863,10 +829,7 @@ struct LaneBlockProposalPreimage {
 }
 /// Canonical descriptor for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockDescriptorV1 {
     /// Lane whose local block is described.
@@ -955,10 +918,7 @@ impl LaneBlockDescriptorV1 {
 /// only as a recovery hint for fetching a certified block body; the fetched block still has to
 /// validate against its commit certificate and the lane descriptor before any payload is replayed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalPayloadHintV1 {
     /// Global proposal height that anchored the lane payload ownership.
@@ -970,10 +930,7 @@ pub struct LaneBlockProposalPayloadHintV1 {
 }
 /// Canonical standalone lane-local block proposal artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalV1 {
     /// Replayable descriptor proposed to the lane committee.
@@ -1056,10 +1013,7 @@ impl LaneBlockProposalV1 {
 }
 /// Canonical lane-local block vote payload signed by lane committees.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneBlockVoteBodyV1 {
     /// Lane-local QC phase certified by this vote body.
     pub phase: CertPhase,
@@ -1118,10 +1072,7 @@ impl LaneBlockVoteBodyV1 {
 /// prepared. This prevents a valid payload certificate from being rebound across networks, epochs,
 /// lane incarnations, proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LanePayloadAvailabilityBodyV1 {
     /// Artifact schema version. Only version one is accepted.
     pub version: u8,
@@ -1184,10 +1135,7 @@ impl LanePayloadAvailabilityBodyV1 {
 }
 /// Quorum proof that the exact autonomous executable payload is durably held.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LanePayloadAvailabilityQcV1 {
     /// READY body certified by the aggregate signature.
     pub body: LanePayloadAvailabilityBodyV1,
@@ -1206,10 +1154,7 @@ pub struct LanePayloadAvailabilityQcV1 {
 }
 /// Validator-set proof for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneBlockQcV1 {
     /// Vote body certified by the aggregate signature.
     pub body: LaneBlockVoteBodyV1,
@@ -1237,10 +1182,7 @@ pub struct LaneBlockQcV1 {
 /// which durably retains the matching Kura artifact returns this single envelope, so Prepare and
 /// Commit evidence cannot be split across a volatile transport-capacity boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneBlockCertificateV1 {
     /// Exact canonical proposal certified by both quorum certificates.
     pub proposal: LaneBlockProposalV1,
@@ -1655,10 +1597,7 @@ impl SumeragiLanePayloadOwnership {
 }
 /// Deterministic settlement receipt emitted for audit and reconciliation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneSettlementReceipt {
     /// Caller-specified identifier linking the receipt to the originating transaction.
@@ -1676,10 +1615,7 @@ pub struct LaneSettlementReceipt {
 }
 /// Deterministic Nexus fee schedule inputs captured for asynchronous settlement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NexusFeeScheduleInputs {
     /// Serialized signed transaction payload length used for fee metering.
     pub tx_bytes_len: u64,
@@ -1698,10 +1634,7 @@ pub struct NexusFeeScheduleInputs {
 }
 /// Versioned Nexus fee receipt committed by a finalized lane block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NexusFeeReceipt {
     /// Receipt format version.
     pub version: u16,
@@ -1746,10 +1679,7 @@ pub const NATIVE_AMX_VALIDATORS_MAX: usize = 128;
 pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
 /// Phase certified by a native AMX participant committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "phase",
     content = "detail",
@@ -1768,10 +1698,7 @@ pub enum NativeAmxPhase {
 /// preventing a valid lane-local vote from being replayed across networks,
 /// parent decisions, epochs, heights, or views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct NativeAmxAttestationBodyV2 {
     /// Exact frozen global round in which the receipt may be included.
@@ -2081,10 +2008,7 @@ impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
 }
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct NativeAmxLegRecordV2 {
     /// Participant lane certified by both phase QCs.
@@ -2114,10 +2038,7 @@ impl PartialOrd for NativeAmxLegRecordV2 {
 }
 /// Versioned native AMX receipt committed by a finalized coordinator block.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct NativeAmxReceipt {
     /// Receipt format version.
@@ -2164,10 +2085,7 @@ impl NativeAmxLegRecordV2 {
 }
 /// Liquidity profile applied when computing XOR conversions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "profile", content = "state")]
 pub enum LaneLiquidityProfile {
     /// Deep pools with negligible slippage.
@@ -2179,10 +2097,7 @@ pub enum LaneLiquidityProfile {
 }
 /// Volatility bucket applied when computing the safety margin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "bucket", content = "state")]
 pub enum LaneVolatilityClass {
     /// Normal operating conditions.
@@ -2195,10 +2110,7 @@ pub enum LaneVolatilityClass {
 }
 /// Swap metadata describing the deterministic conversion parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LaneSwapMetadata {
     /// Basis-point safety margin applied on top of the TWAP.
     pub epsilon_bps: u16,
@@ -2214,10 +2126,7 @@ pub struct LaneSwapMetadata {
 }
 /// Aggregated per-lane settlement commitment captured within a block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockCommitment {
     /// Lane-local block height associated with the commitment.
@@ -2387,7 +2296,7 @@ fn validate_native_amx_qc_shape(
             .any(|pop| pop.len() != NATIVE_AMX_BLS_PROOF_BYTES || !native_amx_nonzero(pop))
         || qc.signers_bitmap.len() != expected_bitmap_len
         || !trailing_bits_clear
-        || signer_count < expected_quorum
+        || signer_count != expected_quorum
         || qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES
         || !native_amx_nonzero(&qc.bls_aggregate_signature)
     {
@@ -2614,10 +2523,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
 }
 /// Runtime-upgrade governance hook snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRuntimeUpgradeHook {
     /// Whether runtime-upgrade instructions are allowed.
     pub allow: bool,
@@ -2632,10 +2538,7 @@ pub struct SumeragiRuntimeUpgradeHook {
 }
 /// Governance manifest readiness snapshot for a lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiLaneGovernance {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -2666,10 +2569,7 @@ pub struct SumeragiLaneGovernance {
 }
 /// DA availability reason reported by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SumeragiDaGateReason {
     /// No gate currently blocking commit/finalize.
@@ -2688,10 +2588,7 @@ pub enum SumeragiDaGateReason {
 }
 /// Which DA availability condition was satisfied most recently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SumeragiDaGateSatisfaction {
     /// No condition has been satisfied yet.
@@ -2704,10 +2601,7 @@ pub enum SumeragiDaGateSatisfaction {
 }
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiDaGateStatus {
     /// Most recent reason that reported missing availability evidence.
     pub reason: SumeragiDaGateReason,
@@ -2721,10 +2615,7 @@ pub struct SumeragiDaGateStatus {
 }
 /// Snapshot of missing-block fetch attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiMissingBlockFetchStatus {
     /// Total fetch evaluations after QC-first arrival (including backoff/no-target cases).
     pub total: u64,
@@ -2735,10 +2626,7 @@ pub struct SumeragiMissingBlockFetchStatus {
 }
 /// Snapshot of kura persistence failures and retries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiKuraStoreStatus {
     /// Total times a block failed to enqueue for persistence.
     pub failures_total: u64,
@@ -2802,10 +2690,7 @@ pub struct SumeragiKuraStoreStatus {
 }
 /// Session evicted from the RBC store due to TTL or capacity enforcement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRbcEvictedSession {
     /// Block hash associated with the evicted session.
     pub block_hash: HashOf<BlockHeader>,
@@ -2825,10 +2710,7 @@ impl Default for SumeragiRbcEvictedSession {
 }
 /// Snapshot of the RBC on-disk store state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRbcStoreStatus {
     /// Current number of persisted RBC sessions on disk.
     pub sessions: u64,
@@ -2849,10 +2731,7 @@ pub struct SumeragiRbcStoreStatus {
 }
 /// Per-peer RBC payload mismatch counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRbcMismatchEntry {
     /// Peer associated with the mismatch counts.
     pub peer_id: PeerId,
@@ -2867,10 +2746,7 @@ pub struct SumeragiRbcMismatchEntry {
 }
 /// Snapshot of RBC mismatch counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRbcMismatchStatus {
     /// Per-peer mismatch counters.
     #[norito(default)]
@@ -2878,10 +2754,7 @@ pub struct SumeragiRbcMismatchStatus {
 }
 /// Snapshot of pending (pre-INIT) RBC stashes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiPendingRbcEntry {
     /// Block hash associated with the pending session.
     pub block_hash: HashOf<BlockHeader>,
@@ -2935,10 +2808,7 @@ impl Default for SumeragiPendingRbcEntry {
 }
 /// Aggregated pending RBC stash telemetry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiPendingRbcStatus {
     /// Current pending sessions awaiting INIT.
     pub sessions: u64,
@@ -3014,10 +2884,7 @@ pub struct SumeragiPendingRbcStatus {
 }
 /// Block-sync roster selection counters exposed via Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiBlockSyncRosterStatus {
     /// Total times a commit certificate hint was used.
     #[norito(default)]
@@ -3043,10 +2910,7 @@ pub struct SumeragiBlockSyncRosterStatus {
 }
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after commit failures (with QC quorum).
     #[norito(default)]
@@ -3112,10 +2976,7 @@ pub struct SumeragiViewChangeCauseStatus {
 }
 /// Validation-gate reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiValidationRejectStatus {
     /// Total rejects recorded before voting.
     #[norito(default)]
@@ -3157,10 +3018,7 @@ pub struct SumeragiValidationRejectStatus {
 }
 /// Peer consensus-key policy reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiPeerKeyPolicyStatus {
     /// Total peer-key policy rejects recorded.
     #[norito(default)]
@@ -3196,10 +3054,7 @@ pub struct SumeragiPeerKeyPolicyStatus {
 }
 /// Consensus message drop/deferral counter entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiConsensusMessageHandlingEntry {
     /// Message kind label (e.g., `block_created`).
     pub kind: String,
@@ -3212,10 +3067,7 @@ pub struct SumeragiConsensusMessageHandlingEntry {
 }
 /// Consensus message drop/deferral counters surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiConsensusMessageHandlingStatus {
     /// Per-kind drop/deferral counters (best-effort).
     #[norito(default)]
@@ -3223,10 +3075,7 @@ pub struct SumeragiConsensusMessageHandlingStatus {
 }
 /// Vote validation drop entry with roster context.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiVoteValidationDropEntry {
     /// Drop reason label.
     pub reason: String,
@@ -3255,10 +3104,7 @@ pub struct SumeragiVoteValidationDropEntry {
 }
 /// Aggregated count for a vote-validation drop reason.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiVoteValidationDropReasonCount {
     /// Drop reason label.
     pub reason: String,
@@ -3267,10 +3113,7 @@ pub struct SumeragiVoteValidationDropReasonCount {
 }
 /// Aggregated vote validation drops for a peer/roster hash pairing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiVoteValidationDropPeerEntry {
     /// Peer associated with the drop counts.
     pub peer_id: PeerId,
@@ -3296,10 +3139,7 @@ pub struct SumeragiVoteValidationDropPeerEntry {
 }
 /// Vote validation drop snapshot surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiVoteValidationDropStatus {
     /// Total vote validation drops recorded.
     #[norito(default)]
@@ -3313,10 +3153,7 @@ pub struct SumeragiVoteValidationDropStatus {
 }
 /// Deterministic consensus configuration caps captured alongside status snapshots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiConsensusCapsStatus {
     /// Canonical digest of deterministic, locally configured Nexus policy.
     #[norito(default)]
@@ -3327,10 +3164,7 @@ pub struct SumeragiConsensusCapsStatus {
 }
 /// Queue depth snapshot for Sumeragi worker-loop channels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiWorkerQueueDepths {
     /// Vote channel depth.
     #[norito(default)]
@@ -3356,10 +3190,7 @@ pub struct SumeragiWorkerQueueDepths {
 }
 /// Per-queue totals for worker-loop diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiWorkerQueueTotals {
     /// Vote channel total.
     #[norito(default)]
@@ -3385,10 +3216,7 @@ pub struct SumeragiWorkerQueueTotals {
 }
 /// Worker-loop queue diagnostics (drops/blocking).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiWorkerQueueDiagnostics {
     /// Total count of blocking enqueues per queue.
     #[norito(default)]
@@ -3405,10 +3233,7 @@ pub struct SumeragiWorkerQueueDiagnostics {
 }
 /// Worker-loop diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiWorkerLoopStatus {
     /// Last observed worker-loop stage label.
     #[norito(default)]
@@ -3428,10 +3253,7 @@ pub struct SumeragiWorkerLoopStatus {
 }
 /// Commit inflight diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiCommitInflightStatus {
     /// Whether a commit job is currently in flight.
     #[norito(default)]
@@ -3495,10 +3317,7 @@ pub struct SumeragiCommitInflightStatus {
 }
 /// Commit-pipeline timing snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiCommitPipelineStatus {
     /// End-to-end time spent in the most recent commit-pipeline run.
     #[norito(default)]
@@ -3548,10 +3367,7 @@ pub struct SumeragiCommitPipelineStatus {
 }
 /// DELIVER-to-next-proposal gap snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiRoundGapStatus {
     /// Most recent elapsed time from first accepted DELIVER to local state commit.
     #[norito(default)]
@@ -3574,10 +3390,7 @@ pub struct SumeragiRoundGapStatus {
 }
 /// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiCommitQuorumStatus {
     /// Block height associated with the tally.
     #[norito(default)]
@@ -3607,10 +3420,7 @@ pub struct SumeragiCommitQuorumStatus {
 }
 /// Latest commit QC summary exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiQcStatus {
     /// Block height certified by the commit QC.
     #[norito(default)]
@@ -3638,10 +3448,7 @@ pub struct SumeragiQcStatus {
 }
 /// Observational `NPoS` repair fanout stake-coverage snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiNposRepairCoverageStatus {
     /// Last height for which a repair fanout selection was recorded.
     #[norito(default)]
@@ -3667,10 +3474,7 @@ pub struct SumeragiNposRepairCoverageStatus {
 }
 /// Fail-closed consensus safety halt exposed via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiSafetyHaltStatus {
     /// Whether this process has halted consensus participation.
     #[norito(default)]
@@ -3712,10 +3516,7 @@ pub struct SumeragiSafetyHaltStatus {
 }
 /// Cached standalone lane-block consensus session status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each boolean is an independent V1 operator-visible session fact; collapsing them would change the canonical diagnostics wire shape"
@@ -3770,10 +3571,7 @@ pub struct SumeragiLaneBlockSessionStatus {
 }
 /// Proposal-gate inputs from the most recent pacemaker evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "operator diagnostics expose independent proposal-gate booleans"
@@ -3845,10 +3643,7 @@ pub struct SumeragiProposalGateStatus {
 }
 /// Cohesive `NPoS`-only operator diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiNposDiagnostics {
     /// Length of the active epoch in blocks.
@@ -3896,10 +3691,7 @@ impl SumeragiNposDiagnostics {
 }
 /// Aggregate execution diagnostics for the latest block pipeline run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiPipelineExecutionStatus {
     /// Total transaction vertices across all lanes.
@@ -4177,10 +3969,7 @@ impl SumeragiAutonomousLaneExecutionStage {
 /// Rows are ordered by their complete lane slot and proposal identity. Optional
 /// hashes appear only after the corresponding durable evidence revalidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiAutonomousLaneExecution {
     /// Execution lane.
@@ -4436,10 +4225,7 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
 /// response. The record carries only hashes and counters; transaction bodies and other unbounded
 /// application material stay in Kura.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiNativeAmxParticipantApplication {
     /// Participant lane.
@@ -4545,10 +4331,7 @@ impl SumeragiNativeAmxParticipantApplication {
 /// This payload deliberately excludes reducer phase, height, view, leader, certificates, mode, and
 /// timing. `/v1/sumeragi/status` is the sole source of authoritative consensus state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -4675,10 +4458,7 @@ impl SumeragiDiagnosticsStatus {
 }
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiQcEntry {
     /// Certified block height.
     pub height: Height,
@@ -4690,10 +4470,7 @@ pub struct SumeragiQcEntry {
 }
 /// Norito payload returned by Torii for `/v1/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SumeragiQcSnapshot {
     /// `HighestQC` snapshot.
     pub highest_qc: SumeragiQcEntry,
@@ -4702,10 +4479,7 @@ pub struct SumeragiQcSnapshot {
 }
 /// Minimal execution witness KV pair for SBV-AM prototypes.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ExecKv {
     /// Raw key bytes.
     pub key: Vec<u8>,
@@ -4714,10 +4488,7 @@ pub struct ExecKv {
 }
 /// Execution witness containing reads and writes for SMT recomputation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ExecWitness {
     /// Witnessed reads during execution (key,value).
     pub reads: Vec<ExecKv>,
@@ -4776,10 +4547,7 @@ pub struct Reconfig {
 }
 /// RBC payload encoding used for chunk distribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "encoding", content = "state", rename_all = "snake_case")]
 pub enum RbcEncoding {
     /// Raw payload chunking without parity shards.

@@ -66,7 +66,7 @@ pub(crate) struct VerifiedGeneration {
 /// Exclusive, unpublished generation transaction.
 #[derive(Debug)]
 pub(crate) struct GenerationTransaction {
-    root: PathBuf,
+    network_root: PathBuf,
     generation_root: PathBuf,
     id: String,
     expected_base_generation: Option<String>,
@@ -183,7 +183,7 @@ impl GenerationTransaction {
                     #[cfg(unix)]
                     fs::set_permissions(&generation_root, fs::Permissions::from_mode(0o700))?;
                     return Ok(Self {
-                        root: root.clone(),
+                        network_root: root.clone(),
                         generation_root,
                         id,
                         expected_base_generation,
@@ -228,8 +228,8 @@ impl GenerationTransaction {
                 "peer alias `{alias}` is not one safe path component"
             )));
         }
-        let peers = self.root.join("peers");
-        ensure_direct_child_directory(&self.root, &peers, "runtime peers directory")?;
+        let peers = self.network_root.join("peers");
+        ensure_direct_child_directory(&self.network_root, &peers, "runtime peers directory")?;
         let peer = peers.join(alias);
         ensure_direct_child_directory(&peers, &peer, "runtime peer directory")?;
         let storage_generations = peer.join("storage-generations");
@@ -267,12 +267,14 @@ impl GenerationTransaction {
             Err(mut failure) => Err(failure.take_error()),
         }
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, None)
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_with_fault_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
@@ -280,6 +282,7 @@ impl GenerationTransaction {
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, Some(fault))
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     fn publish_inner(
         mut self,
         context: GenerationInventoryContext<'_>,
@@ -320,21 +323,21 @@ impl GenerationTransaction {
         // Persist the `generations/` and `peers/` root entries before the
         // pointer can select either hierarchy. The post-rename sync below is
         // then responsible only for committing the pointer replacement.
-        sync_directory(&self.root)?;
+        sync_directory(&self.network_root)?;
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::AfterRuntimeStorageSync)?;
         // The transaction has held the exclusive generation lock since its
         // candidate was allocated. Compare the selected base immediately
         // before creating the replacement pointer so a stale Supervisor can
         // never roll the sandbox back to paths derived from a retired base.
-        let actual_base_generation = current_generation_id(&self.root)?;
+        let actual_base_generation = current_generation_id(&self.network_root)?;
         if actual_base_generation != self.expected_base_generation {
             return Err(SupervisorError::GenerationSelectionChanged {
                 expected: self.expected_base_generation.clone(),
                 actual: actual_base_generation,
             });
         }
-        let pointer = self.root.join(CURRENT_GENERATION_FILE);
+        let pointer = self.network_root.join(CURRENT_GENERATION_FILE);
         reject_symlink(&pointer, "current generation pointer")?;
         let mut file = self.pointer_temporary_file.take().ok_or_else(|| {
             SupervisorError::GenerationValidation(
@@ -368,7 +371,7 @@ impl GenerationTransaction {
         if fault == Some(PublicationFaultPoint::AfterPointerSync) {
             return Err(injected_fault(PublicationFaultPoint::AfterPointerSync));
         }
-        let verified = verify_selected_generation(&self.root, &self.id)?;
+        let verified = verify_selected_generation(&self.network_root, &self.id)?;
         ensure_inventory_context(&verified, context)?;
         if let Err(error) = fs::rename(&self.pointer_temporary, &pointer) {
             return Err(error.into());
@@ -381,13 +384,13 @@ impl GenerationTransaction {
                 "injected generation publication fault after pointer rename",
             ))
         } else {
-            sync_directory(&self.root).err()
+            sync_directory(&self.network_root).err()
         };
         Ok(durability_error)
     }
     fn sync_runtime_storage_roots(&self) -> Result<()> {
         for storage in &self.runtime_storage_roots {
-            if !candidate_runtime_storage_is_safe(&self.root, &self.id, storage) {
+            if !candidate_runtime_storage_is_safe(&self.network_root, &self.id, storage) {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate runtime storage `{}` escaped its managed generation",
                     storage.display()
@@ -404,7 +407,7 @@ impl GenerationTransaction {
             sync_directory(peer)?;
         }
         if !self.runtime_storage_roots.is_empty() {
-            sync_directory(&self.root.join("peers"))?;
+            sync_directory(&self.network_root.join("peers"))?;
         }
         Ok(())
     }
@@ -494,9 +497,9 @@ impl Drop for GenerationTransaction {
             return;
         }
         drop(self.pointer_temporary_file.take());
-        let generations = self.root.join(GENERATIONS_DIRECTORY);
+        let generations = self.network_root.join(GENERATIONS_DIRECTORY);
         let _ = reclaim_abandoned_generation_transaction(
-            &self.root,
+            &self.network_root,
             &generations,
             &self.id,
             &self.pointer_temporary,
@@ -1788,9 +1791,7 @@ mod tests {
     fn lock_contention_fails_fast_and_releases_on_drop() {
         let temp = tempfile::tempdir().expect("temporary root");
         let first = GenerationTransaction::begin(temp.path()).expect("acquire first lock");
-        let error = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("second lock must fail");
+        let error = GenerationTransaction::begin(temp.path()).expect_err("second lock must fail");
         assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
         drop(first);
         GenerationTransaction::begin(temp.path()).expect("lock released after drop");
@@ -2061,8 +2062,7 @@ mod tests {
                 if generation_id == &candidate_id
         ));
         let contention = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("uncertain committed guard must retain the generation lock");
+            .expect_err("uncertain committed guard must retain the generation lock");
         assert!(matches!(
             contention,
             SupervisorError::GenerationLocked { .. }
@@ -2096,8 +2096,7 @@ mod tests {
         assert_eq!(publication.id(), candidate_id);
         assert!(publication.take_uncertainty().is_none());
         let contention = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("committed guard must retain the generation lock");
+            .expect_err("committed guard must retain the generation lock");
         assert!(matches!(
             contention,
             SupervisorError::GenerationLocked { .. }
@@ -2591,8 +2590,7 @@ mod tests {
         symlink(outside.path(), root.path().join(GENERATIONS_DIRECTORY))
             .expect("create generations symlink");
         let error = GenerationTransaction::begin(root.path())
-            .err()
-            .expect("symlinked generations parent must fail closed");
+            .expect_err("symlinked generations parent must fail closed");
         assert!(error.to_string().contains("symbolic link"));
         assert!(
             fs::read_dir(outside.path())

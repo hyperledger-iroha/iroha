@@ -4,16 +4,7 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
     let (receipt, artifact) = durable_finality_fixture(&service, &keys);
     let target = service.context.roster[1].validator.clone();
     let (request, _) = certified_sidecar_outputs(&service.local_peer, &target);
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let attempts_for_hook = Arc::clone(&attempts);
-    service.set_exact_output_admission_hook(move |post, ticket| {
-        attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let attempts = install_counting_exact_output_backpressure(&mut service);
     let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
         &artifact,
         Hash::new(b"empty exact-output final seal lane witness"),
@@ -435,11 +426,6 @@ fn autonomous_retirement_handoff_fixture(
         .kura
         .store_block(block)
         .expect("persist control-only canonical carrier");
-    let round = wire::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: header.view_change_index(),
-    };
     let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"autonomous handoff parent state"),
         Hash::new(b"autonomous handoff post state"),
@@ -447,53 +433,18 @@ fn autonomous_retirement_handoff_fixture(
         1,
         Hash::new(b"autonomous handoff executed block wire"),
     );
-    let preimage = wire::Vote {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Commit,
+    let artifact = signed_worker_finality_artifact(
+        &context,
+        validators,
+        header.view_change_index(),
         subject,
         execution_commitment,
-        signer: 0,
-        signature: Vec::new(),
-    }
-    .signature_preimage();
-    let signature_shares = validators[..3]
-        .iter()
-        .map(|key| {
-            Signature::new(key.private_key(), &preimage)
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let signature_refs = signature_shares
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-    let certificate = wire::QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Commit,
-        subject,
-        execution_commitment,
-        signers: vec![0, 1, 2],
-        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate autonomous handoff CommitQC"),
-    };
-    let artifact = wire::finality::V2FinalityArtifact::new(
-        context,
-        subject,
-        certificate,
-        validators
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("autonomous handoff validator PoP")
-            })
-            .collect(),
+        [
+            "aggregate autonomous handoff CommitQC",
+            "autonomous handoff validator PoP",
+            "valid autonomous handoff finality artifact",
+        ],
     );
-    artifact
-        .validate()
-        .expect("valid autonomous handoff finality artifact");
     artifact
         .validate_for_header(&header)
         .expect("autonomous handoff artifact matches its canonical carrier");
@@ -660,12 +611,15 @@ fn applied_height_handoff_rejects_wrong_height_global_output() {
 #[test]
 fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
     let history = durable_history_fixture();
-    let mut service = successor_service_for_history_as(
-        Arc::clone(&history.kura),
-        &history.artifact,
-        &history.validators,
-        3,
-    );
+    let archive_successor = || {
+        successor_service_for_history_as(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+            3,
+        )
+    };
+    let mut service = archive_successor();
     let (receipt, applied_artifact) = durable_finality_fixture(&service, &history.validators);
     let commit_message =
         ProductionV2Services::preencode_v2_network_message(history.commit_response.clone())
@@ -689,13 +643,7 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         .expect_err("Kura presence cannot authorize an untyped manual response");
     assert!(error.contains("no typed applied-height rollover claim"));
     assert!(manual.is_pending());
-    service.set_exact_output_admission_hook(|post, ticket| {
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    install_exact_output_backpressure(&mut service);
     for response in [
         history.commit_response.clone(),
         history.body_response.clone(),
@@ -807,60 +755,24 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         .expect_err("handoff must independently reject a non-Kura CommitQC");
     assert!(error.contains("differs from its Kura finality source"));
     assert!(mismatched.is_pending(), "failed handoff remains atomic");
-    let mut rejected_commit_service = successor_service_for_history_as(
-        Arc::clone(&history.kura),
-        &history.artifact,
-        &history.validators,
-        3,
+    let mut rejected_commit_service = archive_successor();
+    assert_rejected_before_actor_admission(
+        &mut rejected_commit_service,
+        |service| {
+            post_history_response_for_rejection(
+                service,
+                history.requester.clone(),
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CommitCertificateResponse(substituted_commit),
+                ),
+                "invalid CommitQC response operation",
+            )
+        },
+        "substituted CommitQC must fail before actor admission",
+        "differs from its Kura finality source",
+        "inspect rejected CommitQC response",
     );
-    let commit_attempts = Arc::new(AtomicUsize::new(0));
-    let commit_attempts_for_hook = Arc::clone(&commit_attempts);
-    rejected_commit_service.set_exact_output_admission_hook(move |post, ticket| {
-        commit_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
-    let guard = Arc::clone(&rejected_commit_service.output_guard);
-    let operation = guard
-        .begin_fail_stop_operation()
-        .expect("invalid CommitQC response operation");
-    let error = rejected_commit_service
-        .post_durable_history_response_with_permit(
-            history.requester.clone(),
-            wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CommitCertificateResponse(substituted_commit),
-            ),
-            operation.permit(),
-        )
-        .expect_err("substituted CommitQC must fail before actor admission");
-    drop(operation);
-    assert!(error.contains("differs from its Kura finality source"));
-    assert_eq!(commit_attempts.load(Ordering::Relaxed), 0);
-    assert!(
-        !rejected_commit_service
-            .has_pending_exact_output()
-            .expect("inspect rejected CommitQC response")
-    );
-    assert!(rejected_commit_service.output_guard.restart_required());
-    let mut rejected_service = successor_service_for_history_as(
-        Arc::clone(&history.kura),
-        &history.artifact,
-        &history.validators,
-        3,
-    );
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let attempts_for_hook = Arc::clone(&attempts);
-    rejected_service.set_exact_output_admission_hook(move |post, ticket| {
-        attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let mut rejected_service = archive_successor();
     let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut wrong_responder) =
         history.body_response.payload.clone()
     else {
@@ -873,44 +785,24 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
     )
     .payload()
     .to_vec();
-    let guard = Arc::clone(&rejected_service.output_guard);
-    let operation = guard
-        .begin_fail_stop_operation()
-        .expect("invalid historical response operation");
-    let error = rejected_service
-        .post_durable_history_response_with_permit(
-            history.requester.clone(),
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                wrong_responder,
-            )),
-            operation.permit(),
-        )
-        .expect_err("wrong historical responder must fail before actor admission");
-    drop(operation);
-    assert!(error.contains("serving network identity"));
-    assert_eq!(attempts.load(Ordering::Relaxed), 0);
-    assert!(
-        !rejected_service
-            .has_pending_exact_output()
-            .expect("inspect rejected body response")
+    assert_rejected_before_actor_admission(
+        &mut rejected_service,
+        |service| {
+            post_history_response_for_rejection(
+                service,
+                history.requester.clone(),
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(wrong_responder),
+                ),
+                "invalid historical response operation",
+            )
+        },
+        "wrong historical responder must fail before actor admission",
+        "serving network identity",
+        "inspect rejected body response",
     );
-    assert!(rejected_service.output_guard.restart_required());
-    let mut rejected_body_service = successor_service_for_history_as(
-        Arc::clone(&history.kura),
-        &history.artifact,
-        &history.validators,
-        3,
-    );
-    let body_attempts = Arc::new(AtomicUsize::new(0));
-    let body_attempts_for_hook = Arc::clone(&body_attempts);
-    rejected_body_service.set_exact_output_admission_hook(move |post, ticket| {
-        body_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let mut rejected_body_service = archive_successor();
+    let _ = archive_successor;
     let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut substituted_body) =
         history.body_response.payload
     else {
@@ -936,28 +828,22 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
     )
     .payload()
     .to_vec();
-    let guard = Arc::clone(&rejected_body_service.output_guard);
-    let operation = guard
-        .begin_fail_stop_operation()
-        .expect("invalid body response operation");
-    let error = rejected_body_service
-        .post_durable_history_response_with_permit(
-            history.requester,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                substituted_body,
-            )),
-            operation.permit(),
-        )
-        .expect_err("substituted canonical body must fail before actor admission");
-    drop(operation);
-    assert!(error.contains("differs from its Kura finality source"));
-    assert_eq!(body_attempts.load(Ordering::Relaxed), 0);
-    assert!(
-        !rejected_body_service
-            .has_pending_exact_output()
-            .expect("inspect rejected canonical body response")
+    assert_rejected_before_actor_admission(
+        &mut rejected_body_service,
+        |service| {
+            post_history_response_for_rejection(
+                service,
+                history.requester,
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(substituted_body),
+                ),
+                "invalid body response operation",
+            )
+        },
+        "substituted canonical body must fail before actor admission",
+        "differs from its Kura finality source",
+        "inspect rejected canonical body response",
     );
-    assert!(rejected_body_service.output_guard.restart_required());
 }
 #[test]
 fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() {
@@ -973,13 +859,7 @@ fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() 
         successor_service_for_history(Arc::clone(&lane_kura), &parent_artifact, &lane_validators);
     let (receipt, applied_artifact) = durable_finality_fixture(&service, &lane_validators);
     let target = service.context.roster[1].validator.clone();
-    service.set_exact_output_admission_hook(|post, ticket| {
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    install_exact_output_backpressure(&mut service);
     service
         .post_durable_lane_certificate(target.clone(), certificate.clone())
         .expect("live emitter accepts exact certified Kura lane response");
@@ -1010,27 +890,13 @@ fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() 
     substituted.commit_qc.bls_aggregate_signature[0] ^= 0x01;
     let mut rejected_service =
         successor_service_for_history(Arc::clone(&lane_kura), &parent_artifact, &lane_validators);
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let attempts_for_hook = Arc::clone(&attempts);
-    rejected_service.set_exact_output_admission_hook(move |post, ticket| {
-        attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
-    let error = rejected_service
-        .post_durable_lane_certificate(target, substituted)
-        .expect_err("a modified lane proof must fail before actor admission");
-    assert!(error.contains("differs from its certified Kura source"));
-    assert_eq!(attempts.load(Ordering::Relaxed), 0);
-    assert!(
-        !rejected_service
-            .has_pending_exact_output()
-            .expect("inspect rejected lane response")
+    assert_rejected_before_actor_admission(
+        &mut rejected_service,
+        |service| service.post_durable_lane_certificate(target, substituted),
+        "a modified lane proof must fail before actor admission",
+        "differs from its certified Kura source",
+        "inspect rejected lane response",
     );
-    assert!(rejected_service.output_guard.restart_required());
 }
 #[test]
 fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {

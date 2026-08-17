@@ -33,6 +33,8 @@ mod sorafs_reputation_finalized_archive;
 mod sorafs_storage_pin_aliases;
 #[path = "sorafs_stream_token_runtime_signer.rs"]
 mod sorafs_stream_token_runtime_signer;
+#[path = "soranet_privacy_ingest_hard_cut.rs"]
+mod soranet_privacy_ingest_hard_cut;
 #[path = "sumeragi_v2_merge_runtime_config.rs"]
 mod sumeragi_v2_merge_runtime_config;
 #[path = "transaction_ingress_limits.rs"]

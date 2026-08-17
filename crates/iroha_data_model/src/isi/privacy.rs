@@ -15,12 +15,11 @@ use crate::privacy::{
     PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     PrivacyZkX509TrustAnchorRecordV1,
 };
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 isi! {
     /// Register one immutable, future privacy-protocol activation.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RegisterPrivacyProtocolActivationV1 {
         /// Exact protocol, artifacts, lifecycle, and admission limits to register.
         pub activation: PrivacyProtocolActivationRecordV1,
@@ -38,10 +37,7 @@ impl RegisterPrivacyProtocolActivationV1 {
 }
 isi! {
     /// Schedule a delayed component-wise tightening of the chain-wide privacy policy.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct SchedulePrivacyConsensusPolicyTighteningV1 {
         /// Exact incoming height at which the successor becomes effective.
         pub effective_at_height: u64,
@@ -64,10 +60,7 @@ impl SchedulePrivacyConsensusPolicyTighteningV1 {
 }
 isi! {
     /// Schedule a delayed component-wise tightening for one privacy protocol.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct SchedulePrivacyProtocolLimitsTighteningV1 {
         /// Exact registered protocol whose limits will be tightened.
         pub protocol_id: PrivacyProtocolIdV1,
@@ -97,10 +90,7 @@ impl SchedulePrivacyProtocolLimitsTighteningV1 {
 }
 isi! {
     /// Apply a forward-only lifecycle transition to a registered privacy protocol.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct TransitionPrivacyProtocolLifecycleV1 {
         /// Exact protocol whose lifecycle is changing.
         pub protocol_id: PrivacyProtocolIdV1,
@@ -126,10 +116,7 @@ impl TransitionPrivacyProtocolLifecycleV1 {
 }
 isi! {
     /// Publish or initialize one governance-authorized canonical privacy root.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct PublishPrivacyRootV1 {
         /// Exact namespace, role, epoch, and root publication.
         pub publication: PrivacyRootPublicationV1,
@@ -147,10 +134,7 @@ impl PublishPrivacyRootV1 {
 }
 isi! {
     /// Bootstrap one governed Orchard V3 pool at the node-derived empty root.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct BootstrapPrivacyOrchardPoolV1 {
         /// Immutable pool, public asset, and reserve-account binding.
         pub bootstrap: PrivacyOrchardPoolBootstrapV1,
@@ -168,10 +152,7 @@ impl BootstrapPrivacyOrchardPoolV1 {
 }
 isi! {
     /// Bootstrap one governed FCMP++, private-IVM, or PQ-MASP pool at its node-derived empty root.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct BootstrapPrivacyProofManagedPoolV1 {
         /// Exact closed protocol, namespace, asset, and optional program/reserve binding.
         pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
@@ -189,10 +170,7 @@ impl BootstrapPrivacyProofManagedPoolV1 {
 }
 isi! {
     /// Bootstrap one complete governed Anonymous PGC encrypted-account table.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct BootstrapPrivacyPgcAccountsV1 {
         /// Complete canonical pool namespace, root, epoch, and ordered accounts.
         pub bootstrap: PrivacyPgcAccountBootstrapV1,
@@ -215,10 +193,7 @@ impl BootstrapPrivacyPgcAccountsV1 {
 }
 isi! {
     /// Atomically initialize one governed ZK-AMS issuer, policy, and admitted-identity registry.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct BootstrapPrivacyZkAmsRegistryV1 {
         /// Exact issuer key, policy digest, namespace, root, and origin epoch.
         pub bootstrap: PrivacyZkAmsRegistryBootstrapV1,
@@ -236,10 +211,7 @@ impl BootstrapPrivacyZkAmsRegistryV1 {
 }
 isi! {
     /// Register one canonical authoritative ZK-ACE policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RegisterPrivacyZkAcePolicyV1 {
         /// Complete active origin record, including its canonical self-digest.
         pub policy: PrivacyZkAcePolicyRecordV1,
@@ -257,10 +229,7 @@ impl RegisterPrivacyZkAcePolicyV1 {
 }
 isi! {
     /// Rotate one active authoritative ZK-ACE policy by exactly one epoch.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RotatePrivacyZkAcePolicyV1 {
         /// Exact self-digest of the active record being replaced.
         pub expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
@@ -286,10 +255,7 @@ impl RotatePrivacyZkAcePolicyV1 {
 }
 isi! {
     /// Irreversibly revoke one active authoritative ZK-ACE policy.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RevokePrivacyZkAcePolicyV1 {
         /// Exact self-digest of the active record being revoked.
         pub expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
@@ -315,10 +281,7 @@ impl RevokePrivacyZkAcePolicyV1 {
 }
 isi! {
     /// Register one canonical authoritative Bootle/Lantern issuer-policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RegisterPrivacyBootleLanternIssuerPolicyV1 {
         /// Complete active origin policy, including its canonical self-digest.
@@ -337,10 +300,7 @@ impl RegisterPrivacyBootleLanternIssuerPolicyV1 {
 }
 isi! {
     /// Rotate one active Bootle/Lantern issuer-policy lineage by exactly one epoch.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RotatePrivacyBootleLanternIssuerPolicyV1 {
         /// Exact self-digest of the active policy being replaced.
@@ -367,10 +327,7 @@ impl RotatePrivacyBootleLanternIssuerPolicyV1 {
 }
 isi! {
     /// Irreversibly revoke one active Bootle/Lantern issuer-policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RevokePrivacyBootleLanternIssuerPolicyV1 {
         /// Exact self-digest of the active policy being revoked.
@@ -397,10 +354,7 @@ impl RevokePrivacyBootleLanternIssuerPolicyV1 {
 }
 isi! {
     /// Register one canonical authoritative Vega issuer-key/policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RegisterPrivacyVegaIssuerV1 {
         /// Complete active origin revision, including its canonical self-digest.
@@ -419,10 +373,7 @@ impl RegisterPrivacyVegaIssuerV1 {
 }
 isi! {
     /// Rotate one active Vega issuer lineage by exactly one immutable epoch.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RotatePrivacyVegaIssuerV1 {
         /// Exact self-digest of the active revision being replaced.
@@ -449,10 +400,7 @@ impl RotatePrivacyVegaIssuerV1 {
 }
 isi! {
     /// Irreversibly revoke one active Vega issuer lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct RevokePrivacyVegaIssuerV1 {
         /// Exact self-digest of the active revision being revoked.
@@ -479,10 +427,7 @@ impl RevokePrivacyVegaIssuerV1 {
 }
 isi! {
     /// Register one canonical authoritative X.509 trust-anchor lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RegisterPrivacyZkX509TrustAnchorV1 {
         /// Complete active origin revision, including its canonical self-digest.
         pub record: PrivacyZkX509TrustAnchorRecordV1,
@@ -500,10 +445,7 @@ impl RegisterPrivacyZkX509TrustAnchorV1 {
 }
 isi! {
     /// Rotate one active X.509 trust-anchor lineage by exactly one epoch.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RotatePrivacyZkX509TrustAnchorV1 {
         /// Exact self-digest of the active revision being replaced.
         pub expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
@@ -529,10 +471,7 @@ impl RotatePrivacyZkX509TrustAnchorV1 {
 }
 isi! {
     /// Irreversibly revoke one active X.509 trust-anchor lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RevokePrivacyZkX509TrustAnchorV1 {
         /// Exact self-digest of the active revision being revoked.
         pub expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
@@ -558,10 +497,7 @@ impl RevokePrivacyZkX509TrustAnchorV1 {
 }
 isi! {
     /// Register one canonical authoritative X.509 certificate-policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RegisterPrivacyZkX509CertificatePolicyV1 {
         /// Complete active origin revision, including its canonical self-digest.
         pub record: PrivacyZkX509CertificatePolicyRecordV1,
@@ -579,10 +515,7 @@ impl RegisterPrivacyZkX509CertificatePolicyV1 {
 }
 isi! {
     /// Rotate one active X.509 certificate-policy lineage by exactly one epoch.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RotatePrivacyZkX509CertificatePolicyV1 {
         /// Exact self-digest of the active revision being replaced.
         pub expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
@@ -608,10 +541,7 @@ impl RotatePrivacyZkX509CertificatePolicyV1 {
 }
 isi! {
     /// Irreversibly revoke one active X.509 certificate-policy lineage.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RevokePrivacyZkX509CertificatePolicyV1 {
         /// Exact self-digest of the active revision being revoked.
         pub expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
@@ -640,10 +570,7 @@ isi! {
     ///
     /// Execution atomically installs the record and its exact revoked-serial
     /// root; generic root publication cannot substitute either component.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RegisterPrivacyZkX509CrlV1 {
         /// Complete active origin record, including its root and self-digest.
         pub record: PrivacyZkX509CrlRecordV1,
@@ -664,10 +591,7 @@ isi! {
     ///
     /// The expected digest provides compare-and-swap semantics. Execution
     /// atomically replaces the current record and appends its exact root.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RotatePrivacyZkX509CrlV1 {
         /// Exact self-digest of the current record being replaced.
         pub expected_current_record_digest: PrivacyZkX509CrlRecordDigestV1,
@@ -696,10 +620,7 @@ isi! {
     ///
     /// Execution atomically installs the terminal successor while preserving
     /// the last active root head, leaving no active proof snapshot.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct RevokePrivacyZkX509CrlV1 {
         /// Exact self-digest of the current record being revoked.
         pub expected_current_record_digest: PrivacyZkX509CrlRecordDigestV1,
@@ -725,10 +646,7 @@ impl RevokePrivacyZkX509CrlV1 {
 }
 isi! {
     /// Verify and atomically apply one protocol-typed privacy proof action.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct SubmitPrivacyProofV1 {
         /// Complete governed-artifact-bound statement and native proof.
         pub envelope: PrivacyProofEnvelopeV1,
@@ -1682,7 +1600,7 @@ mod tests {
         );
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));
-            assert!(wire_id.ends_with(".v1"));
+            assert!(matches!(wire_id.rsplit_once('.'), Some((_, "v1"))));
             assert!(!wire_id.contains("zkAt"));
             assert!(!wire_id.contains("silent"));
             assert!(!wire_id.contains("penumbra"));

@@ -199,8 +199,7 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             "Vega",
         )
-        .err()
-        .expect("local catalog must not invent network availability");
+        .expect_err("local catalog must not invent network availability");
     assert!(
         missing
             .to_string()
@@ -216,8 +215,7 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             "Vega",
         )
-        .err()
-        .expect("another active protocol row must not authorize Vega");
+        .expect_err("another active protocol row must not authorize Vega");
     assert!(
         mismatch
             .to_string()

@@ -1,10 +1,4 @@
 // Service and journal test body included from the parent module.
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
 use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
@@ -27,6 +21,12 @@ use iroha_data_model::{
 };
 use norito::codec::Encode as _;
 use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 fn test_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         [seed; 32],
@@ -650,6 +650,10 @@ fn control_commitment() -> MusubiArchiveCommitmentV1 {
         chunk_count: 4,
     }
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the control-service fixture constructs one fully cross-bound authenticated request and response surface"
+)]
 fn control_service_fixture(
     substitute_storage: bool,
     substitute_readback: bool,
@@ -897,6 +901,10 @@ fn control_service_fixture(
         clock,
     }
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the private-service fixture constructs one fully cross-bound publication and storage surface"
+)]
 fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
     let (regressing_client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
@@ -1280,7 +1288,7 @@ fn client() -> (Client, KeyPair) {
         transaction_status_timeout: Duration::from_secs(5),
         torii_request_timeout: Duration::from_secs(5),
         account,
-        headers: Default::default(),
+        headers: std::collections::HashMap::default(),
         operator_key_pair: None,
         add_transaction_nonce: false,
         alias_cache_policy: sorafs_manifest::alias_cache::AliasCachePolicy::new(
@@ -1293,12 +1301,12 @@ fn client() -> (Client, KeyPair) {
             Duration::from_secs(1),
             Duration::from_secs(1),
         ),
-        default_anonymity_policy: Default::default(),
-        rollout_phase: Default::default(),
+        default_anonymity_policy: sorafs_orchestrator::AnonymityPolicy::default(),
+        rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),
         data_model_compatibility: Arc::new(Mutex::new(
             crate::client::DataModelCompatibility::Unchecked,
         )),
-        wire_format_preference: Default::default(),
+        wire_format_preference: crate::client::WireFormatPreference::default(),
     };
     (client, key_pair)
 }

@@ -592,7 +592,7 @@ enum CommandResponse {
     Pong,
     Lease(WitnessLease),
     Cancelled,
-    SignedAction(SignedActionResponseV1),
+    SignedAction(Box<SignedActionResponseV1>),
     Error(WorkerError),
 }
 struct SignedActionResponseV1 {
@@ -650,7 +650,9 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
                 .map(|()| CommandResponse::Cancelled)
         }),
         CommandKind::Execute => decode_execute_payload(payload).and_then(|request| {
-            execute_native_action_v1(vault, request).map(CommandResponse::SignedAction)
+            execute_native_action_v1(vault, request)
+                .map(Box::new)
+                .map(CommandResponse::SignedAction)
         }),
     };
     result.unwrap_or_else(CommandResponse::Error)
@@ -1786,16 +1788,16 @@ mod tests {
     fn all_binding_dimensions_are_enforced() {
         let directory = TempDir::new().expect("temp dir");
         let path = execution_bundle_file(&directory, "credential", JINDO_WITNESS);
-        let mut mutations: Vec<Box<dyn Fn(&mut WitnessBinding)>> = vec![
-            Box::new(|value| value.network_id[0] ^= 1),
-            Box::new(|value| value.signer.push_str("-other")),
-            Box::new(|value| value.protocol = "verange-transparent-range-v1".to_owned()),
-            Box::new(|value| value.profile_digest[0] ^= 1),
-            Box::new(|value| value.public_intent_digest[0] ^= 1),
-            Box::new(|value| value.nonce[0] ^= 1),
-            Box::new(|value| value.signed_release_authority_digest[0] ^= 1),
+        let mutations: [fn(&mut WitnessBinding); 7] = [
+            |value| value.network_id[0] ^= 1,
+            |value| value.signer.push_str("-other"),
+            |value| value.protocol = "verange-transparent-range-v1".to_owned(),
+            |value| value.profile_digest[0] ^= 1,
+            |value| value.public_intent_digest[0] ^= 1,
+            |value| value.nonce[0] ^= 1,
+            |value| value.signed_release_authority_digest[0] ^= 1,
         ];
-        for mutate in mutations.drain(..) {
+        for mutate in mutations {
             let mut vault = WitnessVault::default();
             let lease = import(&mut vault, &path);
             let mut wrong = binding();

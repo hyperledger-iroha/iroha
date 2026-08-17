@@ -14,6 +14,7 @@ use std::{
 use zeroize::Zeroizing;
 const DEFAULT_TTL_MS: u64 = 120_000;
 const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
+const CLIENT_CONFIG_DERIVATION_DOMAIN: &[u8] = b"iroha:kagami:client-config:v1";
 #[derive(Debug, Clone)]
 struct BaseConfig {
     chain: String,
@@ -90,11 +91,13 @@ fn derive_client_key_pair(master_seed: &[u8], name: &str) -> Result<KeyPair> {
     }
     let name_len =
         u64::try_from(name.len()).map_err(|_| eyre!("client name length exceeds u64"))?;
-    const DOMAIN: &[u8] = b"iroha:kagami:client-config:v1";
     let mut seed_material = Zeroizing::new(Vec::with_capacity(
-        DOMAIN.len() + master_seed.len() + core::mem::size_of::<u64>() + name.len(),
+        CLIENT_CONFIG_DERIVATION_DOMAIN.len()
+            + master_seed.len()
+            + core::mem::size_of::<u64>()
+            + name.len(),
     ));
-    seed_material.extend_from_slice(DOMAIN);
+    seed_material.extend_from_slice(CLIENT_CONFIG_DERIVATION_DOMAIN);
     seed_material.extend_from_slice(master_seed);
     seed_material.extend_from_slice(&name_len.to_le_bytes());
     seed_material.extend_from_slice(name.as_bytes());

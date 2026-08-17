@@ -69,6 +69,15 @@ class RunLocalSwarmSafetyTest(unittest.TestCase):
         )
         self.assertIn('expected_hash = "$GENESIS_EXPECTED_HASH"', text)
 
+    def test_consensus_context_is_signed_in_genesis_not_local_config(self) -> None:
+        text = _script_text()
+
+        self.assertIn("$KAGAMI genesis generate", text)
+        self.assertIn("Consensus mode, validator set, and DA geometry come from the signed genesis", text)
+        self.assertNotIn("consensus_mode =", text)
+        self.assertNotIn("enable_bls =", text)
+        self.assertNotIn("da_enabled =", text)
+
 
 if __name__ == "__main__":
     unittest.main()

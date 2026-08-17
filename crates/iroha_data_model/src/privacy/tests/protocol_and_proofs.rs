@@ -1,6 +1,3 @@
-use std::str::FromStr as _;
-use hex_literal::hex;
-use crate::{domain::DomainId, name::Name};
 use super::{
     exact12_fixture::{
         account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy, commitment,
@@ -13,6 +10,9 @@ use super::{
     },
     *,
 };
+use crate::{domain::DomainId, name::Name};
+use hex_literal::hex;
+use std::str::FromStr as _;
 fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
     (1..=count)
         .map(|seed| PrivacyPgcAccountV1 {
@@ -1220,13 +1220,17 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
     }
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the Exact12 archive mutation matrix is clearer as one end-to-end invariant"
+)]
 fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
-    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
     use crate::{
         isi::privacy::SubmitPrivacyProofV1,
         transaction::{SignedTransaction, TransactionBuilder},
     };
     use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
     let bundle = privacy_exact12_fixture_bundle_v1().expect("typed exact12 fixture bundle");
     let archive =
         privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
@@ -1498,6 +1502,10 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the cross-SDK matrix is one contiguous closed-schema conformance check"
+)]
 fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
     let matrix = include_str!("../../../../../fixtures/privacy/exact12_v1.tsv");
     let generated = privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");
@@ -1895,7 +1903,7 @@ fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
         *statement_context.network_id.as_bytes(),
         &limits,
     )
-        .expect("construct canonical native consensus binding");
+    .expect("construct canonical native consensus binding");
     binding.validate(&limits).expect("validate binding");
     binding
         .validate_against_context(&statement_context, &limits)
@@ -1956,31 +1964,31 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
         *statement_context.network_id.as_bytes(),
         &limits,
     )
-        .expect("construct canonical native consensus binding");
+    .expect("construct canonical native consensus binding");
     let expected = binding.digest().expect("digest canonical binding");
     let mut mutations = Vec::new();
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.network_id = network_id(201);
     mutations.push(("network_id", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.genesis_hash = raw(201);
     mutations.push(("genesis_hash", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.action_index = 1;
     mutations.push(("action_index", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(202));
     mutations.push(("transaction_intent_digest", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.parameter_id = PrivacyParameterIdV1::new(raw(203));
     mutations.push(("parameter_id", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.parameter_digest = PrivacyParameterDigestV1::new(raw(204));
     mutations.push(("parameter_digest", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.verifier_digest = PrivacyVerifierDigestV1::new(raw(205));
     mutations.push(("verifier_digest", mutated));
-    let mut mutated = binding.clone();
+    let mut mutated = binding;
     mutated.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(206));
     mutations.push(("statement_schema_digest", mutated));
     let mut mutated = binding;
@@ -2017,49 +2025,49 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
     )
     .expect("construct canonical native consensus binding");
     let mut substitutions = Vec::new();
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.network_id = network_id(201);
     substitutions.push((
         "network_id",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.action_index = 1;
     substitutions.push((
         "action_index",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(210));
     substitutions.push((
         "transaction_intent_digest",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.parameter_id = PrivacyParameterIdV1::new(raw(211));
     substitutions.push((
         "parameter_id",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.parameter_digest = PrivacyParameterDigestV1::new(raw(212));
     substitutions.push((
         "parameter_digest",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.verifier_digest = PrivacyVerifierDigestV1::new(raw(213));
     substitutions.push((
         "verifier_digest",
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
     ));
-    let mut substituted = base_context.clone();
+    let mut substituted = base_context;
     substituted.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(214));
     substitutions.push((
         "statement_schema_digest",
@@ -2237,7 +2245,13 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one matrix verifies every consensus-limit boundary and hard maximum together"
+)]
 fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
+    type HardMaximumMutation = (PrivacyLimitFieldV1, u32, fn(&mut PrivacyConsensusLimitsV1));
+
     let defaults = PrivacyConsensusLimitsV1::taira_default();
     defaults.validate().expect("Taira defaults");
     assert_eq!(
@@ -2320,7 +2334,7 @@ fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
             "mutated limits must fail: {value:?}"
         );
     }
-    let hard_maximum_mutations: [(PrivacyLimitFieldV1, u32, fn(&mut PrivacyConsensusLimitsV1)); 4] = [
+    let hard_maximum_mutations: [HardMaximumMutation; 4] = [
         (
             PrivacyLimitFieldV1::ProofBytesPerAction,
             TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,

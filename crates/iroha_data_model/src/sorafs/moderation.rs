@@ -6,6 +6,8 @@
 //! signature coverage, and commit/reveal binding before accepting moderation evidence.
 #[cfg(feature = "json")]
 pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use blake2::digest::Digest;
 use iroha_crypto::{Algorithm, Blake2b256, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -89,10 +91,7 @@ pub const SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1: u16 = 1;
 pub const SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 /// Deterministic bounded integer inference engine used by first-release models.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ModerationModelEngineV1 {
     /// Fixed-point linear model followed by monotonic piecewise-linear calibration.
@@ -101,10 +100,7 @@ pub enum ModerationModelEngineV1 {
 }
 /// Deterministic feature extraction profile used by first-release models.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ModerationFeatureProfileV1 {
     /// 256 byte-frequency bins followed by 256 stable adjacent-byte bins.
@@ -113,10 +109,7 @@ pub enum ModerationFeatureProfileV1 {
 }
 /// One point in a monotonic, piecewise-linear calibration curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCalibrationKnotV1 {
     /// Raw signed linear-model output at this point.
     pub input: i64,
@@ -129,10 +122,7 @@ pub struct ModerationCalibrationKnotV1 {
 /// external tokenizer state, or implementation-selected operator set. Its exact
 /// operation and memory budgets are committed into the signed manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationModelArtifactV1 {
     /// Artefact schema version; must equal [`MODERATION_MODEL_ARTIFACT_VERSION_V1`].
     pub schema_version: u16,
@@ -158,10 +148,7 @@ pub struct ModerationModelArtifactV1 {
 }
 /// A score emitted for one manifest-bound moderation model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationModelScoreV1 {
     /// Model UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -370,10 +357,7 @@ impl ModerationModelArtifactV1 {
 }
 /// Governance-signed moderation reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationReproManifestV1 {
     /// Canonical payload describing the runner, models, and thresholds.
     pub body: ModerationReproBodyV1,
@@ -383,10 +367,7 @@ pub struct ModerationReproManifestV1 {
 }
 /// Canonical payload hashed and signed in the reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationReproBodyV1 {
     /// Schema version; must equal [`MODERATION_REPRO_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -416,10 +397,7 @@ pub struct ModerationReproBodyV1 {
 }
 /// Complete execution fingerprint for one model artefact referenced by the runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationModelFingerprintV1 {
     /// Model UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -452,10 +430,7 @@ pub struct ModerationModelFingerprintV1 {
 }
 /// Seed derivation metadata used to generate deterministic RNG inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationSeedMaterialV1 {
     /// Signed calibration-provenance label; integer inference never consumes it.
     pub domain_tag: String,
@@ -467,10 +442,7 @@ pub struct ModerationSeedMaterialV1 {
 }
 /// Threshold values used when aggregating moderation verdicts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationThresholdsV1 {
     /// Minimum combined score required to quarantine content (basis points, 0-10_000).
     pub quarantine: u16,
@@ -479,10 +451,7 @@ pub struct ModerationThresholdsV1 {
 }
 /// Signature and signer metadata for a reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationReproSignatureV1 {
     /// Governance role (e.g., `council`, `sre_lead`, `audit`).
     pub role: String,
@@ -493,10 +462,7 @@ pub struct ModerationReproSignatureV1 {
 }
 /// Validation summary returned after checking a reproducibility manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationReproManifestSummary {
     /// Referenced manifest UUID.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -510,10 +476,7 @@ pub struct ModerationReproManifestSummary {
 }
 /// Governance-signed runner trust policy bound to one reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationTrustPolicyV1 {
     /// Canonical policy body.
     pub body: ModerationTrustPolicyBodyV1,
@@ -523,10 +486,7 @@ pub struct ModerationTrustPolicyV1 {
 }
 /// Canonical body of a runner trust and freshness policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationTrustPolicyBodyV1 {
     /// Schema version; must equal [`MODERATION_TRUST_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -570,10 +530,7 @@ pub struct ModerationTrustPolicyBodyV1 {
 }
 /// One runner signer authorization and its validity/revocation window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationTrustedSignerV1 {
     /// Canonical operational role label.
     pub role: String,
@@ -589,10 +546,7 @@ pub struct ModerationTrustedSignerV1 {
 }
 /// Governance signature over a moderation trust policy body.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationTrustPolicySignatureV1 {
     /// Governance role label.
     pub role: String,
@@ -603,10 +557,7 @@ pub struct ModerationTrustPolicySignatureV1 {
 }
 /// Canonical runner-signed screening result envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationSignedScreeningResultV1 {
     /// Signed screening body.
     pub body: ModerationSignedScreeningBodyV1,
@@ -617,10 +568,7 @@ pub struct ModerationSignedScreeningResultV1 {
 }
 /// Canonical body signed by an authorized deterministic runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationSignedScreeningBodyV1 {
     /// Schema version; must equal [`MODERATION_SIGNED_RESULT_VERSION_V1`].
     pub schema_version: u16,
@@ -667,10 +615,7 @@ pub struct ModerationSignedScreeningBodyV1 {
 }
 /// Successful external trust-policy validation summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationTrustPolicySummaryV1 {
     /// Number of authorized runner signers.
     pub trusted_signer_count: u16,
@@ -681,10 +626,7 @@ pub struct ModerationTrustPolicySummaryV1 {
 }
 /// One authenticated runner contribution committed by a committee aggregate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCommitteeMemberV1 {
     /// Distinct policy-authorized runner key.
     pub signer_public_key: PublicKey,
@@ -702,10 +644,7 @@ pub struct ModerationCommitteeMemberV1 {
 }
 /// Deterministic aggregate over distinct, authenticated runner results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationCommitteeAggregateV1 {
     /// Schema version; must equal [`MODERATION_COMMITTEE_AGGREGATE_VERSION_V1`].
     pub schema_version: u16,
@@ -744,10 +683,7 @@ pub struct ModerationCommitteeAggregateV1 {
 }
 /// Payload retained in a tamper-evident moderation provenance record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 pub enum ModerationProvenancePayloadV1 {
     /// Exact runner-signed screening result.
@@ -757,10 +693,7 @@ pub enum ModerationProvenancePayloadV1 {
 }
 /// One hash-chained moderation provenance entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationProvenanceEntryV1 {
     /// Zero-based sequence number.
     pub sequence: u64,
@@ -777,10 +710,7 @@ pub struct ModerationProvenanceEntryV1 {
 }
 /// Bounded tamper-evident moderation provenance segment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationProvenanceLogV1 {
     /// Schema version; must equal [`MODERATION_PROVENANCE_LOG_VERSION_V1`].
     pub schema_version: u16,
@@ -2685,10 +2615,7 @@ impl SoraFsModerationVoteChoice {
 }
 /// Immutable case scope that every moderation commit/reveal payload must bind.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraFsModerationBallotContextV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1`].
     pub version: u16,
@@ -2757,10 +2684,7 @@ impl SoraFsModerationBallotContextV1 {
 }
 /// Juror commitment for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraFsModerationBallotCommitV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1`].
     pub version: u16,
@@ -2834,10 +2758,7 @@ impl SoraFsModerationBallotCommitV1 {
 }
 /// Juror reveal for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraFsModerationBallotRevealV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1`].
     pub version: u16,
@@ -2985,10 +2906,7 @@ fn is_zero_digest(digest: &[u8; 32]) -> bool {
 pub const ADVERSARIAL_CORPUS_VERSION_V1: u16 = 1;
 /// Governance-signed registry describing adversarial corpus families.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdversarialCorpusManifestV1 {
     /// Schema version; must equal [`ADVERSARIAL_CORPUS_VERSION_V1`].
     pub schema_version: u16,
@@ -3003,10 +2921,7 @@ pub struct AdversarialCorpusManifestV1 {
 }
 /// Perceptual hash/embedding family describing one moderated cluster.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdversarialPerceptualFamilyV1 {
     /// Deterministic family identifier (UUID).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -3019,10 +2934,7 @@ pub struct AdversarialPerceptualFamilyV1 {
 }
 /// Entry describing a single adversarial variant and its fingerprints.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdversarialPerceptualVariantV1 {
     /// Variant identifier (UUID).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]

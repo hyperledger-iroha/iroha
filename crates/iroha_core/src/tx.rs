@@ -8556,7 +8556,10 @@ pub mod tests {
                 .sign(self.keypair.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
             let mut ivm_cache = IvmCache::new();
-            block.validate_transaction(accepted, &mut ivm_cache).1
+            block
+                .validate_transaction(accepted, &mut ivm_cache)
+                .1
+                .map(|_| ())
         }
     }
     #[test]

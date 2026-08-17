@@ -5,10 +5,15 @@
 # This file is both a small command-line utility and a sourceable shell library.
 # Callers must select exactly one lock with
 # IROHA_PRIVACY_CARGO_LOCKFILE_PATH. The selected lock may be external to the
-# repository or at a non-workspace path inside it; the repository-root
-# Cargo.lock is never a valid selected lock. SDK-specific environment names are
-# outputs derived from that authenticated selection, never aliases or fallback
-# inputs.
+# repository or at a non-workspace path inside it. The tracked repository-root
+# Cargo.lock is a distinct source authority and is never a valid privacy-release
+# lock selection. SDK-specific environment names are outputs derived from that
+# authenticated selection, never aliases or fallback inputs.
+
+readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
+"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
+"0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -1084,10 +1089,13 @@ privacy_sdk_assert_ci_cargo_lock_state() {
   : "${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL:?CI lock verification requires an authenticated Cargo lock seal}"
   : "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE:?CI lock verification requires an authenticated workspace lock state}"
 
-  if [[ "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE}" != "absent" ]]; then
-    echo "error: privacy SDK CI requires an initially absent workspace Cargo.lock" >&2
-    return 1
-  fi
+  case "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE}" in
+    "present:${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo "error: privacy SDK CI requires the sealed tracked root Cargo.lock" >&2
+      return 1
+      ;;
+  esac
   if ! resolved_lockfile="$(
     privacy_sdk_resolve_cargo_lockfile "${repository_root}" "${python_bin}"
   )"; then
@@ -1134,6 +1142,13 @@ privacy_sdk_assert_ci_cargo_lock_state() {
     echo "error: privacy SDK CI Cargo lock selection changed" >&2
     return 1
   fi
+  case "${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL}" in
+    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo "error: privacy SDK CI selected lock does not match the distinct immutable privacy release authority" >&2
+      return 1
+      ;;
+  esac
   : "${IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH:?CI lock verification requires an authenticated Cargo config path}"
   : "${IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL:?CI lock verification requires an authenticated Cargo config seal}"
   : "${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME:?CI lock verification requires an authenticated Cargo home}"
@@ -1265,7 +1280,8 @@ privacy_sdk_provision_ci_cargo_lock() {
   local rust_toolchain_selector="$6"
   local python_bin="${7:-python3}"
   local canonical_repository_root canonical_corridor_root
-  local workspace_lock lock_directory lock_path resolved_lock resolved_lock_seal
+  local workspace_lock workspace_lock_state lock_directory lock_path
+  local resolved_lock resolved_lock_seal
   local real_cargo real_cargo_seal real_rustc real_rustc_seal
   local real_rustdoc real_rustdoc_seal rustup_seal toolchain_bin_directory
   local rust_toolchain_path rust_toolchain_seal
@@ -1332,10 +1348,19 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
   workspace_lock="${canonical_repository_root}/Cargo.lock"
-  if [[ -e "${workspace_lock}" || -L "${workspace_lock}" ]]; then
-    echo "error: clean privacy SDK CI checkout unexpectedly contains Cargo.lock" >&2
+  if ! workspace_lock_state="$(
+    privacy_sdk_capture_optional_file_state \
+      "${workspace_lock}" "tracked root Cargo.lock" "${python_bin}"
+  )"; then
     return 1
   fi
+  case "${workspace_lock_state}" in
+    "present:${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo "error: privacy SDK CI requires the tracked root Cargo.lock" >&2
+      return 1
+      ;;
+  esac
   privacy_sdk_reject_cargo_policy_environment "${python_bin}" || return 1
   privacy_sdk_validate_rust_toolchain_overrides \
     "${canonical_repository_root}" \
@@ -1493,8 +1518,10 @@ privacy_sdk_provision_ci_cargo_lock() {
     echo "error: Cargo failed to generate the required external Cargo.lock" >&2
     return 1
   fi
-  if [[ -e "${workspace_lock}" || -L "${workspace_lock}" ]]; then
-    echo "error: external lock generation created workspace Cargo.lock" >&2
+  if ! privacy_sdk_assert_optional_file_state \
+    "${workspace_lock}" "${workspace_lock_state}" \
+    "tracked root Cargo.lock" "${python_bin}"; then
+    echo "error: external lock generation changed the tracked root Cargo.lock" >&2
     return 1
   fi
   if [[ ! -f "${lock_path}" || -L "${lock_path}" ]]; then
@@ -1544,6 +1571,15 @@ privacy_sdk_provision_ci_cargo_lock() {
   )"; then
     return 1
   fi
+  case "${resolved_lock_seal}" in
+    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo \
+        "error: generated privacy Cargo.lock candidate does not match the distinct immutable cd9e release authority; external release-artifact requalification is required" \
+        >&2
+      return 1
+      ;;
+  esac
 
   if ! script_directory="$(
     cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P
@@ -1563,7 +1599,8 @@ privacy_sdk_provision_ci_cargo_lock() {
     printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL=%s\n' "${resolved_lock_seal}"
-    printf 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=absent\n'
+    printf 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=%s\n' \
+      "${workspace_lock_state}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH=%s\n' "${cargo_config_path}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL=%s\n' "${cargo_config_seal}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME=%s\n' "${private_cargo_home}"

@@ -469,14 +469,14 @@ impl AtomicWriteRoot {
         validate_relative_path(relative)?;
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
-            let _ = max_bytes;
+            let _ = (self, max_bytes);
             // TODO: Enable this read on other targets only after safe `std` or an approved
             // workspace primitive provides a descriptor-rooted, no-follow final open.
-            return Err(AtomicWriteError::new(
+            Err(AtomicWriteError::new(
                 AtomicWriteErrorCode::UnsupportedPlatform,
                 relative,
                 "load private bytes through a retained root descriptor",
-            ));
+            ))
         }
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {

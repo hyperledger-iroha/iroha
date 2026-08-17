@@ -1,13 +1,13 @@
 use crate::{
-    gates::{range::RangeInstructions, RangeChip},
+    Context,
+    gates::{RangeChip, range::RangeInstructions},
     halo2_proofs::{arithmetic::Field, halo2curves::bn256::Fr},
     poseidon::hasher::{
-        spec::OptimizedPoseidonSpec, PoseidonCompactChunkInput, PoseidonCompactInput,
-        PoseidonHasher,
+        PoseidonCompactChunkInput, PoseidonCompactInput, PoseidonHasher,
+        spec::OptimizedPoseidonSpec,
     },
     safe_types::SafeTypeChip,
-    utils::{testing::base_test, ScalarField},
-    Context,
+    utils::{ScalarField, testing::base_test},
 };
 use itertools::Itertools;
 use pse_poseidon::Poseidon;
@@ -108,7 +108,10 @@ fn hasher_compact_inputs_compatiblity_verification<
         let is_not_final_output: bool = compact_output.is_final().as_ref().value().is_zero().into();
         assert_eq!(is_not_final_input, is_not_final_output);
         if !is_not_final_output {
-            assert_eq!(native_results[output_offset], *compact_output.hash().value());
+            assert_eq!(
+                native_results[output_offset],
+                *compact_output.hash().value()
+            );
             output_offset += 1;
         }
     }
@@ -142,9 +145,16 @@ fn hasher_compact_chunk_inputs_compatiblity_verification<
         assert!(payload.values.len() % RATE == 0);
         let inputs = ctx.assign_witnesses(payload.values.clone());
 
-        let is_final_witness = if is_final { true_witness } else { false_witness };
+        let is_final_witness = if is_final {
+            true_witness
+        } else {
+            false_witness
+        };
         chunk_inputs.push(PoseidonCompactChunkInput {
-            inputs: inputs.chunks(RATE).map(|c| c.try_into().unwrap()).collect_vec(),
+            inputs: inputs
+                .chunks(RATE)
+                .map(|c| c.try_into().unwrap())
+                .collect_vec(),
             is_final: is_final_witness,
         });
         native_sponge.update(&payload.values);
@@ -163,7 +173,10 @@ fn hasher_compact_chunk_inputs_compatiblity_verification<
         let is_final_output = compact_output.is_final.as_ref().value();
         assert_eq!(is_final_input, is_final_output);
         if is_final_output == &Fr::ONE {
-            assert_eq!(native_results[output_offset], *compact_output.hash().value());
+            assert_eq!(
+                native_results[output_offset],
+                *compact_output.hash().value()
+            );
             output_offset += 1;
         }
     }
@@ -185,21 +198,31 @@ fn random_payload_without_len<F: ScalarField>(max_len: usize, max_value: usize) 
     for _ in 0..max_len {
         values.push(F::from(rng.gen_range(0..=max_value) as u64));
     }
-    Payload { values, len: rng.gen_range(0..=max_len) }
+    Payload {
+        values,
+        len: rng.gen_range(0..=max_len),
+    }
 }
 
 fn validate_compact_input_row(len: usize, is_final: bool, expect_satisfied: bool) {
     const RATE: usize = 2;
 
-    base_test().k(10).lookup_bits(8).expect_satisfied(expect_satisfied).run(|ctx, range| {
-        let safe = SafeTypeChip::new(range);
-        let is_final = safe.load_bool(ctx, is_final);
-        let len = ctx.load_witness(Fr::from(len as u64));
-        let inputs = [ctx.load_witness(Fr::from(111u64)), ctx.load_witness(Fr::from(222u64))];
-        let row = PoseidonCompactInput::<Fr, RATE>::new(inputs, is_final, len);
+    base_test()
+        .k(10)
+        .lookup_bits(8)
+        .expect_satisfied(expect_satisfied)
+        .run(|ctx, range| {
+            let safe = SafeTypeChip::new(range);
+            let is_final = safe.load_bool(ctx, is_final);
+            let len = ctx.load_witness(Fr::from(len as u64));
+            let inputs = [
+                ctx.load_witness(Fr::from(111u64)),
+                ctx.load_witness(Fr::from(222u64)),
+            ];
+            let row = PoseidonCompactInput::<Fr, RATE>::new(inputs, is_final, len);
 
-        row.add_validation_constraints(ctx, range);
-    });
+            row.add_validation_constraints(ctx, range);
+        });
 }
 
 #[test]
@@ -259,16 +282,18 @@ fn test_poseidon_hasher_with_prover() {
         for max_len in max_lens {
             let init_input = random_payload_without_len(max_len, usize::MAX);
             let logic_input = random_payload_without_len(max_len, usize::MAX);
-            base_test().k(12).bench_builder(init_input, logic_input, |pool, range, payload| {
-                let ctx = pool.main();
-                // Construct in-circuit Poseidon hasher. Assuming SECURE_MDS = 0.
-                let spec = OptimizedPoseidonSpec::<Fr, T, RATE>::new::<R_F, R_P, 0>();
-                let mut hasher = PoseidonHasher::<Fr, T, RATE>::new(spec);
-                hasher.initialize_consts(ctx, range.gate());
-                let inputs = ctx.assign_witnesses(payload.values);
-                let len = ctx.load_witness(Fr::from(payload.len as u64));
-                hasher.hash_var_len_array(ctx, range, &inputs, len);
-            });
+            base_test()
+                .k(12)
+                .bench_builder(init_input, logic_input, |pool, range, payload| {
+                    let ctx = pool.main();
+                    // Construct in-circuit Poseidon hasher. Assuming SECURE_MDS = 0.
+                    let spec = OptimizedPoseidonSpec::<Fr, T, RATE>::new::<R_F, R_P, 0>();
+                    let mut hasher = PoseidonHasher::<Fr, T, RATE>::new(spec);
+                    hasher.initialize_consts(ctx, range.gate());
+                    let inputs = ctx.assign_witnesses(payload.values);
+                    let len = ctx.load_witness(Fr::from(payload.len as u64));
+                    hasher.hash_var_len_array(ctx, range, &inputs, len);
+                });
         }
     }
 }
@@ -314,10 +339,14 @@ fn test_poseidon_hasher_compact_inputs_with_prover() {
             .iter()
             .map(|(max_len, len)| random_payload(*max_len, *len, usize::MAX))
             .collect::<Vec<_>>();
-        base_test().k(12).bench_builder(init_payloads, logic_payloads, |pool, range, input| {
-            let ctx = pool.main();
-            hasher_compact_inputs_compatiblity_verification::<T, RATE, 8, 57>(input, ctx, range);
-        });
+        base_test()
+            .k(12)
+            .bench_builder(init_payloads, logic_payloads, |pool, range, input| {
+                let ctx = pool.main();
+                hasher_compact_inputs_compatiblity_verification::<T, RATE, 8, 57>(
+                    input, ctx, range,
+                );
+            });
     }
 }
 
@@ -374,11 +403,13 @@ fn test_poseidon_hasher_compact_chunk_inputs_with_prover() {
             .iter()
             .map(|(len, is_final)| (random_payload(*len, *len, usize::MAX), *is_final))
             .collect::<Vec<_>>();
-        base_test().k(12).bench_builder(init_payloads, logic_payloads, |pool, range, input| {
-            let ctx = pool.main();
-            hasher_compact_chunk_inputs_compatiblity_verification::<T, RATE, 8, 57>(
-                input, ctx, range,
-            );
-        });
+        base_test()
+            .k(12)
+            .bench_builder(init_payloads, logic_payloads, |pool, range, input| {
+                let ctx = pool.main();
+                hasher_compact_chunk_inputs_compatiblity_verification::<T, RATE, 8, 57>(
+                    input, ctx, range,
+                );
+            });
     }
 }

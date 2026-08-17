@@ -586,6 +586,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
+    let mut sorafs_storage = A::SorafsStorage::default();
+    sorafs_storage.data_dir = crate::data_dir::base_dir().join("sorafs");
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
@@ -978,7 +980,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 reference_data: Default::default(),
             },
             sorafs_discovery: Default::default(),
-            sorafs_storage: iroha_config::parameters::actual::SorafsStorage::default(),
+            sorafs_storage,
             sorafs_repair: Default::default(),
             sorafs_gc: Default::default(),
             sorafs_quota: Default::default(),

@@ -1,5 +1,5 @@
 //! Canonical T256 group boundary for the pinned Vega profile.
-use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::Shake256Reader};
+use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::shake256};
 use core::{
     fmt,
     ops::{Add, Neg as _, Sub},
@@ -160,27 +160,6 @@ impl VegaT256PointV1 {
         destination.copy_from_slice(self.0.to_bytes().as_ref());
         Ok(())
     }
-    /// Return this point's canonical big-endian affine coordinates.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
-    pub fn coordinates_be(self) -> Result<([u8; 32], [u8; 32]), VegaCurveError> {
-        if bool::from(self.0.is_identity()) {
-            return Err(VegaCurveError::IdentityPoint);
-        }
-        let affine = self.0.to_affine();
-        let coordinates = Option::<Coordinates<T256Affine>>::from(affine.coordinates())
-            .ok_or(VegaCurveError::IdentityPoint)?;
-        let mut x: [u8; 32] = coordinates.x().to_repr().into();
-        let mut y: [u8; 32] = coordinates.y().to_repr().into();
-        // `PrimeField::Repr` is little-endian for both linked fields even
-        // though T256 point compression uses its base field's big-endian
-        // `EndianRepr`. Keep the public coordinate boundary explicitly BE.
-        x.reverse();
-        y.reverse();
-        Ok((x, y))
-    }
     /// Return the exact upstream transcript representation `x_LE || y_LE`.
     ///
     /// # Errors
@@ -226,24 +205,6 @@ impl VegaT256PointV1 {
     pub fn mul_scalar(self, scalar: VegaT256ScalarV1) -> Self {
         Self(self.0 * scalar.0)
     }
-    /// Select `a` for zero and `b` for one without secret-dependent branches.
-    ///
-    /// Only the low bit of `choice` is used. Multiplication by that scalar uses the linked curve's
-    /// constant-time scalar multiplication and avoids a secret-dependent branch or table lookup.
-    #[must_use]
-    pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
-        *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
-    }
-    /// Replace this complete projective point instance with the identity.
-    ///
-    /// This is best-effort safe erasure for a named value. The point is
-    /// [`Copy`], so compiler-created copies and register temporaries cannot be
-    /// guaranteed erased, and no destructor runs after process abort.
-    pub fn clear_secret(&mut self) {
-        *self = Self::identity();
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut *self);
-    }
     pub(super) fn identity() -> Self {
         Self(T256::identity())
     }
@@ -256,7 +217,7 @@ impl VegaT256PointV1 {
             for bit in (0..8).rev() {
                 result = result + result;
                 if byte & (1 << bit) != 0 {
-                    result += self;
+                    result = result + self;
                 }
             }
         }
@@ -310,22 +271,22 @@ pub fn derive_t256_generators_v1(
     if count == 0 || count > MAX_VEGA_T256_GENERATORS_V1 {
         return Err(VegaCurveError::InvalidGeneratorCount);
     }
-    let mut points = Vec::with_capacity(count);
-    let allocation = points.as_ptr();
-    let mut shake = Shake256Reader::new(label);
+    let byte_len = count
+        .checked_mul(32)
+        .ok_or(VegaCurveError::InvalidGeneratorCount)?;
+    let uniform = shake256(label, byte_len);
     let hash_to_curve = T256::hash_to_curve("from_uniform_bytes");
-    let mut message = [0_u8; 32];
-    for _ in 0..count {
-        shake.read(&mut message);
-        let point = VegaT256PointV1(hash_to_curve(&message));
-        if point.is_identity() {
-            return Err(VegaCurveError::IdentityPoint);
-        }
-        points.push(point);
-    }
-    assert_eq!(points.len(), count);
-    assert_eq!(points.as_ptr(), allocation);
-    Ok(points)
+    uniform
+        .chunks_exact(32)
+        .map(|message| {
+            let point = VegaT256PointV1(hash_to_curve(message));
+            if point.is_identity() {
+                Err(VegaCurveError::IdentityPoint)
+            } else {
+                Ok(point)
+            }
+        })
+        .collect()
 }
 #[cfg(test)]
 fn base_from_be_exact(bytes: [u8; 32]) -> Option<Fp> {
@@ -377,24 +338,13 @@ mod tests {
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
         assert!((generator.mul_scalar(minus_one) + generator).is_identity());
-        let identity = VegaT256PointV1::identity();
-        assert_eq!(
-            VegaT256PointV1::conditional_select(&identity, &generator, 0),
-            identity
-        );
-        assert_eq!(
-            VegaT256PointV1::conditional_select(&identity, &generator, 1),
-            generator
-        );
-        let mut cleared = generator;
-        cleared.clear_secret();
-        assert_eq!(cleared, identity);
     }
     #[test]
     fn generator_derivation_matches_independent_rfc9380_vector() {
-        let mut points = derive_t256_generators_v1(b"vega-t256-kat", 1).expect("valid derivation");
-        assert_eq!((points.len(), points.capacity()), (1, 1));
-        let point = points.pop().expect("one point");
+        let point = derive_t256_generators_v1(b"vega-t256-kat", 1)
+            .expect("valid derivation")
+            .pop()
+            .expect("one point");
         assert_eq!(
             point.to_non_identity_wire_bytes().expect("non-identity"),
             decode_hex("8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6")

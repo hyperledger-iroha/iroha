@@ -1,10 +1,12 @@
 //! Shared aggregate SHA-256/Goldilocks STARK commitment and opening core.
 //!
-//! Relation modules supply their exact transcript suite, profile digest, public-input digest, trace
-//! columns, constraint-composition values, and an [`AggregateOpenedRowEvaluatorV1`]. This module
-//! owns the canonical ordered trace-group layout, exact proof codec, SHA-256 vector-row
-//! commitments, minimal batched Merkle multiproofs, shared binary FRI, and opened-query
-//! verification. It deliberately contains no X.509, private-note, or PQ-MASP policy.
+//! Relation modules supply their exact transcript suite, profile digest,
+//! public-input digest, trace columns, constraint-composition values, and an
+//! [`AggregateOpenedRowEvaluatorV1`]. This module owns the canonical ordered
+//! trace-group layout, exact proof codec, SHA-256 vector-row commitments,
+//! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
+//! verification. It deliberately contains no X.509, private-note, or PQ-MASP
+//! policy.
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     Sha256MerkleTreeV1, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
@@ -22,31 +24,20 @@ use super::transparent_stark::{
     TRANSCRIPT_FRAME_DOMAIN_V1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
 };
-#[cfg(test)]
-use chacha20poly1305::{
-    XChaCha20Poly1305,
-    aead::{Aead as _, KeyInit as _, Payload},
-};
 use rand::TryRngCore;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
-#[cfg(all(test, target_os = "linux"))]
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::io::{Read as _, Seek as _, Write as _};
-#[cfg(all(test, target_os = "linux"))]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use thiserror::Error;
-#[cfg(test)]
-use zeroize::Zeroizing;
 const FRI_MASK_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-leaf:v1";
 const FRI_MASK_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-node:v1";
 const FRI_MASK_ROOT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-root:v1";
 const DEEP_POINT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-point:v1";
 const DEEP_OPENINGS_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-openings:v1";
+/// Rows processed per bounded DEEP/FRI denominator-inversion batch.
+pub(crate) const DEEP_FRI_BASE_BATCH_ROWS_V1: usize = 1 << 12;
 /// Exact maximum number of independent masked-trace LDE columns retained
 /// concurrently by one deterministic parallel batch.
 pub(crate) const MASKED_TRACE_LDE_COLUMN_BATCH_V1: usize = 8;
@@ -474,10 +465,11 @@ impl AggregateProofLayoutV1 {
 }
 /// Exact release certificate for the affine-batched binary-FRI theorem.
 ///
-/// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*` represents the exact code
-/// rate, and `affine_arities` is the complete list whose sum appears in the commitment-error term.
-/// The remaining fields bind the smooth domain, Fp4 field-size lower bound, fold/terminal geometry,
-/// and the implementation's distinct-query schedule.
+/// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*`
+/// represents the exact code rate, and `affine_arities` is the complete list
+/// whose sum appears in the commitment-error term. The remaining fields bind
+/// the smooth domain, Fp4 field-size lower bound, fold/terminal geometry, and
+/// the implementation's distinct-query schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriTheorem2CertificateV1 {
     /// Numerator of `L - 1`.
@@ -500,7 +492,8 @@ pub(crate) struct AggregateFriTheorem2CertificateV1 {
     pub(crate) base_field_two_adicity: u8,
     /// Every native trace domain is a power-of-two multiplicative subgroup.
     pub(crate) trace_domains_are_smooth_subgroups: bool,
-    /// The evaluation domain is the fixed primitive-generator coset of a power-of-two subgroup.
+    /// The evaluation domain is the fixed primitive-generator coset of a
+    /// power-of-two subgroup.
     pub(crate) evaluation_domain_is_smooth_generator_coset: bool,
     /// The evaluation coset is disjoint from every native trace subgroup.
     pub(crate) evaluation_domain_is_disjoint_from_trace_domains: bool,
@@ -524,7 +517,8 @@ pub(crate) struct AggregateFriTheorem2CertificateV1 {
 pub(crate) struct AggregateFriTheorem2BoundV1 {
     /// Query error is strictly below `2^-query_error_bits`.
     pub(crate) query_error_bits: u16,
-    /// Sum of both commitment-error terms is below `2^-commitment_error_bits`.
+    /// Sum of both commitment-error terms is below
+    /// `2^-commitment_error_bits`.
     pub(crate) commitment_error_bits: u16,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -944,10 +938,11 @@ pub(crate) fn deep_point_is_admissible_v1(
 /// Derive the sole uniform DEEP point outside every trace, evaluation, and
 /// query domain used by an aggregate proof.
 ///
-/// Zero remains admissible: it is outside all multiplicative domains and all required denominators
-/// remain nonzero. For every trace group the predicate also excludes `z * omega_H`, because the
-/// next-row opening is evaluated at that point. Query positions are elements of the common
-/// evaluation coset, so excluding the complete coset also excludes every possible query point
+/// Zero remains admissible: it is outside all multiplicative domains and all
+/// required denominators remain nonzero. For every trace group the predicate
+/// also excludes `z * omega_H`, because the next-row opening is evaluated at
+/// that point. Query positions are elements of the common evaluation coset, so
+/// excluding the complete coset also excludes every possible query point
 /// before grinding fixes the concrete index set.
 pub(crate) fn derive_deep_point_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -961,7 +956,8 @@ pub(crate) fn derive_deep_point_v1(
         })
         .map_err(map_transparent_error_v1)
 }
-/// Validate the exact statement-derived shape and canonicality of a DEEP opening payload.
+/// Validate the exact statement-derived shape and canonicality of a DEEP
+/// opening payload.
 pub(crate) fn validate_deep_proof_shape_v1(
     deep: &AggregateDeepProofV1,
     parameters: AggregateStarkParametersV1,
@@ -1165,8 +1161,9 @@ fn fri_mask_tree_v1(
 ///
 /// Each lane samples the normalized `D - 1` coefficients, which contains the
 /// required `|H| + h - 1`-coefficient hiding space and stays strictly inside
-/// the one FRI-enforced exclusive cap `D`. The resulting root must be transcript-bound before any
-/// challenge that batches the lane's trace and composition polynomials.
+/// the one FRI-enforced exclusive cap `D`. The resulting root must be
+/// transcript-bound before any challenge that batches the lane's trace and
+/// composition polynomials.
 pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
@@ -1264,9 +1261,10 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
 }
 /// Incremental binary Merkle accumulator with a query-aware frontier plan.
 ///
-/// Leaves must be appended in ascending index order. The accumulator retains one pending subtree
-/// per level and only those sibling hashes required by the requested canonical multiproof. Its
-/// memory is therefore `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
+/// Leaves must be appended in ascending index order. The accumulator retains
+/// one pending subtree per level and only those sibling hashes required by the
+/// requested canonical multiproof. Its memory is therefore
+/// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingMerkleAccumulatorV1 {
     node_domain: &'static [u8],
@@ -1280,7 +1278,8 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
     ///
-    /// An empty opening set is permitted for the transcript's root-only commitment pass.
+    /// An empty opening set is permitted for the transcript's root-only
+    /// commitment pass.
     pub(crate) fn new(
         node_domain: &'static [u8],
         leaf_count: usize,
@@ -1448,11 +1447,12 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 }
 /// Column-at-a-time vector-row commitment builder.
 ///
-/// This is the bounded-memory replacement for retaining every LDE column. Each row owns one
-/// incremental SHA-256 state while columns are supplied in canonical order. The final leaf digests
-/// are immediately consumed by [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels
-/// are retained. A second deterministic pass after Fiat–Shamir query derivation supplies the
-/// canonical frontier and the small set of opened rows.
+/// This is the bounded-memory replacement for retaining every LDE column.
+/// Each row owns one incremental SHA-256 state while columns are supplied in
+/// canonical order. The final leaf digests are immediately consumed by
+/// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
+/// retained. A second deterministic pass after Fiat–Shamir query derivation
+/// supplies the canonical frontier and the small set of opened rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingRowCommitmentV1 {
     rows: usize,
@@ -1585,15 +1585,17 @@ impl StreamingRowCommitmentV1 {
 }
 /// Secret replay material for one exact ordered set of streamed trace columns.
 ///
-/// This type deliberately implements neither `Clone` nor `Debug`. Dropping it recursively
-/// overwrites every mask coefficient through [`ReplayableTraceMaskV1`].
+/// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
+/// recursively overwrites every mask coefficient through
+/// [`ReplayableTraceMaskV1`].
 #[cfg(test)]
 pub(crate) struct StreamingTraceMaskSetV1 {
     native_trace_log2: u8,
     lde_log2: u8,
     masks: Vec<ReplayableTraceMaskV1>,
 }
-/// Owner of one secret-bearing field column that overwrites every cell on every return path.
+/// Owner of one secret-bearing field column that overwrites every cell on
+/// every return path.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1651,11 +1653,12 @@ impl StreamingTraceMaskSetV1 {
 }
 /// Secret retained masked polynomials for one exact streamed trace commitment.
 ///
-/// Each column stores ascending coefficients of `T(X) + r(X) * (X^n - 1)`, rather than a
-/// common-domain LDE. This lets a prover evaluate the same committed polynomial on its large
-/// commitment domain, a smaller quotient domain, and transcript-derived DEEP points without
-/// anonymous matrix scratch. The type implements neither `Clone` nor `Debug`; every coefficient is
-/// overwritten recursively on drop.
+/// Each column stores ascending coefficients of
+/// `T(X) + r(X) * (X^n - 1)`, rather than a common-domain LDE. This lets a
+/// prover evaluate the same committed polynomial on its large commitment
+/// domain, a smaller quotient domain, and transcript-derived DEEP points
+/// without anonymous matrix scratch. The type implements neither `Clone` nor
+/// `Debug`; every coefficient is overwritten recursively on drop.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct MaskedTracePolynomialSetV1 {
     native_trace_log2: u8,
@@ -1887,10 +1890,11 @@ where
 }
 /// Sample masks, commit their LDEs, and retain only the masked coefficients.
 ///
-/// All verifier-derived shape checks and commitment allocations finish before the witness source is
-/// called. The retained coefficient set is sufficient to replay the exact commitment, evaluate
-/// smaller quotient cosets, and construct DEEP openings without materializing anonymous
-/// common-domain scratch.
+/// All verifier-derived shape checks and commitment allocations finish before
+/// the witness source is called. The retained coefficient set is sufficient
+/// to replay the exact commitment, evaluate smaller quotient cosets, and
+/// construct DEEP openings without materializing anonymous common-domain
+/// scratch.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_masked_trace_polynomial_columns_v1<R, S>(
     leaf_domain: &[u8],
@@ -1974,8 +1978,9 @@ where
 }
 /// Replay a retained masked-polynomial commitment and requested row frontier.
 ///
-/// No native witness source or mask RNG is needed: the exact committed polynomials, including
-/// canonical trailing zero coefficients, are owned by `polynomials`.
+/// No native witness source or mask RNG is needed: the exact committed
+/// polynomials, including canonical trailing zero coefficients, are owned by
+/// `polynomials`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     leaf_domain: &[u8],
@@ -2008,782 +2013,6 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
         }
     }
     commitment.finish()
-}
-#[cfg(test)]
-const ENCRYPTED_FIELD_SCRATCH_AAD_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:aggregate-stark:encrypted-field-scratch-record:v1";
-#[cfg(test)]
-const XCHACHA20_POLY1305_TAG_BYTES_V1: usize = 16;
-#[cfg(test)]
-const XCHACHA20_NONCE_PREFIX_BYTES_V1: usize = 16;
-#[cfg(test)]
-const XCHACHA20_NONCE_BYTES_V1: usize = 24;
-/// Default number of common-domain rows authenticated in one scratch record.
-///
-/// At eight bytes per field this keeps each plaintext record at 32 KiB. The value is a power of two
-/// and therefore divides every admitted aggregate LDE domain at or above this size.
-pub(crate) const DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1: usize = 1 << 12;
-#[cfg(test)]
-fn encrypted_field_scratch_record_aad_v1(
-    rows: usize,
-    width: usize,
-    chunk_rows: usize,
-    record_index: u64,
-) -> Result<[u8; 32], AggregateStarkErrorV1> {
-    let rows = u64::try_from(rows)
-        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
-        .to_be_bytes();
-    let width = u64::try_from(width)
-        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
-        .to_be_bytes();
-    let chunk_rows = u64::try_from(chunk_rows)
-        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
-        .to_be_bytes();
-    let record_index = record_index.to_be_bytes();
-    sha256_frame_v1(
-        ENCRYPTED_FIELD_SCRATCH_AAD_DOMAIN_V1,
-        &[&rows, &width, &chunk_rows, &record_index],
-    )
-    .map_err(map_transparent_error_v1)
-}
-#[cfg(test)]
-fn encrypted_field_scratch_nonce_v1(
-    nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
-    record_index: u64,
-) -> chacha20poly1305::XNonce {
-    let mut bytes = [0_u8; XCHACHA20_NONCE_BYTES_V1];
-    bytes[..XCHACHA20_NONCE_PREFIX_BYTES_V1].copy_from_slice(nonce_prefix);
-    bytes[XCHACHA20_NONCE_PREFIX_BYTES_V1..].copy_from_slice(&record_index.to_be_bytes());
-    bytes.into()
-}
-#[cfg(test)]
-fn encrypted_field_scratch_shape_v1(
-    rows: usize,
-    width: usize,
-    chunk_rows: usize,
-) -> Result<(usize, usize, usize, u64), AggregateStarkErrorV1> {
-    if rows == 0
-        || !rows.is_power_of_two()
-        || width == 0
-        || chunk_rows == 0
-        || !chunk_rows.is_power_of_two()
-        || chunk_rows > rows
-        || rows % chunk_rows != 0
-    {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let chunks_per_column = rows / chunk_rows;
-    let plaintext_chunk_bytes = chunk_rows
-        .checked_mul(core::mem::size_of::<u64>())
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let ciphertext_chunk_bytes = plaintext_chunk_bytes
-        .checked_add(XCHACHA20_POLY1305_TAG_BYTES_V1)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let record_count = width
-        .checked_mul(chunks_per_column)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let expected_file_bytes = record_count
-        .checked_mul(ciphertext_chunk_bytes)
-        .and_then(|bytes| u64::try_from(bytes).ok())
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    if expected_file_bytes == 0 {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    Ok((
-        chunks_per_column,
-        plaintext_chunk_bytes,
-        ciphertext_chunk_bytes,
-        expected_file_bytes,
-    ))
-}
-/// Sequential writer for one authenticated, anonymous field-matrix scratch.
-///
-/// Columns must be appended in their canonical commitment order. The file is anonymous from
-/// creation, every fixed-size record is independently XChaCha20-Poly1305 authenticated, and record
-/// coordinates and matrix dimensions are included in AAD. Consequently truncation, extension,
-/// substitution, reordering, and cross-matrix record reuse all fail closed. The ephemeral key is
-/// drawn independently from operating-system entropy so scratch encryption never perturbs
-/// deterministic proof-mask KATs.
-#[cfg(test)]
-pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
-    file: std::fs::File,
-    rows: usize,
-    width: usize,
-    chunk_rows: usize,
-    chunks_per_column: usize,
-    plaintext_chunk_bytes: usize,
-    ciphertext_chunk_bytes: usize,
-    expected_file_bytes: u64,
-    next_column: usize,
-    key: Zeroizing<[u8; 32]>,
-    nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
-}
-#[cfg(test)]
-fn encrypted_field_scratch_entropy_is_healthy_v1(
-    key: &[u8; 32],
-    nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
-) -> bool {
-    let key_constant = key.iter().all(|byte| *byte == key[0]);
-    let nonce_constant = nonce_prefix.iter().all(|byte| *byte == nonce_prefix[0]);
-    let repeated_prefix = key[..XCHACHA20_NONCE_PREFIX_BYTES_V1] == nonce_prefix[..];
-    !key_constant && !nonce_constant && !repeated_prefix
-}
-#[cfg(test)]
-std::thread_local! {
-    static ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-#[cfg(test)]
-fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErrorV1> {
-    #[cfg(test)]
-    ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(|attempts| {
-        attempts.set(attempts.get().saturating_add(1));
-    });
-    #[cfg(target_os = "linux")]
-    {
-        let descriptor = memfd_create(
-            "iroha-aggregate-stark-scratch-v1",
-            MemfdFlags::CLOEXEC | MemfdFlags::NOEXEC_SEAL,
-        )
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        let file = std::fs::File::from(descriptor);
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        let seals = fcntl_get_seals(&file).map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        if !metadata.file_type().is_file()
-            || metadata.nlink() != 0
-            || metadata.mode() & 0o777 != 0o600
-            || !seals.contains(SealFlags::EXEC)
-        {
-            return Err(AggregateStarkErrorV1::AllocationFailure);
-        }
-        Ok(file)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        tempfile::tempfile().map_err(|_| AggregateStarkErrorV1::AllocationFailure)
-    }
-}
-#[cfg(test)]
-fn encrypted_scratch_file_creation_attempts_v1() -> usize {
-    ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(std::cell::Cell::get)
-}
-#[cfg(test)]
-impl EncryptedFieldMatrixScratchWriterV1 {
-    /// Create an owner-private anonymous scratch with an independent ephemeral encryption key.
-    pub(crate) fn new(
-        rows: usize,
-        width: usize,
-        chunk_rows: usize,
-    ) -> Result<Self, AggregateStarkErrorV1> {
-        Self::new_with_rng(rows, width, chunk_rows, &mut rand::rngs::OsRng)
-    }
-    /// Create a scratch writer with injected entropy.
-    ///
-    /// Shape validation and the complete key/nonce-prefix health check happen before the anonymous
-    /// backing file is created. Both secret buffers are recursively zeroized on every early return
-    /// and when the sealed scratch is dropped.
-    pub(crate) fn new_with_rng<R: TryRngCore>(
-        rows: usize,
-        width: usize,
-        chunk_rows: usize,
-        rng: &mut R,
-    ) -> Result<Self, AggregateStarkErrorV1> {
-        let (chunks_per_column, plaintext_chunk_bytes, ciphertext_chunk_bytes, expected_file_bytes) =
-            encrypted_field_scratch_shape_v1(rows, width, chunk_rows)?;
-        let mut key = Zeroizing::new([0_u8; 32]);
-        let mut nonce_prefix = Zeroizing::new([0_u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]);
-        rng.try_fill_bytes(key.as_mut())
-            .map_err(|_| AggregateStarkErrorV1::RandomnessUnavailable)?;
-        rng.try_fill_bytes(nonce_prefix.as_mut())
-            .map_err(|_| AggregateStarkErrorV1::RandomnessUnavailable)?;
-        if !encrypted_field_scratch_entropy_is_healthy_v1(&key, &nonce_prefix) {
-            return Err(AggregateStarkErrorV1::RandomnessUnavailable);
-        }
-        let file = create_anonymous_scratch_file_v1()?;
-        Ok(Self {
-            file,
-            rows,
-            width,
-            chunk_rows,
-            chunks_per_column,
-            plaintext_chunk_bytes,
-            ciphertext_chunk_bytes,
-            expected_file_bytes,
-            next_column: 0,
-            key,
-            nonce_prefix,
-        })
-    }
-    fn record_index(&self, column: usize, chunk: usize) -> Result<u64, AggregateStarkErrorV1> {
-        if column >= self.width || chunk >= self.chunks_per_column {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        column
-            .checked_mul(self.chunks_per_column)
-            .and_then(|index| index.checked_add(chunk))
-            .and_then(|index| u64::try_from(index).ok())
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)
-    }
-    /// Encrypt and append the next exact column.
-    pub(crate) fn append_column(&mut self, column: &[F]) -> Result<(), AggregateStarkErrorV1> {
-        if self.next_column >= self.width || column.len() != self.rows {
-            return Err(AggregateStarkErrorV1::InvalidProofShape);
-        }
-        let cipher = XChaCha20Poly1305::new_from_slice(self.key.as_ref())
-            .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-        for chunk in 0..self.chunks_per_column {
-            let start = chunk
-                .checked_mul(self.chunk_rows)
-                .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-            let end = start
-                .checked_add(self.chunk_rows)
-                .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-            let mut plaintext = Zeroizing::new(Vec::new());
-            plaintext
-                .try_reserve_exact(self.plaintext_chunk_bytes)
-                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-            for value in column
-                .get(start..end)
-                .ok_or(AggregateStarkErrorV1::InvalidProofShape)?
-            {
-                plaintext.extend_from_slice(&value.0.to_be_bytes());
-            }
-            if plaintext.len() != self.plaintext_chunk_bytes {
-                return Err(AggregateStarkErrorV1::InternalInvariant);
-            }
-            let record_index = self.record_index(self.next_column, chunk)?;
-            let nonce = encrypted_field_scratch_nonce_v1(&self.nonce_prefix, record_index);
-            let aad = encrypted_field_scratch_record_aad_v1(
-                self.rows,
-                self.width,
-                self.chunk_rows,
-                record_index,
-            )?;
-            let ciphertext = cipher
-                .encrypt(
-                    &nonce,
-                    Payload {
-                        msg: plaintext.as_slice(),
-                        aad: &aad,
-                    },
-                )
-                .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-            if ciphertext.len() != self.ciphertext_chunk_bytes {
-                return Err(AggregateStarkErrorV1::InternalInvariant);
-            }
-            self.file
-                .write_all(&ciphertext)
-                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        }
-        self.next_column += 1;
-        Ok(())
-    }
-    /// Seal the exact matrix after every declared column was appended.
-    pub(crate) fn finish(mut self) -> Result<EncryptedFieldMatrixScratchV1, AggregateStarkErrorV1> {
-        if self.next_column != self.width {
-            return Err(AggregateStarkErrorV1::InvalidProofShape);
-        }
-        self.file
-            .flush()
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        let position = self
-            .file
-            .stream_position()
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        let actual = self
-            .file
-            .metadata()
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?
-            .len();
-        if position != self.expected_file_bytes || actual != self.expected_file_bytes {
-            return Err(AggregateStarkErrorV1::InternalInvariant);
-        }
-        Ok(EncryptedFieldMatrixScratchV1 {
-            file: self.file,
-            rows: self.rows,
-            width: self.width,
-            chunk_rows: self.chunk_rows,
-            chunks_per_column: self.chunks_per_column,
-            plaintext_chunk_bytes: self.plaintext_chunk_bytes,
-            ciphertext_chunk_bytes: self.ciphertext_chunk_bytes,
-            expected_file_bytes: self.expected_file_bytes,
-            key: self.key,
-            nonce_prefix: self.nonce_prefix,
-        })
-    }
-}
-/// Decrypted row-major view of one authenticated scratch chunk.
-///
-/// This type deliberately implements neither `Clone` nor `Debug`; all
-/// decrypted field cells are overwritten when it leaves scope.
-#[cfg(test)]
-pub(crate) struct EncryptedFieldMatrixBlockV1 {
-    row_start: usize,
-    row_count: usize,
-    width: usize,
-    values: Vec<F>,
-}
-#[cfg(test)]
-impl EncryptedFieldMatrixBlockV1 {
-    /// First common-domain row represented by this block.
-    pub(crate) fn row_start(&self) -> usize {
-        self.row_start
-    }
-    /// Number of rows represented by this block.
-    pub(crate) fn row_count(&self) -> usize {
-        self.row_count
-    }
-    /// Return one exact row by its global common-domain index.
-    pub(crate) fn row(&self, index: usize) -> Result<&[F], AggregateStarkErrorV1> {
-        let local = index
-            .checked_sub(self.row_start)
-            .filter(|local| *local < self.row_count)
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        let start = local
-            .checked_mul(self.width)
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        let end = start
-            .checked_add(self.width)
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        self.values
-            .get(start..end)
-            .ok_or(AggregateStarkErrorV1::InternalInvariant)
-    }
-}
-#[cfg(test)]
-impl Drop for EncryptedFieldMatrixBlockV1 {
-    fn drop(&mut self) {
-        for value in &mut self.values {
-            value.0 = 0;
-        }
-    }
-}
-/// Sealed authenticated anonymous storage for one masked LDE matrix.
-///
-/// Only masked polynomial evaluations are ever written. The anonymous file is
-/// closed and unlinked on drop, and its ephemeral key is recursively zeroized.
-/// At most one fixed-size row block is decrypted by [`Self::read_chunk`].
-#[cfg(test)]
-pub(crate) struct EncryptedFieldMatrixScratchV1 {
-    file: std::fs::File,
-    rows: usize,
-    width: usize,
-    chunk_rows: usize,
-    chunks_per_column: usize,
-    plaintext_chunk_bytes: usize,
-    ciphertext_chunk_bytes: usize,
-    expected_file_bytes: u64,
-    key: Zeroizing<[u8; 32]>,
-    nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
-}
-#[cfg(test)]
-impl EncryptedFieldMatrixScratchV1 {
-    /// Number of common-domain rows in the stored matrix.
-    pub(crate) fn rows(&self) -> usize {
-        self.rows
-    }
-    /// Number of columns in the stored matrix.
-    pub(crate) fn width(&self) -> usize {
-        self.width
-    }
-    /// Number of rows in every independently authenticated record.
-    pub(crate) fn chunk_rows(&self) -> usize {
-        self.chunk_rows
-    }
-    /// Number of row chunks in every column.
-    pub(crate) fn chunk_count(&self) -> usize {
-        self.chunks_per_column
-    }
-    /// Exact ciphertext bytes occupied by the anonymous backing file.
-    pub(crate) fn ciphertext_bytes(&self) -> u64 {
-        self.expected_file_bytes
-    }
-    fn record_index(&self, column: usize, chunk: usize) -> Result<u64, AggregateStarkErrorV1> {
-        if column >= self.width || chunk >= self.chunks_per_column {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        column
-            .checked_mul(self.chunks_per_column)
-            .and_then(|index| index.checked_add(chunk))
-            .and_then(|index| u64::try_from(index).ok())
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)
-    }
-    fn validate_backing_file(&self) -> Result<(), AggregateStarkErrorV1> {
-        let actual = self
-            .file
-            .metadata()
-            .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?
-            .len();
-        if actual != self.expected_file_bytes {
-            return Err(AggregateStarkErrorV1::InternalInvariant);
-        }
-        Ok(())
-    }
-    /// Authenticate, decrypt, and transpose one row chunk.
-    pub(crate) fn read_chunk(
-        &mut self,
-        chunk: usize,
-    ) -> Result<EncryptedFieldMatrixBlockV1, AggregateStarkErrorV1> {
-        if chunk >= self.chunks_per_column {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        self.validate_backing_file()?;
-        let value_count = self
-            .chunk_rows
-            .checked_mul(self.width)
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(value_count)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        values.resize(value_count, F::ZERO);
-        let cipher = XChaCha20Poly1305::new_from_slice(self.key.as_ref())
-            .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-        let mut ciphertext = Vec::new();
-        ciphertext
-            .try_reserve_exact(self.ciphertext_chunk_bytes)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        ciphertext.resize(self.ciphertext_chunk_bytes, 0);
-        for column in 0..self.width {
-            let record_index = self.record_index(column, chunk)?;
-            let offset = record_index
-                .checked_mul(
-                    u64::try_from(self.ciphertext_chunk_bytes)
-                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-                )
-                .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-            self.file
-                .seek(std::io::SeekFrom::Start(offset))
-                .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-            self.file
-                .read_exact(&mut ciphertext)
-                .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-            let nonce = encrypted_field_scratch_nonce_v1(&self.nonce_prefix, record_index);
-            let aad = encrypted_field_scratch_record_aad_v1(
-                self.rows,
-                self.width,
-                self.chunk_rows,
-                record_index,
-            )?;
-            let plaintext = Zeroizing::new(
-                cipher
-                    .decrypt(
-                        &nonce,
-                        Payload {
-                            msg: &ciphertext,
-                            aad: &aad,
-                        },
-                    )
-                    .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?,
-            );
-            if plaintext.len() != self.plaintext_chunk_bytes {
-                return Err(AggregateStarkErrorV1::InternalInvariant);
-            }
-            for row in 0..self.chunk_rows {
-                let byte_start = row
-                    .checked_mul(core::mem::size_of::<u64>())
-                    .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-                let bytes: [u8; 8] = plaintext
-                    .get(byte_start..byte_start + core::mem::size_of::<u64>())
-                    .ok_or(AggregateStarkErrorV1::InternalInvariant)?
-                    .try_into()
-                    .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
-                let value = F::canonical(u64::from_be_bytes(bytes))
-                    .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-                let destination = row
-                    .checked_mul(self.width)
-                    .and_then(|index| index.checked_add(column))
-                    .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-                values[destination] = value;
-            }
-        }
-        let row_start = chunk
-            .checked_mul(self.chunk_rows)
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        Ok(EncryptedFieldMatrixBlockV1 {
-            row_start,
-            row_count: self.chunk_rows,
-            width: self.width,
-            values,
-        })
-    }
-}
-/// Commit the exact row framing of a sealed encrypted scratch while retaining
-/// only one decrypted block, logarithmic Merkle state, and requested rows.
-#[cfg(test)]
-pub(crate) fn commit_encrypted_field_scratch_rows_v1(
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    opening_indices: &[usize],
-    scratch: &mut EncryptedFieldMatrixScratchV1,
-) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
-    if leaf_domain.is_empty() || node_domain.is_empty() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    if !opening_indices.is_empty() {
-        validate_canonical_index_set_v1(scratch.rows, opening_indices)?;
-    }
-    let mut merkle = StreamingMerkleAccumulatorV1::new(node_domain, scratch.rows, opening_indices)?;
-    let mut opened_rows = BTreeMap::new();
-    for &index in opening_indices {
-        let mut row = Vec::new();
-        row.try_reserve_exact(scratch.width)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        if opened_rows.insert(index, row).is_some() {
-            return Err(AggregateStarkErrorV1::InvalidProofShape);
-        }
-    }
-    for chunk in 0..scratch.chunks_per_column {
-        let block = scratch.read_chunk(chunk)?;
-        let end = block
-            .row_start()
-            .checked_add(block.row_count())
-            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        for index in block.row_start()..end {
-            let row = block.row(index)?;
-            if let Some(opening) = opened_rows.get_mut(&index) {
-                opening.extend_from_slice(row);
-            }
-            merkle.append_leaf(row_leaf_hash_v1(leaf_domain, group, row)?)?;
-        }
-    }
-    if opened_rows
-        .values()
-        .any(|opening| opening.len() != scratch.width)
-    {
-        return Err(AggregateStarkErrorV1::InternalInvariant);
-    }
-    Ok(StreamingRowCommitmentResultV1 {
-        commitment: merkle.finish()?,
-        opened_rows,
-    })
-}
-/// Replay a masked trace into authenticated anonymous scratch storage without
-/// retaining more than one native column and one LDE column in memory.
-#[cfg(test)]
-pub(crate) fn spill_replayed_masked_trace_columns_v1<S>(
-    masks: &StreamingTraceMaskSetV1,
-    mut source: S,
-) -> Result<EncryptedFieldMatrixScratchV1, AggregateStarkErrorV1>
-where
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let native_rows = checked_domain_size_v1(masks.native_trace_log2)?;
-    let lde_rows = checked_domain_size_v1(masks.lde_log2)?;
-    let chunk_rows = DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1.min(lde_rows);
-    let mut writer = EncryptedFieldMatrixScratchWriterV1::new(lde_rows, masks.width(), chunk_rows)?;
-    for (column_index, mask) in masks.masks.iter().enumerate() {
-        let native = ZeroizingFieldColumnV1(source(column_index)?);
-        if native.len() != native_rows {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        let lde = ZeroizingFieldColumnV1(
-            masked_trace_lde_column_with_mask_v1(
-                &native,
-                masks.native_trace_log2,
-                masks.lde_log2,
-                mask.coefficients(),
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        writer.append_column(&lde)?;
-    }
-    writer.finish()
-}
-/// Sample masks, commit, and retain the exact encrypted masked-LDE matrix with
-/// an explicitly bounded authenticated scratch-record height.
-///
-/// This is the canonical path for provers that need the committed trace again
-/// for composition or post-query openings. Returning the sealed scratch
-/// prevents a second interpolation/FFT pass while retaining only one native
-/// column, one LDE column, and one decrypted row block in resident memory.
-#[cfg(test)]
-pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1<R, S>(
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    native_trace_log2: u8,
-    lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
-    scratch_chunk_rows: usize,
-    opening_indices: &[usize],
-    rng: &mut R,
-    mut source: S,
-) -> Result<
-    (
-        StreamingRowCommitmentResultV1,
-        StreamingTraceMaskSetV1,
-        EncryptedFieldMatrixScratchV1,
-    ),
-    AggregateStarkErrorV1,
->
-where
-    R: TryRngCore,
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let (native_rows, lde_rows) = validate_masked_trace_commitment_shape_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        native_trace_log2,
-        lde_log2,
-        width,
-        mask_degree,
-        opening_indices,
-    )?;
-    if scratch_chunk_rows == 0
-        || !scratch_chunk_rows.is_power_of_two()
-        || scratch_chunk_rows > lde_rows
-        || lde_rows % scratch_chunk_rows != 0
-    {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let mut writer = EncryptedFieldMatrixScratchWriterV1::new(lde_rows, width, scratch_chunk_rows)?;
-    let mut masks = Vec::new();
-    masks
-        .try_reserve_exact(width)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for column_index in 0..width {
-        let native = ZeroizingFieldColumnV1(source(column_index)?);
-        if native.len() != native_rows {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        let mask = sample_trace_mask_v1(mask_degree, rng).map_err(map_transparent_error_v1)?;
-        let lde = ZeroizingFieldColumnV1(
-            masked_trace_lde_column_with_mask_v1(
-                &native,
-                native_trace_log2,
-                lde_log2,
-                mask.coefficients(),
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        writer.append_column(&lde)?;
-        masks.push(mask);
-    }
-    let mut scratch = writer.finish()?;
-    let commitment = commit_encrypted_field_scratch_rows_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        opening_indices,
-        &mut scratch,
-    )?;
-    Ok((
-        commitment,
-        StreamingTraceMaskSetV1 {
-            native_trace_log2,
-            lde_log2,
-            masks,
-        },
-        scratch,
-    ))
-}
-/// Sample masks, commit, and retain the encrypted masked-LDE matrix using the
-/// generic bounded scratch-record height.
-#[cfg(test)]
-pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_v1<R, S>(
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    native_trace_log2: u8,
-    lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
-    opening_indices: &[usize],
-    rng: &mut R,
-    source: S,
-) -> Result<
-    (
-        StreamingRowCommitmentResultV1,
-        StreamingTraceMaskSetV1,
-        EncryptedFieldMatrixScratchV1,
-    ),
-    AggregateStarkErrorV1,
->
-where
-    R: TryRngCore,
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let lde_rows = checked_domain_size_v1(lde_log2)?;
-    commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        native_trace_log2,
-        lde_log2,
-        width,
-        mask_degree,
-        DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1.min(lde_rows),
-        opening_indices,
-        rng,
-        source,
-    )
-}
-/// Low-resident-memory root-only alternative to [`commit_masked_trace_columns_v1`].
-///
-/// Callers that need composition or later openings must use
-/// [`commit_masked_trace_columns_retaining_encrypted_scratch_v1`] so the
-/// already-computed masked LDE is not discarded and recomputed.
-#[cfg(test)]
-pub(crate) fn commit_masked_trace_columns_via_encrypted_scratch_v1<R, S>(
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    native_trace_log2: u8,
-    lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
-    opening_indices: &[usize],
-    rng: &mut R,
-    source: S,
-) -> Result<(StreamingRowCommitmentResultV1, StreamingTraceMaskSetV1), AggregateStarkErrorV1>
-where
-    R: TryRngCore,
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let (commitment, masks, scratch) = commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        native_trace_log2,
-        lde_log2,
-        width,
-        mask_degree,
-        opening_indices,
-        rng,
-        source,
-    )?;
-    drop(scratch);
-    Ok((commitment, masks))
-}
-/// Low-resident-memory replay counterpart for an already sampled mask set.
-#[cfg(test)]
-pub(crate) fn replay_masked_trace_columns_via_encrypted_scratch_v1<S>(
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    masks: &StreamingTraceMaskSetV1,
-    opening_indices: &[usize],
-    source: S,
-) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1>
-where
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let mut scratch = spill_replayed_masked_trace_columns_v1(masks, source)?;
-    commit_encrypted_field_scratch_rows_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        opening_indices,
-        &mut scratch,
-    )
 }
 /// Commit one aggregate composition lane.
 pub(crate) fn composition_tree_v1(
@@ -2910,9 +2139,10 @@ pub(crate) fn split_composition_evaluations_v1(
 }
 /// Divide extension coefficients exactly by the trace vanishing polynomial.
 ///
-/// Synthetic division is performed by the monic polynomial `X^n - 1`. The complete remainder is
-/// checked to be zero before the quotient is returned; a numerator that is only pointwise divisible
-/// on some evaluation set is therefore rejected.
+/// Synthetic division is performed by the monic polynomial `X^n - 1`. The
+/// complete remainder is checked to be zero before the quotient is returned;
+/// a numerator that is only pointwise divisible on some evaluation set is
+/// therefore rejected.
 #[cfg(test)]
 pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     numerator_coefficients: &[E],
@@ -2960,10 +2190,11 @@ pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
 }
 /// Divide a constraint-numerator codeword by `X^n - 1` on a quotient coset.
 ///
-/// The generator shift is checked to be disjoint from both the native trace subgroup and the
-/// quotient evaluation subgroup. Only `Q / n` denominators are materialized and batch-inverted
-/// because the vanishing values repeat with that exact period. Every pointwise division is
-/// multiplied back as an implementation invariant.
+/// The generator shift is checked to be disjoint from both the native trace
+/// subgroup and the quotient evaluation subgroup. Only `Q / n` denominators
+/// are materialized and batch-inverted because the vanishing values repeat
+/// with that exact period. Every pointwise division is multiplied back as an
+/// implementation invariant.
 #[cfg(test)]
 pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
     numerator_evaluations: &[E],
@@ -3023,10 +2254,12 @@ pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
 }
 /// Convert a minimal quotient-coset codeword into common-domain FRI chunks.
 ///
-/// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not the looser aggregate
-/// layout capacity. After interpolation, every coefficient above that bound must be exactly zero.
-/// The canonical coefficient chunks are then evaluated on the common commitment coset, so the
-/// resulting proof wire remains independent of the prover's smaller quotient domain.
+/// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not
+/// the looser aggregate layout capacity. After interpolation, every
+/// coefficient above that bound must be exactly zero. The canonical
+/// coefficient chunks are then evaluated on the common commitment coset, so
+/// the resulting proof wire remains independent of the prover's smaller
+/// quotient domain.
 #[cfg(test)]
 pub(crate) fn composition_chunks_from_quotient_coset_v1(
     quotient_evaluations: &[E],
@@ -3380,10 +2613,12 @@ pub(crate) fn build_materialized_deep_proof_v1(
     validate_deep_proof_shape_v1(&deep, parameters, layout)?;
     Ok(deep)
 }
-/// Batch-invert canonical nonzero Fp4 values using one extension-field inversion.
+/// Batch-invert canonical nonzero Fp4 values using one extension-field
+/// inversion.
 ///
-/// DEEP code calls this on bounded row chunks so constructing quotient codewords does not perform
-/// one expensive inversion per domain element or allocate an evaluation-domain-sized prefix buffer.
+/// DEEP code calls this on bounded row chunks so constructing quotient
+/// codewords does not perform one expensive inversion per domain element or
+/// allocate an evaluation-domain-sized prefix buffer.
 pub(crate) fn batch_invert_fp4_nonzero_v1(values: &mut [E]) -> Result<(), AggregateStarkErrorV1> {
     if values.is_empty() {
         return Err(AggregateStarkErrorV1::DeepOpening);
@@ -3471,7 +2706,8 @@ fn accumulate_base_deep_quotients_v1(
     }
     Ok(accumulator)
 }
-/// Evaluate the complete batched DEEP-ALI quotient at one authenticated query row.
+/// Evaluate the complete batched DEEP-ALI quotient at one authenticated query
+/// row.
 pub(crate) fn deep_ali_mixed_opening_v1(
     query_point: E,
     deep_point: E,
@@ -5611,11 +4847,12 @@ pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEval
 /// Verify opened AIR constraints and the complete DEEP-ALI quotient before
 /// binding every query to FRI.
 ///
-/// The relation callback still recomputes the constraint quotient from the authenticated
-/// current/next trace rows. The FRI base is no longer that raw row mix: it is the verifier-computed
-/// random linear combination of all current, next, and composition differences divided by `x - z`.
-/// Consequently every encoded out-of-domain value is tied to a committed low-degree polynomial,
-/// rather than being an unauthenticated transcript decoration.
+/// The relation callback still recomputes the constraint quotient from the
+/// authenticated current/next trace rows. The FRI base is no longer that raw
+/// row mix: it is the verifier-computed random linear combination of all
+/// current, next, and composition differences divided by `x - z`. Consequently
+/// every encoded out-of-domain value is tied to a committed low-degree
+/// polynomial, rather than being an unauthenticated transcript decoration.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_opened_query_relations_with_deep_v1<
     Evaluator: AggregateOpenedRowEvaluatorV1,
@@ -6546,246 +5783,6 @@ mod tests {
         }
     }
     #[test]
-    fn encrypted_scratch_commitment_strategy_is_byte_exact_with_fast_path() {
-        let columns = (0_u64..4)
-            .map(|column| {
-                (0_u64..8)
-                    .map(|row| F::reduce(u128::from(column + 3) * u128::from(row + 19)))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let indices = [0, 5, 17, 63];
-        let mut fast_rng = StdRng::from_seed([0x93; 32]);
-        let (fast, fast_masks) = commit_masked_trace_columns_v1(
-            b"aggregate-strategy-leaf",
-            b"aggregate-strategy-node",
-            2,
-            3,
-            6,
-            columns.len(),
-            7,
-            &indices,
-            &mut fast_rng,
-            |column| Ok(columns[column].clone()),
-        )
-        .expect("fast commitment");
-        let mut retained_rng = StdRng::from_seed([0x93; 32]);
-        let (retained, retained_masks, mut retained_scratch) =
-            commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-                b"aggregate-strategy-leaf",
-                b"aggregate-strategy-node",
-                2,
-                3,
-                6,
-                columns.len(),
-                7,
-                &indices,
-                &mut retained_rng,
-                |column| Ok(columns[column].clone()),
-            )
-            .expect("retained scratch commitment");
-        let mut scratch_rng = StdRng::from_seed([0x93; 32]);
-        let (scratch, scratch_masks) = commit_masked_trace_columns_via_encrypted_scratch_v1(
-            b"aggregate-strategy-leaf",
-            b"aggregate-strategy-node",
-            2,
-            3,
-            6,
-            columns.len(),
-            7,
-            &indices,
-            &mut scratch_rng,
-            |column| Ok(columns[column].clone()),
-        )
-        .expect("scratch commitment");
-        assert_eq!(retained, fast);
-        assert_eq!(scratch, fast);
-        assert_eq!(retained_scratch.rows(), 64);
-        assert_eq!(retained_scratch.width(), columns.len());
-        assert_eq!(retained_scratch.chunk_rows(), 64);
-        assert_eq!(retained_scratch.chunk_count(), 1);
-        assert!(retained_scratch.ciphertext_bytes() > 64 * columns.len() as u64 * 8);
-        assert_eq!(retained_masks.width(), fast_masks.width());
-        assert_eq!(scratch_masks.width(), fast_masks.width());
-        for ((retained_mask, scratch_mask), fast_mask) in retained_masks
-            .masks
-            .iter()
-            .zip(&scratch_masks.masks)
-            .zip(&fast_masks.masks)
-        {
-            assert_eq!(retained_mask.coefficients(), fast_mask.coefficients());
-            assert_eq!(scratch_mask.coefficients(), fast_mask.coefficients());
-        }
-        let replay_indices = [1, 7, 31, 62];
-        let fast_replay = replay_masked_trace_columns_v1(
-            b"aggregate-strategy-leaf",
-            b"aggregate-strategy-node",
-            2,
-            &fast_masks,
-            &replay_indices,
-            |column| Ok(columns[column].clone()),
-        )
-        .expect("fast replay");
-        let retained_replay = commit_encrypted_field_scratch_rows_v1(
-            b"aggregate-strategy-leaf",
-            b"aggregate-strategy-node",
-            2,
-            &replay_indices,
-            &mut retained_scratch,
-        )
-        .expect("retained scratch replay");
-        let scratch_replay = replay_masked_trace_columns_via_encrypted_scratch_v1(
-            b"aggregate-strategy-leaf",
-            b"aggregate-strategy-node",
-            2,
-            &scratch_masks,
-            &replay_indices,
-            |column| Ok(columns[column].clone()),
-        )
-        .expect("scratch replay");
-        assert_eq!(retained_replay, fast_replay);
-        assert_eq!(scratch_replay, fast_replay);
-    }
-    #[test]
-    fn explicit_scratch_chunk_height_is_exact_and_rejects_invalid_geometry_before_source() {
-        let columns = (0_u64..2)
-            .map(|column| {
-                (0_u64..8)
-                    .map(|row| F::reduce(u128::from(column + 5) * u128::from(row + 23)))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let indices = [0, 7, 31, 63];
-        let mut expected_rng = StdRng::from_seed([0xB6; 32]);
-        let (expected, expected_masks) = commit_masked_trace_columns_v1(
-            b"aggregate-explicit-chunk-leaf",
-            b"aggregate-explicit-chunk-node",
-            1,
-            3,
-            6,
-            columns.len(),
-            7,
-            &indices,
-            &mut expected_rng,
-            |column| Ok(columns[column].clone()),
-        )
-        .expect("materialized commitment");
-        let mut chunked_rng = StdRng::from_seed([0xB6; 32]);
-        let (chunked, chunked_masks, scratch) =
-            commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1(
-                b"aggregate-explicit-chunk-leaf",
-                b"aggregate-explicit-chunk-node",
-                1,
-                3,
-                6,
-                columns.len(),
-                7,
-                8,
-                &indices,
-                &mut chunked_rng,
-                |column| Ok(columns[column].clone()),
-            )
-            .expect("eight-row scratch chunks");
-        assert_eq!(chunked, expected);
-        assert_eq!(scratch.chunk_rows(), 8);
-        assert_eq!(scratch.chunk_count(), 8);
-        for (actual, expected) in chunked_masks.masks.iter().zip(expected_masks.masks) {
-            assert_eq!(actual.coefficients(), expected.coefficients());
-        }
-        for hostile_chunk_rows in [0, 3, 128] {
-            let calls = std::cell::Cell::new(0_usize);
-            let mut rng = StdRng::from_seed([0xB7; 32]);
-            assert_eq!(
-                commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1(
-                    b"aggregate-explicit-chunk-leaf",
-                    b"aggregate-explicit-chunk-node",
-                    1,
-                    3,
-                    6,
-                    columns.len(),
-                    7,
-                    hostile_chunk_rows,
-                    &indices,
-                    &mut rng,
-                    |column| {
-                        calls.set(calls.get() + 1);
-                        Ok(columns[column].clone())
-                    },
-                )
-                .map(|_| ()),
-                Err(AggregateStarkErrorV1::InvalidLayout)
-            );
-            assert_eq!(calls.get(), 0);
-        }
-    }
-    #[test]
-    fn retaining_scratch_commitment_rejects_every_shape_before_calling_source() {
-        fn reject_before_source(
-            leaf_domain: &[u8],
-            node_domain: &'static [u8],
-            native_log2: u8,
-            lde_log2: u8,
-            width: usize,
-            mask_degree: usize,
-            indices: &[usize],
-        ) {
-            let calls = std::cell::Cell::new(0_usize);
-            let mut rng = StdRng::from_seed([0xA4; 32]);
-            assert!(
-                commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-                    leaf_domain,
-                    node_domain,
-                    0,
-                    native_log2,
-                    lde_log2,
-                    width,
-                    mask_degree,
-                    indices,
-                    &mut rng,
-                    |_| {
-                        calls.set(calls.get() + 1);
-                        Ok(vec![F::ZERO; 8])
-                    },
-                )
-                .is_err()
-            );
-            assert_eq!(
-                calls.get(),
-                0,
-                "invalid retained-scratch shape must reject before source work"
-            );
-        }
-        reject_before_source(b"", b"node", 3, 6, 2, 7, &[]);
-        reject_before_source(b"leaf", b"", 3, 6, 2, 7, &[]);
-        reject_before_source(b"leaf", b"node", 3, 3, 2, 7, &[]);
-        reject_before_source(b"leaf", b"node", 3, 6, 0, 7, &[]);
-        reject_before_source(b"leaf", b"node", 3, 6, 2, 56, &[]);
-        reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[1, 1]);
-        reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[2, 1]);
-        reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[64]);
-        let calls = std::cell::Cell::new(0_usize);
-        let mut rng = StdRng::from_seed([0xA5; 32]);
-        assert!(
-            commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-                b"leaf",
-                b"node",
-                0,
-                3,
-                6,
-                2,
-                7,
-                &[],
-                &mut rng,
-                |_| {
-                    calls.set(calls.get() + 1);
-                    Ok(vec![F::ZERO; 7])
-                },
-            )
-            .is_err()
-        );
-        assert_eq!(calls.get(), 1, "first malformed native column must stop");
-    }
-    #[test]
     fn replayable_masked_column_commitment_rejects_shape_substitution() {
         let columns = [vec![F::ZERO; 8], vec![F::ONE; 8]];
         let mut rng = StdRng::from_seed([0x24; 32]);
@@ -7495,281 +6492,4 @@ mod tests {
             verify_all_merkle_openings_v1(&decoded, PARAMETERS, DOMAINS, &layout, &[1, 7]).is_err()
         );
     }
-    fn encrypted_scratch_fixture() -> EncryptedFieldMatrixScratchV1 {
-        let rows = 16;
-        let width = 3;
-        let chunk_rows = 4;
-        let mut writer =
-            EncryptedFieldMatrixScratchWriterV1::new(rows, width, chunk_rows).expect("scratch");
-        for column in 0..width {
-            let values = (0..rows)
-                .map(|row| F(u64::try_from(column * 100 + row + 1).expect("small")))
-                .collect::<Vec<_>>();
-            writer.append_column(&values).expect("append column");
-        }
-        writer.finish().expect("finish scratch")
-    }
-    #[derive(Clone, Copy)]
-    enum ScratchEntropyModeV1 {
-        FailAt(u8),
-        Constant(u8),
-        RepeatedPrefix,
-        Healthy,
-    }
-    #[derive(Debug)]
-    struct ScratchEntropyErrorV1;
-    impl core::fmt::Display for ScratchEntropyErrorV1 {
-        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            formatter.write_str("injected encrypted-scratch entropy failure")
-        }
-    }
-    struct ScratchEntropyRngV1 {
-        mode: ScratchEntropyModeV1,
-        fills: usize,
-    }
-    impl ScratchEntropyRngV1 {
-        fn new(mode: ScratchEntropyModeV1) -> Self {
-            Self { mode, fills: 0 }
-        }
-    }
-    impl TryRngCore for ScratchEntropyRngV1 {
-        type Error = ScratchEntropyErrorV1;
-        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            let mut bytes = [0_u8; 4];
-            self.try_fill_bytes(&mut bytes)?;
-            Ok(u32::from_le_bytes(bytes))
-        }
-        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-            let mut bytes = [0_u8; 8];
-            self.try_fill_bytes(&mut bytes)?;
-            Ok(u64::from_le_bytes(bytes))
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            let fill = self.fills;
-            self.fills = self.fills.saturating_add(1);
-            match self.mode {
-                ScratchEntropyModeV1::FailAt(target) if fill == usize::from(target) => {
-                    let partial = destination.len() / 2;
-                    destination
-                        .iter_mut()
-                        .take(partial)
-                        .enumerate()
-                        .for_each(|(index, byte)| *byte = index as u8);
-                    Err(ScratchEntropyErrorV1)
-                }
-                ScratchEntropyModeV1::FailAt(_) | ScratchEntropyModeV1::Healthy => {
-                    for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = (fill as u8)
-                            .wrapping_mul(97)
-                            .wrapping_add(index as u8)
-                            .wrapping_add(1);
-                    }
-                    Ok(())
-                }
-                ScratchEntropyModeV1::Constant(byte) => {
-                    destination.fill(byte);
-                    Ok(())
-                }
-                ScratchEntropyModeV1::RepeatedPrefix => {
-                    for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = index as u8 + 1;
-                    }
-                    Ok(())
-                }
-            }
-        }
-    }
-    #[test]
-    fn encrypted_field_scratch_entropy_is_injected_healthy_and_precedes_file_creation() {
-        for mode in [
-            ScratchEntropyModeV1::FailAt(0),
-            ScratchEntropyModeV1::FailAt(1),
-            ScratchEntropyModeV1::Constant(0),
-            ScratchEntropyModeV1::Constant(0xa5),
-            ScratchEntropyModeV1::RepeatedPrefix,
-        ] {
-            let attempts = encrypted_scratch_file_creation_attempts_v1();
-            let mut rng = ScratchEntropyRngV1::new(mode);
-            assert!(matches!(
-                EncryptedFieldMatrixScratchWriterV1::new_with_rng(16, 2, 4, &mut rng),
-                Err(AggregateStarkErrorV1::RandomnessUnavailable)
-            ));
-            assert_eq!(
-                encrypted_scratch_file_creation_attempts_v1(),
-                attempts,
-                "no anonymous file may be created before entropy validation"
-            );
-        }
-        let attempts = encrypted_scratch_file_creation_attempts_v1();
-        let mut healthy = ScratchEntropyRngV1::new(ScratchEntropyModeV1::Healthy);
-        let writer = EncryptedFieldMatrixScratchWriterV1::new_with_rng(16, 2, 4, &mut healthy)
-            .expect("healthy injected entropy");
-        assert_eq!(encrypted_scratch_file_creation_attempts_v1(), attempts + 1);
-        drop(writer);
-        let attempts = encrypted_scratch_file_creation_attempts_v1();
-        let mut healthy = ScratchEntropyRngV1::new(ScratchEntropyModeV1::Healthy);
-        assert!(matches!(
-            EncryptedFieldMatrixScratchWriterV1::new_with_rng(12, 2, 4, &mut healthy),
-            Err(AggregateStarkErrorV1::InvalidLayout)
-        ));
-        assert_eq!(healthy.fills, 0, "invalid shape must not consume entropy");
-        assert_eq!(encrypted_scratch_file_creation_attempts_v1(), attempts);
-    }
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn encrypted_field_scratch_memfd_is_anonymous_owner_private_and_exec_sealed() {
-        use rustix::fs::{Mode, fchmod};
-        let file = create_anonymous_scratch_file_v1().expect("Linux 6.3+ sealed scratch memfd");
-        let metadata = file.metadata().expect("scratch metadata");
-        assert!(metadata.file_type().is_file());
-        assert_eq!(metadata.nlink(), 0);
-        assert_eq!(metadata.mode() & 0o777, 0o600);
-        assert_eq!(
-            fcntl_get_seals(&file).expect("scratch seals") & SealFlags::EXEC,
-            SealFlags::EXEC
-        );
-        assert_eq!(
-            fchmod(&file, Mode::RWXU).expect_err("F_SEAL_EXEC must reject execute permission"),
-            rustix::io::Errno::PERM
-        );
-        assert_eq!(
-            file.metadata()
-                .expect("scratch metadata after rejection")
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-    #[test]
-    fn encrypted_field_scratch_roundtrips_exact_row_chunks_without_plaintext_storage() {
-        let mut scratch = encrypted_scratch_fixture();
-        assert_eq!(scratch.rows(), 16);
-        assert_eq!(scratch.width(), 3);
-        assert_eq!(scratch.chunk_rows(), 4);
-        assert_eq!(scratch.chunk_count(), 4);
-        assert_eq!(
-            scratch.ciphertext_bytes(),
-            u64::try_from(3 * 4 * (4 * 8 + XCHACHA20_POLY1305_TAG_BYTES_V1)).expect("small")
-        );
-        scratch
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek ciphertext");
-        let mut ciphertext = Vec::new();
-        scratch
-            .file
-            .read_to_end(&mut ciphertext)
-            .expect("read ciphertext");
-        let first_plaintext_chunk = (1_u64..=4).flat_map(u64::to_be_bytes).collect::<Vec<_>>();
-        assert!(
-            !ciphertext
-                .windows(first_plaintext_chunk.len())
-                .any(|window| window == first_plaintext_chunk)
-        );
-        for chunk in 0..scratch.chunk_count() {
-            let block = scratch.read_chunk(chunk).expect("authenticated block");
-            assert_eq!(block.row_start(), chunk * 4);
-            assert_eq!(block.row_count(), 4);
-            for row in block.row_start()..block.row_start() + block.row_count() {
-                assert_eq!(
-                    block.row(row).expect("row"),
-                    &[
-                        F(u64::try_from(row + 1).expect("small")),
-                        F(u64::try_from(100 + row + 1).expect("small")),
-                        F(u64::try_from(200 + row + 1).expect("small")),
-                    ]
-                );
-            }
-            assert!(block.row(block.row_start() + block.row_count()).is_err());
-        }
-        assert!(scratch.read_chunk(scratch.chunk_count()).is_err());
-    }
-    #[test]
-    fn encrypted_field_scratch_rejects_shape_and_incomplete_writes() {
-        assert!(EncryptedFieldMatrixScratchWriterV1::new(0, 1, 1).is_err());
-        assert!(EncryptedFieldMatrixScratchWriterV1::new(12, 1, 4).is_err());
-        assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 0, 4).is_err());
-        assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 1, 3).is_err());
-        assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 1, 32).is_err());
-        let mut writer = EncryptedFieldMatrixScratchWriterV1::new(16, 2, 4).expect("valid writer");
-        assert!(writer.append_column(&[F::ZERO; 15]).is_err());
-        writer
-            .append_column(&[F::ONE; 16])
-            .expect("first exact column");
-        assert!(writer.finish().is_err());
-        let mut writer = EncryptedFieldMatrixScratchWriterV1::new(16, 1, 4).expect("valid writer");
-        writer
-            .append_column(&[F::ONE; 16])
-            .expect("only exact column");
-        assert!(writer.append_column(&[F::ONE; 16]).is_err());
-        writer.finish().expect("complete writer");
-    }
-    #[test]
-    fn encrypted_field_scratch_authenticates_bytes_key_nonce_order_and_length() {
-        let mut mutated = encrypted_scratch_fixture();
-        mutated
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek");
-        let mut byte = [0_u8; 1];
-        mutated.file.read_exact(&mut byte).expect("read");
-        byte[0] ^= 1;
-        mutated
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek");
-        mutated.file.write_all(&byte).expect("mutate");
-        assert!(mutated.read_chunk(0).is_err());
-        let mut wrong_key = encrypted_scratch_fixture();
-        wrong_key.key[0] ^= 1;
-        assert!(wrong_key.read_chunk(0).is_err());
-        let mut wrong_nonce = encrypted_scratch_fixture();
-        wrong_nonce.nonce_prefix[0] ^= 1;
-        assert!(wrong_nonce.read_chunk(0).is_err());
-        let mut reordered = encrypted_scratch_fixture();
-        let record_bytes = reordered.ciphertext_chunk_bytes;
-        let mut first = vec![0_u8; record_bytes];
-        let mut second = vec![0_u8; record_bytes];
-        reordered
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek");
-        reordered.file.read_exact(&mut first).expect("first");
-        reordered.file.read_exact(&mut second).expect("second");
-        reordered
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek");
-        reordered.file.write_all(&second).expect("swap first");
-        reordered.file.write_all(&first).expect("swap second");
-        assert!(reordered.read_chunk(0).is_err());
-        let mut duplicated = encrypted_scratch_fixture();
-        let mut first = vec![0_u8; duplicated.ciphertext_chunk_bytes];
-        duplicated
-            .file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek");
-        duplicated.file.read_exact(&mut first).expect("first");
-        duplicated
-            .file
-            .seek(std::io::SeekFrom::Start(
-                u64::try_from(duplicated.ciphertext_chunk_bytes).expect("small"),
-            ))
-            .expect("seek second");
-        duplicated.file.write_all(&first).expect("duplicate");
-        assert!(duplicated.read_chunk(1).is_err());
-        let mut truncated = encrypted_scratch_fixture();
-        truncated
-            .file
-            .set_len(truncated.expected_file_bytes - 1)
-            .expect("truncate");
-        assert!(truncated.read_chunk(0).is_err());
-        let mut extended = encrypted_scratch_fixture();
-        extended
-            .file
-            .set_len(extended.expected_file_bytes + 1)
-            .expect("extend");
-        assert!(extended.read_chunk(0).is_err());
-    }
-    include!("aggregate_stark_scratch_replay_tests.rs");
 }

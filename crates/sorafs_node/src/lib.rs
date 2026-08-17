@@ -9230,6 +9230,7 @@ impl NodeHandle {
             None,
         )
     }
+    #[expect(clippy::too_many_arguments, reason = "explicit audit inputs")]
     fn publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
         &self,
         now_unix: u64,
@@ -24182,7 +24183,6 @@ mod tests {
     fn privacy_publication_budget_state_and_fused_head_restore_atomically() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-        let schedule = privacy_aggregate_schedule_config();
         let cfg = privacy_aggregate_storage_config(&root);
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());

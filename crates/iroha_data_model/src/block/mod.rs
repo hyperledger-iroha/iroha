@@ -1998,10 +1998,12 @@ mod tests {
             .external_signed_transaction_at(0)
             .expect("legacy signed transaction must remain directly addressable");
         assert_eq!(legacy_hash, entrypoint.hash());
-        assert!(std::ptr::eq(
-            legacy_tx,
-            &legacy_block.payload.transactions[0]
-        ));
+        let cached_tx = legacy_block
+            .payload
+            .transactions
+            .first()
+            .expect("legacy signed transaction cache");
+        assert!(std::ptr::eq(legacy_tx, cached_tx));
         let encoded = block.encode_versioned();
         block.payload.transactions.clear();
         assert_eq!(
@@ -2153,7 +2155,7 @@ mod tests {
         let signature = checked_block_signature(0, &key_pair, &header);
         let with_da = SignedBlock::presigned_with_da(
             signature.clone(),
-            header.clone(),
+            header,
             Vec::new(),
             Some(DaCommitmentBundle::default()),
         );

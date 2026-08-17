@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    gates::{flex_gate::threads::SinglePhaseCoreManager, GateChip},
+    gates::{GateChip, flex_gate::threads::SinglePhaseCoreManager},
     halo2_proofs::halo2curves::{bn256::Fr, ff::PrimeField},
 };
 
@@ -23,7 +23,10 @@ fn test_fix_permutation_against_test_vectors() {
         let mut state = PoseidonState::<Fr, T, RATE> {
             s: [0u64, 1, 2].map(|v| ctx.load_constant(Fr::from(v))),
         };
-        let inputs = [Fr::zero(); RATE].iter().map(|f| ctx.load_constant(*f)).collect_vec();
+        let inputs = [Fr::zero(); RATE]
+            .iter()
+            .map(|f| ctx.load_constant(*f))
+            .collect_vec();
         state.permutation(ctx, &gate, &inputs, None, &spec); // avoid padding
         let state_0 = state.s;
         let expected = [
@@ -49,7 +52,10 @@ fn test_fix_permutation_against_test_vectors() {
         let mut state = PoseidonState::<Fr, T, RATE> {
             s: [0u64, 1, 2, 3, 4].map(|v| ctx.load_constant(Fr::from(v))),
         };
-        let inputs = [Fr::zero(); RATE].iter().map(|f| ctx.load_constant(*f)).collect_vec();
+        let inputs = [Fr::zero(); RATE]
+            .iter()
+            .map(|f| ctx.load_constant(*f))
+            .collect_vec();
         state.permutation(ctx, &gate, &inputs, None, &spec);
         let state_0 = state.s;
         let expected: [&str; 5] = [
@@ -84,7 +90,10 @@ fn test_var_permutation_against_test_vectors() {
         let mut state = PoseidonState::<Fr, T, RATE> {
             s: [0u64, 1, 2].map(|v| ctx.load_constant(Fr::from(v))),
         };
-        let inputs = [Fr::zero(); RATE].iter().map(|f| ctx.load_constant(*f)).collect_vec();
+        let inputs = [Fr::zero(); RATE]
+            .iter()
+            .map(|f| ctx.load_constant(*f))
+            .collect_vec();
         let len = ctx.load_constant(Fr::from(RATE as u64));
         state.permutation(ctx, &gate, &inputs, Some(len), &spec); // avoid padding
         let state_0 = state.s;
@@ -111,7 +120,10 @@ fn test_var_permutation_against_test_vectors() {
         let mut state = PoseidonState::<Fr, T, RATE> {
             s: [0u64, 1, 2, 3, 4].map(|v| ctx.load_constant(Fr::from(v))),
         };
-        let inputs = [Fr::zero(); RATE].iter().map(|f| ctx.load_constant(*f)).collect_vec();
+        let inputs = [Fr::zero(); RATE]
+            .iter()
+            .map(|f| ctx.load_constant(*f))
+            .collect_vec();
         let len = ctx.load_constant(Fr::from(RATE as u64));
         state.permutation(ctx, &gate, &inputs, Some(len), &spec);
         let state_0 = state.s;

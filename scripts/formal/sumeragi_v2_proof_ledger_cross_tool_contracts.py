@@ -463,7 +463,7 @@ _EFFECTIVE_LOCK_TRACE_SHARED_MACRO_SHA256 = {
         "fa803e8d9ee4d9919e5b32d5572c7abf048a2a32f3a10651326395d64376d722"
     ),
     "enter_view_projection_gate_body": (
-        "02098fc6a19056d6e8e463cb27478ad28c7e963fb481bcfcc9d955e3308288fa"
+        "eb798caf85e9275880186d7f992bf0b21c5915d114319d68876392e97ff83aef"
     ),
     "tag_projection_strictly_advances_body": (
         "3671834240e325ebfd10306320d682266254384a6e163059afbbc9b01ba1575c"
@@ -610,7 +610,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         item="check",
                         item_token_sha256=(
-                            "1db08f6f4afa93500566e9b27cac9c0fe2dd1c234af375482b61a9dbdf67590f"
+                            "ea543ec5958603f0d1bd8bb682e241fa18d328881c6886aff4683818a8c39b52"
                         ),
                         projection="trace, enter_view",
                         required_expression="""
@@ -870,6 +870,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="commit_body_pipeline_owner",
+                        item_token_sha256="df0d9e50cb6432bf90079e1fddc22c2abd9bf962dd562976969b7c0affed2f88",
                         required_expression="""
                             let BodyPipelineOwnerBindingPlan {
                                 key,
@@ -976,7 +977,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
                         item_token_sha256=(
-                            "da83291d975ff1f309746a87c94f2371ecae41df7733677b568f32a7008f89c2"
+                            "41b00d09f09c0265f828d53726daea233b3c62c9626137117ef7f0c5f0daf63f"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1125,6 +1126,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
+                        item_token_sha256="aead33e5d7df955164b9ff8764dc4aefbe46648b96041d5c056fb4f366d3697d",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
@@ -1264,7 +1266,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
+                            "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -1277,7 +1279,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="pop_next_with_ownership",
                         item_token_sha256=(
-                            "5b737b0c5c3629305efae9d1cf6024bcb6f5bec5eb381483f346692fe0380dd6"
+                            "b8ecf17c88e9ef65032956a4dfb65312903342a96a64e7521ac15c99c9a2fbf2"
                         ),
                         brace_context=((
                             "impl", "<", "C", ":", "ExactRuntimeCommandIdentity",
@@ -2807,6 +2809,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/status.rs",
                     "crates/iroha_core/src/sumeragi/v2_effects.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
                     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
                 ),
                 verus_parameters=(
@@ -3169,8 +3172,26 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
 _CHECKED_PRODUCTION_TOKEN_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
 )
+_CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
+    "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
+)
+_CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
+    "03681c3a3df1ab231d64ba64e62d7aea1e125b9bff3133ec81d4d3bce11f1f1e"
+)
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
-    "75eb1e9bc469306b1e001c314f6e473fe29c3f4465d9081831beded57396a695"
+    "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"
+)
+_CHECKED_PRODUCTION_TOKEN_IMPL_SHA256 = (
+    "9a6f880e32c89dfc44a0bd12fca625d5cdbc5a41037ba46ee8cdc57549354068"
+)
+_CHECKED_PRODUCTION_TOKEN_UNWITNESSED_SHA256 = (
+    "157599b4d0b6db28be7ea76c1e59848b97814a424407dc174865f8ea5be3528b"
+)
+_CHECKED_PRODUCTION_TOKEN_WITNESS_BINDER_SHA256 = (
+    "f31a2bcc1a2a79939f6edc2f5d5362d29338984b4eb482ccc5dcc86881595483"
+)
+_CHECKED_PRODUCTION_TOKEN_WITNESS_ACCESSOR_SHA256 = (
+    "9113ffd3920c71ccfca509e8f5247b547c47e98cedb7339f80362bc7afc6f8b6"
 )
 _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256 = (
     "ba2bba675ad645198011a24ae3c60a024cdad47caf2eb1e0acefc16467ef9994"
@@ -3182,26 +3203,29 @@ _CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256 = (
     "0d89c85775aded9990deeefe79f082098629e60e348775c4820ce8a2e6667ed2"
 )
 _CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256 = (
-    "5c65b9aba0d560e58b8c85596902e53eb65b3cdcce48e474f7deb53ab493bb92"
+    "96fe254882b529cb780963a465e6d930ea56258ab5862b74ec3f2c949daf7d18"
+)
+_CHECKED_PRODUCTION_FIRST_RELEASE_CONSTRUCTOR_SHA256 = (
+    "c549d2d053ab1f7dfdee866c9a5b85d278733464111ea44e7f6b9b2e120a112a"
 )
 _CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256 = (
-    "774849f95ce4344cab37cd0a8b6c53170eaf98012d268c3904b0c254ed4bc725"
+    "9e060bcae1f30be96faecfb04e75b66bfd7671e06f18f83c5c099520b6d5df74"
 )
 _CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256 = (
     "c68bd376597d39cc72ae3195df249c286badeb8b8275c7933b1b1c933f9bd1aa"
 )
 _CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256 = {
     "check_production_enter_view_effective_lock_transition": (
-        "9820fc8dabfec2291a2449594f6245470ca28303a68789204a3c2ba699bcdbd7"
+        "01d34e10a6b65314b25d6f41b2e35985831618404ceb5f3e8fc1d65e4c5c2fdd"
     ),
     "check_production_body_ownership_effective_lock_transition": (
-        "7a42604e801cbc2525c3020628143810f1e6b64691718427cdfc370979fe8992"
+        "c140204abebe6509b7b9fd185923a3ad5dffad911d2dd1be763a55b6dacd0fa7"
     ),
     "check_production_body_capacity_retirement_effective_lock_transition": (
-        "790ac268e1e3201793f0d57cc443c5b4f6ff4d2da5dd897d2b51444f7ae9701c"
+        "bfc78743ec28a1591d6593242f24b6525ed61c0539f06a5c36ca6772973c38da"
     ),
     "check_production_body_service_effective_lock_transition": (
-        "694a844a95be5ad9236c211768c5b55393845596813cc740b2bd55331fb6827d"
+        "caa8f0973b35099ff923b243fa579944b5334bec61eeec6e48b85e51754aefd3"
     ),
 }
 _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256 = (
@@ -3214,7 +3238,7 @@ _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_MACRO_SHA256 = (
     "16f4268fe5032a9f91c683b6d71b3c8403d71f2ac4d47e597f65043b72e48611"
 )
 _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_GATE_SHA256 = (
-    "f081f846a6ecba51118d404b0a628bf075098df6aa294183ea206cce244610d0"
+    "aaff756b0a731e4e90807fc7ed125502eebb2a8c48e1613afb1138b20c7f1f0a"
 )
 _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256 = (
     "3a3c7b1e2c1c9ac68ab20fc8022666b7d8da7825775f7f3aa4e30477d109048f"
@@ -3232,7 +3256,7 @@ _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_MACRO_SHA256 = (
     "e3fc5ceca76f5a878abf66de4607ff4f4b393aff18b5f53870a451674acfb8ab"
 )
 _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_GATE_SHA256 = (
-    "900c145d1a16a580d36462d30335d118dde6ec5de661f575876bc3fef7a0d270"
+    "257d63bfc22f879efba083dbc4869e443e52bce841c5dff3d87208ac778c6429"
 )
 _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_VERUS_GATE_SHA256 = (
     "07e41c8605ff29ceb732e64ff1238ba8e22722b09d7be416f425e18b956f0fa0"
@@ -3753,6 +3777,798 @@ def _normalized_rust_contract(source: str) -> str:
     """Normalize one code-owned Rust/Verus contract to its token stream."""
 
     return " ".join(rust_code_tokens(source))
+
+
+def _checked_token_exact_item(
+    source: str,
+    name: str,
+    header: str,
+    body: str,
+    expected_sha256: str,
+    label: str,
+    *,
+    brace_context: tuple[tuple[str, ...], ...] = (),
+    attributes: tuple[str, ...] = ("#[must_use]",),
+    sealed: bool = True,
+) -> tuple[Any, str]:
+    """Require one exact, unconditional checked-token function item."""
+
+    items = rust_items(source, name)
+    if len(items) != 1:
+        raise ValueError(
+            f"cross-tool checked-token closure requires exactly one {label}"
+        )
+    item = items[0]
+    if (
+        item.brace_context != brace_context
+        or item.ancestor_inner_attributes
+        or tuple(rust_code_tokens(attribute) for attribute in item.attributes)
+        != tuple(rust_code_tokens(attribute) for attribute in attributes)
+        or _rust_item_header_tokens(item) != rust_code_tokens(header)
+        or rust_code_tokens(item.body) != rust_code_tokens(body)
+    ):
+        raise ValueError(
+            f"cross-tool checked-token {label} changed its exact fail-closed shape"
+        )
+    item_sha256 = (
+        _rust_sealed_item_token_sha256(item)
+        if sealed
+        else _rust_item_token_sha256(item)
+    )
+    if item_sha256 != expected_sha256:
+        raise ValueError(
+            f"cross-tool checked-token {label} does not match its exact "
+            "reviewed token seal"
+        )
+    return item, item_sha256
+
+
+def _checked_token_exact_struct(
+    source: str,
+    name: str,
+    header: str,
+    body: str,
+    expected_sha256: str,
+    label: str,
+    *,
+    attributes: tuple[str, ...],
+) -> tuple[Any, str]:
+    """Require one exact, unconditional checked-token struct item."""
+
+    items = rust_struct_items(source, name)
+    if len(items) != 1:
+        raise ValueError(
+            f"cross-tool checked-token closure requires exactly one {label}"
+        )
+    item = items[0]
+    if (
+        item.brace_context != ()
+        or item.ancestor_inner_attributes
+        or tuple(rust_code_tokens(attribute) for attribute in item.attributes)
+        != tuple(rust_code_tokens(attribute) for attribute in attributes)
+        or _rust_item_header_tokens(item) != rust_code_tokens(header)
+        or rust_code_tokens(item.body) != rust_code_tokens(body)
+    ):
+        raise ValueError(
+            f"cross-tool checked-token {label} changed its exact reviewed layout"
+        )
+    item_sha256 = _rust_sealed_item_token_sha256(item)
+    if item_sha256 != expected_sha256:
+        raise ValueError(
+            f"cross-tool checked-token {label} does not match its exact "
+            "reviewed token seal"
+        )
+    return item, item_sha256
+
+
+def _checked_token_impl_blocks(source: str) -> tuple[tuple[str, ...], ...]:
+    """Return every explicit impl block whose header names the opaque token."""
+
+    tokens = rust_code_tokens(source)
+    blocks: list[tuple[str, ...]] = []
+    matching = {">": "<", "]": "[", ")": "(", "}": "{"}
+    for start, token in enumerate(tokens):
+        if token != "impl":
+            continue
+        stack: list[str] = []
+        body_start: int | None = None
+        for index in range(start + 1, len(tokens)):
+            current = tokens[index]
+            if current == "{" and not stack:
+                body_start = index
+                break
+            if current == "<":
+                if not stack or stack[-1] == "<":
+                    stack.append(current)
+            elif current in ("[", "(", "{"):
+                stack.append(current)
+            elif current in matching and stack and stack[-1] == matching[current]:
+                stack.pop()
+            elif current == ";" and not stack:
+                break
+        if body_start is None:
+            continue
+        header = tokens[start:body_start]
+        if "CheckedProductionTransition" not in header:
+            continue
+        depth = 0
+        for end in range(body_start, len(tokens)):
+            if tokens[end] == "{":
+                depth += 1
+            elif tokens[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    blocks.append(tokens[start : end + 1])
+                    break
+        else:
+            raise ValueError(
+                "cross-tool CheckedProductionTransition impl is unterminated"
+            )
+    return tuple(blocks)
+
+
+def _checked_token_named_literal_count(tokens: tuple[str, ...]) -> int:
+    """Count direct opaque-token literals, including balanced turbofish types."""
+
+    count = 0
+    matching = {">": "<", "]": "[", ")": "(", "}": "{"}
+    for index, token in enumerate(tokens):
+        if token != "CheckedProductionTransition" or index + 1 >= len(tokens):
+            continue
+        cursor = index + 1
+        if tokens[cursor] == "{":
+            count += 1
+            continue
+        if tokens[cursor : cursor + 2] != ("::", "<"):
+            continue
+        cursor += 1
+        stack: list[str] = []
+        while cursor < len(tokens):
+            current = tokens[cursor]
+            if current == "<":
+                if not stack or stack[-1] == "<":
+                    stack.append(current)
+            elif current in ("[", "(", "{"):
+                stack.append(current)
+            elif current in matching and stack and stack[-1] == matching[current]:
+                stack.pop()
+                if not stack:
+                    cursor += 1
+                    break
+            cursor += 1
+        if not stack and cursor < len(tokens) and tokens[cursor] == "{":
+            count += 1
+    return count
+
+
+def _checked_token_alias_names(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    """Return aliases that could obscure an opaque-token impl or literal."""
+
+    aliases: set[str] = set()
+    identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+    matching = {">": "<", "]": "[", ")": "(", "}": "{"}
+    for start, token in enumerate(tokens):
+        if token not in ("type", "use"):
+            continue
+        stack: list[str] = []
+        end = len(tokens)
+        for cursor in range(start + 1, len(tokens)):
+            current = tokens[cursor]
+            if current == "<":
+                if not stack or stack[-1] == "<":
+                    stack.append(current)
+            elif current in ("[", "(", "{"):
+                stack.append(current)
+            elif current in matching and stack and stack[-1] == matching[current]:
+                stack.pop()
+            elif current == ";" and not stack:
+                end = cursor
+                break
+        declaration = tokens[start:end]
+        if "CheckedProductionTransition" not in declaration:
+            continue
+        if token == "type" and len(declaration) > 1 and "=" in declaration:
+            name = declaration[1]
+            aliases.add(
+                name if identifier.fullmatch(name) else "<macro-type-alias>"
+            )
+        for cursor, current in enumerate(declaration[:-2]):
+            if (
+                current == "CheckedProductionTransition"
+                and declaration[cursor + 1] == "as"
+                and identifier.fullmatch(declaration[cursor + 2])
+            ):
+                aliases.add(declaration[cursor + 2])
+            if current == "CheckedProductionTransition":
+                for grouped in range(cursor + 1, len(declaration) - 2):
+                    if (
+                        declaration[grouped : grouped + 2] == ("self", "as")
+                        and identifier.fullmatch(declaration[grouped + 2])
+                    ):
+                        aliases.add(declaration[grouped + 2])
+    return tuple(sorted(aliases))
+
+
+def _checked_token_macro_reference_count(tokens: tuple[str, ...]) -> int:
+    """Count opaque-token names passed through macro invocations."""
+
+    count = 0
+    matching = {")": "(", "]": "[", "}": "{"}
+    delimiters: list[tuple[str, bool]] = []
+    for index, token in enumerate(tokens):
+        if token in ("(", "[", "{"):
+            inherited = delimiters[-1][1] if delimiters else False
+            delimiters.append(
+                (token, inherited or (index > 0 and tokens[index - 1] == "!"))
+            )
+        elif token in matching:
+            if delimiters and delimiters[-1][0] == matching[token]:
+                delimiters.pop()
+        elif (
+            token == "CheckedProductionTransition"
+            and delimiters
+            and delimiters[-1][1]
+        ):
+            count += 1
+    return count
+
+
+def _cross_tool_checked_token_payload(
+    *,
+    source_entries: list[Any],
+    root_dir: Path,
+) -> dict[str, Any]:
+    """Validate the opaque authorization token in its authenticated include closure."""
+
+    source_entry = _verus_source_entry(
+        source_entries,
+        _CHECKED_PRODUCTION_TOKEN_SOURCE,
+        description="checked production token parent source",
+    )
+    definition_entry = _verus_source_entry(
+        source_entries,
+        _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+        description="checked production token definition source",
+    )
+    path = root_dir / _CHECKED_PRODUCTION_TOKEN_SOURCE
+    definition_path = root_dir / _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE
+    for checked_path, description in (
+        (path, "parent"),
+        (definition_path, "definition"),
+    ):
+        if not checked_path.is_file() or checked_path.is_symlink():
+            raise ValueError(
+                "cross-tool checked-token "
+                f"{description} source is not a regular file: {checked_path}"
+            )
+    source_sha256 = _sha256_file(path)
+    definition_sha256 = _sha256_file(definition_path)
+    if source_entry.get("sha256") != source_sha256:
+        raise ValueError("cross-tool checked-token parent source digest mismatch")
+    if definition_entry.get("sha256") != definition_sha256:
+        raise ValueError(
+            "cross-tool checked-token definition source digest mismatch"
+        )
+    source_errors: list[str] = []
+    _loaded_path, source = _read_reviewed_rust_source(
+        root_dir,
+        _CHECKED_PRODUCTION_TOKEN_SOURCE,
+        source_errors,
+        "checked production token authenticated include closure",
+    )
+    if source_errors:
+        raise ValueError(
+            "cross-tool checked-token authenticated include closure is invalid: "
+            + "; ".join(source_errors)
+        )
+    definition_source = definition_path.read_text(encoding="utf-8")
+    aliases = _checked_token_alias_names(rust_code_tokens(source))
+    provider_aliases = _checked_token_alias_names(
+        rust_code_tokens(definition_source)
+    )
+    if aliases or provider_aliases:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition may not have type or use "
+            f"aliases; found closure={aliases!r}, provider={provider_aliases!r}"
+        )
+    macro_references = _checked_token_macro_reference_count(
+        rust_code_tokens(source)
+    )
+    provider_macro_references = _checked_token_macro_reference_count(
+        rust_code_tokens(definition_source)
+    )
+    if macro_references or provider_macro_references:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition may not be passed through "
+            "macro invocations; found "
+            f"closure={macro_references}, provider={provider_macro_references}"
+        )
+
+    token_attributes = (
+        '#[must_use = "checked transition evidence must be consumed"]',
+        "#[derive(Debug, PartialEq, Eq)]",
+    )
+    token_body = """
+        projection: P,
+        first_release_witness:
+            Option<ProductionInFlightFirstReleaseTransitionWitnessV1>,
+    """
+    struct, struct_sha256 = _checked_token_exact_struct(
+        source,
+        "CheckedProductionTransition",
+        "pub struct CheckedProductionTransition<P>",
+        token_body,
+        _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "CheckedProductionTransition struct",
+        attributes=token_attributes,
+    )
+    provider_struct, provider_struct_sha256 = _checked_token_exact_struct(
+        definition_source,
+        "CheckedProductionTransition",
+        "pub struct CheckedProductionTransition<P>",
+        token_body,
+        _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "CheckedProductionTransition provider struct",
+        attributes=token_attributes,
+    )
+    if provider_struct.source != struct.source:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition must be supplied by its "
+            "exact authenticated definition provider"
+        )
+
+    impl_blocks = _checked_token_impl_blocks(source)
+    provider_impl_blocks = _checked_token_impl_blocks(definition_source)
+    if len(impl_blocks) != 1 or len(provider_impl_blocks) != 1:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition must have exactly one "
+            "explicit inherent impl in its authenticated closure and provider"
+        )
+    if impl_blocks[0] != provider_impl_blocks[0]:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition impl must come from its "
+            "exact authenticated definition provider"
+        )
+    impl_sha256 = hashlib.sha256(
+        "\0".join(impl_blocks[0]).encode("utf-8")
+    ).hexdigest()
+    if impl_sha256 != _CHECKED_PRODUCTION_TOKEN_IMPL_SHA256:
+        raise ValueError(
+            "cross-tool CheckedProductionTransition impl does not match its "
+            "exact reviewed token seal"
+        )
+
+    impl_context = (
+        ("impl", "<", "P", ">", "CheckedProductionTransition", "<", "P", ">"),
+    )
+    method_contracts = (
+        (
+            "unwitnessed",
+            "const fn unwitnessed(projection: P) -> Self",
+            "Self { projection, first_release_witness: None, }",
+            _CHECKED_PRODUCTION_TOKEN_UNWITNESSED_SHA256,
+            "private const unwitnessed constructor",
+            (),
+        ),
+        (
+            "accepted_projection",
+            "pub(crate) const fn accepted_projection(&self) -> &P",
+            "&self.projection",
+            _CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256,
+            "borrowed accepted_projection accessor",
+            ("#[must_use]",),
+        ),
+        (
+            "with_first_release_witness",
+            """
+                pub(super) fn with_first_release_witness(
+                    mut self,
+                    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+                ) -> Self
+            """,
+            """
+                self.first_release_witness = Some(witness);
+                self
+            """,
+            _CHECKED_PRODUCTION_TOKEN_WITNESS_BINDER_SHA256,
+            "first-release witness binder",
+            ("#[must_use]",),
+        ),
+        (
+            "first_release_witness",
+            """
+                pub(crate) const fn first_release_witness(
+                    &self,
+                ) -> Option<&ProductionInFlightFirstReleaseTransitionWitnessV1>
+            """,
+            "self.first_release_witness.as_ref()",
+            _CHECKED_PRODUCTION_TOKEN_WITNESS_ACCESSOR_SHA256,
+            "first-release witness accessor",
+            (
+                "#[must_use]",
+                """
+                    #[cfg_attr(
+                        not(test),
+                        allow(dead_code, reason = "first-release witness")
+                    )]
+                """,
+            ),
+        ),
+        (
+            "into_projection",
+            "pub fn into_projection(self) -> P",
+            "self.projection",
+            _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256,
+            "consuming into_projection method",
+            ("#[must_use]",),
+        ),
+    )
+    method_payload: dict[str, str] = {}
+    for name, header, body, expected_sha256, label, attributes in method_contracts:
+        item, item_sha256 = _checked_token_exact_item(
+            source,
+            name,
+            header,
+            body,
+            expected_sha256,
+            label,
+            brace_context=impl_context,
+            attributes=attributes,
+        )
+        provider_item, provider_item_sha256 = _checked_token_exact_item(
+            definition_source,
+            name,
+            header,
+            body,
+            expected_sha256,
+            f"provider {label}",
+            brace_context=impl_context,
+            attributes=attributes,
+        )
+        if provider_item.source != item.source:
+            raise ValueError(
+                f"cross-tool checked-token {label} must come from its exact "
+                "authenticated definition provider"
+            )
+        method_payload[name] = item_sha256
+        assert provider_item_sha256 == item_sha256
+    expected_method_names = tuple(contract[0] for contract in method_contracts)
+    for method_source, description in (
+        (source, "authenticated include closure"),
+        (definition_source, "definition provider"),
+    ):
+        observed_method_names = tuple(
+            item.name
+            for item in _rust_all_function_items(method_source)
+            if item.brace_context == impl_context
+        )
+        if observed_method_names != expected_method_names:
+            raise ValueError(
+                "cross-tool CheckedProductionTransition method inventory in "
+                f"its {description} must equal {expected_method_names!r}; "
+                f"found {observed_method_names!r}"
+            )
+
+    projection_attributes = (
+        "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]",
+    )
+    _in_flight_projection, in_flight_projection_sha256 = (
+        _checked_token_exact_struct(
+            source,
+            "ProductionInFlightReservationTransitionProjection",
+            """
+                pub(crate) struct
+                    ProductionInFlightReservationTransitionProjection
+            """,
+            """
+                pub(crate) action: u8,
+                pub(crate) requested_reservation_identity:
+                    CanonicalIdentityProjection,
+                pub(crate) requested_release_identity:
+                    CanonicalIdentityProjection,
+                pub(crate) before:
+                    ProductionInFlightReservationOwnerProjection,
+                pub(crate) after:
+                    ProductionInFlightReservationOwnerProjection,
+            """,
+            _CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256,
+            "in-flight reservation transition projection",
+            attributes=projection_attributes,
+        )
+    )
+    macros = rust_macro_items(
+        source, "production_in_flight_reservation_transition_body"
+    )
+    if len(macros) != 1:
+        raise ValueError(
+            "cross-tool checked-token closure requires exactly one in-flight "
+            "reservation transition macro"
+        )
+    in_flight_macro = macros[0]
+    if (
+        in_flight_macro.brace_context != ()
+        or in_flight_macro.delimiter_context != ()
+        or in_flight_macro.attributes
+        or in_flight_macro.ancestor_inner_attributes
+    ):
+        raise ValueError(
+            "cross-tool in-flight reservation transition macro must remain "
+            "unconditional and top-level"
+        )
+    in_flight_macro_sha256 = _rust_item_token_sha256(in_flight_macro)
+    if in_flight_macro_sha256 != _CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256:
+        raise ValueError(
+            "cross-tool in-flight reservation transition macro does not match "
+            "its exact reviewed token seal"
+        )
+    _in_flight_kernel, in_flight_kernel_sha256 = _checked_token_exact_item(
+        source,
+        "production_in_flight_reservation_transition_kernel",
+        """
+            pub(crate) const fn production_in_flight_reservation_transition_kernel(
+                projection: ProductionInFlightReservationTransitionProjection,
+            ) -> bool
+        """,
+        "production_in_flight_reservation_transition_body!(projection)",
+        _CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256,
+        "in-flight reservation transition kernel",
+        attributes=(),
+        sealed=False,
+    )
+    _in_flight_constructor, in_flight_constructor_sha256 = (
+        _checked_token_exact_item(
+            source,
+            "check_production_in_flight_reservation_transition",
+            """
+                pub(crate) fn check_production_in_flight_reservation_transition(
+                    projection: ProductionInFlightReservationTransitionProjection,
+                ) -> Option<CheckedProductionTransition<
+                    ProductionInFlightReservationTransitionProjection
+                >>
+            """,
+            """
+                if production_in_flight_reservation_transition_kernel(projection) {
+                    Some(CheckedProductionTransition::unwitnessed(projection))
+                } else {
+                    None
+                }
+            """,
+            _CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256,
+            "in-flight reservation checked constructor",
+        )
+    )
+    _first_release_constructor, first_release_constructor_sha256 = (
+        _checked_token_exact_item(
+            source,
+            "check_production_in_flight_first_release_transition",
+            """
+                pub(crate) fn check_production_in_flight_first_release_transition(
+                    projection: ProductionInFlightFirstReleaseTransitionProjection,
+                ) -> Option<CheckedProductionTransition<
+                    ProductionInFlightFirstReleaseTransitionProjection
+                >>
+            """,
+            """
+                if production_in_flight_first_release_transition_kernel(projection) {
+                    Some(CheckedProductionTransition::unwitnessed(projection))
+                } else {
+                    None
+                }
+            """,
+            _CHECKED_PRODUCTION_FIRST_RELEASE_CONSTRUCTOR_SHA256,
+            "in-flight first-release checked constructor",
+            attributes=("#[must_use]", "#[allow(dead_code)]"),
+        )
+    )
+    _materialization, materialization_projection_sha256 = (
+        _checked_token_exact_struct(
+            source,
+            "ProductionIngressReservationMaterializationTraceProjection",
+            "pub struct ProductionIngressReservationMaterializationTraceProjection",
+            """
+                pub(crate) incoming_height: u64,
+                pub(crate) incoming_view: u64,
+                pub(crate) incoming_generation: u64,
+                pub(crate) incoming_class: u8,
+                pub(crate) stored_height: u64,
+                pub(crate) stored_view: u64,
+                pub(crate) stored_generation: u64,
+                pub(crate) stored_class: u8,
+                pub(crate) queue_len_before: u64,
+                pub(crate) queue_len_after: u64,
+                pub(crate) reserved_slots_before: u8,
+                pub(crate) reserved_slots_after: u8,
+                pub(crate) queue_capacity: u64,
+                pub(crate) ordinal_source_before: u128,
+                pub(crate) physical_admission_ordinal: u128,
+                pub(crate) lifecycle_ordinal: u128,
+                pub(crate) ordinal_source_after: u128,
+                pub(crate) dormant_reservations_before: u64,
+                pub(crate) dormant_reservations_after: u64,
+                pub(crate) dormant_owner_ordinal: u128,
+            """,
+            _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256,
+            "ingress reservation materialization projection",
+            attributes=projection_attributes,
+        )
+    )
+
+    legacy_gate_contracts = (
+        (
+            "check_production_enter_view_effective_lock_transition",
+            """
+                pub(crate) fn check_production_enter_view_effective_lock_transition(
+                    trace: EffectiveLockTraceProjection,
+                    enter_view: EnterViewProjection,
+                ) -> Option<CheckedProductionTransition<(
+                    EffectiveLockTraceProjection, EnterViewProjection
+                )>>
+            """,
+            """
+                if production_enter_view_uses_post_install_effective_lock_kernel(
+                    trace, enter_view
+                ) {
+                    Some(CheckedProductionTransition::unwitnessed((
+                        trace, enter_view,
+                    )))
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_ownership_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_ownership_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_ownership_preserves_effective_lock_kernel(projection) {
+                    Some(CheckedProductionTransition::unwitnessed(projection))
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_capacity_retirement_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_capacity_retirement_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_capacity_retirement_preserves_effective_lock_kernel(projection) {
+                    Some(CheckedProductionTransition::unwitnessed(projection))
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_service_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_service_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_service_refines_async_fairness_kernel(projection) {
+                    Some(CheckedProductionTransition::unwitnessed(projection))
+                } else {
+                    None
+                }
+            """,
+        ),
+    )
+    legacy_gate_payload: list[dict[str, str]] = []
+    for legacy_name, legacy_header, legacy_body in legacy_gate_contracts:
+        _legacy_item, legacy_sha256 = _checked_token_exact_item(
+            source,
+            legacy_name,
+            legacy_header,
+            legacy_body,
+            _CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256[legacy_name],
+            f"legacy effective-lock constructor {legacy_name}",
+        )
+        legacy_gate_payload.append(
+            {"name": legacy_name, "item_token_sha256": legacy_sha256}
+        )
+
+    source_tokens = rust_code_tokens(source)
+    constructor_count = _token_sequence_count(
+        source_tokens,
+        ("CheckedProductionTransition", "::", "unwitnessed", "("),
+    )
+    if constructor_count != 25:
+        raise ValueError(
+            "cross-tool opaque token closure must contain exactly twenty-five "
+            "unwitnessed calls (eighteen total gates, four effective-lock gates, "
+            "the outer reducer, in-flight reservation, and first-release gates); "
+            f"found {constructor_count}"
+        )
+    raw_literal_count = _checked_token_named_literal_count(source_tokens)
+    if raw_literal_count != 0:
+        raise ValueError(
+            "cross-tool opaque token closure may not contain raw "
+            "CheckedProductionTransition struct literals; found "
+            f"{raw_literal_count}"
+        )
+    structural = mask_rust_comments_and_literals(source)
+    if re.search(
+        r"impl[^{};]{0,240}\b(?:Clone|Copy|Default|Encode|Decode)\b"
+        r"[^{};]{0,240}\bCheckedProductionTransition\b",
+        structural,
+    ):
+        raise ValueError(
+            "cross-tool checked token may not gain Clone, Copy, Default, or "
+            "codec construction"
+        )
+    closure_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if closure_sha256 != _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256:
+        raise ValueError(
+            "cross-tool checked-token authenticated include closure does not "
+            "match its exact reviewed source seal"
+        )
+
+    reexports = (
+        (
+            "crates/iroha_core/src/sumeragi/v2_core.rs",
+            ("pub", "use", "refinement", "::", "{", "CheckedProductionTransition", ","),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            ("pub", "use", "v2_core", "::", "{", "CheckedProductionTransition", ","),
+        ),
+    )
+    reexport_payload: list[dict[str, str]] = []
+    for relative, tokens in reexports:
+        reexport_path = root_dir / relative
+        if not reexport_path.is_file() or reexport_path.is_symlink():
+            raise ValueError(
+                "cross-tool checked-token re-export source is invalid: "
+                f"{reexport_path}"
+            )
+        reexport_source = reexport_path.read_text(encoding="utf-8")
+        if _token_sequence_count(rust_code_tokens(reexport_source), tokens) != 1:
+            raise ValueError(
+                f"cross-tool checked-token re-export changed in {relative}"
+            )
+        reexport_payload.append(
+            {"path": relative, "sha256": _sha256_file(reexport_path)}
+        )
+    return {
+        "source": _CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "source_sha256": source_sha256,
+        "definition_source": _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+        "definition_source_sha256": definition_sha256,
+        "struct_item_token_sha256": struct_sha256,
+        "definition_struct_item_token_sha256": provider_struct_sha256,
+        "unwitnessed_item_token_sha256": method_payload["unwitnessed"],
+        "borrower_item_token_sha256": method_payload["accepted_projection"],
+        "witness_binder_item_token_sha256": method_payload[
+            "with_first_release_witness"
+        ],
+        "witness_accessor_item_token_sha256": method_payload[
+            "first_release_witness"
+        ],
+        "consumer_item_token_sha256": method_payload["into_projection"],
+        "in_flight_projection_item_token_sha256": in_flight_projection_sha256,
+        "in_flight_macro_item_token_sha256": in_flight_macro_sha256,
+        "in_flight_kernel_item_token_sha256": in_flight_kernel_sha256,
+        "in_flight_constructor_item_token_sha256": in_flight_constructor_sha256,
+        "first_release_constructor_item_token_sha256": (
+            first_release_constructor_sha256
+        ),
+        "materialization_projection_item_token_sha256": (
+            materialization_projection_sha256
+        ),
+        "legacy_effective_lock_constructor_items": legacy_gate_payload,
+        "constructor_count": constructor_count,
+        "raw_named_literal_count": raw_literal_count,
+        "reexports": reexport_payload,
+    }
 
 
 def _first_json_mismatch(

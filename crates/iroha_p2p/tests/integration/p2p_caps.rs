@@ -208,7 +208,7 @@ async fn topic_cap_violation_disconnects() {
     let started1 = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp1.clone()),
         cfg(a1.clone()),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -221,7 +221,7 @@ async fn topic_cap_violation_disconnects() {
     let started2 = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone()),
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -307,7 +307,7 @@ async fn tcp_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -320,7 +320,7 @@ async fn tcp_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -424,7 +424,7 @@ async fn tls_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -437,7 +437,7 @@ async fn tls_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -545,7 +545,7 @@ async fn quic_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -558,7 +558,7 @@ async fn quic_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -650,7 +650,7 @@ async fn ws_global_frame_cap_disconnects() {
     let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),
@@ -667,7 +667,7 @@ async fn ws_global_frame_cap_disconnects() {
     let (net_dialer, _child_dialer) = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
-        chain.clone(),
+        chain,
         None,
         None,
         ShutdownSignal::new(),

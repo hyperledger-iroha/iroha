@@ -74,7 +74,7 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
     fn sign_native(
         &self,
         expected_role: SoftwareSignerRoleV1,
-        payload: TransactionPayload,
+        payload: &TransactionPayload,
     ) -> Result<SignedTransaction, ExternalSoftwareSignerAdapterErrorV1> {
         if self.binding.role != expected_role {
             return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
@@ -103,7 +103,7 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
         let signature = Signature::try_from_bytes(&receipt.signature)
             .map_err(|_| ExternalSoftwareSignerAdapterErrorV1::SubstitutedTransaction)?;
         let transaction = builder.build_with_signature(signature);
-        if transaction.payload() != &payload
+        if transaction.payload() != payload
             || transaction.authority() != self.native_binding.authority()
             || transaction.verify_signature().is_err()
         {
@@ -153,7 +153,7 @@ macro_rules! impl_role_signer {
     ($trait_name:ident, $error:ident, $role:expr) => {
         impl $trait_name for ExternalSoftwareSignerNativeAdapterV1 {
             fn sign(&self, payload: TransactionPayload) -> Result<SignedTransaction, $error> {
-                self.sign_native($role, payload)
+                self.sign_native($role, &payload)
                     .map_err(|error| match error {
                         ExternalSoftwareSignerAdapterErrorV1::Unavailable => $error::Unavailable,
                         ExternalSoftwareSignerAdapterErrorV1::Refused
@@ -233,7 +233,8 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             | SoftwareSignerRoleV1::BillingStatement
             | SoftwareSignerRoleV1::EvidenceViewer
             | SoftwareSignerRoleV1::StreamToken
-            | SoftwareSignerRoleV1::PopCredentials => {
+            | SoftwareSignerRoleV1::PopCredentials
+            | SoftwareSignerRoleV1::TairaAuthority => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };

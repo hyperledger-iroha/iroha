@@ -854,6 +854,7 @@ fn verify_soranet_transport_delegation_v3(
     expected_challenge: &SoranetTransportDelegationChallenge,
 ) -> Result<VerifiedSoranetTransportDelegationV3, crate::SoranetTransportDelegationError> {
     use crate::SoranetTransportDelegationError as DelegationError;
+    const ED25519_PUBLIC_KEY_BYTES: usize = 32;
     if canonical_signed_frame.is_empty() {
         return Err(DelegationError::EmptyFrame);
     }
@@ -919,7 +920,6 @@ fn verify_soranet_transport_delegation_v3(
             found: transport_algorithm,
         });
     }
-    const ED25519_PUBLIC_KEY_BYTES: usize = 32;
     if transport_public_key.len() != ED25519_PUBLIC_KEY_BYTES {
         return Err(DelegationError::TransportKeyLength {
             expected: ED25519_PUBLIC_KEY_BYTES,
@@ -8392,6 +8392,7 @@ mod run {
             );
         }
         #[tokio::test(flavor = "current_thread")]
+        #[expect(clippy::too_many_lines, reason = "complete abort/drain timeline")]
         async fn peer_task_abort_drains_queued_worker_then_notifies_exact_connection_once() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
@@ -8411,9 +8412,8 @@ mod run {
                 topic: Topic::ConsensusSafety,
                 priority: Priority::Low,
             };
-            let dispatch_budgets =
-                InboundDispatchByteBudgets::new(1, 1, 0).expect("dispatch owner geometry");
-            let high_budget = Arc::clone(&dispatch_budgets.high);
+            let budgets = InboundDispatchByteBudgets::new(1, 1, 0).expect("dispatch geometry");
+            let high_budget = Arc::clone(&budgets.high);
             let (safety, mut safety_rx) = mpsc::channel(1);
             let (high, _high_rx) = mpsc::channel(1);
             let (low, _low_rx) = mpsc::channel(1);
@@ -8432,7 +8432,7 @@ mod run {
                 safety,
                 high,
                 low,
-                dispatch_budgets,
+                dispatch_budgets: budgets,
                 source_credits,
                 topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
                 delivery_drain: Arc::clone(&delivery_drain),

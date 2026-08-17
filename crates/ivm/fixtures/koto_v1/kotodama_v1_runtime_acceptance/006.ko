@@ -1,0 +1,33 @@
+
+seiyaku AggregateSumAcceptance {
+  error enum AggregateSumError {
+    SomeLost = 1,
+    NoneFallbackLost = 2,
+    OkLost = 3,
+    ErrFallbackLost = 4,
+    ResultErrorLost = 5
+  }
+
+  struct Pair { int count, bool ready }
+
+  view fn run() -> int {
+    let Option<Pair> some = Option::some(Pair { count: 7, ready: true });
+    let from_some = some.unwrap_or(Pair { count: 90, ready: false });
+    require(from_some.count == 7 && from_some.ready, AggregateSumError::SomeLost);
+
+    let Option<Pair> none = Option::none;
+    let from_none = none.unwrap_or(Pair { count: 11, ready: true });
+    require(from_none.count == 11 && from_none.ready, AggregateSumError::NoneFallbackLost);
+
+    let Result<Pair, Pair> ok = Result::ok(Pair { count: 13, ready: true });
+    let from_ok = ok.unwrap_or(Pair { count: 91, ready: false });
+    require(from_ok.count == 13 && from_ok.ready, AggregateSumError::OkLost);
+
+    let Result<Pair, Pair> err = Result::err(Pair { count: 17, ready: true });
+    let from_err = err.unwrap_or(Pair { count: 19, ready: true });
+    require(from_err.count == 19 && from_err.ready, AggregateSumError::ErrFallbackLost);
+    let error_value = err.unwrap_err_or(Pair { count: 92, ready: false });
+    require(error_value.count == 17 && error_value.ready, AggregateSumError::ResultErrorLost);
+    return from_some.count + from_none.count + from_ok.count + from_err.count + error_value.count;
+  }
+}

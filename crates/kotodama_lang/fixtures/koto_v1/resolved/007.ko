@@ -1,0 +1,6 @@
+
+seiyaku Init {
+    state StateMap<AccountId, int> entries;
+    state int count;
+    始まり() { count = 0; }
+}

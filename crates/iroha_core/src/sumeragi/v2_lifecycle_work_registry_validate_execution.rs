@@ -546,10 +546,6 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     pub(super) const fn ready_projection(&self) -> &DurableCertifiedFetchReplayProjectionV1 {
         &self.ready_projection
     }
-    /// Return the exact Waiting incumbent address authenticated before persistence.
-    pub(super) const fn waiting_location(&self) -> CertifiedFetchWaitingLocation {
-        self.location
-    }
     /// Revalidate the selector-retained exact response before LedgerV1 fsync.
     ///
     /// The later checked dequeue can then mint only an ownership carrier; its

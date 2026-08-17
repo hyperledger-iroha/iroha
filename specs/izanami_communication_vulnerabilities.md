@@ -63,7 +63,8 @@ scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper -- --seed
 The runner accepts `--sumeragi-mode permissioned`, `--sumeragi-mode npos`, or
 `--sumeragi-mode both`. Permissioned mode uses the default Sumeragi validator
 roster. NPoS mode passes `--nexus` to Izanami, which loads the Nexus/Sora
-profile and sets `sumeragi.consensus_mode = "npos"`.
+profile and signs NPoS mode into the genesis/height context; it does not write
+a local Sumeragi mode switch.
 
 The helper writes `summary.md`, `summary.tsv`, and per-scenario logs under
 `dist/izanami-communication-vuln-*`. The Markdown report includes the paper

@@ -169,7 +169,7 @@ fn normalized_relative_path(base: &Path, path: &Path) -> io::Result<String> {
         if separator != 0 {
             normalized.push('/');
         }
-        normalized.push_str(&component);
+        normalized.push_str(component);
     }
     Ok(normalized)
 }
@@ -449,7 +449,7 @@ mod snapshot_hash_helper_tests {
             canonical.extend_from_slice(&(relative.len() as u64).to_le_bytes());
             canonical.extend_from_slice(relative.as_bytes());
             canonical.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            canonical.extend_from_slice(Hash::new(&bytes).as_ref());
+            canonical.extend_from_slice(Hash::new(bytes).as_ref());
         }
         assert_eq!(
             hash_directory(temp.path()).expect("stream directory digest"),

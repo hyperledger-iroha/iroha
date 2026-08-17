@@ -167,11 +167,7 @@ fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> usize {
         + plan.files.capacity() * std::mem::size_of::<FilePlan>();
     for file in &plan.files {
         retained += file.path.capacity() * std::mem::size_of::<String>();
-        retained += file
-            .path
-            .iter()
-            .map(|component| component.capacity())
-            .sum::<usize>();
+        retained += file.path.iter().map(String::capacity).sum::<usize>();
     }
     retained
 }

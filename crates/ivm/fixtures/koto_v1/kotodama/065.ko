@@ -1,0 +1,5 @@
+
+        module InvalidAssetRegistration {
+            fn f() { ledger::asset::register(asset_definition: "x", name: "X", scale: 1, mintable: 0); }
+        }
+    

@@ -30,7 +30,14 @@ def test_retired_v1_corridor_is_absent() -> None:
 
 def test_release_gate_fails_closed_while_completion_is_false() -> None:
     module = load_checker()
-    result = module.validate_ledger(module.load_ledger(), release=True)
+    ledger = copy.deepcopy(module.load_ledger())
+    ledger["machine_checked_completion"] = False
+    next(
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] == "height-liveness"
+    )["status"] = "specified_unproved"
+    result = module.validate_ledger(ledger, release=True)
 
     assert "release gate requires machine_checked_completion=true" in result.errors
     assert any(
@@ -46,7 +53,7 @@ def test_multilane_trace_dependencies_exclude_generic_liveness_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
 
-    assert ledger["machine_checked_completion"] is False
+    assert ledger["machine_checked_completion"] is True
     snapshot = module._production_trace_extraction_ledger_dependency_snapshot(
         ledger
     )
@@ -98,6 +105,9 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         by_id[dependent_id]["status"] = original_dependent_status
         by_id[prerequisite_id]["status"] = original_prerequisite_status
 
+    original_progress_refinement_status = by_id[
+        "progress-witness-production-refinement"
+    ]["status"]
     by_id["progress-witness-production-refinement"]["status"] = "cross_tool_proved"
     original_progress_status = by_id["progress-witness-preservation"]["status"]
     by_id["progress-witness-preservation"]["status"] = "specified_unproved"
@@ -107,10 +117,13 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         "cross_tool_proved before prerequisite progress-witness-preservation "
         "is proved"
     ) in errors
-    by_id["progress-witness-production-refinement"]["status"] = "specified_unproved"
+    by_id["progress-witness-production-refinement"][
+        "status"
+    ] = original_progress_refinement_status
     by_id["progress-witness-preservation"]["status"] = original_progress_status
 
     original_rank_status = by_id["protected-service-rank"]["status"]
+    original_starvation_status = by_id["post-gst-starvation-freedom"]["status"]
     by_id["post-gst-starvation-freedom"]["status"] = "tlaps_proved"
     by_id["protected-service-rank"]["status"] = "specified_unproved"
     errors = module._proof_status_dependency_errors(obligations)
@@ -119,24 +132,35 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         "before prerequisite protected-service-rank is tlaps_proved"
     ) in errors
 
-    by_id["post-gst-starvation-freedom"]["status"] = "specified_unproved"
+    by_id["post-gst-starvation-freedom"]["status"] = original_starvation_status
     by_id["protected-service-rank"]["status"] = original_rank_status
+    handoff_prerequisite_ids = (
+        "rotating-leader-liveness",
+        "application-liveness",
+        "successor-activation-starvation-freedom",
+    )
+    for prerequisite_id in handoff_prerequisite_ids:
+        by_id[prerequisite_id]["status"] = "specified_unproved"
     for dependent_id in (
         "genesis-height-successor-handoff",
         "height-liveness",
     ):
-        by_id[dependent_id]["status"] = "tlaps_proved"
-        errors = module._proof_status_dependency_errors(obligations)
         for prerequisite_id in (
             "rotating-leader-liveness",
             "application-liveness",
             "successor-activation-starvation-freedom",
         ):
+            weakened = copy.deepcopy(module.load_ledger()["obligations"])
+            weakened_by_id = {
+                obligation["id"]: obligation for obligation in weakened
+            }
+            weakened_by_id[dependent_id]["status"] = "tlaps_proved"
+            weakened_by_id[prerequisite_id]["status"] = "specified_unproved"
+            errors = module._proof_status_dependency_errors(weakened)
             assert (
                 f"proof obligation {dependent_id} cannot be tlaps_proved before "
                 f"prerequisite {prerequisite_id} is tlaps_proved"
             ) in errors
-        by_id[dependent_id]["status"] = "specified_unproved"
 
     rank_index = next(
         index

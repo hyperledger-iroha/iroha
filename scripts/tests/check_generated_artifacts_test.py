@@ -187,6 +187,7 @@ def test_current_rust_contract_artifact_has_complete_unique_owner() -> None:
     }
     assert {
         ".cargo/config.toml",
+        "Cargo.lock",
         "Cargo.toml",
         "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.ko",
         "javascript/iroha_js/src/blake2b.js",

@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::DecodeAll as _;
-    use super::*;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
@@ -150,6 +150,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test exhaustively checks the first-release execution commitment shape"
+    )]
     fn execution_commitment_enforces_native_amx_manifest_shape_and_bound() {
         #[derive(Encode)]
         struct LegacyExecutionCommitment {
@@ -600,6 +604,27 @@ mod tests {
         assert_eq!(context.quorum.min_signers, 3);
         assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
         assert_eq!(context.validate_signers(&[1, 2, 3]), Ok(()));
+        assert_eq!(context.validate_signers(&[0, 1, 2, 3]), Ok(()));
+        assert_eq!(context.validate_certificate_signers(&[0, 1, 2]), Ok(()));
+        assert_eq!(
+            ValidationError::TooManySigners.to_string(),
+            "signer count exceeds the wire range"
+        );
+        assert_eq!(
+            ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            }
+            .to_string(),
+            "certificate signer count mismatch: expected exactly 3, got 4"
+        );
+        assert_eq!(
+            context.validate_certificate_signers(&[0, 1, 2, 3]),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
+        );
         assert_eq!(
             context.validate_signers(&[0, 1]),
             Err(ValidationError::InsufficientSignerCount)
@@ -607,6 +632,13 @@ mod tests {
         assert_eq!(
             context.validate_signers(&[0, 1, 1]),
             Err(ValidationError::SignersNotStrictlySorted)
+        );
+        assert_eq!(
+            qc(&context, 0, GlobalPhase::Commit, vec![0, 1, 2, 3]).validate(&context),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
         );
     }
     #[test]
@@ -1033,6 +1065,15 @@ mod tests {
         };
         assert_eq!(certificate.validate(&context), Ok(()));
         assert_eq!(certificate.highest_prepare_qc(), Some(&prepare));
+        let mut superset = certificate.clone();
+        superset.groups[1].signers.push(3);
+        assert_eq!(
+            superset.validate(&context),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
+        );
         let mut overlapping = certificate.clone();
         overlapping.groups[1].signers = vec![0, 2];
         assert_eq!(
@@ -1178,6 +1219,10 @@ mod tests {
         assert_eq!(decoded.validate_version(), Ok(()));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps every consensus payload variant in one round-trip matrix"
+    )]
     fn every_v2_payload_variant_roundtrips() {
         let context = context(&[1, 1, 1, 1]);
         let prepare = qc(&context, 1, GlobalPhase::Prepare, vec![0, 1, 2]);

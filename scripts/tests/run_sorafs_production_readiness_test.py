@@ -2122,6 +2122,28 @@ def test_promotion_aggregate_requires_exact_ready_ordered_inventory(
         in MODULE.validate_promotion_aggregate(payload)
     )
 
+    for field in ("summary_file_count", "recognized_summary_count"):
+        payload = promotion_payload()
+        payload[field] = 17.0
+        assert (
+            f"replayed aggregate {field} must be 17"
+            in MODULE.validate_promotion_aggregate(payload)
+        )
+
+
+def test_exact_json_equal_rejects_recursive_numeric_type_coercion() -> None:
+    expected = {"rows": [{"count": 1, "verified": True}]}
+
+    assert MODULE.exact_json_equal(expected, expected)
+    assert not MODULE.exact_json_equal(
+        {"rows": [{"count": 1.0, "verified": True}]},
+        expected,
+    )
+    assert not MODULE.exact_json_equal(
+        {"rows": [{"count": 1, "verified": 1}]},
+        expected,
+    )
+
 
 def test_replay_manifest_is_schema_closed_digest_only() -> None:
     snapshot = replay_input_snapshot()
@@ -2153,6 +2175,29 @@ def test_replay_manifest_is_schema_closed_digest_only() -> None:
     )
     assert "schema-closed contract" in diagnostics
     assert "runtime-only-material" not in diagnostics
+
+
+def test_replay_manifest_rejects_python_equal_numeric_type_substitutions() -> None:
+    snapshot = replay_input_snapshot()
+    aggregate_digest = hashlib.sha256(b"aggregate").hexdigest()
+    replay = MODULE.ReplayAggregate(
+        payload=promotion_payload(),
+        first_sha256=aggregate_digest,
+        second_sha256=aggregate_digest,
+        semantic_sha256=hashlib.sha256(b"semantic").hexdigest(),
+    )
+
+    for field, substituted in (
+        ("input_count", 22.0),
+        ("execution_count", 2.0),
+        ("all_required_rows_valid", 1),
+    ):
+        manifest = MODULE.build_replay_manifest(snapshot, replay)
+        manifest[field] = substituted
+
+        diagnostics = MODULE.validate_replay_manifest(manifest, snapshot, replay)
+
+        assert any("verified immutable inputs" in error for error in diagnostics)
 
 
 def test_published_replay_manifest_requires_exact_valid_readback(

@@ -101,6 +101,7 @@ mod mochi;
 mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
+mod openapi_git;
 mod poseidon_bench;
 mod sm;
 mod sns;
@@ -1887,7 +1888,6 @@ fn parse_command<I>(mut args: I) -> Result<CommandKind, Box<dyn Error>>
 where
     I: Iterator<Item = String>,
 {
-    // Skip binary name
     let _ = args.next();
     let Some(cmd) = args.next() else {
         print_usage();
@@ -9700,10 +9700,10 @@ const OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES: usize = 256;
 const OPENAPI_GENERATOR_INPUT_INVENTORY: &[u8] =
     include_bytes!("../../release/openapi-generator-inputs-v1.txt");
 const OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER: &str = "iroha.openapi.generator-inputs.v1";
-const OPENAPI_GENERATOR_INPUT_TREE_DOMAIN: &[u8] = b"iroha-openapi-generator-input-tree-v2";
-const OPENAPI_GENERATOR_IGNORED_INPUT: &str = "Cargo.lock";
-const OPENAPI_GENERATOR_IGNORED_INPUT_MODE: &[u8] = b"100644";
-const OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const OPENAPI_GENERATOR_INPUT_TREE_DOMAIN: &[u8] = b"iroha-openapi-generator-input-tree-v3";
+const OPENAPI_GENERATOR_TRACKED_INPUT: &str = "Cargo.lock";
+const OPENAPI_GENERATOR_TRACKED_INPUT_MODE: &[u8] = b"100644";
+const OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-cargo-lock-v1.txt");
 const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
 const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
@@ -11001,35 +11001,6 @@ fn git_openapi_generator_input_tree_sha256(
         );
     }
     let inventory_paths = validate_openapi_generator_input_inventory()?;
-    let tracked_inventory_paths = inventory_paths
-        .iter()
-        .copied()
-        .filter(|path| *path != OPENAPI_GENERATOR_IGNORED_INPUT)
-        .collect::<Vec<_>>();
-    if tracked_inventory_paths.len().checked_add(1) != Some(inventory_paths.len()) {
-        return Err(
-            "OpenAPI generator input inventory must contain exactly one ignored Cargo.lock input"
-                .into(),
-        );
-    }
-    let ignored_tree_entry = git_stdout(
-        repo_root,
-        &[
-            OsString::from("ls-tree"),
-            OsString::from("-z"),
-            OsString::from("--full-tree"),
-            OsString::from(commit),
-            OsString::from("--"),
-            OsString::from(OPENAPI_GENERATOR_IGNORED_INPUT),
-        ],
-    )?;
-    if !ignored_tree_entry.is_empty() {
-        return Err(format!(
-            "OpenAPI generator ignored input {} must not exist at pinned commit {commit}",
-            OPENAPI_GENERATOR_IGNORED_INPUT
-        )
-        .into());
-    }
     let mut args = vec![
         OsString::from("ls-tree"),
         OsString::from("-r"),
@@ -11038,11 +11009,7 @@ fn git_openapi_generator_input_tree_sha256(
         OsString::from(commit),
         OsString::from("--"),
     ];
-    args.extend(
-        tracked_inventory_paths
-            .iter()
-            .map(|path| OsString::from(*path)),
-    );
+    args.extend(inventory_paths.iter().map(|path| OsString::from(*path)));
     let tree = git_stdout(repo_root, &args)?;
     if tree.is_empty() {
         return Err("OpenAPI generator input inventory resolved to an empty Git tree".into());
@@ -11053,6 +11020,8 @@ fn git_openapi_generator_input_tree_sha256(
     let mut resolved_paths = Vec::new();
     let mut unique_paths = BTreeSet::new();
     let mut cargo_lock_pin_mode = None;
+    let mut cargo_lock_mode = None;
+    let mut cargo_lock_blob_oid = None;
     for entry in tree
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
@@ -11081,9 +11050,13 @@ fn git_openapi_generator_input_tree_sha256(
         if path == OPENAPI_CARGO_LOCK_PIN_PATH {
             cargo_lock_pin_mode = Some(fields[0].to_owned());
         }
+        if path == OPENAPI_GENERATOR_TRACKED_INPUT {
+            cargo_lock_mode = Some(fields[0].to_owned());
+            cargo_lock_blob_oid = Some(fields[2].to_owned());
+        }
         resolved_paths.push(path);
     }
-    for required in &tracked_inventory_paths {
+    for required in &inventory_paths {
         let prefix = format!("{required}/");
         if !resolved_paths
             .iter()
@@ -11103,18 +11076,28 @@ fn git_openapi_generator_input_tree_sha256(
             )
             .into());
         }
-        None => {
-            return Err(format!("OpenAPI Cargo.lock pin is missing at commit {commit}").into());
-        }
+        None => return Err(format!("OpenAPI Cargo.lock pin is missing at commit {commit}").into()),
     }
+    match cargo_lock_mode.as_deref() {
+        Some("100644") => {}
+        Some(mode) => {
+            return Err(format!(
+                "OpenAPI Cargo.lock must have Git mode 100644 at commit {commit}, found {mode}"
+            )
+            .into());
+        }
+        None => return Err(format!("OpenAPI Cargo.lock is missing at commit {commit}").into()),
+    }
+    let cargo_lock_blob_oid = cargo_lock_blob_oid.ok_or("OpenAPI Cargo.lock blob is missing")?;
     let pin = read_git_openapi_cargo_lock_pin(repo_root, commit)?;
-    let ignored_input = read_openapi_generator_ignored_input(repo_root, &pin)?;
+    let tracked_input =
+        read_openapi_generator_tracked_input(repo_root, commit, &cargo_lock_blob_oid, &pin)?;
     Ok(openapi_generator_input_closure_sha256(
         &tree,
-        &ignored_input,
+        &tracked_input,
     ))
 }
-fn openapi_generator_input_closure_sha256(tree: &[u8], ignored_input: &[u8]) -> String {
+fn openapi_generator_input_closure_sha256(tree: &[u8], tracked_input: &[u8]) -> String {
     let mut source_digest = Sha256::new();
     update_sha256_component(
         &mut source_digest,
@@ -11129,15 +11112,15 @@ fn openapi_generator_input_closure_sha256(tree: &[u8], ignored_input: &[u8]) -> 
     update_sha256_component(&mut source_digest, b"tree", tree);
     update_sha256_component(
         &mut source_digest,
-        b"ignored-input-path",
-        OPENAPI_GENERATOR_IGNORED_INPUT.as_bytes(),
+        b"tracked-input-path",
+        OPENAPI_GENERATOR_TRACKED_INPUT.as_bytes(),
     );
     update_sha256_component(
         &mut source_digest,
-        b"ignored-input-mode",
-        OPENAPI_GENERATOR_IGNORED_INPUT_MODE,
+        b"tracked-input-mode",
+        OPENAPI_GENERATOR_TRACKED_INPUT_MODE,
     );
-    update_sha256_component(&mut source_digest, b"ignored-input-bytes", ignored_input);
+    update_sha256_component(&mut source_digest, b"tracked-input-bytes", tracked_input);
     hex::encode(source_digest.finalize())
 }
 fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
@@ -11176,9 +11159,9 @@ fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, B
     if fields.next() != Some("") || fields.next().is_some() {
         return Err("OpenAPI Cargo.lock pin must contain exactly three fields".into());
     }
-    if expected_bytes == 0 || expected_bytes > OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES {
+    if expected_bytes == 0 || expected_bytes > OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES {
         return Err(format!(
-            "OpenAPI Cargo.lock pin bytes must be within 1..={OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES}"
+            "OpenAPI Cargo.lock pin bytes must be within 1..={OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES}"
         )
         .into());
     }
@@ -11242,72 +11225,158 @@ fn read_git_openapi_cargo_lock_pin(
     }
     parse_openapi_cargo_lock_pin(&committed_pin)
 }
-fn read_openapi_generator_ignored_input(
+fn read_openapi_generator_tracked_input(
     repo_root: &Path,
+    commit: &str,
+    expected_blob_oid: &str,
     pin: &OpenApiCargoLockPinV1,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    let tracked = git_stdout(
+    let index_entry = git_stdout(
         repo_root,
         &[
             "ls-files",
             "--stage",
             "-z",
             "--",
-            OPENAPI_GENERATOR_IGNORED_INPUT,
+            OPENAPI_GENERATOR_TRACKED_INPUT,
         ],
     )?;
-    if !tracked.is_empty() {
-        return Err(format!(
-            "OpenAPI generator ignored input {} must remain untracked",
-            OPENAPI_GENERATOR_IGNORED_INPUT
-        )
-        .into());
-    }
-    let ignored = git_stdout(
+    let generator_tree_entry = git_stdout(
         repo_root,
-        &["check-ignore", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
-    )
-    .map_err(|_| {
-        format!(
-            "OpenAPI generator ignored input {} must be excluded by Git",
-            OPENAPI_GENERATOR_IGNORED_INPUT
-        )
-    })?;
-    if ignored != format!("{}\n", OPENAPI_GENERATOR_IGNORED_INPUT).as_bytes() {
+        &[
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            commit,
+            "--",
+            OPENAPI_GENERATOR_TRACKED_INPUT,
+        ],
+    )?;
+    let head_tree_entry = git_stdout(
+        repo_root,
+        &[
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            "HEAD",
+            "--",
+            OPENAPI_GENERATOR_TRACKED_INPUT,
+        ],
+    )?;
+    let index_blob_oid = parse_openapi_cargo_lock_index_entry(&index_entry)?;
+    let generator_blob_oid =
+        parse_openapi_cargo_lock_tree_entry(&generator_tree_entry, "generator Git tree")?;
+    let head_blob_oid = parse_openapi_cargo_lock_tree_entry(&head_tree_entry, "HEAD Git tree")?;
+    if generator_blob_oid != expected_blob_oid
+        || index_blob_oid != generator_blob_oid
+        || generator_blob_oid != head_blob_oid
+    {
+        return Err(
+            "OpenAPI Cargo.lock must reference the same blob in the index, generator Git tree, and HEAD Git tree"
+                .into(),
+        );
+    }
+    let committed = git_stdout(
+        repo_root,
+        &[
+            OsString::from("cat-file"),
+            OsString::from("blob"),
+            OsString::from(generator_blob_oid),
+        ],
+    )?;
+    if committed.is_empty()
+        || u64::try_from(committed.len())? > OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES
+    {
         return Err(format!(
-            "Git returned a noncanonical ignored-input identity for {}",
-            OPENAPI_GENERATOR_IGNORED_INPUT
+            "tracked OpenAPI generator Cargo.lock Git blob must contain 1..={OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES} bytes"
         )
         .into());
     }
-    let path = repo_root.join(OPENAPI_GENERATOR_IGNORED_INPUT);
-    let bytes = read_openapi_input_stable_with_policy(
+    let path = repo_root.join(OPENAPI_GENERATOR_TRACKED_INPUT);
+    let working = read_openapi_input_stable_with_policy(
         &path,
-        "OpenAPI generator ignored Cargo lock",
-        OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES,
+        "tracked OpenAPI generator Cargo lock",
+        OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES,
         false,
         true,
     )?;
-    if bytes.is_empty() {
-        return Err("OpenAPI generator ignored Cargo lock must not be empty".into());
+    if working != committed {
+        return Err(
+            "tracked OpenAPI generator Cargo.lock working bytes must equal the authenticated Git blob"
+                .into(),
+        );
     }
-    if u64::try_from(bytes.len())? != pin.bytes {
+    if u64::try_from(committed.len())? != pin.bytes {
         return Err(format!(
-            "OpenAPI generator ignored Cargo lock has {} bytes; expected exactly {}",
-            bytes.len(),
+            "tracked OpenAPI generator Cargo.lock has {} bytes; expected exactly {}",
+            committed.len(),
             pin.bytes
         )
         .into());
     }
-    let digest = hex::encode(Sha256::digest(&bytes));
+    let digest = hex::encode(Sha256::digest(&committed));
     if digest != pin.sha256_hex {
         return Err(format!(
-            "OpenAPI generator ignored Cargo lock SHA-256 {digest} does not match pinned {}",
+            "tracked OpenAPI generator Cargo.lock SHA-256 {digest} does not match pinned {}",
             pin.sha256_hex
         )
         .into());
     }
-    Ok(bytes)
+    Ok(committed)
+}
+fn parse_openapi_cargo_lock_index_entry(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
+    let entry = parse_single_nul_git_entry(bytes, "OpenAPI Cargo.lock Git index")?;
+    let (metadata, path) = entry
+        .split_once('\t')
+        .ok_or("OpenAPI Cargo.lock Git index entry is missing its path separator")?;
+    if path != OPENAPI_GENERATOR_TRACKED_INPUT {
+        return Err("OpenAPI Cargo.lock Git index entry has a noncanonical root path".into());
+    }
+    let fields = metadata.split(' ').collect::<Vec<_>>();
+    if fields.len() != 3
+        || fields[0] != "100644"
+        || !is_lower_hex_digest(fields[1], 20)
+        || fields[1].bytes().all(|byte| byte == b'0')
+        || fields[2] != "0"
+    {
+        return Err("OpenAPI Cargo.lock index must be one stage-zero 100644 blob".into());
+    }
+    Ok(fields[1].to_owned())
+}
+fn parse_openapi_cargo_lock_tree_entry(
+    bytes: &[u8],
+    label: &str,
+) -> Result<String, Box<dyn Error>> {
+    let entry = parse_single_nul_git_entry(bytes, label)?;
+    let (metadata, path) = entry
+        .split_once('\t')
+        .ok_or_else(|| format!("OpenAPI Cargo.lock {label} entry is missing its path separator"))?;
+    if path != OPENAPI_GENERATOR_TRACKED_INPUT {
+        return Err(
+            format!("OpenAPI Cargo.lock {label} entry has a noncanonical root path").into(),
+        );
+    }
+    let fields = metadata.split(' ').collect::<Vec<_>>();
+    if fields.len() != 3
+        || fields[0] != "100644"
+        || fields[1] != "blob"
+        || !is_lower_hex_digest(fields[2], 20)
+        || fields[2].bytes().all(|byte| byte == b'0')
+    {
+        return Err(
+            format!("OpenAPI Cargo.lock must be one canonical 100644 blob in the {label}").into(),
+        );
+    }
+    Ok(fields[2].to_owned())
+}
+fn parse_single_nul_git_entry<'a>(bytes: &'a [u8], label: &str) -> Result<&'a str, Box<dyn Error>> {
+    if !bytes.ends_with(&[0]) || bytes[..bytes.len().saturating_sub(1)].contains(&0) {
+        return Err(
+            format!("{label} evidence must contain exactly one NUL-terminated entry").into(),
+        );
+    }
+    std::str::from_utf8(&bytes[..bytes.len() - 1])
+        .map_err(|err| format!("{label} evidence is not UTF-8: {err}").into())
 }
 fn validate_openapi_generator_input_inventory() -> Result<Vec<&'static str>, Box<dyn Error>> {
     let inventory = std::str::from_utf8(OPENAPI_GENERATOR_INPUT_INVENTORY)
@@ -11413,7 +11482,7 @@ fn git_stdout<S: AsRef<OsStr>>(repo_root: &Path, args: &[S]) -> Result<Vec<u8>, 
         .map(|arg| arg.as_ref().to_string_lossy())
         .collect::<Vec<_>>()
         .join(" ");
-    let output = process::Command::new("git")
+    let output = openapi_git::command()
         .current_dir(repo_root)
         .args(args)
         .output()
@@ -11739,7 +11808,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "f8eaf5cc575ab4dfe79b6809693ea9ebb4b0336d93e9bd51160caaa776923d70"
+            "5034e34e44a804546302178b2f13468096663997b2074ef0a2fe6916f654e080"
         );
     }
     #[test]
@@ -11747,7 +11816,7 @@ mod openapi_tests {
         let pin =
             parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin");
         assert!(pin.bytes > 0);
-        assert!(pin.bytes <= OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES);
+        assert!(pin.bytes <= OPENAPI_GENERATOR_TRACKED_INPUT_MAX_BYTES);
         assert!(is_lower_hex_digest(&pin.sha256_hex, 32));
         assert!(!pin.sha256_hex.bytes().all(|byte| byte == b'0'));
         let canonical = std::str::from_utf8(OPENAPI_CARGO_LOCK_PIN).expect("UTF-8 canonical pin");
@@ -11815,12 +11884,12 @@ mod openapi_tests {
             } else {
                 fs::create_dir_all(target.parent().expect("generator input has a parent"))
                     .expect("create generator input parent");
-                if *relative == OPENAPI_GENERATOR_IGNORED_INPUT {
+                if *relative == OPENAPI_GENERATOR_TRACKED_INPUT {
                     fs::copy(
-                        workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+                        workspace_root().join(OPENAPI_GENERATOR_TRACKED_INPUT),
                         &target,
                     )
-                    .expect("copy canonical ignored Cargo lock fixture");
+                    .expect("copy canonical tracked Cargo lock fixture");
                 } else {
                     let bytes = if *relative == OPENAPI_CARGO_LOCK_PIN_PATH {
                         OPENAPI_CARGO_LOCK_PIN
@@ -11833,8 +11902,8 @@ mod openapi_tests {
                 }
             }
         }
-        fs::write(root.join(".gitignore"), b"/Cargo.lock\n")
-            .expect("write ignored Cargo lock rule");
+        fs::write(root.join(".gitignore"), b"**/Cargo.lock\n!/Cargo.lock\n")
+            .expect("write tracked root Cargo lock rule");
         fs::write(root.join("xtask/source.txt"), b"source-v1\n").expect("write fixture source");
         fs::create_dir_all(root.join("artifacts/openapi/versions/current"))
             .expect("create generated fixture directory");
@@ -12670,23 +12739,25 @@ mod openapi_tests {
             "generated files are not source inputs"
         );
         fs::write(tmp.path().join("Cargo.lock"), b"fixture-lock-v2\n")
-            .expect("change ignored Cargo lock");
+            .expect("change tracked Cargo lock");
         let lock_changed = git_source_provenance(tmp.path(), &generated)
-            .expect_err("substituted ignored Cargo lock must fail");
+            .expect_err("substituted tracked Cargo lock must fail");
         assert!(
-            lock_changed.to_string().contains("expected exactly"),
+            lock_changed
+                .to_string()
+                .contains("working bytes must equal the authenticated Git blob"),
             "unexpected substituted lock error: {lock_changed}"
         );
         fs::copy(
-            workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
-            tmp.path().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+            workspace_root().join(OPENAPI_GENERATOR_TRACKED_INPUT),
+            tmp.path().join(OPENAPI_GENERATOR_TRACKED_INPUT),
         )
-        .expect("restore ignored Cargo lock");
+        .expect("restore tracked Cargo lock");
         let lock_restored =
             git_source_provenance(tmp.path(), &generated).expect("restored lock provenance");
         assert_eq!(
             lock_restored, clean,
-            "restoring the ignored Cargo lock must restore clean provenance"
+            "restoring the tracked Cargo lock must restore clean provenance"
         );
         fs::write(tmp.path().join("xtask/source.txt"), b"source-v2\n")
             .expect("modify tracked source");
@@ -12731,166 +12802,7 @@ mod openapi_tests {
             "untracked non-output contents must be provenance-bound"
         );
     }
-    #[test]
-    fn openapi_generator_ignored_lock_fails_closed_when_missing_empty_large_or_tracked() {
-        let tmp = tempdir().expect("tempdir");
-        initialize_git_fixture(tmp.path());
-        let lock = tmp.path().join(OPENAPI_GENERATOR_IGNORED_INPUT);
-        let head = std::str::from_utf8(
-            &git_stdout(tmp.path(), &["rev-parse", "--verify", "HEAD"]).expect("fixture HEAD"),
-        )
-        .expect("UTF-8 fixture HEAD")
-        .trim()
-        .to_owned();
-        fs::remove_file(&lock).expect("remove ignored Cargo lock");
-        let missing = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("missing ignored Cargo lock must fail");
-        assert!(
-            missing.to_string().contains("ignored Cargo lock"),
-            "unexpected missing-lock error: {missing}"
-        );
-        fs::write(&lock, []).expect("write empty ignored Cargo lock");
-        let empty = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("empty ignored Cargo lock must fail");
-        assert!(
-            empty.to_string().contains("must not be empty"),
-            "unexpected empty-lock error: {empty}"
-        );
-        let canonical = fs::read(workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT))
-            .expect("read canonical ignored Cargo lock");
-        fs::write(&lock, &canonical[..canonical.len() - 1])
-            .expect("write short ignored Cargo lock");
-        let short = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("short ignored Cargo lock must fail");
-        assert!(
-            short.to_string().contains("expected exactly"),
-            "unexpected short-lock error: {short}"
-        );
-        let mut substituted = canonical;
-        substituted[0] ^= 1;
-        fs::write(&lock, substituted).expect("write substituted ignored Cargo lock");
-        let wrong_digest = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("substituted ignored Cargo lock must fail");
-        assert!(
-            wrong_digest.to_string().contains("SHA-256"),
-            "unexpected substituted-lock error: {wrong_digest}"
-        );
-        let large = fs::File::create(&lock).expect("create oversized ignored Cargo lock");
-        large
-            .set_len(OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES + 1)
-            .expect("size oversized ignored Cargo lock");
-        drop(large);
-        let oversized = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("oversized ignored Cargo lock must fail");
-        assert!(
-            oversized.to_string().contains("exceeds the"),
-            "unexpected oversized-lock error: {oversized}"
-        );
-        fs::copy(
-            workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
-            &lock,
-        )
-        .expect("restore ignored Cargo lock");
-        git_stdout(
-            tmp.path(),
-            &["add", "--force", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
-        )
-        .expect("force-track ignored Cargo lock");
-        let tracked = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("tracked Cargo lock must fail");
-        assert!(
-            tracked.to_string().contains("must remain untracked"),
-            "unexpected tracked-lock error: {tracked}"
-        );
-    }
-    #[test]
-    fn openapi_generator_ignored_lock_requires_a_git_ignore_rule() {
-        let tmp = tempdir().expect("tempdir");
-        initialize_git_fixture(tmp.path());
-        fs::remove_file(tmp.path().join(".gitignore")).expect("remove Cargo lock ignore rule");
-        let head = std::str::from_utf8(
-            &git_stdout(tmp.path(), &["rev-parse", "--verify", "HEAD"]).expect("fixture HEAD"),
-        )
-        .expect("UTF-8 fixture HEAD")
-        .trim()
-        .to_owned();
-        let err = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
-            .expect_err("unignored Cargo lock must fail");
-        assert!(
-            err.to_string().contains("must be excluded by Git"),
-            "unexpected unignored-lock error: {err}"
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn openapi_generator_ignored_lock_rejects_executable_symlink_and_hardlink_inputs() {
-        use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let executable_fixture = tempdir().expect("executable tempdir");
-        initialize_git_fixture(executable_fixture.path());
-        let executable_lock = executable_fixture
-            .path()
-            .join(OPENAPI_GENERATOR_IGNORED_INPUT);
-        fs::set_permissions(&executable_lock, fs::Permissions::from_mode(0o700))
-            .expect("make ignored Cargo lock executable");
-        let executable_head = std::str::from_utf8(
-            &git_stdout(
-                executable_fixture.path(),
-                &["rev-parse", "--verify", "HEAD"],
-            )
-            .expect("fixture HEAD"),
-        )
-        .expect("UTF-8 fixture HEAD")
-        .trim()
-        .to_owned();
-        let executable =
-            git_openapi_generator_input_tree_sha256(executable_fixture.path(), &executable_head)
-                .expect_err("executable ignored Cargo lock must fail");
-        assert!(
-            executable.to_string().contains("must not be executable"),
-            "unexpected executable-lock error: {executable}"
-        );
-        let symlink_fixture = tempdir().expect("symlink tempdir");
-        initialize_git_fixture(symlink_fixture.path());
-        let symlink_lock = symlink_fixture.path().join(OPENAPI_GENERATOR_IGNORED_INPUT);
-        fs::remove_file(&symlink_lock).expect("remove ignored Cargo lock");
-        fs::write(symlink_fixture.path().join("lock-target"), b"fixture\n")
-            .expect("write lock symlink target");
-        symlink("lock-target", &symlink_lock).expect("symlink ignored Cargo lock");
-        let symlink_head = std::str::from_utf8(
-            &git_stdout(symlink_fixture.path(), &["rev-parse", "--verify", "HEAD"])
-                .expect("fixture HEAD"),
-        )
-        .expect("UTF-8 fixture HEAD")
-        .trim()
-        .to_owned();
-        let linked = git_openapi_generator_input_tree_sha256(symlink_fixture.path(), &symlink_head)
-            .expect_err("symlinked ignored Cargo lock must fail");
-        assert!(
-            linked.to_string().contains("must not be a symlink"),
-            "unexpected symlink-lock error: {linked}"
-        );
-        let hardlink_fixture = tempdir().expect("hardlink tempdir");
-        initialize_git_fixture(hardlink_fixture.path());
-        let hardlink_lock = hardlink_fixture
-            .path()
-            .join(OPENAPI_GENERATOR_IGNORED_INPUT);
-        fs::hard_link(&hardlink_lock, hardlink_fixture.path().join("lock-alias"))
-            .expect("hard-link ignored Cargo lock");
-        let hardlink_head = std::str::from_utf8(
-            &git_stdout(hardlink_fixture.path(), &["rev-parse", "--verify", "HEAD"])
-                .expect("fixture HEAD"),
-        )
-        .expect("UTF-8 fixture HEAD")
-        .trim()
-        .to_owned();
-        let hardlinked =
-            git_openapi_generator_input_tree_sha256(hardlink_fixture.path(), &hardlink_head)
-                .expect_err("hard-linked ignored Cargo lock must fail");
-        assert!(
-            hardlinked.to_string().contains("exactly one hard link"),
-            "unexpected hardlink-lock error: {hardlinked}"
-        );
-    }
+    include!("tests/openapi_tracked_lock.rs");
     #[cfg(unix)]
     #[test]
     fn openapi_generator_pin_rejects_missing_executable_and_symlinked_git_blobs() {
@@ -12958,46 +12870,26 @@ mod openapi_tests {
         }
     }
     #[test]
-    fn openapi_generator_rejects_a_pinned_commit_that_tracks_cargo_lock() {
-        let fixture = tempdir().expect("tracked ancestor tempdir");
+    fn openapi_generator_rejects_generator_and_head_lock_blob_divergence() {
+        let fixture = tempdir().expect("divergent lock tempdir");
         initialize_git_fixture(fixture.path());
-        git_stdout(
-            fixture.path(),
-            &["add", "--force", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
-        )
-        .expect("force-stage ignored Cargo lock");
-        git_stdout(
-            fixture.path(),
-            &[
-                "-c",
-                "user.name=OpenAPI Test",
-                "-c",
-                "user.email=openapi-test@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "bad tracked lock ancestor",
-            ],
-        )
-        .expect("commit tracked lock ancestor");
-        let bad_ancestor = std::str::from_utf8(
+        let generator_commit = std::str::from_utf8(
             &git_stdout(fixture.path(), &["rev-parse", "--verify", "HEAD"])
-                .expect("bad ancestor HEAD"),
+                .expect("generator HEAD"),
         )
-        .expect("UTF-8 bad ancestor HEAD")
+        .expect("UTF-8 generator HEAD")
         .trim()
         .to_owned();
+        fs::write(
+            fixture.path().join(OPENAPI_GENERATOR_TRACKED_INPUT),
+            b"substituted tracked lock\n",
+        )
+        .expect("substitute tracked Cargo lock");
         git_stdout(
             fixture.path(),
-            &[
-                "rm",
-                "--cached",
-                "--quiet",
-                "--",
-                OPENAPI_GENERATOR_IGNORED_INPUT,
-            ],
+            &["add", "--", OPENAPI_GENERATOR_TRACKED_INPUT],
         )
-        .expect("remove Cargo lock from the current index");
+        .expect("stage substituted Cargo lock");
         git_stdout(
             fixture.path(),
             &[
@@ -13008,30 +12900,15 @@ mod openapi_tests {
                 "commit",
                 "--quiet",
                 "-m",
-                "remove tracked lock",
+                "change tracked lock",
             ],
         )
-        .expect("commit current untracked lock state");
-        let current_tree_entry = git_stdout(
-            fixture.path(),
-            &[
-                "ls-tree",
-                "-z",
-                "--full-tree",
-                "HEAD",
-                "--",
-                OPENAPI_GENERATOR_IGNORED_INPUT,
-            ],
-        )
-        .expect("inspect current tree");
-        assert!(current_tree_entry.is_empty());
-        let error = git_openapi_generator_input_tree_sha256(fixture.path(), &bad_ancestor)
-            .expect_err("tracked pinned Cargo lock must fail");
+        .expect("commit changed tracked lock");
+        let error = git_openapi_generator_input_tree_sha256(fixture.path(), &generator_commit)
+            .expect_err("generator and HEAD lock divergence must fail");
         assert!(
-            error
-                .to_string()
-                .contains("must not exist at pinned commit"),
-            "unexpected tracked-ancestor error: {error}"
+            error.to_string().contains("same blob in the index"),
+            "unexpected divergent-lock error: {error}"
         );
     }
     #[test]

@@ -109,6 +109,14 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     assert controller.CONTROLLER_ROOT == Path(
         "/usr/local/libexec/iroha-taira-release-controller-v1.d"
     )
+    assert controller.KAGEMUSHA_PREPARE_RESET_FLAGS <= controller.OPERATION_FLAGS[
+        "prepare-reset"
+    ]
+    assert not (
+        controller.KAGEMUSHA_PREPARE_RESET_FLAGS
+        & controller.REQUIRED_FLAGS[("prepare-reset", None)]
+    )
+    assert "--kagemusha-release-root" in controller.INPUT_PATH_FLAGS
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
@@ -1165,6 +1173,16 @@ def _publisher_operation_fixture(
     _write_handoff(candidate, {"candidate.tar.zst": b"candidate"}, "candidate")
     _freeze_handoff(candidate)
     attestation = _attestation(handoff, trusted, "macos-publish")
+    authority_root = Path(str(attestation["authority_root"]))
+    rollout_inputs = {
+        "--rollout-plan": authority_root / "rollout-plan.json",
+        "--rollout-result": authority_root / "rollout-result.json",
+        "--rollout-authority-envelope": authority_root / "rollout-envelope.json",
+        "--rollout-durable-receipt": authority_root / "rollout-receipt.json",
+    }
+    for flag, path in rollout_inputs.items():
+        path.write_bytes((flag + "\n").encode("ascii"))
+        path.chmod(0o400)
     attestation["trusted_values"] = [
         {
             "flag": "--expected-oras-version",
@@ -1205,6 +1223,8 @@ def _publisher_operation_fixture(
         "--suffix",
         "testnet",
     ]
+    for flag, path in rollout_inputs.items():
+        args.extend((flag, str(path)))
     return args, attestation, candidate
 
 
@@ -1410,6 +1430,126 @@ def test_trusted_executable_requires_root_ancestry_stable_inode_and_digest(
     monkeypatch.setattr(controller, "_revalidate_ancestry", changed)
     with pytest.raises(controller.ControllerSealError, match="ancestry changed"):
         controller._validate_trusted_executable_path(trusted, digest)
+
+
+def test_kagemusha_release_root_requires_canonical_root_owned_ancestry(
+    tmp_path: Path,
+) -> None:
+    assert controller._validate_root_owned_release_root(Path("/usr")) == Path("/usr")
+    with pytest.raises(controller.ControllerSealError, match="filesystem root"):
+        controller._validate_root_owned_release_root(Path("/"))
+    for noncanonical in (Path("usr"), Path("/usr/../usr")):
+        with pytest.raises(controller.ControllerSealError, match="absolute lexical"):
+            controller._validate_root_owned_release_root(noncanonical)
+
+    caller_owned = tmp_path / "release-root"
+    caller_owned.mkdir(mode=0o755)
+    with pytest.raises(
+        controller.ControllerSealError, match="root-owned and nonwritable"
+    ):
+        controller._validate_root_owned_release_root(caller_owned)
+
+    writable_system_root = (
+        Path("/private/tmp") if Path("/private/tmp").is_dir() else Path("/tmp")
+    )
+    with pytest.raises(
+        controller.ControllerSealError, match="root-owned and nonwritable"
+    ):
+        controller._validate_root_owned_release_root(writable_system_root)
+
+
+@pytest.mark.parametrize(
+    "operation_args",
+    (
+        ["--kagemusha-release-root", "/usr"],
+        ["--kagemusha-activation-authority", "genesis-authority"],
+    ),
+)
+def test_prepare_reset_requires_complete_kagemusha_flag_pair(
+    tmp_path: Path, operation_args: list[str]
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    with pytest.raises(controller.ControllerSealError, match="supplied together"):
+        controller._validate_operation_args(
+            "prepare-reset",
+            operation_args,
+            _attestation(handoff, trusted, "macos-qualification"),
+        )
+
+
+def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
+    tmp_path: Path,
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    attestation = _attestation(handoff, trusted, "macos-qualification")
+    runtime_root = Path(str(attestation["runtime_root"]))
+    source_bundle = runtime_root / "source-bundle"
+    privacy_release = runtime_root / "privacy-release"
+    source_bundle.mkdir(mode=0o700)
+    privacy_release.mkdir(mode=0o700)
+    controller_root = tmp_path / "installed-controller"
+    controller_root.mkdir(mode=0o755)
+    controller_manifest = controller_root / controller.MANIFEST_NAME
+    controller_manifest.write_bytes(b"{}\n")
+    attestation["controller_root"] = str(controller_root)
+    attestation["trusted_inputs"] = [
+        {
+            "flag": "--source-bundle",
+            "operation": "prepare-reset",
+            "path": str(source_bundle),
+        }
+    ]
+    executable = Path("/usr/bin/true")
+    executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+    attestation["trusted_executables"] = [
+        {
+            "digest_flag": "--trusted-genesis-external-signer-sha256",
+            "flag": "--genesis-external-signer",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
+            "flag": "--onboarding-token-hash-tool",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+    ]
+    output = runtime_root / "kagemusha-reset"
+    args = [
+        "--source-bundle", str(source_bundle),
+        "--source-bundle-sha256", "1" * 64,
+        "--privacy-release-dir", str(privacy_release),
+        "--genesis-external-signer", str(executable),
+        "--trusted-genesis-external-signer-sha256", executable_sha256,
+        "--onboarding-token-hash-tool", str(executable),
+        "--irohad-sha256", "2" * 64,
+        "--source-commit", "a" * 40,
+        "--dpn-validator-release-commit", "b" * 40,
+        "--cargo-lock-sha256", "3" * 64,
+        "--workspace-source-manifest-sha256", "4" * 64,
+        "--controller-manifest", str(controller_manifest),
+        "--controller-digest", "5" * 64,
+        "--output-bundle", str(output),
+        "--kagemusha-release-root", "/usr",
+        "--kagemusha-activation-authority", "genesis-authority",
+    ]
+
+    staged, outputs = controller._validate_operation_args(
+        "prepare-reset", args, attestation
+    )
+
+    assert not staged
+    assert outputs == {output}
 
 
 def test_controller_has_no_generic_signing_or_direct_close_surface() -> None:

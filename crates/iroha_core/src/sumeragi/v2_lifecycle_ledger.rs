@@ -19,6 +19,7 @@ use super::wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedWalVoteLifecycleRepair, DurableAuthenticatedWalVoteLifecycleRepair,
     RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    RecoveredLifecycleSignedBroadcastProjectionV1,
 };
 use super::{
     CandidateAdmission, CausalRoot, DurablePayloadReference, DurableServeNegativeOutcome,
@@ -1560,19 +1561,20 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
     /// successful launch cannot be detached from its retirement authority or
     /// used to publish the generic adapter status.
     #[allow(dead_code, clippy::result_large_err)]
+    #[inline(never)]
     pub(in crate::sumeragi) fn launch(
         self,
         inputs: super::launch::ProductionLifecycleLaunchInputsV1,
     ) -> Result<
-        LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+        Box<LaunchedRecoveredCompleteTipSuccessorLifecycleV1>,
         super::launch::ProductionLifecycleLaunchErrorV1,
     > {
         let Self { owner, retirement } = self;
         let launched = owner.launch(inputs)?;
-        Ok(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+        Ok(Box::new(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
             launched,
             retirement,
-        })
+        }))
     }
 }
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
@@ -1584,7 +1586,7 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
-    launched: super::launch::LaunchedProductionLifecycleV1,
+    launched: Box<super::launch::LaunchedProductionLifecycleV1>,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
 }
 
@@ -2304,10 +2306,10 @@ impl ProductionLifecycleOwnerV1 {
         verified: VerifiedHeightContext,
         projection: AuthenticatedRecoveredWalControlProjection,
         ledger_root: &Path,
-        mut body_store: V2BodyStore,
+        body_store: V2BodyStore,
         config: &SumeragiV2Config,
         reply_route_source_capacity: usize,
-        mut payload_store: CertifiedServePayloadStoreV1,
+        payload_store: CertifiedServePayloadStoreV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         adapter_startup: ProductionLifecycleAdapterStartupV1,
     ) -> Result<Self, ProductionRecoveredWalControlStartupErrorV1> {
@@ -2323,8 +2325,28 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered control LedgerV1 open failed",
                 )
             })?;
-        if let Ok((broadcast, parent_ordinal, child_ordinal)) =
-            opened.authenticate_recovered_control_signed_broadcast(&verified, &projection)
+        #[inline(never)]
+        #[allow(
+            clippy::items_after_statements,
+            clippy::result_large_err,
+            clippy::too_many_arguments,
+            clippy::too_many_lines
+        )]
+        fn open_recovered_control_signed_startup(
+            verified: VerifiedHeightContext,
+            projection: AuthenticatedRecoveredWalControlProjection,
+            ledger_store: LifecycleLedgerStoreV1,
+            opened: LifecycleLedgerV1,
+            broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
+            parent_ordinal: u128,
+            child_ordinal: u128,
+            mut body_store: V2BodyStore,
+            config: &SumeragiV2Config,
+            reply_route_source_capacity: usize,
+            mut payload_store: CertifiedServePayloadStoreV1,
+            serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+            adapter_startup: ProductionLifecycleAdapterStartupV1,
+        ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
         {
             let mut matching_pairs = opened
                 .recovered_lifecycle_signed_broadcast_and_sign_pairs()
@@ -2464,7 +2486,7 @@ impl ProductionLifecycleOwnerV1 {
                     .map_err(|error| {
                         ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                     })?;
-                return Ok(Self {
+                return Ok(ProductionLifecycleOwnerV1 {
                     verified,
                     coordinator,
                     registry,
@@ -2553,7 +2575,7 @@ impl ProductionLifecycleOwnerV1 {
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
-            return Ok(Self {
+            Ok(ProductionLifecycleOwnerV1 {
                 verified,
                 coordinator,
                 registry,
@@ -2564,39 +2586,77 @@ impl ProductionLifecycleOwnerV1 {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: Some(adapter_startup),
-            });
+            })
         }
-        let (repaired, ordinal, changed) = opened
-            .stage_authenticated_wal_control_sign(&projection)
-            .map_err(|_error| {
-                ProductionRecoveredWalControlStartupErrorV1::new(
-                    "recovered control durable row is absent-or-exact invariant failed",
-                )
-            })?;
-        if changed {
-            ledger_store
-                .persist_exact_successor(&opened, &repaired)
+        if let Ok((broadcast, parent_ordinal, child_ordinal)) =
+            opened.authenticate_recovered_control_signed_broadcast(&verified, &projection)
+        {
+            return open_recovered_control_signed_startup(
+                verified,
+                projection,
+                ledger_store,
+                opened,
+                broadcast,
+                parent_ordinal,
+                child_ordinal,
+                body_store,
+                config,
+                reply_route_source_capacity,
+                payload_store,
+                serve_payloads,
+                adapter_startup,
+            );
+        }
+        #[inline(never)]
+        #[allow(
+            clippy::items_after_statements,
+            clippy::result_large_err,
+            clippy::too_many_arguments
+        )]
+        fn open_recovered_control_sign_startup(
+            verified: VerifiedHeightContext,
+            projection: AuthenticatedRecoveredWalControlProjection,
+            ledger_store: LifecycleLedgerStoreV1,
+            opened: LifecycleLedgerV1,
+            mut body_store: V2BodyStore,
+            config: &SumeragiV2Config,
+            reply_route_source_capacity: usize,
+            mut payload_store: CertifiedServePayloadStoreV1,
+            serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+            adapter_startup: ProductionLifecycleAdapterStartupV1,
+        ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
+        {
+            let (repaired, ordinal, changed) = opened
+                .stage_authenticated_wal_control_sign(&projection)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
-                        "recovered control LedgerV1 successor publication failed",
+                        "recovered control durable row is absent-or-exact invariant failed",
                     )
                 })?;
-        }
-        if !ledger_store.load().is_ok_and(|loaded| loaded == repaired)
-            || !projection.exactly_matches_ledger_at(&repaired, ordinal)
-        {
-            return Err(ProductionRecoveredWalControlStartupErrorV1::new(
-                "recovered control LedgerV1 reopen changed the exact row",
-            ));
-        }
-        let fetches = repaired
-            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
-            .map_err(|_error| {
-                ProductionRecoveredWalControlStartupErrorV1::new(
-                    "recovered control Ready-Fetch census authentication failed",
-                )
-            })?;
-        let (recovery, fetches) =
+            if changed {
+                ledger_store
+                    .persist_exact_successor(&opened, &repaired)
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control LedgerV1 successor publication failed",
+                        )
+                    })?;
+            }
+            if !ledger_store.load().is_ok_and(|loaded| loaded == repaired)
+                || !projection.exactly_matches_ledger_at(&repaired, ordinal)
+            {
+                return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                    "recovered control LedgerV1 reopen changed the exact row",
+                ));
+            }
+            let fetches = repaired
+                .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+                .map_err(|_error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control Ready-Fetch census authentication failed",
+                    )
+                })?;
+            let (recovery, fetches) =
             AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_control_sign_and_durable_fetch_startup(
                 repaired.clone(),
                 serve_payloads,
@@ -2609,36 +2669,58 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered control storage census assembly failed",
                 )
             })?;
-        let mut registry = LifecycleWorkRegistryHolder::empty();
-        let mut installed = registry
-            .registry_mut()
-            .install_recovered_wal_control_sign(&verified, &ledger_store, &repaired, projection)
-            .map_err(|error| ProductionRecoveredWalControlStartupErrorV1::new(error.reason()))?;
-        installed
-            .install_fetches(fetches)
-            .map_err(|error| ProductionRecoveredWalControlStartupErrorV1::new(error.reason()))?;
-        let authority =
-            authority::production_authority(&verified, config, reply_route_source_capacity)
-                .ok_or_else(|| {
-                    ProductionRecoveredWalControlStartupErrorV1::new(
-                        "verified height cannot derive recovered control lifecycle authority",
-                    )
+            let mut registry = LifecycleWorkRegistryHolder::empty();
+            let mut installed = registry
+                .registry_mut()
+                .install_recovered_wal_control_sign(&verified, &ledger_store, &repaired, projection)
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
-        let (coordinator, recovery) = installed
-            .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
-            .map_err(|error| ProductionRecoveredWalControlStartupErrorV1::new(error.reason()))?;
-        Ok(Self {
+            installed.install_fetches(fetches).map_err(|error| {
+                ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+            })?;
+            let authority =
+                authority::production_authority(&verified, config, reply_route_source_capacity)
+                    .ok_or_else(|| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "verified height cannot derive recovered control lifecycle authority",
+                        )
+                    })?;
+            let (coordinator, recovery) = installed
+                .open_with_exact_store_authority(
+                    authority,
+                    ledger_store,
+                    &mut payload_store,
+                    recovery,
+                )
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
+            Ok(ProductionLifecycleOwnerV1 {
+                verified,
+                coordinator,
+                registry,
+                payload_store,
+                serve_payloads: recovery.into_serve_payloads(),
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(adapter_startup),
+            })
+        }
+        open_recovered_control_sign_startup(
             verified,
-            coordinator,
-            registry,
+            projection,
+            ledger_store,
+            opened,
+            body_store,
+            config,
+            reply_route_source_capacity,
             payload_store,
-            serve_payloads: recovery.into_serve_payloads(),
-            body_store: Some(body_store),
-            body_store_identity: None,
-            kura_binding: None,
-            apply_service: None,
-            adapter_startup: Some(adapter_startup),
-        })
+            serve_payloads,
+            adapter_startup,
+        )
     }
     /// Repair/coalesce and open one exact Decision-owned certified Fetch.
     ///
@@ -2894,7 +2976,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_decision_apply_startup(
         verified: VerifiedHeightContext,
-        projection: crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+        projection: Box<crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1>,
         effects: Vec<crate::sumeragi::v2::AdapterEffect>,
         ledger_root: &Path,
         mut body_store: V2BodyStore,
@@ -2932,7 +3014,7 @@ impl ProductionLifecycleOwnerV1 {
                 .0
         };
         let (successor, _apply_ordinal, _changed) = staged_predecessor
-            .stage_recovered_decision_apply(&projection)
+            .stage_recovered_decision_apply(projection.as_ref())
             .map_err(|_error| {
                 ProductionRecoveredDecisionApplyStartupErrorV1::new(
                     "recovered Decision Apply four-row durable lineage is not exact",
@@ -2949,7 +3031,7 @@ impl ProductionLifecycleOwnerV1 {
             successor.clone(),
             serve_payloads,
             &mut body_store,
-            &projection,
+            projection.as_ref(),
             fetches,
         )
         .map_err(|_error| {

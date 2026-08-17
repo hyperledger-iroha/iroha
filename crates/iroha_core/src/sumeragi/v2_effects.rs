@@ -2553,7 +2553,7 @@ struct FetchCompletionPlan {
 }
 /// Closed executor-side retirement prepared for the coordinator-owned
 /// certified-Fetch completion path.
-///
+/// TODO: Wire ordinary certified-Fetch Phase B through the final runner.
 /// This plan reserves no legacy runtime command and mints no lifecycle
 /// ordinal. It freezes only existing exact request, Fetch, and body-pipeline
 /// indexes so the post-dequeue tail can retire them without another fallible

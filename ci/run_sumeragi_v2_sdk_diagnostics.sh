@@ -318,7 +318,7 @@ PY
 observed_test_count=0
 case "$surface" in
   python)
-    observed_test_count=121
+    observed_test_count=129
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Sumeragi diagnostics require Python >=3.10")'
     readonly python_path="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
@@ -326,6 +326,7 @@ case "$surface" in
     readonly torii_test="${repo_root}/python/iroha_torii_client/tests/test_client.py"
     python_diagnostics_tests=(
       "${repo_root}/python/iroha_python/tests/client_sumeragi_v2_status_test.py"
+      "${repo_root}/python/iroha_torii_client/tests/exact_certificate_cardinality_test.py"
       "${torii_test}::test_get_sumeragi_status_parses_authoritative_v2_snapshot"
       "${torii_test}::test_get_sumeragi_status_accepts_nonempty_native_manifest"
       "${torii_test}::test_get_sumeragi_status_rejects_invalid_native_manifest"
@@ -445,13 +446,13 @@ case "$surface" in
     done
     ;;
   swift)
-    observed_test_count=33
+    observed_test_count=34
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for Sumeragi v2 Swift diagnostics" >&2
       exit 1
     fi
     readonly swift_transcript="${temporary_root}/swift.log"
-    readonly swift_filter='ToriiClientTests/testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync|ToriiClientTests/testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest|ToriiClientTests/testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection|ToriiClientTests/testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts|ToriiClientTests/testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict|ToriiClientTests/testSumeragiDiagnosticsReservationsDurableIdentityAndGeometryAreExact|ToriiClientTests/testSumeragiDiagnosticsRejectsUnknownAutonomousLaneExecutionField|ToriiClientTests/testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows|ToriiClientTests/testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync|ToriiClientTests/testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence|ToriiClientTests/testSumeragiDiagnosticsRejectsWrongNativeAmxPhaseAndDuplicateLegs|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxSignatureAndPopLengthDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsLowercaseSourceAndLegacyReceipt|ToriiClientTests/testSumeragiDiagnosticsRejectsNoncanonicalNexusFeeQuantities|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxContextAndEpochDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsFlattenedNativeAmxPhaseAndSessionTampering|ToriiClientTests/testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes|SumeragiV2WireFixtureTests'
+    readonly swift_filter='ExactCertificateCardinalityTests|ToriiClientTests/testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync|ToriiClientTests/testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest|ToriiClientTests/testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection|ToriiClientTests/testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts|ToriiClientTests/testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict|ToriiClientTests/testSumeragiDiagnosticsReservationsDurableIdentityAndGeometryAreExact|ToriiClientTests/testSumeragiDiagnosticsRejectsUnknownAutonomousLaneExecutionField|ToriiClientTests/testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows|ToriiClientTests/testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync|ToriiClientTests/testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence|ToriiClientTests/testSumeragiDiagnosticsRejectsWrongNativeAmxPhaseAndDuplicateLegs|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxSignatureAndPopLengthDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsLowercaseSourceAndLegacyReceipt|ToriiClientTests/testSumeragiDiagnosticsRejectsNoncanonicalNexusFeeQuantities|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxContextAndEpochDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsFlattenedNativeAmxPhaseAndSessionTampering|ToriiClientTests/testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes|SumeragiV2WireFixtureTests'
     run_and_capture "$swift_transcript" \
       env GIT_ALLOW_PROTOCOL= GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       GIT_TERMINAL_PROMPT=0 HTTP_PROXY=http://127.0.0.1:9 \
@@ -484,7 +485,7 @@ if len(passed_cases) != expected or any("skipped" in line.lower() for line in li
 PY
     ;;
   kotlin)
-    observed_test_count=42
+    observed_test_count=43
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -516,7 +517,7 @@ PY
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=41
+    observed_test_count=42
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"

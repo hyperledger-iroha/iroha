@@ -1,7 +1,6 @@
 // Kagemusha V4 provenance regressions are included at offline-model module scope.
 #[cfg(test)]
 mod kagemusha_v4_topup_provenance_tests {
-    use iroha_crypto::HashOf;
     use super::*;
     use crate::{
         block::{
@@ -11,6 +10,7 @@ mod kagemusha_v4_topup_provenance_tests {
         domain::DomainId,
         peer::PeerId,
     };
+    use iroha_crypto::HashOf;
     struct Fixture {
         statement: KagemushaRecursiveSpendPublicStatementV4,
         provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -35,6 +35,10 @@ mod kagemusha_v4_topup_provenance_tests {
             seed, 0xF0,
         ])))
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture constructor must keep the top-up anchor, height context, quorum certificate, and proof mutually consistent"
+    )]
     fn evidence(
         network_id: NetworkId,
         asset: &AssetDefinitionId,
@@ -173,12 +177,13 @@ mod kagemusha_v4_topup_provenance_tests {
             generation: "provenance-test-release".to_owned(),
             manifest_sha256: [0x51; 32],
         };
-        let validator_keys = (0_u8..4)
+        let mut validator_keys = (0_u8..4)
             .map(|offset| {
                 KeyPair::try_from_seed(vec![0x61 + offset; 32], Algorithm::BlsNormal)
                     .expect("deterministic validator key")
             })
             .collect::<Vec<_>>();
+        validator_keys.sort_unstable_by_key(|key| PeerId::new(key.public_key().clone()));
         let validator_set = validator_keys
             .iter()
             .map(|key| ValidatorPower {
@@ -259,6 +264,18 @@ mod kagemusha_v4_topup_provenance_tests {
                 .is_err()
         );
     }
+    fn init_request(fixture: &Fixture) -> KagemushaRecursiveSpendInitRequestV4 {
+        let evidence = &fixture.provenance.topup_finality_evidence[0];
+        KagemushaRecursiveSpendInitRequestV4 {
+            topup_anchor: evidence.topup_anchor.clone(),
+            topup_finality_proof: evidence.topup_finality_proof.clone(),
+            topup_finality_roster_artifact: fixture
+                .provenance
+                .topup_finality_roster_artifact
+                .clone(),
+            artifact_binding: evidence.topup_anchor.artifact_binding.clone(),
+        }
+    }
     #[test]
     fn provenance_rejects_zero_many_duplicate_reordered_and_wrong_refs() {
         let fixture = fixture_with_seeds(&[0x11, 0x21]);
@@ -320,6 +337,95 @@ mod kagemusha_v4_topup_provenance_tests {
                 field: "topup_finality.height_context"
             })
         ));
+    }
+    #[test]
+    fn topup_finality_roster_rejects_weighted_npos_validators() {
+        let fixture = fixture_with_seeds(&[0x24]);
+        let mut window = fixture.provenance.topup_finality_roster_artifact.windows[0].clone();
+        window.consensus_mode = ConsensusMode::Npos;
+        window.validator_set[0].power = 2;
+        assert!(matches!(
+            window.validate_structure(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.roster_window.validator_set"
+            })
+        ));
+    }
+    #[test]
+    fn provenance_rejects_context_and_qc_that_cannot_match_roster_window() {
+        let fixture = fixture_with_seeds(&[0x25]);
+        let mut invalid_context = fixture.provenance.clone();
+        invalid_context.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .nexus_amx_context_hash = Hash::prehashed([0; Hash::LENGTH]);
+        rejects(&fixture, &invalid_context, 50);
+
+        let mut invalid_da_layout = fixture.provenance.clone();
+        invalid_da_layout.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .da_layout
+            .chunk_size_bytes = 0;
+        rejects(&fixture, &invalid_da_layout, 50);
+
+        let mut missing_next_epoch = fixture.provenance.clone();
+        let context = &mut missing_next_epoch.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context;
+        context.epoch_end_height = context.height;
+        context.next_epoch_snapshot = None;
+        rejects(&fixture, &missing_next_epoch, 50);
+
+        let mut missing_parent = fixture.provenance.clone();
+        missing_parent.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .snapshot_bootstrap = None;
+        rejects(&fixture, &missing_parent, 50);
+
+        let mut insufficient_quorum = fixture.provenance.clone();
+        insufficient_quorum.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .certificate
+            .signers = vec![0, 1];
+        rejects(&fixture, &insufficient_quorum, 50);
+
+        let mut out_of_range_signer = fixture.provenance.clone();
+        out_of_range_signer.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .certificate
+            .signers = vec![0, 1, 31];
+        rejects(&fixture, &out_of_range_signer, 50);
+    }
+    #[test]
+    fn init_request_rejects_context_and_qc_that_cannot_match_roster_window() {
+        let fixture = fixture_with_seeds(&[0x26]);
+        init_request(&fixture)
+            .validate_public_binding()
+            .expect("canonical init request");
+
+        let mut invalid_context = init_request(&fixture);
+        invalid_context
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .nexus_amx_context_hash = Hash::prehashed([0; Hash::LENGTH]);
+        assert!(invalid_context.validate_public_binding().is_err());
+
+        let mut insufficient_quorum = init_request(&fixture);
+        insufficient_quorum
+            .topup_finality_proof
+            .commit_qc
+            .certificate
+            .signers = vec![0, 1];
+        assert!(insufficient_quorum.validate_public_binding().is_err());
     }
     #[test]
     fn provenance_rejects_wrong_context_binding_window_height_qc_and_size() {

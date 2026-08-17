@@ -128,6 +128,12 @@ def test_owner_command_is_argument_free() -> None:
     command = writer.owner_command()
     assert command[-2:] == ["--bin", "musubi_fixtures"]
     assert command[command.index("--jobs") + 1] == "1"
+    assert set(command[command.index("--features") + 1].split(",")) == {
+        "dev-tools",
+        "test-fixtures",
+        "json",
+        "transparent_api",
+    }
     assert "--locked" in command
     assert "--offline" in command
     assert "-Z" not in command

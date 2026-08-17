@@ -1498,7 +1498,7 @@ fn appeal_finance_settlement_receipt_source_identity_binds_finalized_cursor() {
             u64::try_from(encoded.len()).expect("encoded length"),
             &encoded_blake3,
             u64::try_from(json.len()).expect("JSON length"),
-            &blake3::hash(json.as_bytes()).to_hex().to_string(),
+            blake3::hash(json.as_bytes()).to_hex().as_ref(),
         )
         .expect("derive composite source identity")
     };

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod recovery_tests {
+    use super::super::authority;
     #[cfg(feature = "bls")]
     use super::super::schema::DurableContinuationEdge;
     use super::super::schema::{CausalRoot, DurableContinuation, LifecycleStageKind, OwnerId};

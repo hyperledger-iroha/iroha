@@ -89,6 +89,10 @@ pub mod base64_vec {
                 None => out.push_str("null"),
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "Norito bounded serializers receive optional fields by shared reference"
+        )]
         pub fn serialize_bounded(
             value: &Option<Vec<u8>>,
             out: &mut dyn JsonWriteSink,
@@ -156,6 +160,10 @@ pub mod u64_string {
     pub fn serialize(value: &u64, out: &mut String) {
         JsonSerialize::json_serialize(&value.to_string(), out);
     }
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito bounded serializers receive fields by shared reference"
+    )]
     pub fn serialize_bounded(
         value: &u64,
         out: &mut dyn JsonWriteSink,
@@ -174,6 +182,10 @@ pub mod u64_string {
                 None => out.push_str("null"),
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "Norito bounded serializers receive optional fields by shared reference"
+        )]
         pub fn serialize_bounded(
             value: &Option<u64>,
             out: &mut dyn JsonWriteSink,
@@ -264,6 +276,10 @@ pub mod fixed_bytes {
                 None => out.push_str("null"),
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "Norito bounded serializers receive optional fields by shared reference"
+        )]
         pub fn serialize_bounded<const N: usize>(
             value: &Option<[u8; N]>,
             out: &mut dyn JsonWriteSink,
@@ -328,6 +344,10 @@ pub mod fixed_bytes {
                 None => out.push_str("null"),
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "Norito bounded serializers receive optional fields by shared reference"
+        )]
         pub fn serialize_bounded<const N: usize>(
             value: &Option<Vec<[u8; N]>>,
             out: &mut dyn JsonWriteSink,
@@ -539,6 +559,10 @@ pub mod fixed_bytes_hex {
                 None => out.push_str("null"),
             }
         }
+        #[expect(
+            clippy::ref_option,
+            reason = "Norito bounded serializers receive optional fields by shared reference"
+        )]
         pub fn serialize_bounded<const N: usize>(
             value: &Option<[u8; N]>,
             out: &mut dyn JsonWriteSink,
@@ -592,6 +616,10 @@ pub mod privacy_mode {
     pub fn serialize(value: &SoranetPrivacyModeV1, out: &mut String) {
         JsonSerialize::json_serialize(value.as_label(), out);
     }
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito bounded serializers receive fields by shared reference"
+    )]
     pub fn serialize_bounded(
         value: &SoranetPrivacyModeV1,
         out: &mut dyn JsonWriteSink,

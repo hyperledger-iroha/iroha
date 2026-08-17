@@ -3230,6 +3230,232 @@ fn verify_app_infra_signature(request: &SignedAppInfraRequest) -> Result<(), Sor
     })?;
     Ok(())
 }
+
+macro_rules! define_provenance_signature_verifiers {
+    ($(
+        $verify_fn:ident(
+            $request_ty:ty,
+            $payload_field:ident,
+            $encode_fn:ident,
+            $failure:literal
+        );
+    )*) => {
+        $(
+            fn $verify_fn(request: &$request_ty) -> Result<(), SoracloudError> {
+                let payload = $encode_fn(&request.$payload_field)?;
+                verify_signature_for_signer(
+                    &request.provenance.signature,
+                    &request.provenance.signer,
+                    &payload,
+                )
+                .map_err(|_| SoracloudError::unauthorized($failure))?;
+                Ok(())
+            }
+        )*
+    };
+}
+
+define_provenance_signature_verifiers! {
+    verify_rollback_signature(
+        SignedRollbackRequest,
+        payload,
+        encode_rollback_signature_payload,
+        "rollback provenance signature verification failed"
+    );
+    verify_service_config_set_signature(
+        SignedServiceConfigSetRequest,
+        payload,
+        encode_service_config_set_signature_payload,
+        "service config provenance signature verification failed"
+    );
+    verify_service_config_delete_signature(
+        SignedServiceConfigDeleteRequest,
+        payload,
+        encode_service_config_delete_signature_payload,
+        "service config delete provenance signature verification failed"
+    );
+    verify_service_secret_set_signature(
+        SignedServiceSecretSetRequest,
+        payload,
+        encode_service_secret_set_signature_payload,
+        "service secret provenance signature verification failed"
+    );
+    verify_service_secret_delete_signature(
+        SignedServiceSecretDeleteRequest,
+        payload,
+        encode_service_secret_delete_signature_payload,
+        "service secret delete provenance signature verification failed"
+    );
+    verify_state_mutation_signature(
+        SignedStateMutationRequest,
+        payload,
+        encode_state_mutation_signature_payload,
+        "state mutation provenance signature verification failed"
+    );
+    verify_fhe_job_run_signature(
+        SignedFheJobRunRequest,
+        payload,
+        encode_fhe_job_run_signature_payload,
+        "fhe job run provenance signature verification failed"
+    );
+    verify_training_job_start_signature(
+        SignedTrainingJobStartRequest,
+        payload,
+        encode_training_job_start_signature_payload,
+        "training job start provenance signature verification failed"
+    );
+    verify_training_job_checkpoint_signature(
+        SignedTrainingJobCheckpointRequest,
+        payload,
+        encode_training_job_checkpoint_signature_payload,
+        "training checkpoint provenance signature verification failed"
+    );
+    verify_training_job_retry_signature(
+        SignedTrainingJobRetryRequest,
+        payload,
+        encode_training_job_retry_signature_payload,
+        "training retry provenance signature verification failed"
+    );
+    verify_model_weight_register_signature(
+        SignedModelWeightRegisterRequest,
+        payload,
+        encode_model_weight_register_signature_payload,
+        "model weight register provenance signature verification failed"
+    );
+    verify_model_weight_promote_signature(
+        SignedModelWeightPromoteRequest,
+        payload,
+        encode_model_weight_promote_signature_payload,
+        "model weight promote provenance signature verification failed"
+    );
+    verify_model_weight_rollback_signature(
+        SignedModelWeightRollbackRequest,
+        payload,
+        encode_model_weight_rollback_signature_payload,
+        "model weight rollback provenance signature verification failed"
+    );
+    verify_model_artifact_register_signature(
+        SignedModelArtifactRegisterRequest,
+        payload,
+        encode_model_artifact_register_signature_payload,
+        "model artifact register provenance signature verification failed"
+    );
+    verify_decryption_request_signature(
+        SignedDecryptionRequest,
+        payload,
+        encode_decryption_request_signature_payload,
+        "decryption request provenance signature verification failed"
+    );
+    verify_ciphertext_query_signature(
+        SignedCiphertextQueryRequest,
+        query,
+        encode_ciphertext_query_signature_payload,
+        "ciphertext query provenance signature verification failed"
+    );
+    verify_rollout_signature(
+        SignedRolloutAdvanceRequest,
+        payload,
+        encode_rollout_signature_payload,
+        "rollout provenance signature verification failed"
+    );
+    verify_agent_deploy_signature(
+        SignedAgentDeployRequest,
+        payload,
+        encode_agent_deploy_signature_payload,
+        "agent deploy provenance signature verification failed"
+    );
+    verify_agent_lease_renew_signature(
+        SignedAgentLeaseRenewRequest,
+        payload,
+        encode_agent_lease_renew_signature_payload,
+        "agent lease renew provenance signature verification failed"
+    );
+    verify_agent_restart_signature(
+        SignedAgentRestartRequest,
+        payload,
+        encode_agent_restart_signature_payload,
+        "agent restart provenance signature verification failed"
+    );
+    verify_agent_policy_revoke_signature(
+        SignedAgentPolicyRevokeRequest,
+        payload,
+        encode_agent_policy_revoke_signature_payload,
+        "agent policy revoke provenance signature verification failed"
+    );
+    verify_agent_wallet_spend_signature(
+        SignedAgentWalletSpendRequest,
+        payload,
+        encode_agent_wallet_spend_signature_payload,
+        "agent wallet spend provenance signature verification failed"
+    );
+    verify_agent_wallet_approve_signature(
+        SignedAgentWalletApproveRequest,
+        payload,
+        encode_agent_wallet_approve_signature_payload,
+        "agent wallet approve provenance signature verification failed"
+    );
+    verify_agent_message_send_signature(
+        SignedAgentMessageSendRequest,
+        payload,
+        encode_agent_message_send_signature_payload,
+        "agent message send provenance signature verification failed"
+    );
+    verify_agent_message_ack_signature(
+        SignedAgentMessageAckRequest,
+        payload,
+        encode_agent_message_ack_signature_payload,
+        "agent message ack provenance signature verification failed"
+    );
+    verify_agent_artifact_allow_signature(
+        SignedAgentArtifactAllowRequest,
+        payload,
+        encode_agent_artifact_allow_signature_payload,
+        "agent artifact allow provenance signature verification failed"
+    );
+    verify_agent_autonomy_run_signature(
+        SignedAgentAutonomyRunRequest,
+        payload,
+        encode_agent_autonomy_run_signature_payload,
+        "agent autonomy run provenance signature verification failed"
+    );
+    verify_hf_deploy_signature(
+        SignedHfDeployRequest,
+        payload,
+        encode_hf_deploy_signature_payload,
+        "hf deploy provenance signature verification failed"
+    );
+    verify_hf_lease_leave_signature(
+        SignedHfLeaseLeaveRequest,
+        payload,
+        encode_hf_lease_leave_signature_payload,
+        "hf shared-lease leave provenance signature verification failed"
+    );
+    verify_hf_lease_renew_signature(
+        SignedHfLeaseRenewRequest,
+        payload,
+        encode_hf_lease_renew_signature_payload,
+        "hf shared-lease renew provenance signature verification failed"
+    );
+    verify_model_host_advertise_signature(
+        SignedModelHostAdvertiseRequest,
+        payload,
+        encode_model_host_advertise_signature_payload,
+        "model host advertise provenance signature verification failed"
+    );
+    verify_model_host_heartbeat_signature(
+        SignedModelHostHeartbeatRequest,
+        payload,
+        encode_model_host_heartbeat_signature_payload,
+        "model host heartbeat provenance signature verification failed"
+    );
+    verify_model_host_withdraw_signature(
+        SignedModelHostWithdrawRequest,
+        payload,
+        encode_model_host_withdraw_signature_payload,
+        "model host withdraw provenance signature verification failed"
+    );
+}
+
 fn app_service_bundle_instruction(
     request: SignedBundleRequest,
     mode: MutationMode,
@@ -3269,38 +3495,12 @@ fn encode_bundle_signature_payload(
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode bundle payload: {err}")))
 }
-fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), SoracloudError> {
-    let payload = encode_rollback_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("rollback provenance signature verification failed")
-    })?;
-    Ok(())
-}
 fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>, SoracloudError> {
     encode_rollback_provenance_payload(
         payload.service_name.as_str(),
         payload.target_version.as_deref(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollback payload: {err}")))
-}
-fn verify_service_config_set_signature(
-    request: &SignedServiceConfigSetRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_service_config_set_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("service config provenance signature verification failed")
-    })?;
-    Ok(())
 }
 fn encode_service_config_set_signature_payload(
     payload: &ServiceConfigSetRequest,
@@ -3313,22 +3513,6 @@ fn encode_service_config_set_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode service config payload: {err}"))
     })
-}
-fn verify_service_config_delete_signature(
-    request: &SignedServiceConfigDeleteRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_service_config_delete_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "service config delete provenance signature verification failed",
-        )
-    })?;
-    Ok(())
 }
 fn encode_service_config_delete_signature_payload(
     payload: &ServiceConfigDeleteRequest,
@@ -3343,20 +3527,6 @@ fn encode_service_config_delete_signature_payload(
         ))
     })
 }
-fn verify_service_secret_set_signature(
-    request: &SignedServiceSecretSetRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_service_secret_set_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("service secret provenance signature verification failed")
-    })?;
-    Ok(())
-}
 fn encode_service_secret_set_signature_payload(
     payload: &ServiceSecretSetRequest,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -3368,22 +3538,6 @@ fn encode_service_secret_set_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode service secret payload: {err}"))
     })
-}
-fn verify_service_secret_delete_signature(
-    request: &SignedServiceSecretDeleteRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_service_secret_delete_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "service secret delete provenance signature verification failed",
-        )
-    })?;
-    Ok(())
 }
 fn encode_service_secret_delete_signature_payload(
     payload: &ServiceSecretDeleteRequest,
@@ -3397,20 +3551,6 @@ fn encode_service_secret_delete_signature_payload(
             "failed to encode service secret delete payload: {err}"
         ))
     })
-}
-fn verify_state_mutation_signature(
-    request: &SignedStateMutationRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_state_mutation_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("state mutation provenance signature verification failed")
-    })?;
-    Ok(())
 }
 fn encode_state_mutation_signature_payload(
     payload: &StateMutationRequest,
@@ -3490,18 +3630,6 @@ fn state_mutation_operation_label(operation: StateMutationOperation) -> &'static
         StateMutationOperation::Delete => "delete",
     }
 }
-fn verify_fhe_job_run_signature(request: &SignedFheJobRunRequest) -> Result<(), SoracloudError> {
-    let payload = encode_fhe_job_run_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("fhe job run provenance signature verification failed")
-    })?;
-    Ok(())
-}
 fn validate_fhe_job_run_proof_attachments(
     payload: &FheJobRunPayload,
 ) -> Result<(), SoracloudError> {
@@ -3526,112 +3654,6 @@ fn validate_fhe_job_run_proof_attachments(
             ))
         })?;
     }
-    Ok(())
-}
-fn verify_training_job_start_signature(
-    request: &SignedTrainingJobStartRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_training_job_start_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("training job start provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_training_job_checkpoint_signature(
-    request: &SignedTrainingJobCheckpointRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_training_job_checkpoint_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("training checkpoint provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_training_job_retry_signature(
-    request: &SignedTrainingJobRetryRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_training_job_retry_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("training retry provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_model_weight_register_signature(
-    request: &SignedModelWeightRegisterRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_weight_register_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model weight register provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_weight_promote_signature(
-    request: &SignedModelWeightPromoteRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_weight_promote_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model weight promote provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_weight_rollback_signature(
-    request: &SignedModelWeightRollbackRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_weight_rollback_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model weight rollback provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_artifact_register_signature(
-    request: &SignedModelArtifactRegisterRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_artifact_register_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model artifact register provenance signature verification failed",
-        )
-    })?;
     Ok(())
 }
 fn verify_uploaded_model_register_signature(
@@ -3664,278 +3686,6 @@ fn verify_uploaded_model_register_signature(
         SoracloudError::unauthorized(
             "uploaded model register finalize provenance signature verification failed",
         )
-    })?;
-    Ok(())
-}
-fn verify_decryption_request_signature(
-    request: &SignedDecryptionRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_decryption_request_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("decryption request provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_ciphertext_query_signature(
-    request: &SignedCiphertextQueryRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_ciphertext_query_signature_payload(&request.query)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("ciphertext query provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(), SoracloudError> {
-    let payload = encode_rollout_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("rollout provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_deploy_signature(request: &SignedAgentDeployRequest) -> Result<(), SoracloudError> {
-    let payload = encode_agent_deploy_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent deploy provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_lease_renew_signature(
-    request: &SignedAgentLeaseRenewRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_lease_renew_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent lease renew provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_restart_signature(
-    request: &SignedAgentRestartRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_restart_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent restart provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_policy_revoke_signature(
-    request: &SignedAgentPolicyRevokeRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_policy_revoke_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent policy revoke provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_wallet_spend_signature(
-    request: &SignedAgentWalletSpendRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_wallet_spend_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent wallet spend provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_wallet_approve_signature(
-    request: &SignedAgentWalletApproveRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_wallet_approve_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "agent wallet approve provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_agent_message_send_signature(
-    request: &SignedAgentMessageSendRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_message_send_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent message send provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_message_ack_signature(
-    request: &SignedAgentMessageAckRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_message_ack_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent message ack provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_agent_artifact_allow_signature(
-    request: &SignedAgentArtifactAllowRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_artifact_allow_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "agent artifact allow provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_agent_autonomy_run_signature(
-    request: &SignedAgentAutonomyRunRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_agent_autonomy_run_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("agent autonomy run provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_hf_deploy_signature(request: &SignedHfDeployRequest) -> Result<(), SoracloudError> {
-    let payload = encode_hf_deploy_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("hf deploy provenance signature verification failed")
-    })?;
-    Ok(())
-}
-fn verify_hf_lease_leave_signature(
-    request: &SignedHfLeaseLeaveRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_hf_lease_leave_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "hf shared-lease leave provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_hf_lease_renew_signature(
-    request: &SignedHfLeaseRenewRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_hf_lease_renew_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "hf shared-lease renew provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_host_advertise_signature(
-    request: &SignedModelHostAdvertiseRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_host_advertise_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model host advertise provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_host_heartbeat_signature(
-    request: &SignedModelHostHeartbeatRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_host_heartbeat_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized(
-            "model host heartbeat provenance signature verification failed",
-        )
-    })?;
-    Ok(())
-}
-fn verify_model_host_withdraw_signature(
-    request: &SignedModelHostWithdrawRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_model_host_withdraw_signature_payload(&request.payload)?;
-    verify_signature_for_signer(
-        &request.provenance.signature,
-        &request.provenance.signer,
-        &payload,
-    )
-    .map_err(|_| {
-        SoracloudError::unauthorized("model host withdraw provenance signature verification failed")
     })?;
     Ok(())
 }

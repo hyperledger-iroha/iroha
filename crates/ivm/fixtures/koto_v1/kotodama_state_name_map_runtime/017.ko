@@ -1,0 +1,43 @@
+
+        seiyaku C {
+            struct Tranche {
+                int status,
+                quantity remaining,
+                List<string, 4> merchant_aliases,
+                List<AccountId, 4> merchant_accounts,
+            }
+            state StateMap<Name, Tranche> Tranches;
+
+            fn empty_tranche() -> Tranche {
+                let List<string, 4> aliases = [];
+                let List<AccountId, 4> accounts = [];
+                return Tranche {
+                    status: 0,
+                    remaining: 0,
+                    merchant_aliases: aliases,
+                    merchant_accounts: accounts,
+                };
+            }
+
+            view fn main() -> bool {
+                let current = Tranches.get_or(
+                    key: Name::parse("t1"),
+                    default: empty_tranche(),
+                );
+                let missing = Tranches.get_or_default(
+                    key: Name::parse("missing"),
+                    default: empty_tranche(),
+                );
+                return current.status == 7
+                    && current.remaining == 42
+                    && current.merchant_aliases.len() == 1
+                    && current.merchant_aliases.contains("merchant@sbp")
+                    && current.merchant_accounts.len() == 1
+                    && current.merchant_accounts.contains(context::authority())
+                    && missing.status == 0
+                    && missing.remaining == 0
+                    && missing.merchant_aliases.len() == 0
+                    && missing.merchant_accounts.len() == 0;
+            }
+        }
+    

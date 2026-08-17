@@ -394,7 +394,8 @@ fn standalone_norito_decoders_are_bounded_exact_and_alignment_safe() {
 }
 #[test]
 fn standalone_params_wire_never_carries_generator_material() {
-    #[derive(iroha_schema::IntoSchema, norito::derive::NoritoSerialize)]
+    #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
+    #[derive(norito::derive::NoritoSerialize)]
     struct RetiredInlineParams {
         version: u16,
         curve_id: u16,
@@ -454,6 +455,22 @@ fn norito_roundtrip_params_and_proof_goldilocks() {
     assert_eq!(proof.b_final.to_bytes(), proof2.b_final.to_bytes());
     let mut tr_v = Transcript::new("test-gold");
     gold::Polynomial::verify_open(&params2, &mut tr_v, z, commitment, t, &proof2).unwrap();
+    let envelope = OpenVerifyEnvelope {
+        params: w_params,
+        public: nh::poly_open_public::<GoldilocksBackend>(params.n(), z, t, commitment),
+        proof: w_proof,
+        transcript_label: "test-gold".into(),
+        vk_commitment: None,
+        public_inputs_schema_hash: None,
+        domain_tag: None,
+    };
+    let results = crate::batch::verify_open_batch(std::slice::from_ref(&envelope));
+    assert!(matches!(
+        results[0],
+        Err(Error::UnsupportedBackend {
+            backend: ZkCurveId::Goldilocks
+        })
+    ));
 }
 #[test]
 fn params_registry_keys_include_backend_curve() {
@@ -533,21 +550,40 @@ fn batch_verify_two_envelopes_mixed() {
     };
     let results = crate::batch::verify_open_batch(&[env_ok.clone(), env_bad.clone()]);
     assert!(matches!(results[0], Ok(true)));
-    assert!(matches!(results[1], Ok(false)));
+    assert!(matches!(
+        results[1],
+        Err(Error::UnsupportedBackend {
+            backend: ZkCurveId::Goldilocks
+        })
+    ));
     let seq_results = crate::batch::verify_open_batch_with_options(
         &[env_ok.clone(), env_bad.clone()],
         &crate::batch::BatchOptions::sequential(),
     );
-    for (lhs, rhs) in results.iter().zip(seq_results.iter()) {
-        assert_eq!(lhs.as_ref().unwrap(), rhs.as_ref().unwrap());
-    }
+    assert_eq!(
+        results[0].as_ref().unwrap(),
+        seq_results[0].as_ref().unwrap()
+    );
+    assert!(matches!(
+        seq_results[1],
+        Err(Error::UnsupportedBackend {
+            backend: ZkCurveId::Goldilocks
+        })
+    ));
     let limited_results = crate::batch::verify_open_batch_with_options(
         &[env_ok, env_bad],
         &crate::batch::BatchOptions::limited(NonZeroUsize::new(1).unwrap()),
     );
-    for (lhs, rhs) in seq_results.iter().zip(limited_results.iter()) {
-        assert_eq!(lhs.as_ref().unwrap(), rhs.as_ref().unwrap());
-    }
+    assert_eq!(
+        seq_results[0].as_ref().unwrap(),
+        limited_results[0].as_ref().unwrap()
+    );
+    assert!(matches!(
+        limited_results[1],
+        Err(Error::UnsupportedBackend {
+            backend: ZkCurveId::Goldilocks
+        })
+    ));
 }
 #[test]
 fn batch_verify_pallas_and_bn254() {

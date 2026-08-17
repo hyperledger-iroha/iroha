@@ -1007,7 +1007,7 @@ fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
 mod tests {
     use super::*;
     use std::{
-        os::unix::fs::{PermissionsExt as _, symlink},
+        os::unix::fs::symlink,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},

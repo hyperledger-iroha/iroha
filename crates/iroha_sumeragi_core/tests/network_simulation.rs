@@ -6,7 +6,6 @@
 //! scheduler. The accelerated chain-prefix gate instead queues every local
 //! completion and injects deterministic WAL/replay interruptions; its QCs and
 //! TCs are externally supplied fixtures, so it does not claim quorum formation.
-use std::collections::{BTreeSet, VecDeque};
 use iroha_sumeragi_core::{
     BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, DurableCommitReceipt, Effect,
     EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId,
@@ -15,6 +14,7 @@ use iroha_sumeragi_core::{
     TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId, Vote, VotingMode,
     VotingPower, WalEntry, WalRecord,
 };
+use std::collections::{BTreeSet, VecDeque};
 const HEIGHT: u64 = 42;
 const ACCELERATED_CHAOS_HEIGHTS: u64 = 100_000;
 const ACCELERATED_CHAOS_SMOKE_HEIGHTS: u64 = 320;

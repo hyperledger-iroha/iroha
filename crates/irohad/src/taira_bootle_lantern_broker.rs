@@ -4,13 +4,6 @@
 //! exposes slot 56 through the stock authenticated local broker while keeping
 //! the Falcon trapdoor, bearer token, and stable principal seed in hardened
 //! service-credential files. Torii remains the only issuance replay-state authority.
-use std::{
-    fmt,
-    fs::File,
-    io::{Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-};
 use crate::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerBackendsV1,
@@ -44,6 +37,13 @@ use iroha_torii::privacy_issuance_api::{
     BootleLanternIssuanceAuthenticationErrorV1, BootleLanternIssuanceRuntimeProviderBindingsV1,
     BootleLanternIssuanceRuntimeProviderQualificationV1,
     BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+};
+use std::{
+    fmt,
+    fs::File,
+    io::{Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 const ISSUER_SEED_BYTES_V1: usize = 32;
 const PRINCIPAL_SEED_BYTES_V1: usize = 32;
@@ -747,16 +747,20 @@ impl PublicArgsV1 {
     }
 }
 #[derive(Clone, Args)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "credential-path suffixes distinguish hardened path inputs from decoded secrets"
+)]
 struct CredentialPathArgsV1 {
     /// Absolute hardened credential path containing exactly 32 issuer-seed bytes.
-    #[arg(long)]
-    issuer_seed_credential: PathBuf,
+    #[arg(long = "issuer-seed-credential")]
+    issuer_seed_path: PathBuf,
     /// Absolute hardened credential path containing the exact opaque bearer bytes.
-    #[arg(long)]
-    bearer_token_credential: PathBuf,
+    #[arg(long = "bearer-token-credential")]
+    bearer_token_path: PathBuf,
     /// Absolute hardened credential path containing exactly 32 stable-principal bytes.
-    #[arg(long)]
-    principal_seed_credential: PathBuf,
+    #[arg(long = "principal-seed-credential")]
+    principal_seed_path: PathBuf,
 }
 #[derive(Args)]
 struct ExportPublicArgsV1 {
@@ -794,9 +798,9 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
             let backend =
                 TairaBootleLanternIssuanceBrokerBackendV1::load_from_hardened_service_credentials_v1(
                     config,
-                    &args.credentials.issuer_seed_credential,
-                    &args.credentials.bearer_token_credential,
-                    &args.credentials.principal_seed_credential,
+                    &args.credentials.issuer_seed_path,
+                    &args.credentials.bearer_token_path,
+                    &args.credentials.principal_seed_path,
                 )?;
             let export = backend.render_public_export_v1()?;
             let mut stdout = std::io::stdout().lock();
@@ -810,9 +814,9 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
             let backend = Arc::new(
                 TairaBootleLanternIssuanceBrokerBackendV1::load_from_hardened_service_credentials_v1(
                     config,
-                    &args.credentials.issuer_seed_credential,
-                    &args.credentials.bearer_token_credential,
-                    &args.credentials.principal_seed_credential,
+                    &args.credentials.issuer_seed_path,
+                    &args.credentials.bearer_token_path,
+                    &args.credentials.principal_seed_path,
                 )?,
             );
             backend.validate_expected_digests_v1(
@@ -878,7 +882,7 @@ async fn wait_for_termination_signal_v1() -> Result<(), TairaBootleLanternBroker
             result.map_err(|_| TairaBootleLanternBrokerErrorV1::BrokerFailed)
         }
         observed = terminate.recv() => {
-            observed.ok_or(TairaBootleLanternBrokerErrorV1::BrokerFailed).map(|_| ())
+            observed.ok_or(TairaBootleLanternBrokerErrorV1::BrokerFailed)
         }
     }
 }
@@ -1069,22 +1073,28 @@ fn map_backend_crypto_error_v1(
     }
 }
 #[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the loader performs one ordered descriptor-relative credential hardening audit"
+)]
 fn load_credential_v1(
     path: &Path,
     minimum_bytes: usize,
     maximum_bytes: usize,
 ) -> Result<OpenedCredentialV1, TairaBootleLanternBrokerErrorV1> {
-    use std::{ffi::OsString, os::unix::fs::MetadataExt as _};
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    use std::{ffi::OsString, os::unix::fs::MetadataExt as _};
     if minimum_bytes == 0 || minimum_bytes > maximum_bytes || !is_canonical_absolute_path_v1(path) {
         return Err(TairaBootleLanternBrokerErrorV1::CredentialRejected);
     }
     let components = path
         .components()
         .filter_map(|component| match component {
-            Component::RootDir => None,
             Component::Normal(value) => Some(value.to_os_string()),
-            Component::CurDir | Component::ParentDir | Component::Prefix(_) => None,
+            Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir
+            | Component::Prefix(_) => None,
         })
         .collect::<Vec<_>>();
     if components.is_empty() || components.len() > MAX_CREDENTIAL_PATH_COMPONENTS_V1 {
@@ -1258,8 +1268,7 @@ fn identity_from_stat_v1(
     Ok(CredentialFileIdentityV1 {
         device: u64::try_from(stat.st_dev)
             .map_err(|_| TairaBootleLanternBrokerErrorV1::CredentialRejected)?,
-        inode: u64::try_from(stat.st_ino)
-            .map_err(|_| TairaBootleLanternBrokerErrorV1::CredentialRejected)?,
+        inode: stat.st_ino,
     })
 }
 #[cfg(unix)]
@@ -1279,7 +1288,7 @@ fn validate_credential_stat_v1(
     if !credential_metadata_fields_are_valid_v1(
         FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
         stat.st_uid,
-        u64::try_from(stat.st_nlink).ok(),
+        Some(u64::from(stat.st_nlink)),
         u32::from(stat.st_mode),
         Some(size),
         rustix::process::geteuid().as_raw(),
@@ -1373,7 +1382,6 @@ fn run_after_credential_open_test_hook_v1(path: &Path) {
 fn run_after_credential_open_test_hook_v1(_path: &Path) {}
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, OnceLock};
     use super::*;
     use iroha_core::privacy_engines::bootle_lantern::issuer::{
         holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_v1,
@@ -1382,6 +1390,10 @@ mod tests {
         PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyStatementSchemaDigestV1,
         PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::{Arc, OnceLock};
+    fn assert_send_sync<T: Send + Sync>() {}
     fn strong_32_v1(label: &[u8]) -> [u8; 32] {
         let digest = hash_length_framed_v1(b"iroha.taira.broker.test.strong32.v1", &[label])
             .expect("bounded test hash");
@@ -1785,12 +1797,16 @@ mod tests {
         ));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test audits every authenticated authorization substitution dimension"
+    )]
     fn crypto_boundary_rejects_network_genesis_policy_principal_lifetime_and_wire_substitution() {
         let backend = backend_v1();
         let context = statement_context_v1();
         let genesis = strong_32_v1(b"canonical-genesis");
         let authorization = authorization_v1(&backend);
-        let mut wrong_context = context.clone();
+        let mut wrong_context = context;
         wrong_context.network_id = network_id_v1(b"substituted-genesis");
         assert!(matches!(
             backend.prepare_authorization(
@@ -1994,7 +2010,6 @@ mod tests {
             assert!(!rendered.contains("seed"));
             assert!(!rendered.contains("token"));
         }
-        fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TairaBootleLanternIssuanceBrokerBackendV1>();
     }
     #[test]
@@ -2133,7 +2148,7 @@ mod tests {
             true,
             uid,
             Some(1),
-            0o100400,
+            0o100_400,
             Some(32),
             uid,
             false,
@@ -2144,7 +2159,7 @@ mod tests {
             true,
             0,
             Some(1),
-            0o100400,
+            0o100_400,
             Some(32),
             1_001,
             true,
@@ -2155,7 +2170,7 @@ mod tests {
             true,
             1_002,
             Some(1),
-            0o100400,
+            0o100_400,
             Some(32),
             1_001,
             true,
@@ -2163,20 +2178,19 @@ mod tests {
             32,
         ));
         for fields in [
-            (false, uid, Some(1), 0o100400, Some(32)),
-            (true, uid.wrapping_add(1), Some(1), 0o100400, Some(32)),
-            (true, uid, Some(2), 0o100400, Some(32)),
-            (true, uid, Some(1), 0o100600, Some(32)),
-            (true, uid, Some(1), 0o100440, Some(32)),
-            (true, uid, Some(1), 0o100404, Some(32)),
-            (true, uid, Some(1), 0o100400, Some(31)),
-            (true, uid, Some(1), 0o100400, Some(33)),
+            (false, uid, Some(1), 0o100_400, Some(32)),
+            (true, uid.wrapping_add(1), Some(1), 0o100_400, Some(32)),
+            (true, uid, Some(2), 0o100_400, Some(32)),
+            (true, uid, Some(1), 0o100_600, Some(32)),
+            (true, uid, Some(1), 0o100_440, Some(32)),
+            (true, uid, Some(1), 0o100_404, Some(32)),
+            (true, uid, Some(1), 0o100_400, Some(31)),
+            (true, uid, Some(1), 0o100_400, Some(33)),
         ] {
             assert!(!credential_metadata_fields_are_valid_v1(
                 fields.0, fields.1, fields.2, fields.3, fields.4, uid, false, 32, 32,
             ));
         }
-        use std::os::unix::fs::PermissionsExt as _;
         let directory = tempfile::tempdir().expect("credential tempdir");
         let path = write_credential_v1(directory.path(), "wrong-mode", &issuer_seed_v1());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
@@ -2209,7 +2223,7 @@ mod tests {
             true,
             0,
             Some(1),
-            0o100400,
+            0o100_400,
             Some(32),
             1_001,
             false,
@@ -2238,7 +2252,6 @@ mod tests {
             assert!(is_weak_secret_v1(&weak));
         }
         let (issuer, bearer, principal) = credential_paths_v1(directory.path());
-        use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&issuer, std::fs::Permissions::from_mode(0o600))
             .expect("make zero-seed file writable");
         std::fs::write(&issuer, [0; 32]).expect("replace with zero seed");

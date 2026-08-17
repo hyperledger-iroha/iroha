@@ -1,0 +1,28 @@
+
+seiyaku AggregateStateAcceptance {
+  error enum AggregateError {
+    MissingValue = 1,
+    WrongCount = 2,
+    WrongFlag = 3,
+    RemovalLostValue = 4,
+    RemovalDidNotDelete = 5
+  }
+
+  struct Pair { int count, bool ready }
+  state StateMap<int, Pair> Values;
+
+  kotoage fn run() -> int authorize("WriteState") {
+    Values[7] = Pair { count: 9, ready: true };
+    let found = Values.get(7);
+    require(found.is_some(), AggregateError::MissingValue);
+    let pair = found.unwrap_or(Pair { count: 0, ready: false });
+    require(pair.count == 9, AggregateError::WrongCount);
+    require(pair.ready, AggregateError::WrongFlag);
+
+    let removed = Values.remove(7);
+    let old = removed.unwrap_or(Pair { count: 0, ready: false });
+    require(old.count == 9, AggregateError::RemovalLostValue);
+    require(Values.get(7).is_none(), AggregateError::RemovalDidNotDelete);
+    return pair.count;
+  }
+}

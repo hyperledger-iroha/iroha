@@ -1,9 +1,6 @@
 /// Fully homomorphic encryption scheme family used by a parameter set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
 pub enum FheSchemeV1 {
     /// Brakerski/Fan-Vercauteren integer arithmetic scheme.
@@ -16,10 +13,7 @@ pub enum FheSchemeV1 {
 }
 /// Governance lifecycle state for a registered FHE parameter set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 pub enum FheParamLifecycleV1 {
     /// Parameter set is published and awaiting activation.
@@ -34,10 +28,7 @@ pub enum FheParamLifecycleV1 {
 }
 /// Governance-managed FHE parameter-set descriptor for `Soracloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheParamSetV1 {
     /// Schema version; must equal [`FHE_PARAM_SET_VERSION_V1`].
     pub schema_version: u16,
@@ -293,10 +284,7 @@ impl FheParamSetV1 {
 }
 /// Rounding mode used for deterministic ciphertext arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "rounding_mode", content = "value"))]
 pub enum FheDeterministicRoundingModeV1 {
     /// Always round toward negative infinity.
@@ -307,10 +295,7 @@ pub enum FheDeterministicRoundingModeV1 {
 }
 /// Public BFV refresh transcript derivation mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "refresh_transcript_mode", content = "value")
@@ -324,10 +309,7 @@ pub enum BfvRefreshTranscriptModeV1 {
 }
 /// Public BFV ciphertext bound semantics attached to FHE state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "bound_mode", content = "value"))]
 pub enum BfvCiphertextBoundModeV1 {
     /// Bound is an exact plaintext-modulus residual multiple.
@@ -338,10 +320,7 @@ pub enum BfvCiphertextBoundModeV1 {
 }
 /// Public transcript seed for one BFV rotation refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvRotationRefreshTranscriptV1 {
     /// Rotation step count whose public refresh key is derived from `seed`.
     pub rotation_steps: u32,
@@ -350,10 +329,7 @@ pub struct BfvRotationRefreshTranscriptV1 {
 }
 /// Public transcript seed for the BFV bootstrap refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvBootstrapRefreshTranscriptV1 {
     /// Bootstrap key id whose refresh rounds are derived from `seed`.
     pub key_id: String,
@@ -364,10 +340,7 @@ pub struct BfvBootstrapRefreshTranscriptV1 {
 }
 /// Public transcript inventory for BFV evaluation-key refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BfvEvaluationKeyRefreshTranscriptV1 {
     /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
     pub public_key: BfvPublicKey,
@@ -785,10 +758,7 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
 }
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheExecutionPolicyV1 {
     /// Schema version; must equal [`FHE_EXECUTION_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -1172,10 +1142,7 @@ impl FheExecutionPolicyV1 {
 }
 /// Governance admission bundle coupling an FHE parameter set and execution policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheGovernanceBundleV1 {
     /// Schema version; must equal [`FHE_GOVERNANCE_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -1218,10 +1185,7 @@ impl FheGovernanceBundleV1 {
 }
 /// Exact immutable reference to one governed Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyReferenceV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1`].
     pub schema_version: u16,
@@ -1254,10 +1218,7 @@ impl SoracloudFhePolicyReferenceV1 {
 }
 /// Exact service-and-policy scope carried by the FHE governance permission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheGovernancePermissionScopeV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -1284,10 +1245,7 @@ impl SoracloudFheGovernancePermissionScopeV1 {
 }
 /// Immutable, governance-authenticated material for one Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheGovernedMaterialV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1`].
     pub schema_version: u16,
@@ -1540,10 +1498,7 @@ impl SoracloudFheGovernedMaterialV1 {
 }
 /// Lifecycle of one immutable governed Soracloud FHE policy version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 pub enum SoracloudFhePolicyVersionLifecycleV1 {
     /// Exact version currently authorized for execution.
@@ -1555,10 +1510,7 @@ pub enum SoracloudFhePolicyVersionLifecycleV1 {
 }
 /// Lifecycle wrapper for one immutable governed material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyVersionStateV1 {
     /// Immutable authenticated material.
     pub material: SoracloudFheGovernedMaterialV1,
@@ -1605,10 +1557,7 @@ impl SoracloudFhePolicyVersionStateV1 {
 }
 /// Complete monotonic lifecycle history for one service-scoped FHE policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePolicyRecordV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1737,10 +1686,7 @@ impl SoracloudFhePolicyRecordV1 {
 }
 /// Proof envelope admitting a client-provided BFV ciphertext as Soracloud FHE input.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheInputAdmissionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1893,20 +1839,18 @@ impl SoracloudFheInputAdmissionProofV1 {
             self.residual_multiple_bound,
             self.bound_mode,
         )?;
-        validate_soracloud_fhe_input_admission_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
 }
 /// Proof envelope admitting public BFV key material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFhePublicKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1996,20 +1940,18 @@ impl SoracloudFhePublicKeyProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_public_key_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
 }
 /// Proof envelope admitting public BFV bootstrap-key zero-refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheBootstrapKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2099,20 +2041,18 @@ impl SoracloudFheBootstrapKeyProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
 }
 /// Proof envelope admitting a governed BFV full-bootstrap execution output claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoracloudFheFullBootstrapExecutionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2202,10 +2142,11 @@ impl SoracloudFheFullBootstrapExecutionProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
-        validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
+        validate_soracloud_fhe_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_OPEN_VERIFY_CONTRACT,
         )?;
         Ok(())
     }
@@ -2656,360 +2597,143 @@ fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
             .windows(needle.len())
             .any(|window| window == needle)
 }
-fn validate_soracloud_fhe_input_admission_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_input_admission_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe input admission proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe input admission proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
+#[derive(Clone, Copy)]
+struct SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: &'static str,
+    max_open_verify_bytes: usize,
+    bounds: fn() -> OpenVerifyEnvelopeBounds,
+    circuit_id: &'static str,
+    public_inputs: &'static [u8],
+    max_native_envelope_bytes: usize,
 }
-fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_public_key_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe public-key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe public-key proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
-}
-fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_bootstrap_key_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe bootstrap key proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe bootstrap key proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
-}
-fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs
-        != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap execution proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe full-bootstrap execution proof",
-        &open_proof.envelope_bytes,
+
+const SORACLOUD_FHE_INPUT_ADMISSION_OPEN_VERIFY_CONTRACT: SoracloudFheOpenVerifyEnvelopeContract =
+    SoracloudFheOpenVerifyEnvelopeContract {
+        manifest: "soracloud fhe input admission proof",
+        max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+        bounds: soracloud_fhe_input_admission_open_verify_bounds,
+        circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        public_inputs: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+    };
+const SORACLOUD_FHE_PUBLIC_KEY_PROOF_OPEN_VERIFY_CONTRACT: SoracloudFheOpenVerifyEnvelopeContract =
+    SoracloudFheOpenVerifyEnvelopeContract {
+        manifest: "soracloud fhe public-key proof",
+        max_open_verify_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+        bounds: soracloud_fhe_public_key_proof_open_verify_bounds,
+        circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        public_inputs: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+    };
+const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe bootstrap key proof",
+    max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+};
+const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_OPEN_VERIFY_CONTRACT:
+    SoracloudFheOpenVerifyEnvelopeContract = SoracloudFheOpenVerifyEnvelopeContract {
+    manifest: "soracloud fhe full-bootstrap execution proof",
+    max_open_verify_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES,
+    bounds: soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds,
+    circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    public_inputs: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+    max_native_envelope_bytes:
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
+};
+
+fn validate_soracloud_fhe_open_verify_envelope(
+    proof_bytes: &[u8],
+    vk_commitment: [u8; 32],
+    statement_hash: Hash,
+    contract: SoracloudFheOpenVerifyEnvelopeContract,
+) -> Result<(), SoracloudManifestError> {
+    if proof_bytes.len() > contract.max_open_verify_bytes {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope length {} exceeds maximum {}",
+                proof_bytes.len(),
+                contract.max_open_verify_bytes
+            ),
+        });
+    }
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+        SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
+        }
+    })?;
+    envelope
+        .validate_with_bounds((contract.bounds)())
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
+        })?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
+        });
+    }
+    if envelope.circuit_id != contract.circuit_id {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
+        });
+    }
+    if envelope.public_inputs != contract.public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
+        });
+    }
+    if vk_commitment != envelope.vk_hash {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.vk_commitment",
+            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
+        });
+    }
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
+            ),
+        })?;
+    if open_proof.version != 1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "STARK public-input wrapper version must be 1".to_string(),
+        });
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open_proof.public_inputs != expected_public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: contract.manifest,
+            field: "proof.proof.bytes",
+            reason: "STARK public inputs must match statement_hash".to_string(),
+        });
+    }
+    validate_soracloud_fhe_stark_native_envelope_bytes(
+        contract.manifest,
+        &open_proof.envelope_bytes,
+        contract.max_native_envelope_bytes,
+    )
 }
+
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE input admission.
 ///
 /// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK
@@ -3074,10 +2798,7 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> Open
 }
 /// Encryption class for an opaque secret envelope payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
 pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is client-encrypted and opaque to validators.
@@ -3087,10 +2808,7 @@ pub enum SecretEnvelopeEncryptionV1 {
 }
 /// Opaque encrypted payload with commitment used by ciphertext-native state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SecretEnvelopeV1 {
     /// Schema version; must equal [`SECRET_ENVELOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -3177,10 +2895,7 @@ impl SecretEnvelopeV1 {
 }
 /// Public metadata attached to ciphertext-native state records.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextStateMetadataV1 {
     /// MIME-style content hint for encrypted payload decoding.
     pub content_type: String,
@@ -3241,10 +2956,7 @@ impl CiphertextStateMetadataV1 {
 }
 /// Ciphertext-native key-value record with public metadata and secret payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextStateRecordV1 {
     /// Schema version; must equal [`CIPHERTEXT_STATE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -3310,10 +3022,7 @@ impl CiphertextStateRecordV1 {
 }
 /// Deterministic FHE operation class admitted for Soracloud ciphertext jobs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 pub enum FheJobOperationV1 {
     /// Element-wise homomorphic addition over two or more inputs.
@@ -3331,10 +3040,7 @@ pub enum FheJobOperationV1 {
 }
 /// Input ciphertext reference for deterministic FHE job admission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheJobInputRefV1 {
     /// Canonical state key of the ciphertext input.
     pub state_key: String,
@@ -3369,10 +3075,7 @@ impl FheJobInputRefV1 {
 }
 /// Deterministic FHE admission/execution job descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FheJobSpecV1 {
     /// Schema version; must equal [`FHE_JOB_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3742,10 +3445,7 @@ impl FheJobSpecV1 {
 }
 /// Decryption authority mode enforced for private-state disclosure requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum DecryptionAuthorityModeV1 {
     /// Ciphertext keys are client-held; network records request/audit only.
@@ -3755,10 +3455,7 @@ pub enum DecryptionAuthorityModeV1 {
 }
 /// Governance-managed policy for decryption authority and request gating.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DecryptionAuthorityPolicyV1 {
     /// Schema version; must equal [`DECRYPTION_AUTHORITY_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -3901,10 +3598,7 @@ impl DecryptionAuthorityPolicyV1 {
 }
 /// Decryption request envelope gated by a [`DecryptionAuthorityPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DecryptionRequestV1 {
     /// Schema version; must equal [`DECRYPTION_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -4088,10 +3782,7 @@ impl DecryptionRequestV1 {
 }
 /// Metadata projection level for ciphertext query responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "metadata_level", content = "value"))]
 pub enum CiphertextQueryMetadataLevelV1 {
     /// Return only digest-level key references.
@@ -4101,10 +3792,7 @@ pub enum CiphertextQueryMetadataLevelV1 {
 }
 /// Deterministic query specification for ciphertext-only state lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQuerySpecV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -4165,10 +3853,7 @@ impl CiphertextQuerySpecV1 {
 }
 /// Inclusion proof attached to ciphertext query results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextInclusionProofV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -4224,10 +3909,7 @@ impl CiphertextInclusionProofV1 {
 }
 /// A single query result row for ciphertext metadata lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQueryResultItemV1 {
     /// Binding owning the ciphertext state row.
     pub binding_name: Name,
@@ -4303,10 +3985,7 @@ impl CiphertextQueryResultItemV1 {
 }
 /// Deterministic response payload for ciphertext query execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CiphertextQueryResponseV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -4382,10 +4061,7 @@ impl CiphertextQueryResponseV1 {
 }
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraDeploymentBundleV1 {
     /// Schema version; must equal [`SORA_DEPLOYMENT_BUNDLE_VERSION_V1`].
     pub schema_version: u16,

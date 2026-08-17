@@ -4,6 +4,8 @@
 //! credential and revocation-nonce commitments together with the exact signed public root and
 //! revocation-list publications needed by verifiers.
 use crate::account::AccountId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -40,10 +42,7 @@ pub const POP_REGISTRY_AUDIT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-aud
 pub const POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-payload.v1";
 /// Governance-controlled issuer identity and bounded admission policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopIssuerPolicyV1 {
     /// Schema version; must equal [`POP_ISSUER_POLICY_VERSION_V1`].
     pub version: u16,
@@ -226,10 +225,7 @@ pub enum PopIssuerPolicyValidationError {
 }
 /// Payload-free issuer commitment to one private signed credential.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopCredentialCommitmentV1 {
     /// Domain-separated BLAKE3-256 commitment to exact canonical signed credential bytes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -296,10 +292,7 @@ pub enum PopCredentialCommitmentValidationError {
 }
 /// Atomic first-release credential commitment, root, and revocation snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopCredentialCommitmentBatchV1 {
     /// Schema version.
     pub version: u16,
@@ -425,10 +418,7 @@ pub enum PopCredentialCommitmentBatchValidationError {
 }
 /// Activated issuer policy with ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopIssuerPolicyRecordV1 {
     /// Active policy.
     pub policy: PopIssuerPolicyV1,
@@ -447,10 +437,7 @@ pub struct PopIssuerPolicyRecordV1 {
 }
 /// Durable payload-free credential commitment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopCredentialCommitmentRecordV1 {
     /// Issuer commitment body.
     pub commitment: PopCredentialCommitmentV1,
@@ -469,10 +456,7 @@ pub struct PopCredentialCommitmentRecordV1 {
 }
 /// Authoritative signed commitment-root publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopCommitmentRootRecordV1 {
     /// Root digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -499,10 +483,7 @@ pub struct PopCommitmentRootRecordV1 {
 }
 /// Authoritative signed revocation-list publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopRevocationPublicationRecordV1 {
     /// Monotonic list version.
     pub list_version: u64,
@@ -532,10 +513,7 @@ pub struct PopRevocationPublicationRecordV1 {
 }
 /// Stable public reason recorded for a private nonce commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "reason", content = "value", rename_all = "snake_case")
@@ -554,10 +532,7 @@ pub enum PopRegistryRevocationReasonV1 {
 }
 /// Durable payload-free revocation record keyed by nonce commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopRevocationRecordV1 {
     /// Domain-separated revocation-nonce commitment.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -589,10 +564,7 @@ pub struct PopRevocationRecordV1 {
 }
 /// Kind of transition committed into the registry audit chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -618,10 +590,7 @@ impl PopRegistryAuditEventKindV1 {
 }
 /// One link in the deterministic registry audit chain.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopRegistryAuditDigestRecordV1 {
     /// Monotonic event sequence beginning at one.
     pub sequence: u64,
@@ -646,10 +615,7 @@ pub struct PopRegistryAuditDigestRecordV1 {
 }
 /// Constant-time authoritative registry counters and active anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PopRegistryStatusV1 {
     /// Active commitment root, absent before the first issuer batch.
     #[cfg_attr(

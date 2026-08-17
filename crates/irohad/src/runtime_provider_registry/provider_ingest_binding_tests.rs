@@ -137,6 +137,10 @@ fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test audits every coupled provider-ingest outbox limit"
+)]
 fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
     let mut exact = default_runtime_config();
     configure_provider_ingest_runtime(&mut exact);

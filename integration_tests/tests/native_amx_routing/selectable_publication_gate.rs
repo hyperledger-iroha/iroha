@@ -151,7 +151,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             "{context}: durable phase acknowledgement did not bind the exact publication"
         );
         let publish_entrypoint = fixture.transaction.hash_as_entrypoint();
-        let mut recovery_heartbeat = None;
         let live_block_before_restart = if phase == NativeAmxFaultPhase::BeforeWorldCommit {
             // This cut is after the complete block overlay exists. The other
             // three validators must finalize the exact publication while the
@@ -192,9 +191,9 @@ async fn run_selectable_musubi_publication_phase_cut(
             Some(live_block)
         } else {
             // Prepare/Commit cuts abort the sole autonomous author before it
-            // can assemble and publish the executable payload. The bounded
-            // recovery path advances one empty global heartbeat, but the exact
-            // publication remains deferred until that author restarts.
+            // can assemble and publish the executable payload. With no other
+            // proposal work, the live validators must retain the exact tip
+            // until that author restarts.
             for (index, peer) in peers
                 .iter()
                 .enumerate()
@@ -206,86 +205,12 @@ async fn run_selectable_musubi_publication_phase_cut(
                     &format!("{context}: live peer {index} before author restart"),
                 )?;
             }
-            let heartbeat_deadline = Instant::now() + STATUS_WAIT_TIMEOUT;
-            let heartbeat = loop {
-                let mut canonical = None;
-                let mut all_live_peers_observed = true;
-                for (index, peer) in peers
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| *index != target_index)
-                {
-                    let blocks = peer.client().query(FindBlocks).execute_all()?;
-                    ensure!(
-                        !blocks.iter().any(|block| {
-                            block
-                                .entrypoint_hashes()
-                                .any(|hash| hash == publish_entrypoint)
-                        }),
-                        "{context}: live peer {index} committed the deferred publication before author restart"
-                    );
-                    let successors = blocks
-                        .iter()
-                        .filter(|block| block.header().height().get() > pre_cut_height)
-                        .collect::<Vec<_>>();
-                    ensure!(
-                        successors.len() <= 1,
-                        "{context}: live peer {index} manufactured {} successors while one recovery heartbeat was armed",
-                        successors.len()
-                    );
-                    let Some(block) = successors.first().copied() else {
-                        all_live_peers_observed = false;
-                        continue;
-                    };
-                    ensure!(
-                        block.header().height().get() == pre_cut_height.saturating_add(1)
-                            && block.is_empty()
-                            && block.external_entrypoint_count() == 0
-                            && block.time_triggers().len() == 0,
-                        "{context}: live peer {index} did not commit the exact empty recovery-heartbeat successor: {block:?}"
-                    );
-                    let observed = (block.header().height().get(), block.hash());
-                    if let Some(expected) = canonical {
-                        ensure!(
-                            observed == expected,
-                            "{context}: live peer {index} committed another recovery heartbeat"
-                        );
-                    } else {
-                        canonical = Some(observed);
-                    }
-                }
-                if all_live_peers_observed {
-                    break canonical.ok_or_else(|| {
-                        eyre!("{context}: no live peer returned a recovery heartbeat")
-                    })?;
-                }
-                ensure!(
-                    Instant::now() < heartbeat_deadline,
-                    "{context}: timed out waiting for the explicitly armed recovery heartbeat after pre-cut tip h{pre_cut_height} {pre_cut_hash}"
-                );
-                sleep(STATUS_POLL_INTERVAL).await;
-            };
-            for (index, peer) in peers
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != target_index)
-            {
-                let status = peer.status().await.wrap_err_with(|| {
-                    format!("{context}: query recovery-heartbeat status from peer {index}")
-                })?;
-                ensure!(
-                    status.blocks == heartbeat.0
-                        && status.blocks_non_empty == pre_cut_blocks_non_empty,
-                    "{context}: live peer {index} did not expose height-only recovery progress: before_non_empty={pre_cut_blocks_non_empty}, status={status:?}"
-                );
-            }
             // Keep the author down for ten signed cadences, two retransmission
-            // intervals, and two DA commit-quorum windows. The owner-scoped
-            // heartbeat is one-shot: it must not turn the stalled publication
-            // into an empty-block loop anywhere in that protocol window.
+            // intervals, and two DA commit-quorum windows. A bounded recovery
+            // retry which finds no publishable work must retire without
+            // manufacturing a successor anywhere in that protocol window.
             let quiescence_deadline = Instant::now() + recovery_quiescence_observation;
-            while Instant::now() < quiescence_deadline {
-                sleep(STATUS_POLL_INTERVAL).await;
+            loop {
                 for (index, peer) in peers
                     .iter()
                     .enumerate()
@@ -296,26 +221,32 @@ async fn run_selectable_musubi_publication_phase_cut(
                         eyre!("{context}: live peer {index} returned an empty chain")
                     })?;
                     ensure!(
-                        latest.header().height().get() == heartbeat.0
-                            && latest.hash() == heartbeat.1
-                            && blocks
-                                .iter()
-                                .filter(|block| {
-                                    block.header().height().get() > pre_cut_height
-                                        && block.is_empty()
-                                })
-                                .count()
-                                == 1
+                        latest.header().height().get() == pre_cut_height
+                            && latest.hash() == pre_cut_hash
+                            && !blocks.iter().any(|block| {
+                                block.header().height().get() > pre_cut_height
+                            })
                             && !blocks.iter().any(|block| {
                                 block
                                     .entrypoint_hashes()
                                     .any(|hash| hash == publish_entrypoint)
                             }),
-                        "{context}: live peer {index} advanced beyond the one armed heartbeat before author restart"
+                        "{context}: live peer {index} advanced without proposal work before author restart"
+                    );
+                    let status = peer.status().await.wrap_err_with(|| {
+                        format!("{context}: query quiescent status from peer {index}")
+                    })?;
+                    ensure!(
+                        status.blocks == pre_cut_height
+                            && status.blocks_non_empty == pre_cut_blocks_non_empty,
+                        "{context}: live peer {index} did not retain the pre-cut height and non-empty count: before_non_empty={pre_cut_blocks_non_empty}, status={status:?}"
                     );
                 }
+                if Instant::now() >= quiescence_deadline {
+                    break;
+                }
+                sleep(STATUS_POLL_INTERVAL).await;
             }
-            recovery_heartbeat = Some(heartbeat);
             None
         };
         ensure!(
@@ -336,6 +267,11 @@ async fn run_selectable_musubi_publication_phase_cut(
                 )
                 .await?;
                 assert_musubi_universal_home_execution_context(&block, &fixture.transaction)?;
+                ensure!(
+                    block.header().height().get() == pre_cut_height.saturating_add(1)
+                        && !block.is_empty(),
+                    "{context}: restarted author did not publish the exact non-empty successor of pre-cut tip h{pre_cut_height} {pre_cut_hash}: {block:?}"
+                );
                 block
             }
         };
@@ -386,19 +322,10 @@ async fn run_selectable_musubi_publication_phase_cut(
                     block.header().height().get() > pre_cut_height && block.is_empty()
                 })
                 .collect::<Vec<_>>();
-            if let Some((heartbeat_height, heartbeat_hash)) = recovery_heartbeat {
-                ensure!(
-                    empty_successors.len() == 1
-                        && empty_successors[0].header().height().get() == heartbeat_height
-                        && empty_successors[0].hash() == heartbeat_hash,
-                    "{context}: post-replay peer {index} did not retain exactly one canonical recovery heartbeat: {empty_successors:?}"
-                );
-            } else {
-                ensure!(
-                    empty_successors.is_empty(),
-                    "{context}: before-world-commit peer {index} retained an unexpected empty successor: {empty_successors:?}"
-                );
-            }
+            ensure!(
+                empty_successors.is_empty(),
+                "{context}: post-replay peer {index} retained an unexpected empty successor: {empty_successors:?}"
+            );
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
@@ -419,12 +346,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                 publication_block.error(entrypoint_index).is_none(),
                 "{context}: post-replay peer {index} retained a rejected publication occurrence"
             );
-            if let Some((heartbeat_height, _)) = recovery_heartbeat {
-                ensure!(
-                    publication_block.header().height().get() > heartbeat_height,
-                    "{context}: post-replay peer {index} ordered the deferred publication before its recovery heartbeat"
-                );
-            }
             if let Some(expected) = canonical_publication_block {
                 ensure!(
                     publication_block.hash() == expected,
@@ -434,21 +355,16 @@ async fn run_selectable_musubi_publication_phase_cut(
                 canonical_publication_block = Some(publication_block.hash());
             }
         }
-        if let Some((heartbeat_height, heartbeat_hash)) = recovery_heartbeat {
+        if phase != NativeAmxFaultPhase::BeforeWorldCommit {
             eprintln!(
-                "EX-297 recovery-heartbeat evidence: phase={phase_label}, cadence={signed_cadence:?}, retransmit_interval_ms={retransmit_interval_ms}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, quiescence_window={recovery_quiescence_observation:?}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, heartbeat_height={heartbeat_height}, heartbeat_hash={heartbeat_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}"
+                "EX-297 no-proposal-work quiescence evidence: phase={phase_label}, cadence={signed_cadence:?}, retransmit_interval_ms={retransmit_interval_ms}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, quiescence_window={recovery_quiescence_observation:?}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}"
             );
         }
         let publication_block_hash = canonical_publication_block
             .ok_or_else(|| eyre!("{context}: no canonical publication block was observed"))?;
-        let heartbeat_height = recovery_heartbeat
-            .map(|(height, _)| height.to_string())
-            .unwrap_or_else(|| "none".to_owned());
-        let heartbeat_hash = recovery_heartbeat
-            .map(|(_, hash)| hash.to_string())
-            .unwrap_or_else(|| "none".to_owned());
         eprintln!(
-            "EX-297 phase-completion evidence: phase={phase_label}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}, heartbeat_height={heartbeat_height}, heartbeat_hash={heartbeat_hash}, publication_block_hash={publication_block_hash}"
+            "EX-297 phase-completion evidence: phase={phase_label}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}, publication_height={}, publication_block_hash={publication_block_hash}",
+            live_block.header().height().get()
         );
         Ok(())
     }

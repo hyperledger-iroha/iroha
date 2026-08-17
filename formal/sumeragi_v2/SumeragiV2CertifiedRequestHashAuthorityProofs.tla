@@ -427,12 +427,12 @@ BY DecisionCertifiedPublishRetainsCommitAuthority,
    DEF DecisionRawHashRegistered
 
 (***************************************************************************
-TODO: the production-refinement ledger must still enumerate the Rust
-`ExecuteDecisionFetch` branches and show that its missing-body branch
-instantiates `DecisionCertifiedPublish`, while the durable-body branch frames
-registration.  This module proves the action-local publisher and exact modeled
-recovery authority; the concrete executor/runner trace mapping remains in
-`ProgressWitnessProductionRefinementObligation`.
+The promoted `ProgressWitnessProductionRefinementObligation` enumerates the
+Rust `ExecuteDecisionFetch` branches: the missing-body branch instantiates
+`DecisionCertifiedPublish`, while the durable-body branch frames registration.
+This module proves the action-local publisher and exact modeled recovery
+authority; release acceptance still requires the fresh source-bound
+executor/runner cross-tool evidence.
 ***************************************************************************)
 
 =============================================================================

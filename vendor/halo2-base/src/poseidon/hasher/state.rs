@@ -3,12 +3,12 @@ use std::iter;
 use itertools::Itertools;
 
 use crate::{
+    AssignedValue, Context,
+    QuantumCell::{Constant, Existing},
     gates::GateInstructions,
     poseidon::hasher::{mds::SparseMDSMatrix, spec::OptimizedPoseidonSpec},
     safe_types::SafeBool,
     utils::ScalarField,
-    AssignedValue, Context,
-    QuantumCell::{Constant, Existing},
 };
 
 #[derive(Clone, Debug)]
@@ -23,7 +23,9 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonState<F, T, RATE
         // • Variable-Input-Length Hashing. The capacity value is 2^64 + (o−1) where o the output length.
         // for our transcript use cases, o = 1
         default_state[0] = F::from_u128(1u128 << 64);
-        Self { s: default_state.map(|f| ctx.load_constant(f)) }
+        Self {
+            s: default_state.map(|f| ctx.load_constant(f)),
+        }
     }
 
     /// Perform permutation on this state.
@@ -49,10 +51,13 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonState<F, T, RATE
         let constants = &spec.constants.start;
         if let Some(len) = len {
             // Note: this doesn't mean `padded_inputs` is 0 padded because there is no constraints on `inputs[len..]`
-            let padded_inputs: [AssignedValue<F>; RATE] =
-                core::array::from_fn(
-                    |i| if i < inputs.len() { inputs[i] } else { ctx.load_zero() },
-                );
+            let padded_inputs: [AssignedValue<F>; RATE] = core::array::from_fn(|i| {
+                if i < inputs.len() {
+                    inputs[i]
+                } else {
+                    ctx.load_zero()
+                }
+            });
             self.absorb_var_len_with_pre_constants(ctx, gate, padded_inputs, len, &constants[0]);
         } else {
             self.absorb_with_pre_constants(ctx, gate, inputs, &constants[0]);
@@ -143,18 +148,30 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonState<F, T, RATE
         self.s[0] = gate.add(ctx, self.s[0], Constant(pre_constants[0]));
 
         // adding pre-constants and inputs to the elements for which both are available
-        for ((x, constant), input) in
-            self.s.iter_mut().zip(pre_constants.iter()).skip(1).zip(inputs.iter())
+        for ((x, constant), input) in self
+            .s
+            .iter_mut()
+            .zip(pre_constants.iter())
+            .skip(1)
+            .zip(inputs.iter())
         {
             *x = gate.sum(ctx, [Existing(*x), Existing(*input), Constant(*constant)]);
         }
 
         let offset = inputs.len() + 1;
         // adding only pre-constants when no input is left
-        for (i, (x, constant)) in
-            self.s.iter_mut().zip(pre_constants.iter()).skip(offset).enumerate()
+        for (i, (x, constant)) in self
+            .s
+            .iter_mut()
+            .zip(pre_constants.iter())
+            .skip(offset)
+            .enumerate()
         {
-            *x = gate.add(ctx, *x, Constant(if i == 0 { F::ONE + constant } else { *constant }));
+            *x = gate.add(
+                ctx,
+                *x,
+                Constant(if i == 0 { F::ONE + constant } else { *constant }),
+            );
             // the if idx == 0 { F::one() } else { F::zero() } is to pad the input with a single 1 and then 0s
             // this is the padding suggested in pg 31 of https://eprint.iacr.org/2019/458.pdf and in Section 4.2 (Variable-Input-Length Hashing. The padding consists of one field element being 1, and the remaining elements being 0.)
         }
@@ -189,8 +206,9 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonState<F, T, RATE
         let idx = gate.dec(ctx, len);
         let len_indicator = gate.idx_to_indicator(ctx, idx, RATE);
         // inputs_mask[i] = sum(len_indicator[i..])
-        let mut inputs_mask =
-            gate.partial_sums(ctx, len_indicator.clone().into_iter().rev()).collect_vec();
+        let mut inputs_mask = gate
+            .partial_sums(ctx, len_indicator.clone().into_iter().rev())
+            .collect_vec();
         inputs_mask.reverse();
 
         let padded_inputs = inputs
@@ -220,7 +238,11 @@ impl<F: ScalarField, const T: usize, const RATE: usize> PoseidonState<F, T, RATE
         let res = mds
             .iter()
             .map(|row| {
-                gate.inner_product(ctx, self.s.iter().copied(), row.iter().map(|c| Constant(*c)))
+                gate.inner_product(
+                    ctx,
+                    self.s.iter().copied(),
+                    row.iter().map(|c| Constant(*c)),
+                )
             })
             .collect::<Vec<_>>();
 

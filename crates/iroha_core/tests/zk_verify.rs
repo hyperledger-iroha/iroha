@@ -691,6 +691,53 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
         .expect_err("verifyproof must reject inactive verifying keys");
     assert!(format!("{err:?}").contains("verifying key is not active"));
 }
+
+#[test]
+fn verifyproof_enforces_verifying_key_activation_window() {
+    for (name, activation_height, withdraw_height) in [
+        ("vk_before_activation", Some(2), None),
+        ("vk_at_withdrawal", None, Some(1)),
+    ] {
+        let world = test_world::world_with_test_accounts();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query_handle);
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let exec = Executor::default();
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", name);
+        let fixture = bound_halo2_fixture();
+        let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+        let mut vk_rec = build_vk_record(name, vk_box, fixture.schema_hash);
+        vk_rec.activation_height = activation_height;
+        vk_rec.withdraw_height = withdraw_height;
+        let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+            id: vk_id.clone(),
+            record: vk_rec,
+        }
+        .into();
+        grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
+        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
+            .expect("register height-bounded vk");
+
+        let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            fixture.proof_box("halo2/ipa"),
+            vk_id,
+        );
+        let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+        let err = exec
+            .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+            .expect_err("proof verification must honor the key activation window");
+        assert!(
+            format!("{err:?}").contains("verifying key is not active"),
+            "unexpected error for {name}: {err:?}"
+        );
+    }
+}
+
 #[test]
 fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let world = test_world::world_with_test_accounts();

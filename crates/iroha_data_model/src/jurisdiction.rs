@@ -2,6 +2,8 @@
 //!
 //! These types define the canonical Norito encoding for JDG attestations, including their scope,
 //! signer sets, optional proofs, and the domain-tagged hash used for signing.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{nexus::DataSpaceId, proof::ProofBox};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -26,10 +28,7 @@ pub const JDG_SDN_COMMITMENT_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:sdn:com
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JurisdictionId(Vec<u8>);
 impl JurisdictionId {
     /// Construct a jurisdiction identifier from canonical bytes.
@@ -84,10 +83,7 @@ pub enum JurisdictionIdError {
 }
 /// Inclusive block-height range covered by an attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgBlockRange {
     /// First block height (inclusive).
     pub start_height: u64,
@@ -135,10 +131,7 @@ impl JdgBlockRange {
 }
 /// Statement scope bound into an attestation (dataspace + block window + jurisdiction id).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgAttestationScope {
     /// Jurisdiction identifier for the attested execution.
     pub jurisdiction_id: JurisdictionId,
@@ -149,10 +142,7 @@ pub struct JdgAttestationScope {
 }
 /// Canonical read/write access set used by the attested execution.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgStateAccessSet {
     /// Canonical read keys (byte-sorted and deduplicated).
     pub reads: Vec<Vec<u8>>,
@@ -190,10 +180,7 @@ pub const JDG_SIGNATURE_SCHEME_BLS_NORMAL_AGGREGATE: u16 = 2;
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
 pub enum JdgSignatureScheme {
     /// Per-signer signatures with optional signer bitmap.
@@ -265,10 +252,7 @@ impl TryFrom<u16> for JdgSignatureScheme {
 }
 /// Threshold signature envelope; concrete scheme defined by JDG policy.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgThresholdSignature {
     /// Identifier for the signing scheme (e.g., simple threshold or BLS aggregate).
     pub scheme_id: u16,
@@ -280,10 +264,7 @@ pub struct JdgThresholdSignature {
 }
 /// Commitment to secret data stored under a Secret Data Node (SDN).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgSdnCommitment {
     /// Commitment format version.
     pub version: u16,
@@ -339,10 +320,7 @@ impl JdgSdnCommitment {
 }
 /// Commitment body covered by the SDN seal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgSdnCommitmentSignable {
     version: u16,
     scope: JdgAttestationScope,
@@ -361,20 +339,14 @@ impl From<&JdgSdnCommitment> for JdgSdnCommitmentSignable {
 }
 /// Rotation/overlap policy applied when sealing SDN payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgSdnRotationPolicy {
     /// Number of blocks the previous SDN key remains valid after a successor activates.
     pub dual_publish_blocks: u64,
 }
 /// Policy describing how SDN commitments are enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgSdnPolicy {
     /// Whether SDN commitments are mandatory for the attested payload.
     pub require_commitments: bool,
@@ -383,10 +355,7 @@ pub struct JdgSdnPolicy {
 }
 /// SDN sealing key with activation and retirement windows.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgSdnKeyRecord {
     /// SDN public key.
     pub public_key: PublicKey,
@@ -555,10 +524,7 @@ impl JdgSdnRegistry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgCommitteeId(pub [u8; 32]);
 impl JdgCommitteeId {
     /// Construct a committee identifier from a 32-byte value.
@@ -569,10 +535,7 @@ impl JdgCommitteeId {
 }
 /// JDG attestation payload including scope, signer set, optional proof, and signature envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgAttestation {
     /// Explicit attestation format version.
     pub version: u16,
@@ -937,10 +900,7 @@ pub enum JdgSdnValidationError {
 }
 /// View of [`JdgAttestation`] used for hashing/signing (omits the signature).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JdgAttestationSignable {
     version: u16,
     scope: JdgAttestationScope,

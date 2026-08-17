@@ -288,7 +288,10 @@ pub(crate) struct CanonicalExecutedBlockRecovery {
     output_guard: Arc<ConsensusOutputGuard>,
     limits: V2LaneWorkLimits,
     needs: VecDeque<CanonicalExecutedBlockNeedV1>,
+    /// Consecutive sends for the current exact chunk without an accepted successor chunk.
     front_attempts: u32,
+    /// Whole-wire assemblies abandoned before the current body was authenticated.
+    whole_wire_restarts: u32,
     next_peer_index: usize,
     assembly_responder: Option<CanonicalExecutedBlockResponder>,
     next_chunk_index: u32,
@@ -296,6 +299,7 @@ pub(crate) struct CanonicalExecutedBlockRecovery {
     assembly_chunk_count: Option<u32>,
     assembly: Vec<u8>,
     outstanding: Option<OutstandingCanonicalExecutedBlockRequest>,
+    retired_request_hashes: BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
     effects: VecDeque<V2LaneWorkEffect>,
 }
 impl CanonicalExecutedBlockRecovery {
@@ -356,6 +360,7 @@ impl CanonicalExecutedBlockRecovery {
             limits,
             needs: needs.into(),
             front_attempts: 0,
+            whole_wire_restarts: 0,
             next_peer_index: 0,
             assembly_responder: None,
             next_chunk_index: 0,
@@ -363,6 +368,7 @@ impl CanonicalExecutedBlockRecovery {
             assembly_chunk_count: None,
             assembly: Vec::new(),
             outstanding: None,
+            retired_request_hashes: BTreeSet::new(),
             effects: VecDeque::new(),
         })
     }
@@ -387,7 +393,85 @@ impl CanonicalExecutedBlockRecovery {
         self.effects.push_front(effect);
         true
     }
+    fn has_queued_local_request(&self) -> bool {
+        self.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+                    ..
+                } if request.requester == self.local_peer
+                    && matches!(
+                        &request.kind,
+                        LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { .. }
+                    )
+            )
+        })
+    }
+    /// Return whether `effect` is the exact request currently awaiting transport.
+    pub(crate) fn is_current_request_effect(&self, effect: &V2LaneWorkEffect) -> bool {
+        let Some(outstanding) = self.outstanding.as_ref() else {
+            return false;
+        };
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+            } if peer == &outstanding.responder.peer
+                && request.as_ref() == &outstanding.request
+        )
+    }
+    fn retire_outstanding_request(&mut self) {
+        let Some(outstanding) = self.outstanding.take() else {
+            return;
+        };
+        if self
+            .retired_request_hashes
+            .contains(&outstanding.request_hash)
+            || self.retired_request_hashes.len() < Self::need_capacity(self.limits)
+        {
+            self.retired_request_hashes.insert(outstanding.request_hash);
+        } else {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+    /// Drain canonical request identities superseded by exact chunk progress,
+    /// signer abandonment, or local cache completion.
+    pub(crate) fn drain_retired_request_hashes(
+        &mut self,
+    ) -> BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>> {
+        std::mem::take(&mut self.retired_request_hashes)
+    }
+    /// Restore a cancellation batch after downstream ownership preflight
+    /// failed without mutating its exact-output corridor.
+    pub(crate) fn requeue_retired_request_hashes(
+        &mut self,
+        request_hashes: BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
+    ) -> Result<(), V2LaneWorkError> {
+        let additional = request_hashes
+            .difference(&self.retired_request_hashes)
+            .count();
+        let next_len = self
+            .retired_request_hashes
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| {
+                V2LaneWorkError::Persistence(
+                    "retired canonical recovery cancellation capacity overflowed".to_owned(),
+                )
+            })?;
+        if next_len > Self::need_capacity(self.limits) {
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::Persistence(
+                "retired canonical recovery cancellations exceeded the need bound".to_owned(),
+            ));
+        }
+        self.retired_request_hashes.extend(request_hashes);
+        Ok(())
+    }
     fn reset_front_assembly(&mut self) {
+        self.front_attempts = 0;
         self.assembly_responder = None;
         self.next_chunk_index = 0;
         self.assembly_wire_len = None;
@@ -395,7 +479,7 @@ impl CanonicalExecutedBlockRecovery {
         // Drop even the allocation: a failed signer must not leave a large
         // poisoned prefix resident while the next signer restarts at zero.
         self.assembly = Vec::new();
-        self.outstanding = None;
+        self.retire_outstanding_request();
     }
     fn record_front_attempt(&mut self) -> Result<(), V2LaneWorkError> {
         let limit = self
@@ -405,10 +489,24 @@ impl CanonicalExecutedBlockRecovery {
             .saturating_mul(self.limits.historical_recovery_max_retry_tier.get());
         if self.front_attempts >= limit {
             return Err(V2LaneWorkError::Persistence(format!(
-                "canonical executed-block recovery exhausted {limit} bounded attempts without progress"
+                "canonical executed-block recovery exhausted {limit} bounded attempts without exact chunk progress"
             )));
         }
         self.front_attempts = self.front_attempts.saturating_add(1);
+        Ok(())
+    }
+    fn record_whole_wire_restart(&mut self) -> Result<(), V2LaneWorkError> {
+        let limit = self
+            .limits
+            .historical_recovery_stuck_attempts
+            .get()
+            .saturating_mul(self.limits.historical_recovery_max_retry_tier.get());
+        if self.whole_wire_restarts >= limit {
+            return Err(V2LaneWorkError::Persistence(format!(
+                "canonical executed-block recovery exhausted {limit} bounded whole-wire restarts without completion"
+            )));
+        }
+        self.whole_wire_restarts = self.whole_wire_restarts.saturating_add(1);
         Ok(())
     }
     fn advance_past_front_responder(&mut self) {
@@ -426,9 +524,37 @@ impl CanonicalExecutedBlockRecovery {
         }
         self.reset_front_assembly();
     }
+    fn abandon_front_responder(&mut self) -> Result<(), V2LaneWorkError> {
+        // Charge the retained assembly before rotating or dropping any of its
+        // ownership. Exhaustion therefore leaves the exact failure state intact.
+        self.record_whole_wire_restart()?;
+        self.advance_past_front_responder();
+        Ok(())
+    }
+    fn abandon_front_responder_after_append(
+        &mut self,
+        retained_prefix_len: usize,
+    ) -> Result<(), V2LaneWorkError> {
+        match self.abandon_front_responder() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // Authentication needs the complete candidate wire. If the
+                // restart budget is already exhausted, roll the speculative
+                // suffix back so the fallible abandonment leaves the exact
+                // pinned prefix and request authority intact.
+                if retained_prefix_len == 0 {
+                    self.assembly = Vec::new();
+                } else {
+                    self.assembly.truncate(retained_prefix_len);
+                }
+                Err(error)
+            }
+        }
+    }
     fn reconcile_cached_front(&mut self) -> Result<(), V2LaneWorkError> {
         loop {
             let Some(need) = self.needs.front().copied() else {
+                self.whole_wire_restarts = 0;
                 self.reset_front_assembly();
                 return Ok(());
             };
@@ -460,27 +586,32 @@ impl CanonicalExecutedBlockRecovery {
                 .preflight_cached_finalized_merge_carrier_reconstruction(&block)
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             self.needs.pop_front();
-            self.front_attempts = 0;
+            self.whole_wire_restarts = 0;
             self.reset_front_assembly();
         }
     }
     /// Queue one bounded retry for the current chunk.
     ///
+    /// Returns `true` exactly when a new transport request was retained.
+    ///
     /// A body assembly is pinned to one exact remote CommitQC signer. Its
     /// first timeout retransmits the exact request bytes to that signer. A
     /// second timeout (or signer-set drift) abandons every unverified prefix,
     /// advances deterministically, and restarts at chunk zero.
-    pub(crate) fn service_next(&mut self) -> Result<(), V2LaneWorkError> {
+    pub(crate) fn service_next(&mut self) -> Result<bool, V2LaneWorkError> {
         let guard = Arc::clone(&self.output_guard);
         let Some(_permit) = guard.acquire() else {
             return Err(V2LaneWorkError::RestartRequired);
         };
         self.reconcile_cached_front()?;
         let Some(need) = self.needs.front().copied() else {
-            return Ok(());
+            return Ok(false);
         };
+        if self.has_queued_local_request() {
+            return Ok(false);
+        }
         if self.effects.len() >= self.limits.effect_capacity.get() {
-            return Ok(());
+            return Ok(false);
         }
         let finality = validate_canonical_executed_block_need(
             &self.context,
@@ -517,7 +648,7 @@ impl CanonicalExecutedBlockRecovery {
                         && pinned.count == outstanding.responder.count
                 });
             if !responder_is_still_exact {
-                self.advance_past_front_responder();
+                self.abandon_front_responder()?;
             } else if !outstanding.retry_sent {
                 let request = outstanding.request.clone();
                 let peer = outstanding.responder.peer.clone();
@@ -530,9 +661,9 @@ impl CanonicalExecutedBlockRecovery {
                     .as_mut()
                     .expect("outstanding request was just observed")
                     .retry_sent = true;
-                return Ok(());
+                return Ok(true);
             } else {
-                self.advance_past_front_responder();
+                self.abandon_front_responder()?;
             }
         }
         let responder = match self.assembly_responder.as_ref() {
@@ -543,7 +674,7 @@ impl CanonicalExecutedBlockRecovery {
                 responder.clone()
             }
             Some(_) => {
-                self.advance_past_front_responder();
+                self.abandon_front_responder()?;
                 let index = self.next_peer_index % eligible_peers.len();
                 CanonicalExecutedBlockResponder {
                     peer: eligible_peers[index].clone(),
@@ -589,7 +720,7 @@ impl CanonicalExecutedBlockRecovery {
             responder,
             retry_sent: false,
         });
-        Ok(())
+        Ok(true)
     }
     /// Return whether recovery-only ingress owns this exact message.
     pub(crate) fn admits_message(&self, message: &BlockMessage) -> bool {
@@ -610,6 +741,10 @@ impl CanonicalExecutedBlockRecovery {
         &mut self,
         mut inbound: InboundBlockMessage,
     ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        let guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = guard.acquire() else {
+            return Err(V2LaneWorkError::RestartRequired);
+        };
         let Some(ownership) = inbound.take_ingress_ownership() else {
             return Ok(V2LaneIngressOutcome::Rejected);
         };
@@ -626,6 +761,9 @@ impl CanonicalExecutedBlockRecovery {
         };
         match message {
             BlockMessage::LaneHistoricalRecoveryRequest(request) => {
+                if self.effects.len() >= self.limits.effect_capacity.get() {
+                    return Ok(V2LaneIngressOutcome::Duplicate);
+                }
                 let response = match build_canonical_executed_block_response(
                     &self.context,
                     self.state.as_ref(),
@@ -644,9 +782,6 @@ impl CanonicalExecutedBlockRecovery {
                         return Ok(V2LaneIngressOutcome::Rejected);
                     }
                 };
-                if self.effects.len() >= self.limits.effect_capacity.get() {
-                    return Ok(V2LaneIngressOutcome::Duplicate);
-                }
                 self.effects.push_back(V2LaneWorkEffect::PostLaneBlock {
                     peer: sender.clone(),
                     message: BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response)),
@@ -740,13 +875,13 @@ impl CanonicalExecutedBlockRecovery {
                 .is_some_and(|existing| existing != chunk_count)
             || expected_start != Some(self.assembly.len())
         {
-            self.advance_past_front_responder();
+            self.abandon_front_responder()?;
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         if self.next_chunk_index == 0 {
             let signed_wire_len = signed_wire_len.expect("validated signed wire length");
             if self.assembly.capacity() != 0 || !self.assembly.is_empty() {
-                self.advance_past_front_responder();
+                self.abandon_front_responder()?;
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
             if self.assembly.try_reserve_exact(signed_wire_len).is_err() {
@@ -756,23 +891,25 @@ impl CanonicalExecutedBlockRecovery {
                 ));
             }
         }
+        let retained_prefix_len = self.assembly.len();
         self.assembly.extend_from_slice(&bytes);
         let next_chunk_index = self.next_chunk_index.saturating_add(1);
         if next_chunk_index != chunk_count {
             self.assembly_wire_len = signed_wire_len;
             self.assembly_chunk_count = Some(chunk_count);
-            self.outstanding = None;
+            self.retire_outstanding_request();
             self.next_chunk_index = next_chunk_index;
+            self.front_attempts = 0;
             return Ok(V2LaneIngressOutcome::Inserted);
         }
         if Some(self.assembly.len()) != signed_wire_len
             || Hash::new(&self.assembly) != need.executed_block_wire_hash
         {
-            self.advance_past_front_responder();
+            self.abandon_front_responder_after_append(retained_prefix_len)?;
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         let Ok(block) = decode_versioned_signed_block(&self.assembly) else {
-            self.advance_past_front_responder();
+            self.abandon_front_responder_after_append(retained_prefix_len)?;
             return Ok(V2LaneIngressOutcome::Rejected);
         };
         if block
@@ -780,7 +917,7 @@ impl CanonicalExecutedBlockRecovery {
             .map_or(true, |canonical_wire| canonical_wire != self.assembly)
             || !canonical_executed_block_matches_need(&block, &local_finality, need)
         {
-            self.advance_past_front_responder();
+            self.abandon_front_responder_after_append(retained_prefix_len)?;
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         self.kura.cache_block_body(&block).map_err(|error| {
@@ -794,7 +931,7 @@ impl CanonicalExecutedBlockRecovery {
                 V2LaneWorkError::Persistence(error.to_string())
             })?;
         self.needs.pop_front();
-        self.front_attempts = 0;
+        self.whole_wire_restarts = 0;
         self.advance_past_front_responder();
         Ok(V2LaneIngressOutcome::Inserted)
     }

@@ -198,7 +198,8 @@ fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
             }),
         "recovered Apply must authenticate its exact context before storage execution"
     );
-    let carrier_source = include_str!("../v2.rs");
+    let carrier_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     assert_eq!(
         carrier_source
             .matches("RecoveredDecisionApplyTaskV1::from_registry_projection")
@@ -269,11 +270,29 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
         .split_once("fn take_io_completion(")
         .expect("ordinary completion take remains present")
         .1
-        .split_once("fn take_recovered_decision_apply_completion(")
-        .expect("owner-only completion take follows ordinary take")
+        .split_once("fn take_recovered_lifecycle_sign_completion(")
+        .expect("the retained Sign extractor follows ordinary take")
         .0;
     assert!(generic_take.contains("V2IoCompletion::RecoveredDecisionApply(_)"));
     assert!(generic_take.contains("IoCompletionTake::retained_runtime()"));
+    let lifecycle_take = source
+        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .expect("the unified lifecycle completion classifier remains present")
+        .1
+        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .expect("the unified classifier precedes the retained Sign fixture seam")
+        .0;
+    for required in [
+        "V2IoCompletion::RecoveredDecisionApply(guarded)",
+        "prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))",
+        "RecoveredLifecycleCompletionTakeV1::Apply(",
+        "PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }",
+    ] {
+        assert!(
+            lifecycle_take.contains(required),
+            "unified lifecycle completion classifier omitted {required}"
+        );
+    }
     let runtime_capacity = source
         .split_once("const fn requires_runtime_capacity(&self) -> bool")
         .expect("completion runtime-capacity classifier remains present")
@@ -282,7 +301,7 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
         .expect("completion acknowledgement follows capacity classification")
         .0;
     assert!(runtime_capacity.contains("Self::RecoveredDecisionApply(_)"));
-    assert!(source.contains("fn drain_recovered_decision_apply_completion("));
+    assert!(!source.contains("fn drain_recovered_decision_apply_completion("));
     assert!(source.contains("fn authorizes_sidecar_owner("));
     assert!(!source.contains("_services: &'services mut ProductionV2Services"));
     assert!(!source.contains("complete_application(*guarded"));

@@ -111,7 +111,7 @@ generated `README.md` into the output directory.
 `kagami localnet`
 - Bare-metal local network generator
 - Requires at least four peers so generated networks use a representative
-  DA/RBC topology
+  revision-4 committee with mandatory RS16 data availability
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.signed.nrt`, `genesis.public_key`, and

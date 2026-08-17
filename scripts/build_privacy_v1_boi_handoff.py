@@ -43,6 +43,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
 
 try:
     from . import check_native_sdk_abi22_artifact as abi22
+    from . import taira_authority_client
     from . import taira_privacy_protocol_receipt as privacy_evidence
     from . import taira_release_authority as native_authority
     from . import taira_rollout_admission as admission
@@ -67,6 +68,7 @@ try:
     )
 except ImportError:
     import check_native_sdk_abi22_artifact as abi22
+    import taira_authority_client
     import taira_privacy_protocol_receipt as privacy_evidence
     import taira_release_authority as native_authority
     import taira_rollout_admission as admission
@@ -105,6 +107,12 @@ QUALIFICATION_PAYLOAD_INVENTORY_PATH = (
     "qualification/qualified-payload-inventory-v1.json"
 )
 QUALIFICATION_ENVELOPE_PATH = "qualification/linux-boi-qualification-v1.json"
+NATIVE_AUTHORITY_ENVELOPE_PATH = (
+    "qualification/native-qualification-authority-envelope-v1.json"
+)
+NATIVE_AUTHORITY_RECEIPT_PATH = (
+    "qualification/native-qualification-durable-receipt-v1.json"
+)
 QUALIFICATION_SIGNATURE_PATH = (
     "qualification/linux-boi-qualification-v1.json.sig"
 )
@@ -316,11 +324,16 @@ def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
 
 def require_boi_qualification_isolation(
     trusted_qualification_external_signer_sha256: object,
-) -> NoReturn:
-    """Refuse issuance until every named installed authority contract exists."""
+) -> None:
+    """Authenticate the fixed qualification service before caller path access."""
 
     del trusted_qualification_external_signer_sha256
-    _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
+    try:
+        taira_authority_client.preflight("qualification")
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise BoiHandoffError(
+            f"{BOI_QUALIFICATION_ISSUANCE_BARRIER}: {error}"
+        ) from error
 
 
 def _json_sha256(value: object, label: str) -> str:
@@ -1721,6 +1734,146 @@ def validate_candidate_boi_artifact_handoff(
     return captured
 
 
+def _qualification_authority_artifacts(
+    artifact_root: Path,
+    candidate: AuthenticatedCandidate,
+) -> tuple[taira_authority_client.Artifact, ...]:
+    """Build the closed descriptor inventory executed by the native sandbox."""
+
+    artifacts = [
+        taira_authority_client.Artifact(
+            f"source/{spec.path}",
+            artifact_root / spec.path,
+            maximum=spec.maximum,
+        )
+        for spec in ARTIFACT_SPECS
+    ]
+    artifacts.append(
+        taira_authority_client.Artifact(
+            "candidate/archive",
+            candidate.archive,
+            maximum=candidate.archive_info.size,
+        )
+    )
+    artifacts.extend(
+        taira_authority_client.Artifact(
+            f"candidate/authority/{relative}",
+            candidate.authority_dir / relative,
+            maximum=MAX_HANDOFF_MANIFEST_BYTES,
+        )
+        for relative in admission.FINAL_AUTHORITY_FILES
+    )
+    return tuple(artifacts)
+
+
+def _qualification_authority_subject(
+    candidate: AuthenticatedCandidate,
+    *,
+    source: Mapping[str, object],
+    controller_digest: str,
+    host_id: str,
+    installation_id: str,
+    issued_at_unix: int,
+    replay_namespace: str,
+    workflow_run_id: int,
+    workflow_run_attempt: int,
+) -> dict[str, object]:
+    """Build the exact stable subject shared by issuance and verification."""
+
+    return {
+        "candidate": {
+            "archive_sha256": candidate.archive_info.sha256,
+            "artifact_handoff_sha256": candidate.artifact_handoff_sha256,
+            "boi_artifact_inventory_sha256": candidate.boi_artifact_inventory_sha256,
+            "exact12_matrix_sha256": candidate.exact12_matrix_sha256,
+            "release_manifest_sha256": candidate.release_manifest_sha256,
+            "validator_binary_sha256": candidate.validator_binary_sha256,
+        },
+        "controller": {
+            "closure_digest": controller_digest,
+            "host_id": host_id,
+            "installation_id": installation_id,
+        },
+        "expected": {
+            "abi_version": 22,
+            "protocol_ids": list(EXACT12_PROTOCOL_IDS),
+            "qualification_contract": BOI_QUALIFICATION_ISOLATION_CONTRACT,
+            "run_binding_contract": BOI_QUALIFICATION_RUN_BINDING_CONTRACT,
+        },
+        "issued_at_unix": issued_at_unix,
+        "replay_namespace": replay_namespace,
+        "source": dict(source),
+        "workflow": {
+            "run_attempt": workflow_run_attempt,
+            "run_id": workflow_run_id,
+        },
+    }
+
+
+def _authority_probe_results(
+    result: taira_authority_client.AuthorityResult,
+    captured: Mapping[str, StableFile],
+    artifact_root: Path,
+) -> dict[str, object]:
+    """Validate the bounded native-sandbox results returned by the authority."""
+
+    claims = result.authority_envelope.get("claims")
+    role_result = claims.get("role_result") if isinstance(claims, dict) else None
+    raw = (
+        role_result.get("probe_results")
+        if isinstance(role_result, dict)
+        else None
+    )
+    if not isinstance(raw, dict) or set(raw) != {"abi22", "python_wheel"}:
+        _fail("qualification authority omitted exact native probe results")
+    abi_result = raw["abi22"]
+    wheel_result = raw["python_wheel"]
+    if not isinstance(abi_result, dict) or not isinstance(wheel_result, dict):
+        _fail("qualification authority native probe results are not objects")
+    native_member, _controller = _wheel_layout(artifact_root, captured)
+    abi_fields = {
+        "abi_version",
+        "compiled_profile_catalog_sha256",
+        "library_sha256",
+        "privacy_c_exports",
+        "result",
+    }
+    wheel_fields = {
+        "capability_binding",
+        "capability_binding_sha256",
+        "capability_manifest_sha256",
+        "compiled_profile_catalog_sha256",
+        "native_member",
+        "result",
+        "wheel_sha256",
+    }
+    if set(abi_result) != abi_fields or set(wheel_result) != wheel_fields:
+        _fail("qualification authority native probe result fields differ")
+    catalog_sha256 = _sha256(
+        abi_result["compiled_profile_catalog_sha256"],
+        "authority compiled-profile catalog digest",
+    )
+    capability_binding = _validate_capability_binding_result(
+        wheel_result["capability_binding"]
+    )
+    if (
+        abi_result["abi_version"] != 22
+        or abi_result["library_sha256"] != captured[ABI_LIBRARY_PATH].sha256
+        or abi_result["privacy_c_exports"] != list(abi22.APPROVED_PRIVACY_C_EXPORTS)
+        or abi_result["result"] != "passed"
+        or wheel_result["capability_manifest_sha256"]
+        != captured[CAPABILITY_PATH].sha256
+        or wheel_result["compiled_profile_catalog_sha256"] != catalog_sha256
+        or wheel_result["native_member"] != native_member
+        or wheel_result["result"] != "passed"
+        or wheel_result["wheel_sha256"] != captured[WHEEL_PATH].sha256
+        or wheel_result["capability_binding_sha256"]
+        != hashlib.sha256(canonical_json_bytes(capability_binding)).hexdigest()
+    ):
+        _fail("qualification authority native probe results differ from artifacts")
+    return {"abi22": dict(abi_result), "python_wheel": dict(wheel_result)}
+
+
 def assemble_boi_handoff(
     artifact_root: Path,
     output: Path,
@@ -1749,6 +1902,12 @@ def assemble_boi_handoff(
 ) -> dict[str, object]:
     """Validate every input and create one closed, immutable BOI directory."""
 
+    # Direct callers receive the same fail-before-input guarantee as the CLI.
+    require_boi_qualification_isolation(None)
+    # Native execution is owned by the installed qualification service.  These
+    # legacy callbacks remain accepted for source compatibility but are never
+    # invoked by the production path.
+    del python, wheel_probe, abi_runtime_validator
     artifact_root = _canonical_directory(artifact_root, "BOI source handoff")
     source = _source_identity(candidate.source)
     qualification_fingerprint = _sha256(
@@ -1806,14 +1965,39 @@ def assemble_boi_handoff(
         inventory_sha256=candidate.boi_artifact_inventory_sha256,
         inventory_payload=candidate.boi_artifact_inventory,
     )
-    probe_results = _validate_artifacts(
+    _validate_artifacts(
         artifact_root,
         captured,
         source=candidate.source,
         exact12_matrix_sha256=candidate.exact12_matrix_sha256,
-        python=python,
-        wheel_probe=wheel_probe,
-        abi_runtime_validator=abi_runtime_validator,
+        python=sys.executable,
+        wheel_probe=None,
+        abi_runtime_validator=None,
+        require_native_execution=False,
+    )
+    authority_subject = _qualification_authority_subject(
+        candidate,
+        source=source,
+        controller_digest=controller_digest,
+        host_id=host_id,
+        installation_id=installation_id,
+        issued_at_unix=issued_at,
+        replay_namespace=replay_namespace,
+        workflow_run_id=run_id,
+        workflow_run_attempt=run_attempt,
+    )
+    try:
+        authority_result = taira_authority_client.authorize(
+            "qualification",
+            authority_subject,
+            artifacts=_qualification_authority_artifacts(artifact_root, candidate),
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise BoiHandoffError(
+            f"native qualification authority refused the candidate: {error}"
+        ) from error
+    probe_results = _authority_probe_results(
+        authority_result, captured, artifact_root
     )
     abi_probe_result = canonical_json_bytes(probe_results["abi22"])
     wheel_probe_result = canonical_json_bytes(probe_results["python_wheel"])
@@ -1839,6 +2023,8 @@ def assemble_boi_handoff(
         QUALIFICATION_RECEIPT_PATH: candidate.qualification_receipt,
         PROTOCOL_RECEIPT_PATH: candidate.privacy_protocol_receipt,
         PROBE_TRANSCRIPT_PATH: probe_transcript,
+        NATIVE_AUTHORITY_ENVELOPE_PATH: authority_result.authority_envelope_bytes,
+        NATIVE_AUTHORITY_RECEIPT_PATH: authority_result.durable_receipt_bytes,
     }
     if any(not payload for payload in generated.values()):
         _fail("admitted candidate contains an empty required receipt")
@@ -1894,6 +2080,12 @@ def assemble_boi_handoff(
                     QUALIFICATION_RECEIPT_PATH: "four-peer-qualification-receipt",
                     PROTOCOL_RECEIPT_PATH: "exact12-four-peer-receipt",
                     PROBE_TRANSCRIPT_PATH: "linux-native-probe-transcript",
+                    NATIVE_AUTHORITY_ENVELOPE_PATH: (
+                        "native-qualification-authority-envelope"
+                    ),
+                    NATIVE_AUTHORITY_RECEIPT_PATH: (
+                        "native-qualification-durable-receipt"
+                    ),
                     candidate_archive_path: "signed-candidate-archive",
                     **{
                         f"{CANDIDATE_AUTHORITY_DIRECTORY}/{relative}": (
@@ -2229,6 +2421,7 @@ def verify_qualified_boi_handoff(
 ) -> QualifiedBoiSnapshot:
     """Independently authenticate and bind one closed qualified BOI handoff."""
 
+    require_boi_qualification_isolation(None)
     root = _canonical_directory(Path(os.path.abspath(root)), "qualified BOI handoff")
     external_archive = Path(os.path.abspath(candidate_archive))
     external_authority = _canonical_directory(
@@ -2350,6 +2543,18 @@ def verify_qualified_boi_handoff(
             max_size=MAX_HANDOFF_MANIFEST_BYTES,
             return_payload=True,
         )
+        _, native_authority_envelope = stable_read_relative(
+            root,
+            NATIVE_AUTHORITY_ENVELOPE_PATH,
+            max_size=taira_authority_client.MAX_CLIENT_OUTPUT_BYTES,
+            return_payload=True,
+        )
+        _, native_authority_receipt = stable_read_relative(
+            root,
+            NATIVE_AUTHORITY_RECEIPT_PATH,
+            max_size=taira_authority_client.MAX_CLIENT_OUTPUT_BYTES,
+            return_payload=True,
+        )
         _, embedded_qualification_public_key = stable_read_relative(
             root,
             QUALIFICATION_PUBLIC_KEY_PATH,
@@ -2362,6 +2567,8 @@ def verify_qualified_boi_handoff(
     assert qualification_payload_inventory is not None
     assert qualification_envelope is not None
     assert probe_transcript is not None
+    assert native_authority_envelope is not None
+    assert native_authority_receipt is not None
     assert embedded_qualification_public_key is not None
     trusted_qualification_key = Path(trusted_qualification_public_key_path)
     try:
@@ -2723,6 +2930,45 @@ def verify_qualified_boi_handoff(
     ):
         _fail("signed BOI qualification payload binding differs")
 
+    try:
+        native_envelope_value = taira_authority_client.decode_canonical_json(
+            native_authority_envelope,
+            "native qualification authority envelope",
+        )
+        native_receipt_value = taira_authority_client.decode_canonical_json(
+            native_authority_receipt,
+            "native qualification durable receipt",
+        )
+        native_verification = taira_authority_client.verify_receipt(
+            "qualification",
+            _qualification_authority_subject(
+                embedded,
+                source=normalized_source,
+                controller_digest=expected_controller_digest,
+                host_id=expected_host_id,
+                installation_id=expected_installation_id,
+                issued_at_unix=issued_at,
+                replay_namespace=expected_replay_namespace,
+                workflow_run_id=expected_run_id,
+                workflow_run_attempt=expected_run_attempt,
+            ),
+            authority_envelope=native_envelope_value,
+            durable_receipt=native_receipt_value,
+            artifacts=_qualification_authority_artifacts(root, embedded),
+        )
+    except taira_authority_client.TairaAuthorityClientError as error:
+        raise BoiHandoffError(
+            f"native qualification receipt verification failed: {error}"
+        ) from error
+    native_probe_results = _authority_probe_results(
+        native_verification, captured, root
+    )
+    if (
+        native_probe_results["abi22"] != abi_probe
+        or native_probe_results["python_wheel"] != wheel_probe
+    ):
+        _fail("native qualification receipt probe results differ from handoff")
+
     expected_roles = {spec.path: spec.role for spec in ARTIFACT_SPECS}
     expected_roles.update(
         {
@@ -2733,6 +2979,12 @@ def verify_qualified_boi_handoff(
             QUALIFICATION_RECEIPT_PATH: "four-peer-qualification-receipt",
             PROTOCOL_RECEIPT_PATH: "exact12-four-peer-receipt",
             PROBE_TRANSCRIPT_PATH: "linux-native-probe-transcript",
+            NATIVE_AUTHORITY_ENVELOPE_PATH: (
+                "native-qualification-authority-envelope"
+            ),
+            NATIVE_AUTHORITY_RECEIPT_PATH: (
+                "native-qualification-durable-receipt"
+            ),
             embedded_archive_relative: "signed-candidate-archive",
             **{
                 f"{CANDIDATE_AUTHORITY_DIRECTORY}/{relative}": (

@@ -1,5 +1,7 @@
 //! Oracle data events for feed aggregation outcomes.
 use super::*;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     oracle::{
         DefiOracleAttestation, FeedEvent, FeedId, KeyedHash, OracleChangeClass, OracleChangeId,
@@ -18,10 +20,7 @@ use crate::{
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FeedEventRecord {
     /// Feed event describing the aggregation outcome.
     pub event: FeedEvent,
@@ -41,10 +40,7 @@ pub struct FeedEventRecord {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TwitterBindingRecorded {
     /// Recorded binding.
     pub record: TwitterBindingRecord,
@@ -59,10 +55,7 @@ pub struct TwitterBindingRecorded {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TwitterBindingRevoked {
     /// Binding hash that was revoked.
     pub binding_hash: KeyedHash,
@@ -83,10 +76,7 @@ pub struct TwitterBindingRevoked {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OracleChangeProposed {
     /// Unique identifier of the change.
     pub change_id: OracleChangeId,
@@ -109,10 +99,7 @@ pub struct OracleChangeProposed {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OracleChangeStageUpdated {
     /// Identifier of the change.
     pub change_id: OracleChangeId,
@@ -138,10 +125,7 @@ pub struct OracleChangeStageUpdated {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DefiOracleAttestationRecorded {
     /// Recorded attestation.
     pub attestation: DefiOracleAttestation,

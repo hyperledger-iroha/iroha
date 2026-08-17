@@ -1113,7 +1113,7 @@ fn release_ready_journal(request: &PublicationRequestV1, broker: &KeyPair) -> Pu
         terminal_floor: None,
     }];
     journal.replication = Some(floor.replication.clone());
-    journal.readbacks = floor.readbacks.clone();
+    journal.readbacks.clone_from(&floor.readbacks);
     let intent = PublicationReleaseSubmissionIntentV1::try_new(
         operation_id,
         request,

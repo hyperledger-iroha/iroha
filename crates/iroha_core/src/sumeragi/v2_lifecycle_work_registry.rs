@@ -506,15 +506,6 @@ impl RecoveredDecisionApplyDispatchIdentityV1 {
     ) -> bool {
         self.key.matches_height_context(context)
     }
-    /// Recheck this identity against one exact installed registry location.
-    fn matches(
-        &self,
-        context: LifecycleContext,
-        address: ConcreteWorkAddress,
-        digest: LifecycleDigest,
-    ) -> bool {
-        self.key.matches(context, address, digest)
-    }
 }
 /// Closed semantic class of one lifecycle-owned recovered signing command.
 ///
@@ -1902,6 +1893,12 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
             .carrier
             .owns_signed_broadcast_recovery(recovery, &self.broadcast)
     }
+    // TODO: Wire this combined phase projection from cold startup or remove it
+    // after the split next-Sign path is proven exhaustive.
+    #[expect(
+        dead_code,
+        reason = "combined phase Broadcast recovery remains a dormant cold-start seam"
+    )]
     fn owns_phase_recovery(&self, recovery: &AuthenticatedLifecycleRecoveryCut) -> bool {
         let DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) = &self.parent else {
             return false;
@@ -2861,9 +2858,9 @@ impl DurableRecoveredWalSignWork {
     }
 }
 /// Whether one concrete registry row is still an executable adapter effect or
-/// a closed durable carrier awaiting its future typed consumer. Keeping the
-/// move-only carriers inline avoids adding another heap-allocation fail-stop
-/// cut between physical evidence and exact-address ownership.
+/// a closed durable carrier awaiting its future typed consumer. Installed
+/// move-only carriers remain inline, so exact-address admission introduces no
+/// later heap-allocation fail-stop cut before the carrier's typed consumer.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ConcreteLifecycleWorkKind {
@@ -3149,26 +3146,6 @@ impl ConcreteLifecycleWork {
     }
     const fn is_pending_adapter(&self) -> bool {
         matches!(&self.kind, ConcreteLifecycleWorkKind::PendingAdapter { .. })
-    }
-    const fn pending_adapter_pair(&self) -> Option<(&AdapterEffect, &PendingRuntimeEffectBinding)> {
-        match &self.kind {
-            ConcreteLifecycleWorkKind::PendingAdapter {
-                effect, pending, ..
-            } => Some((effect, pending)),
-            ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => None,
-            ConcreteLifecycleWorkKind::DurableStoreBody(_) => None,
-            ConcreteLifecycleWorkKind::DurableValidateBody(_) => None,
-            ConcreteLifecycleWorkKind::DurableValidateCompletion(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_) => None,
-            ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => None,
-            ConcreteLifecycleWorkKind::DurableProducerTurn(_) => None,
-        }
     }
 }
 /// One completely preflighted Certified-Serve/ProducerTurn carrier batch.

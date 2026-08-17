@@ -725,10 +725,23 @@ def close_handoff(
     expected_dpn_validator_release_commit: str,
     expected_cargo_lock_sha256: str,
     expected_workspace_source_manifest_sha256: str,
+    rollout_plan: Path,
+    rollout_result: Path,
+    rollout_authority_envelope: Path,
+    rollout_durable_receipt: Path,
 ) -> dict[str, object]:
-    """Close a publication terminal under the fixed root-controller contract."""
+    """Historically verify the observation, then close the publication terminal."""
 
     _require_authenticated_rollout_observation_authority()
+    try:
+        rollout_observation.verify_authenticated_result_files(
+            plan_path=rollout_plan,
+            result_path=rollout_result,
+            authority_envelope_path=rollout_authority_envelope,
+            durable_receipt_path=rollout_durable_receipt,
+        )
+    except rollout_observation.RolloutContractError as exc:
+        raise PublicationHandoffError(str(exc)) from exc
     return _close_handoff(
         source_parent,
         handoff_root,
@@ -766,6 +779,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--expected-workspace-source-manifest-sha256", required=True
     )
+    parser.add_argument("--rollout-plan", type=Path, required=True)
+    parser.add_argument("--rollout-result", type=Path, required=True)
+    parser.add_argument("--rollout-authority-envelope", type=Path, required=True)
+    parser.add_argument("--rollout-durable-receipt", type=Path, required=True)
     return parser.parse_args(argv)
 
 
@@ -774,7 +791,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # Refuse before canonicalizing identities or inspecting terminal/output paths.
         _require_authenticated_rollout_observation_authority()
-        result = _close_handoff(
+        result = close_handoff(
             args.source_parent,
             args.handoff_root,
             expected_authority_uid=_canonical_positive(
@@ -801,7 +818,10 @@ def main(argv: list[str] | None = None) -> int:
             expected_workspace_source_manifest_sha256=(
                 args.expected_workspace_source_manifest_sha256
             ),
-            _required_controller_uid=0,
+            rollout_plan=args.rollout_plan,
+            rollout_result=args.rollout_result,
+            rollout_authority_envelope=args.rollout_authority_envelope,
+            rollout_durable_receipt=args.rollout_durable_receipt,
         )
     except (OSError, PublicationHandoffError) as exc:
         print(f"Taira publication handoff refused: {exc}", file=sys.stderr)

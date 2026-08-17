@@ -204,6 +204,7 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
                 min_lanes: 1,
                 max_lanes: 9,
                 current_height: None,
+                required_active_height: None,
             }),
         ),
         vec![LaneId::SINGLE, LaneId::new(1)]
@@ -216,6 +217,7 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
                 min_lanes: 1,
                 max_lanes: 9,
                 current_height: Some(6),
+                required_active_height: Some(6),
             }),
         ),
         vec![LaneId::SINGLE],
@@ -229,6 +231,7 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
                 min_lanes: 1,
                 max_lanes: 9,
                 current_height: Some(7),
+                required_active_height: Some(7),
             }),
         ),
         vec![LaneId::SINGLE, LaneId::new(1)]
@@ -252,6 +255,7 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
                 min_lanes: 1,
                 max_lanes: 9,
                 current_height: None,
+                required_active_height: None,
             }),
         ),
         vec![LaneId::SINGLE],
@@ -272,6 +276,7 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
                 min_lanes: 1,
                 max_lanes: 8,
                 current_height: None,
+                required_active_height: None,
             }),
         )
         .is_empty()
@@ -295,6 +300,7 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
                 min_lanes: 1,
                 max_lanes: 2,
                 current_height: Some(10),
+                required_active_height: Some(10),
             }),
         ),
         vec![LaneId::SINGLE, LaneId::new(1)],
@@ -308,6 +314,7 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
                 min_lanes: 1,
                 max_lanes: 2,
                 current_height: Some(11),
+                required_active_height: Some(11),
             }),
         ),
         vec![LaneId::SINGLE],
@@ -326,6 +333,7 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
                 min_lanes: 1,
                 max_lanes: 2,
                 current_height: Some(10),
+                required_active_height: Some(10),
             }),
         ),
         vec![LaneId::SINGLE],
@@ -357,6 +365,7 @@ fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
                 min_lanes: 1,
                 max_lanes: 8,
                 current_height: None,
+                required_active_height: None,
             }),
         ),
         vec![LaneId::SINGLE, LaneId::new(1), LaneId::new(7)]
@@ -369,6 +378,7 @@ fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
                 min_lanes: 2,
                 max_lanes: 7,
                 current_height: None,
+                required_active_height: None,
             }),
         ),
         vec![LaneId::SINGLE]

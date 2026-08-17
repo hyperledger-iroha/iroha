@@ -250,6 +250,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('status/test_guards.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
+        Path('v2_authenticated_recovered_adapter_startup_impl.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),
@@ -300,7 +301,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_work_registry_recovery_surface_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_replay_evidence_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs'): (
+        Path('v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('v2_runtime_effect_ownership_core_impl.rs'),
+        Path('v2_runtime_effect_ownership_rebind_impl.rs'),
+        Path('v2_runtime/network_ingress_classification.rs'),
         Path('tests/v2_runtime_pending_binding_cases.rs'),
         Path('tests/v2_runtime_main_00.rs'),
         Path('tests/v2_runtime_main_01.rs'),
@@ -314,9 +321,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),
-        Path('v2_worker/autonomous_lane_output_retirement.rs'),
+        Path('v2_worker/autonomous_lane_output_reconstruction.rs'),
         Path('v2_worker/kura_replica_advert_refresh.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('v2_worker/effect_services_impl.rs'),
         Path('tests/v2_worker_main_00.rs'),
         Path('tests/v2_worker_main_01.rs'),
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
@@ -353,12 +361,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_apply/error_recovery.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/reducer.rs'): (
+        Path('reducer/prepare_certificate_handling.rs'),
         Path('tests/reducer_timeout_and_projection.rs'),
         Path('tests/v2_core_reducer_primitive_projection.rs'),
         Path('reducer/counterfeit_boundary_capability_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
         Path('refinement/first_release_witness.rs'),
+        Path('refinement/volatile_summary_well_formed.rs'),
         Path('refinement_constructor_test_helpers.rs'),
         Path('refinement/transition_gate_tail.rs'),
     ),
@@ -370,6 +380,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/committee_fallback_and_retransmit.rs'),
         Path('tests/v2_core_view_zero_parent_binding.rs'),
         Path('tests/empty_replay_resume_test.rs'),
+        Path('tests/delayed_prepare_qc_cache_bounds.rs'),
         Path('tests/v2_core_terminal_transactionality.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
@@ -393,6 +404,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lane_work_lifecycle_and_recovery_cases.rs'),
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
+        Path('v2_lane_work/autonomous_retirement_and_merge_tests.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs'): (
         Path('v2_lane_work_effect_queue.rs'),
@@ -452,6 +464,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
         Path(
             "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_recovered_wal.rs"
+        ),
+        Path(
+            "crates/iroha_core/src/sumeragi/"
             "v2_lifecycle_work_registry_validate_recovery.rs"
         ),
     ),
@@ -466,9 +482,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 49
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 5
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 5
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 50
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

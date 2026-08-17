@@ -190,7 +190,7 @@ HistoricalQcValid(qc) ==
   /\ qc.view \in Views
   /\ qc.phase \in Phases
   /\ qc.subject \in ValidSubjects
-  /\ DualQuorum(qc.context.epoch, qc.signers)
+  /\ ExactCertificateQuorum(qc.context.epoch, qc.signers)
 
 CertificatesBackedByIntents ==
   /\ \A qc \in prepareQCs:
@@ -215,7 +215,8 @@ FormedTimeoutCertificatesSound ==
     /\ TimeoutVotesDisjoint(tc.votes)
     /\ TimeoutHighsConflictFree(tc.votes)
     /\ TimeoutVotesBindCertificate(tc)
-    /\ DualQuorum(tc.context.epoch, TimeoutSignerSet(tc.votes))
+    /\ ExactCertificateQuorum(
+         tc.context.epoch, TimeoutSignerSet(tc.votes))
     /\ \A vote \in tc.votes:
          /\ vote.signer \in VotingRoster(tc.context.epoch)
          /\ vote.highRank \in Ranks

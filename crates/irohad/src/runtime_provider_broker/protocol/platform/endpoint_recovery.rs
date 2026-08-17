@@ -2,7 +2,7 @@
 use super::{RuntimeProviderBrokerServerErrorV1, SocketIdentity, socket_identity_from_stat};
 use std::{ffi::OsStr, fmt::Write as _, fs};
 const INSTANCE_LOCK_NAME: &str = ".runtime-provider-broker-v1.lock";
-const INSTANCE_LOCK_MODE: u32 = 0o600;
+const INSTANCE_LOCK_MODE: rustix::fs::RawMode = 0o600;
 const QUARANTINE_NAME_ATTEMPTS: usize = 4;
 #[derive(Clone, Copy)]
 struct ExactSocketEntry {
@@ -29,7 +29,7 @@ impl InstanceLockGuard {
         if !lock_metadata_is_exact(&opened, expected_service_uid) {
             return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
         }
-        let identity = socket_identity_from_stat(&opened)?;
+        let identity = socket_identity_from_stat(&opened);
         verify_lock_entry(parent_directory, identity, expected_service_uid)?;
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
@@ -50,7 +50,7 @@ impl InstanceLockGuard {
         let opened = rustix::fs::fstat(&self.file)
             .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
         if !lock_metadata_is_exact(&opened, self.expected_service_uid)
-            || socket_identity_from_stat(&opened)? != self.identity
+            || socket_identity_from_stat(&opened) != self.identity
         {
             return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
         }
@@ -72,17 +72,7 @@ impl InstanceLockGuard {
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         )
         .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed)?;
-        let quarantine_identity = match socket_identity_from_stat(&quarantined) {
-            Ok(identity) => identity,
-            Err(_) => {
-                restore_quarantined_entry(
-                    parent_directory,
-                    quarantine_name.as_os_str(),
-                    OsStr::new(INSTANCE_LOCK_NAME),
-                );
-                return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
-            }
-        };
+        let quarantine_identity = socket_identity_from_stat(&quarantined);
         if !lock_metadata_is_exact(&quarantined, self.expected_service_uid)
             || quarantine_identity != self.identity
         {
@@ -144,7 +134,7 @@ pub(super) fn prepare_endpoint(
     if !socket_metadata_is_exact(&observed, expected_service_uid, socket_mode) {
         return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
     }
-    let identity = socket_identity_from_stat(&observed)?;
+    let identity = socket_identity_from_stat(&observed);
     remove_exact_socket_entry_inner(
         parent_directory,
         socket_name,
@@ -212,7 +202,7 @@ where
         parent_directory,
         socket_name,
         ExactSocketEntry {
-            identity: socket_identity_from_stat(&observed)?,
+            identity: socket_identity_from_stat(&observed),
             expected_service_uid,
             socket_mode,
         },
@@ -281,7 +271,7 @@ fn create_lock_exclusively(parent_directory: &fs::File) -> rustix::io::Result<fs
             | rustix::fs::OFlags::EXCL
             | rustix::fs::OFlags::CLOEXEC
             | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::from_raw_mode(INSTANCE_LOCK_MODE as _),
+        rustix::fs::Mode::from_raw_mode(INSTANCE_LOCK_MODE),
     )
     .map(fs::File::from)
 }
@@ -303,27 +293,22 @@ where
         Err(_) => return Err(mismatch_error),
     };
     if !socket_metadata_is_exact(&observed, exact.expected_service_uid, exact.socket_mode)
-        || socket_identity_from_stat(&observed)? != exact.identity
+        || socket_identity_from_stat(&observed) != exact.identity
     {
         return Err(mismatch_error);
     }
     before_quarantine_rename();
     guard.verify(parent_directory)?;
     let quarantine_name = rename_to_quarantine(parent_directory, socket_name, ".q-")?;
-    let quarantined = match socket_metadata(parent_directory, quarantine_name.as_os_str()) {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => {
-            restore_quarantined_entry(parent_directory, quarantine_name.as_os_str(), socket_name);
-            return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
-        }
+    let quarantined = if let Ok(Some(metadata)) =
+        socket_metadata(parent_directory, quarantine_name.as_os_str())
+    {
+        metadata
+    } else {
+        restore_quarantined_entry(parent_directory, quarantine_name.as_os_str(), socket_name);
+        return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
     };
-    let quarantine_identity = match socket_identity_from_stat(&quarantined) {
-        Ok(identity) => identity,
-        Err(_) => {
-            restore_quarantined_entry(parent_directory, quarantine_name.as_os_str(), socket_name);
-            return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
-        }
-    };
+    let quarantine_identity = socket_identity_from_stat(&quarantined);
     if !socket_metadata_is_exact(&quarantined, exact.expected_service_uid, exact.socket_mode)
         || quarantine_identity != exact.identity
     {
@@ -426,7 +411,7 @@ fn verify_lock_entry(
     )
     .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
     if !lock_metadata_is_exact(&entry, expected_service_uid)
-        || socket_identity_from_stat(&entry)? != identity
+        || socket_identity_from_stat(&entry) != identity
     {
         return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
     }
@@ -435,7 +420,7 @@ fn verify_lock_entry(
 fn lock_metadata_is_exact(metadata: &rustix::fs::Stat, expected_service_uid: u32) -> bool {
     rustix::fs::FileType::from_raw_mode(metadata.st_mode) == rustix::fs::FileType::RegularFile
         && metadata.st_uid == expected_service_uid
-        && u32::from(metadata.st_mode & 0o7777) == INSTANCE_LOCK_MODE
+        && u32::from(metadata.st_mode & 0o7777) == u32::from(INSTANCE_LOCK_MODE)
         && metadata.st_nlink == 1
 }
 pub(super) fn socket_metadata_is_exact(

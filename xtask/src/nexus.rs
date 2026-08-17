@@ -200,8 +200,9 @@ fn nexus_connect_json_object(
     JsonValue::Object(map)
 }
 fn nexus_connect_network_id() -> Result<NetworkId, Box<dyn Error>> {
-    let network_id: NetworkId = NEXUS_CONNECT_FIXTURE_NETWORK_ID.parse()?;
-    if network_id.to_string() != NEXUS_CONNECT_FIXTURE_NETWORK_ID {
+    let network_id_json = json::to_json(&NEXUS_CONNECT_FIXTURE_NETWORK_ID)?;
+    let network_id = json::from_str::<NetworkId>(&network_id_json)?;
+    if json::to_json(&network_id)? != network_id_json {
         return Err("canonical Nexus fixture NetworkId did not round-trip byte-for-byte".into());
     }
     Ok(network_id)

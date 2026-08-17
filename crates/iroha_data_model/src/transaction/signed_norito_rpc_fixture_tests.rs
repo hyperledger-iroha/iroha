@@ -182,9 +182,10 @@ mod norito_rpc_fixture_tests {
             );
             let encoded_len = require_u64(entry, "encoded_len", name);
             let signed_len = require_u64(entry, "signed_len", name);
-            let network_id = require_str(entry, "network_id", name)
-                .parse::<NetworkId>()
-                .unwrap_or_else(|err| panic!("{name}: network_id parse failed: {err}"));
+            let network_id: NetworkId = json::from_value(Value::String(
+                require_str(entry, "network_id", name).to_owned(),
+            ))
+            .unwrap_or_else(|err| panic!("{name}: network_id parse failed: {err}"));
             let authority = require_str(entry, "authority", name);
             let _chain_guard = authority_prefix(authority).map(ChainDiscriminantGuard::enter);
             let creation_time_ms = require_u64(entry, "creation_time_ms", name);
@@ -360,6 +361,10 @@ mod norito_rpc_fixture_tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps one cohesive canonical and alias-encoding golden audit"
+    )]
     fn compact_external_entrypoint_golden_matches_native_hash_and_rejects_alias_encodings() {
         use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
         use sha2::Digest as _;

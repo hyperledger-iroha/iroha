@@ -1781,7 +1781,10 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
         {
             return None;
         }
-        match coordinator.admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
+        // Scheduler fixtures must not publish synthetic WAL identities into an
+        // attached production ledger. Keep this admission process-local so a
+        // cold reopen sees only authorities backed by the real recovered WAL.
+        match coordinator.reduce_admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
             super::AdmissionDecision::Admitted {
                 owner,
                 ordinal,
@@ -2181,16 +2184,6 @@ impl SealedLiveWalPersistedEffectV1 {
             pending,
         };
         sealed.exactly_matches_effect().then_some(sealed)
-    }
-    /// Recheck the payload-free effect and pending owner minted at conversion.
-    pub(super) fn exactly_binds_payload_free_pending(&self) -> bool {
-        matches!(
-            &self.pending,
-            LiveWalPersistedPendingV1::PayloadFree(pending)
-                if pending.exactly_binds_adapter_effect(&self.effect)
-        ) && self
-            .replay
-            .exactly_matches_payload_free_effect(&self.effect)
     }
     /// Replace the frame-derived placeholder owner of one exact vote-sign
     /// continuation with the predecessor-derived binding sealed by the Ready
@@ -3925,31 +3918,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
         manifest.round == round
             && manifest.subject == subject
             && self.exactly_matches_retry(command_identity, tag, manifest)
-    }
-    /// Match the complete queued handoff without exposing its source or receipt parts.
-    pub(in crate::sumeragi) fn exactly_matches_handoff(
-        &self,
-        command_identity: LocalProposalReadyCommandIdentity,
-        validate_effect: &AdapterEffect,
-        validate_pending: &PendingRuntimeEffectBinding,
-        manifest: &wire::PayloadManifest,
-        durable_receipt: &DurableBodyReceipt,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> bool {
-        self.command_identity == command_identity
-            && &self.validate_pending == validate_pending
-            && self
-                .validate_pending
-                .exactly_binds_adapter_effect(validate_effect)
-            && &self.validated_receipt == validated_receipt
-            && validated_receipt.durable() == durable_receipt
-            && local_body_family_manifest_matches(&self.family, manifest)
-            && local_body_stage_matches(
-                &self.family,
-                validate_effect,
-                durable_receipt,
-                LifecycleStageKind::ValidateBody,
-            )
     }
     /// Identify this command's exact unsigned ProposalIntent before owner comparison.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent_effect(

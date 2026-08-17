@@ -152,8 +152,8 @@ impl FixtureOptions {
     pub fn new(output_root: Option<PathBuf>) -> Self {
         Self { output_root }
     }
-    fn resolve_paths(&self) -> Result<ResolvedFixtureOptions> {
-        let requested_root = self.output_root.clone().unwrap_or_else(workspace_root);
+    fn resolve_paths(self) -> Result<ResolvedFixtureOptions> {
+        let requested_root = self.output_root.unwrap_or_else(workspace_root);
         reject_ambiguous_root(&requested_root)?;
         let root_metadata = fs::symlink_metadata(&requested_root)
             .with_context(|| format!("output root does not exist: {}", requested_root.display()))?;
@@ -277,11 +277,8 @@ fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
         .get("network_id")
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("alias-setup fixture onboarding body requires network_id"))?;
-    let network_id = parse_network_id(network_literal)
+    parse_network_id(network_literal)
         .context("alias-setup fixture onboarding network_id is not canonical")?;
-    if network_id.to_string() != network_literal {
-        bail!("alias-setup fixture onboarding network_id must use its canonical literal");
-    }
     Ok(())
 }
 fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> Result<()> {
@@ -457,6 +454,11 @@ fn parse_schema_hash_hex(input: &str) -> Result<[u8; 16]> {
     Ok(out)
 }
 /// Verify canonical fixture bytes, schema hashes, and SDK manifest parity.
+///
+/// # Errors
+///
+/// Returns an error when fixture rendering, canonical validation, SDK parity
+/// checks, or optional report serialization and publication fails.
 pub fn run_verify(
     alias_setup_fixture: &AliasSetupFixtureBytes,
     json_out: Option<JsonOutput>,
@@ -579,6 +581,11 @@ fn build_verification_report(
     })
 }
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
+///
+/// # Errors
+///
+/// Returns an error when the configured paths or fixture source are invalid,
+/// fixture rendering fails, or the guarded publication cannot be committed.
 pub fn generate_fixtures(
     options: FixtureOptions,
     alias_setup_fixture: &AliasSetupFixtureBytes,
@@ -873,10 +880,7 @@ impl RawPayloadFixture {
             payload_bytes,
             signed_bytes,
             summary: PayloadSummary {
-                network_id: payload_value
-                    .network_id()
-                    .expect("ordinary fixture transaction has an exact network identity")
-                    .to_string(),
+                network_id: self.payload.network_id.clone(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: actual_ttl_ms,
@@ -990,10 +994,6 @@ fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
     Ok(fixtures)
 }
 fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| eyre!("fixture entries must be objects"))?;
-    let name = expect_string(obj, "name")?.to_owned();
     const FIELDS: &[&str] = &[
         "name",
         "network_id",
@@ -1007,6 +1007,11 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         "signed_hash",
         "payload",
     ];
+
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("fixture entries must be objects"))?;
+    let name = expect_string(obj, "name")?.to_owned();
     require_exact_fields(obj, FIELDS, &format!("fixture '{name}'"))?;
     for field in [
         "payload_base64",
@@ -1320,7 +1325,7 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
 }
 fn parse_account_id(value: &str) -> Result<AccountId> {
     let account = AccountId::parse_encoded(value)
-        .map(|parsed| parsed.into_account_id())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .with_context(|| {
             format!("account id '{value}' must be a canonical I105-encoded literal")
         })?;
@@ -1341,10 +1346,9 @@ fn parse_network_id(value: &str) -> Result<NetworkId> {
     Ok(network_id)
 }
 fn optional_u32_value(value: Option<u32>) -> Value {
-    match value {
-        Some(v) => Value::Number(Number::U64(v as u64)),
-        None => Value::Null,
-    }
+    value.map_or(Value::Null, |value| {
+        Value::Number(Number::U64(u64::from(value)))
+    })
 }
 fn build_payload_fixtures_json(
     raw_fixtures: &[RawPayloadFixture],
@@ -1926,7 +1930,14 @@ fn read_guarded_file(path: &Path, expected_identity: FileIdentity) -> Result<Vec
             path.display()
         );
     }
-    let mut bytes = Vec::with_capacity(expected_identity.len as usize);
+    let expected_len = usize::try_from(expected_identity.len).map_err(|_| {
+        eyre!(
+            "fixture publication preimage is too large to address on this platform: {} bytes at {}",
+            expected_identity.len,
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(expected_len);
     file.read_to_end(&mut bytes)?;
     let final_identity = file_identity(&fs::symlink_metadata(path)?, path)?;
     if final_identity != expected_identity {
@@ -2166,24 +2177,23 @@ where
 {
     let path = root.join(&mutation.relative);
     ensure_safe_owned_path(root, &path)?;
-    match &mutation.postimage {
-        Some(bytes) => atomic_publish_bytes_with_commit(
+    if let Some(bytes) = &mutation.postimage {
+        atomic_publish_bytes_with_commit(
             root,
             &path,
             mutation.preimage.as_ref(),
             bytes,
             |identity| committed(Some(identity)),
         )
-        .map(|_| ()),
-        None => {
-            let preimage = mutation.preimage.as_ref().ok_or_else(|| {
-                eyre!(
-                    "retired fixture has no guarded preimage: {}",
-                    path.display()
-                )
-            })?;
-            guarded_remove_with_commit(&path, preimage, || committed(None))
-        }
+        .map(|_| ())
+    } else {
+        let preimage = mutation.preimage.as_ref().ok_or_else(|| {
+            eyre!(
+                "retired fixture has no guarded preimage: {}",
+                path.display()
+            )
+        })?;
+        guarded_remove_with_commit(&path, preimage, || committed(None))
     }
 }
 fn rollback_publication_mutation(
@@ -2573,14 +2583,6 @@ impl Manifest {
     }
 }
 fn validate_manifest_shape(value: &Value) -> Result<()> {
-    let root = value
-        .as_object()
-        .ok_or_else(|| eyre!("fixture manifest root must be an object"))?;
-    require_exact_fields(root, &["fixtures"], "fixture manifest root")?;
-    let fixtures = root
-        .get("fixtures")
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("fixture manifest field 'fixtures' must be an array"))?;
     const ENTRY_FIELDS: &[&str] = &[
         "name",
         "authority",
@@ -2596,6 +2598,15 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
         "nonce",
         "time_to_live_ms",
     ];
+
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("fixture manifest root must be an object"))?;
+    require_exact_fields(root, &["fixtures"], "fixture manifest root")?;
+    let fixtures = root
+        .get("fixtures")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("fixture manifest field 'fixtures' must be an array"))?;
     for (index, fixture) in fixtures.iter().enumerate() {
         let object = fixture
             .as_object()
@@ -2626,6 +2637,10 @@ struct FixtureEntry {
     time_to_live_ms: u64,
 }
 impl FixtureEntry {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "fixture validation is one cohesive fail-closed manifest invariant matrix"
+    )]
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         validate_fixture_identity(&self.name, &self.encoded_file)?;
         if self.time_to_live_ms == 0 {
@@ -2637,7 +2652,14 @@ impl FixtureEntry {
         let payload_bytes = BASE64
             .decode(&self.payload_base64)
             .with_context(|| format!("fixture '{}' payload base64 invalid", self.name))?;
-        if payload_bytes.len() != self.encoded_len as usize {
+        let encoded_len = usize::try_from(self.encoded_len).map_err(|_| {
+            eyre!(
+                "fixture '{}' encoded_len {} cannot be addressed on this platform",
+                self.name,
+                self.encoded_len
+            )
+        })?;
+        if payload_bytes.len() != encoded_len {
             bail!(
                 "fixture '{}' payload length mismatch (manifest={}, decoded={})",
                 self.name,
@@ -2657,7 +2679,14 @@ impl FixtureEntry {
         let signed_bytes = BASE64
             .decode(&self.signed_base64)
             .with_context(|| format!("fixture '{}' signed base64 invalid", self.name))?;
-        if signed_bytes.len() != self.signed_len as usize {
+        let signed_len = usize::try_from(self.signed_len).map_err(|_| {
+            eyre!(
+                "fixture '{}' signed_len {} cannot be addressed on this platform",
+                self.name,
+                self.signed_len
+            )
+        })?;
+        if signed_bytes.len() != signed_len {
             bail!(
                 "fixture '{}' signed payload length mismatch (manifest={}, decoded={})",
                 self.name,
@@ -3341,6 +3370,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the transaction test must assert rollback and retry across one ordered mutation set"
+    )]
     fn publication_transaction_rolls_back_injected_failure_and_is_retry_safe() {
         let rendered = tempdir().expect("rendered publication root");
         let destination = tempdir().expect("destination publication root");
@@ -3619,8 +3652,7 @@ mod tests {
         };
         let error = payload
             .to_builder("invalid-network-id")
-            .err()
-            .expect("an empty network id must be rejected");
+            .expect_err("an empty network id must be rejected");
         assert!(
             error
                 .to_string()
@@ -4016,7 +4048,7 @@ mod tests {
             .iter()
             .map(|entry| entry.sdk.as_str())
             .collect();
-        labels.sort();
+        labels.sort_unstable();
         for expected in ["java", "python", "swift"] {
             assert!(
                 labels.contains(&expected),

@@ -75,6 +75,24 @@ mod tests {
         let parsed = super::parse_transfer_public_inputs(&canonical)
             .expect("canonical confidential envelope exposes public inputs");
         assert_eq!(parsed.0[0], scalar_bytes(1));
+        let extra_columns = (1_u64..=10)
+            .map(|value| vec![Fp::from(value)])
+            .collect::<Vec<_>>();
+        let extra_column_refs = extra_columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut extra_zk1 = crate::zk::zk1_test_helpers::wrap_start();
+        crate::zk::zk1_test_helpers::wrap_append_proof(&mut extra_zk1, &[0xA5]);
+        crate::zk::zk1_test_helpers::wrap_append_instances_pasta_fp_cols(
+            &extra_column_refs,
+            &mut extra_zk1,
+        );
+        let mut extra_column_envelope = envelope.clone();
+        extra_column_envelope.proof_bytes = extra_zk1;
+        let extra_column_outer = norito::encode_canonical(&extra_column_envelope)
+            .expect("encode confidential envelope with extra public column");
+        assert!(
+            super::parse_transfer_public_inputs(&extra_column_outer).is_err(),
+            "a trailing public column must not be ignored"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_outer = {

@@ -382,7 +382,7 @@ pub(super) mod route_test_support {
     use crate::http::StatusCode;
     use std::sync::Arc;
     pub(in crate::client) fn assert_rejected_before_http<T: std::fmt::Debug>(
-        expected_error: String,
+        expected_error: &str,
         request: impl FnOnce() -> eyre::Result<T>,
     ) {
         let snapshots: SnapshotStore = Arc::default();
@@ -538,7 +538,7 @@ mod tests {
             .body(vec![0x00, 0xFF, 0x51, 0x00])
             .expect("build non-OK response")
     }
-    fn assert_non_ok_preserved(response: Response<Vec<u8>>) {
+    fn assert_non_ok_preserved(response: &Response<Vec<u8>>) {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
             response.headers()["content-type"],
@@ -547,11 +547,11 @@ mod tests {
         assert_eq!(response.headers()["x-repair-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
     }
-    fn assert_rejected<T>(result: Result<T>) {
+    fn assert_rejected<T>(result: &Result<T>) {
         assert!(result.is_err());
     }
     fn assert_tasks_rejected(page: &RepairLedgerTaskPageV1, filter: &SorafsRepairTasksFilter<'_>) {
-        assert_rejected(validate_tasks_response(
+        assert_rejected(&validate_tasks_response(
             exact_response("tasks", page),
             filter,
         ));
@@ -560,7 +560,7 @@ mod tests {
         page: &RepairFinalizedEventPageV1,
         filter: &SorafsRepairEventsFilter<'_>,
     ) {
-        assert_rejected(validate_events_response(
+        assert_rejected(&validate_events_response(
             exact_response("events", page),
             filter,
         ));
@@ -634,7 +634,7 @@ mod tests {
         transaction: &SignedTransaction,
     ) {
         super::route_test_support::assert_rejected_before_http(
-            format!(
+            &format!(
                 "SoraFS repair route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
@@ -781,7 +781,7 @@ mod tests {
             ),
             wrapped_response("local_scheduler", "status", &status, APPLICATION_JSON),
         ] {
-            assert_rejected(validate_status_response(
+            assert_rejected(&validate_status_response(
                 response,
                 &SorafsRepairFinalizedAnchor::default(),
             ));
@@ -797,7 +797,7 @@ mod tests {
                 expected_finalized_block_hash_hex: None,
             },
         ] {
-            assert_rejected(validate_status_response(
+            assert_rejected(&validate_status_response(
                 exact_response("status", &status),
                 &anchor,
             ));
@@ -809,7 +809,7 @@ mod tests {
             },
             status: RepairLedgerStatusV1::default(),
         };
-        assert_rejected(validate_status_response(
+        assert_rejected(&validate_status_response(
             exact_response("status", &zero_cursor),
             &SorafsRepairFinalizedAnchor::default(),
         ));
@@ -817,7 +817,7 @@ mod tests {
             finalized_cursor: cursor,
             task: repair_task(&client, "REP-OTHER", [0x20; 32]),
         };
-        assert_rejected(validate_task_response(
+        assert_rejected(&validate_task_response(
             exact_response("task", &task),
             "REP-REQUESTED",
             &SorafsRepairFinalizedAnchor::default(),
@@ -880,8 +880,7 @@ mod tests {
             exact_response("tasks", &page),
             &SorafsRepairTasksFilter::default(),
         )
-        .err()
-        .expect("omitted task limit must retain Torii's default response bound");
+        .expect_err("omitted task limit must retain Torii's default response bound");
         assert!(
             error
                 .to_string()
@@ -956,8 +955,7 @@ mod tests {
             exact_response("events", &page),
             &SorafsRepairEventsFilter::default(),
         )
-        .err()
-        .expect("omitted event limit must retain Torii's default response bound");
+        .expect_err("omitted event limit must retain Torii's default response bound");
         assert!(
             error
                 .to_string()
@@ -1016,7 +1014,7 @@ mod tests {
             validate_task_response(non_ok_response(), "REP-1", &finalized),
             validate_events_response(non_ok_response(), &events),
         ] {
-            assert_non_ok_preserved(response.expect("non-OK repair response"));
+            assert_non_ok_preserved(&response.expect("non-OK repair response"));
         }
     }
     #[test]
@@ -1032,7 +1030,7 @@ mod tests {
                     client.get_sorafs_repair_task("REP-1", &SorafsRepairFinalizedAnchor::default()),
                     client.get_sorafs_repair_events(&SorafsRepairEventsFilter::default()),
                 ] {
-                    assert_rejected(response);
+                    assert_rejected(&response);
                 }
             },
         );

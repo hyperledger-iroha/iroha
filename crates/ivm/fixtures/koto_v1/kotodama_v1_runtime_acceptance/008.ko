@@ -1,0 +1,11 @@
+
+seiyaku OptionPropagationLayoutAcceptance {
+  fn source() -> Option<int> {
+    Option::none
+  }
+
+  view fn run() -> Option<(int, int)> {
+    let value = source()?;
+    Option::some((value, value))
+  }
+}

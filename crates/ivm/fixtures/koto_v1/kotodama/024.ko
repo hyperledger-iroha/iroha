@@ -1,0 +1,7 @@
+
+        seiyaku RawQuery {
+          view fn query(bytes payload) -> bytes {
+            return query_execute_norito(payload);
+          }
+        }
+    

@@ -1,0 +1,9 @@
+
+        seiyaku TupleCall {
+            fn pair(int x) -> (int, int) { return (x, x + 1); }
+            view fn main() -> int {
+                let (a, b) = pair(7);
+                return a * b;
+            }
+        }
+    

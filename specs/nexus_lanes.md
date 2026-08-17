@@ -457,10 +457,11 @@ LaneConfigEntry {
   the normal ingress path. Vote caches are bounded both by session count and by
   exact attestation-body buckets inside each session, using deterministic FIFO
   eviction so one source/plan cannot retain unbounded retried or adversarial
-  bodies. Operators tune these guards with
-  `sumeragi.advanced.native_amx.session_cache_max` and
-  `sumeragi.advanced.native_amx.session_body_bucket_max` (defaults: `1024` and
-  `256` respectively).
+  bodies. Revision 4 derives these guards from the shared finite projection:
+  session capacity follows the control/reducer capacity projected from
+  `sumeragi.queues.commands`, and exact-body buckets per session follow
+  `sumeragi.block.max_transactions`. There are no separate Native AMX cache
+  switches.
 - Any Torii ingress node may accept transactions and route them using the
   active routing policy, even if the target dataspace is not validated locally
   by that ingress node.

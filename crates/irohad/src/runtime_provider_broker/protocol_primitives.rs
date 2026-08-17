@@ -673,9 +673,9 @@ impl Drop for ScrubbedBytes {
         let _ = std::hint::black_box(&self.bytes);
     }
 }
-pub(super) struct ScrubbedReadChunk(pub(super) [u8; 64 * 1024]);
+pub(super) struct ScrubbedReadChunk(pub(super) Box<[u8]>);
 impl std::ops::Deref for ScrubbedReadChunk {
-    type Target = [u8; 64 * 1024];
+    type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.0
     }

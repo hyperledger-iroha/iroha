@@ -421,7 +421,7 @@ fn archive_retention_decisions_are_bounded_and_fail_closed() {
         .validate()
         .expect("unknown archives retain fail-closed");
     assert!(unknown.must_retain());
-    let mut inconsistent = referenced.clone();
+    let mut inconsistent = referenced;
     inconsistent.disposition = MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown;
     assert!(inconsistent.validate().is_err());
     let request = MusubiArchiveRetentionQueryV1 {
@@ -723,6 +723,10 @@ fn registry_policy_successors_bind_price_changes_to_pricing_revisions() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one page-boundary matrix covers every Musubi page and cursor representation"
+)]
 fn page_and_cursor_bounds_are_enforced() {
     for limit in [
         0,
@@ -869,6 +873,10 @@ fn page_and_cursor_bounds_are_enforced() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one empty-page matrix verifies exact query identity across all Musubi page families"
+)]
 fn empty_response_pages_retain_their_exact_query_identity() {
     let package_id = package("empty-context");
     let package_query = MusubiPackagePageQueryV1 {
@@ -1045,6 +1053,10 @@ fn finalized_next_cursor_binds_the_exact_full_page_tail() {
     assert!(page.validate().is_err());
 }
 #[test]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "the test intentionally pins the compile-time resolver item budget below the public response ceiling"
+)]
 fn resolver_next_cursor_may_bind_a_nonempty_byte_budgeted_short_page() {
     assert!(
         MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1 < MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1

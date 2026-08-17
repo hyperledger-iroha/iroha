@@ -83,7 +83,6 @@ fn parse_signature(bytes: &[u8; 96]) -> Result<G2Affine, Error> {
 mod tests {
     use super::*;
     use blstrs::{G1Projective, G2Projective, Scalar};
-    use group::{Curve as _, Group as _};
     fn key_and_signature(secret: u64, message: &[u8]) -> ([u8; 48], G2Projective) {
         let scalar = Scalar::from(secret);
         let public_key = (G1Projective::generator() * scalar)

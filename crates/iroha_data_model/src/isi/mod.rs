@@ -1670,8 +1670,17 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
         None
     }
     /// Write the exact canonical Norito frame without materializing an intermediate payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if canonical frame encoding fails or the destination writer rejects the
+    /// frame.
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error>;
     /// Return the exact canonical Norito frame length without allocating.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the canonical frame length cannot be computed.
     fn dyn_frame_len(&self) -> Result<usize, norito::core::Error>;
     /// Downcast to concrete type
     fn as_any(&self) -> &dyn Any;
@@ -1907,10 +1916,11 @@ pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static st
     let framed_payload_len = inner.dyn_frame_len().ok()?;
     let mut payload = Vec::new();
     payload.try_reserve_exact(framed_payload_len).ok()?;
-    let mut exact = ExactInstructionFrameWriter::new(&mut payload, framed_payload_len);
-    let write_result = inner.dyn_write_frame(&mut exact);
-    let complete = exact.is_complete();
-    drop(exact);
+    let (write_result, complete) = {
+        let mut exact = ExactInstructionFrameWriter::new(&mut payload, framed_payload_len);
+        let write_result = inner.dyn_write_frame(&mut exact);
+        (write_result, exact.is_complete())
+    };
     write_result.ok()?;
     complete.then_some((entry.wire_id, payload))
 }
@@ -2001,11 +2011,11 @@ impl norito::core::NoritoSerialize for InstructionBox {
         })?;
         let framed_payload_len = inner.dyn_frame_len()?;
         write_instruction_pair_prefix(&mut *writer, entry.wire_id, framed_payload_len)?;
-        let mut exact = ExactInstructionFrameWriter::new(writer, framed_payload_len);
-        let write_result = inner.dyn_write_frame(&mut exact);
-        let rejected_write = exact.rejected_write();
-        let written = exact.written();
-        drop(exact);
+        let (write_result, rejected_write, written) = {
+            let mut exact = ExactInstructionFrameWriter::new(writer, framed_payload_len);
+            let write_result = inner.dyn_write_frame(&mut exact);
+            (write_result, exact.rejected_write(), exact.written())
+        };
         if rejected_write {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -2873,13 +2883,11 @@ pub(crate) fn decode_packed_instruction_payload<T>(
     bytes: &[u8],
 ) -> Result<(T, usize), norito::core::Error>
 where
-    T: norito::codec::Decode,
+    T: norito::codec::Decode + norito::core::NoritoSerialize,
 {
-    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = <T as norito::codec::Decode>::decode(&mut cursor)?;
-    let used =
-        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+    // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
+    // instruction payloads must instead retain the flags advertised by their enclosing frame.
+    let (decoded, used) = norito::core::decode_field_canonical::<T>(bytes)?;
     if used != bytes.len() {
         return Err(norito::core::Error::LengthMismatch);
     }
@@ -4088,6 +4096,9 @@ pub mod prelude {
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };
 }
+#[cfg(test)]
+#[path = "shared_test_helpers.rs"]
+mod test_support;
 #[cfg(test)]
 #[path = "instruction_enum_tests.rs"]
 mod tests;

@@ -75,7 +75,7 @@ export IROHA_TAIRA_KEEP_LOCALNET=1
 cd "$REPO_ROOT"
 
 # Bind every compiled and retained artifact to the complete tracked/untracked
-# checkout state plus the ignored workspace Cargo.lock. The helper also rejects
+# checkout state including the tracked root Cargo.lock. The helper also rejects
 # unresolved entries and active Git operations. A content-addressed target
 # prevents a stale candidate from a different source tree from satisfying
 # binary discovery.

@@ -1,0 +1,6 @@
+
+        seiyaku InvalidStateRangeTypes {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.range("a", "b") { let seen = value; } }
+        }
+    

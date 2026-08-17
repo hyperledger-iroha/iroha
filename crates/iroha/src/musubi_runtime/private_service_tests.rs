@@ -425,6 +425,10 @@ fn receipt_verification_accepts_only_bounded_service_clock_lead() {
     assert_eq!(error.code(), "MUSUBI_SEED_INGRESS_RECEIPT_INVALID");
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the seed-ingress audit keeps exact metadata, authorization, framing, and secret-isolation checks together"
+)]
 fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body() {
     let (mut client, _) = client();
     client.headers.insert(
@@ -788,6 +792,10 @@ fn seed_ingress_source_transcript_uses_joined_path_byte_order() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the oversized-witness audit reconstructs and verifies the complete authenticated plan surface"
+)]
 fn private_service_accepts_plan_witness_larger_than_metadata_header() {
     let mut fixture = private_service_fixture(false);
     let retained =
@@ -1038,7 +1046,7 @@ fn private_service_constructs_and_verifies_exact_external_signer_payload() {
         .verify(&fixture.request.binding, 1_901)
         .expect("service verifies exact external approval");
     let observed = observed.lock().expect("observed signing payloads");
-    assert_eq!(observed.as_slice(), &[receipt.payload.clone()]);
+    assert_eq!(observed.as_slice(), std::slice::from_ref(&receipt.payload));
     assert_eq!(receipt.payload.binding, fixture.request.binding);
     assert_eq!(receipt.payload.issued_at_ms, 1_901);
     assert_eq!(receipt.payload.expires_at_ms, 61_901);
@@ -1632,6 +1640,10 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the control-request authentication audit covers both storage and readback fail-closed ordering"
+)]
 fn private_service_authenticates_control_requests_before_embedded_evidence() {
     let mut fixture = control_service_fixture(false, false);
     let attacker = KeyPair::try_from_seed(

@@ -7,18 +7,19 @@ integration harness.
 
 ## Perf Profiles (Kagami Localnet)
 
-Use the dedicated profiles to stamp 1s block/commit defaults and throughput
-caps into the generated configs:
+Use the dedicated profiles to sign a 1s block cadence and throughput bounds
+into genesis while generating bounded peer configs:
 
 - Permissioned: `kagami localnet --perf-profile 10k-permissioned`
 - NPoS: `kagami localnet --perf-profile 10k-npos`
 
-These profiles set 1s block/commit timing, `collectors_k`, `redundant_send_r`,
-the on-chain `block_max_transactions = 10_000`, a bounded runtime proposal cap
-of `sumeragi.block.max_transactions = 256`, a 4MiB localnet P2P frame cap,
-shorter transaction gossip cadence (`transaction_gossip_period_ms = 100`,
-`transaction_gossip_resend_ticks = 1`), and NPoS bootstrap stake. Explicit CLI
-flags still override individual values.
+These profiles sign `block_cadence_ms = 1_000`, consensus mode, NPoS election
+context where applicable, and the on-chain block limit of 10,000 transactions.
+Peer configs retain the bounded runtime proposal cap of
+`sumeragi.block.max_transactions = 256`, a 4 MiB localnet P2P frame cap, and
+shorter transaction-gossip cadence (`transaction_gossip_period_ms = 100`,
+`transaction_gossip_resend_ticks = 1`). No local collector, RBC, DA, or
+pacemaker switch participates in the profile.
 
 ## 1s Finality SLO Thresholds
 
@@ -59,7 +60,7 @@ Defaults used by the integration test:
 - On-chain block max transactions: 10_000
 - Runtime proposal cap: 256
 - Localnet P2P frame cap: 4 MiB
-- Block/commit time: 1000 ms
+- Signed block cadence: 1000 ms
 
 ## Required Telemetry/Status Fields
 
@@ -78,7 +79,7 @@ Defaults used by the integration test:
 - `sumeragi.tx_queue_saturated_by_age`
 - `sumeragi.tx_queue_oldest_queued_age_ms`
 
-### `/v1/sumeragi/status`
+### `/v1/sumeragi/status` (diagnostic projection)
 - `view_change_install_total`
 - `pacemaker_backpressure_deferrals_total`
 - `tx_queue_depth`
@@ -97,7 +98,9 @@ Defaults used by the integration test:
 - `commit_time_ms_sum`
 - `commit_time_ms_count`
 
-Gaps to add: none (current fields cover all throughput SLO metrics).
+Use `/status` plus committed-height observations for pass/fail decisions. The
+diagnostic projection supplements artifacts but does not override signed
+consensus context.
 
 ## Running the Harness
 

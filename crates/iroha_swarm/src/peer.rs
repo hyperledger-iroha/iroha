@@ -7,12 +7,12 @@ pub type ExposedKeyPair = (
 );
 pub type PeerPop = Vec<u8>;
 #[derive(Debug)]
-pub(crate) struct PeerInfo {
-    pub(crate) name: PeerName,
-    pub(crate) ports: P2pApiPorts,
-    pub(crate) key_pair: ExposedKeyPair,
-    pub(crate) soranet_transport_key_pair: ExposedKeyPair,
-    pub(crate) pop: PeerPop,
+pub struct PeerInfo {
+    pub name: PeerName,
+    pub ports: P2pApiPorts,
+    pub key_pair: ExposedKeyPair,
+    pub soranet_transport_key_pair: ExposedKeyPair,
+    pub pop: PeerPop,
 }
 pub const SERVICE_NAME: &str = "irohad";
 type Result<T> = std::result::Result<T, iroha_crypto::Error>;
@@ -65,7 +65,7 @@ pub fn generate_bls_key_pair(
         pop,
     ))
 }
-pub(crate) fn generate_soranet_transport_key_pair(
+pub fn generate_soranet_transport_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
 ) -> Result<ExposedKeyPair> {

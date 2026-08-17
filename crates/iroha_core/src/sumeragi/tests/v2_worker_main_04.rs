@@ -7,15 +7,8 @@ fn restored_valid_qc_without_local_retention_authority_is_negative() {
         ("observer", None, vec![0, 1, 2, 3]),
         ("non-signer", Some(0), vec![1, 2, 3]),
     ] {
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &signers,
-        );
+        let (request, validator_pops) =
+            production_prepare_serve_request(&context, &keys, &proposal, &signers);
         let body_root = TempDir::new().expect("nonowner startup body root");
         let serve_root = TempDir::new().expect("nonowner startup Serve root");
         let body_store = V2BodyStore::open(body_root.path(), context.clone())
@@ -41,12 +34,7 @@ fn restored_valid_qc_without_local_retention_authority_is_negative() {
         )
         .unwrap_or_else(|error| panic!("{case} startup discharge failed: {error}"));
         assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .serves
-                .get(&lifecycle_id)
-                .map(|tracked| tracked.state),
+            tracked_serve_state(&command_tx, &lifecycle_id),
             Some(V2IoServeState::Rejected(
                 CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
             )),
@@ -59,22 +47,9 @@ fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let (valid, validator_pops) = production_authenticated_serve_request(
-        &context,
-        &keys,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-        &[0, 1, 2, 3],
-    );
-    let invalid = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let (valid, validator_pops) =
+        production_prepare_serve_request(&context, &keys, &proposal, &[0, 1, 2, 3]);
+    let invalid = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let foreign_decision = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(
             b"foreign durable Decision tag mutation",
@@ -169,13 +144,7 @@ fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (canonical_wire, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let invalid = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let invalid = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let higher_round = wire::ConsensusRound {
         view: proposal.round.view + 1,
         ..proposal.round
@@ -228,12 +197,7 @@ fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
     )
     .expect("install initial invalid-QC negative");
     assert_eq!(
-        command_tx
-            .queue
-            .lock()
-            .serves
-            .get(&negative_id)
-            .map(|tracked| tracked.state),
+        tracked_serve_state(&command_tx, &negative_id),
         Some(V2IoServeState::Rejected(
             CertifiedServeNegativeOutcome::InvalidCertificate
         ))
@@ -323,12 +287,7 @@ fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
     )
     .expect("restart validates the strict higher terminal");
     assert_eq!(
-        restart_tx
-            .queue
-            .lock()
-            .serves
-            .get(&barrier.lifecycle_id())
-            .map(|tracked| tracked.state),
+        tracked_serve_state(&restart_tx, &barrier.lifecycle_id()),
         Some(V2IoServeState::Terminal)
     );
     let (restart_ingress, restart_gate) = gated_fair_ingress(&context, &restart_tx);
@@ -371,15 +330,8 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-    let (request, validator_pops) = production_authenticated_serve_request(
-        &context,
-        &keys,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-        &[0, 1, 2, 3],
-    );
+    let (request, validator_pops) =
+        production_prepare_serve_request(&context, &keys, &proposal, &[0, 1, 2, 3]);
     let _ = fully_authenticate_persisted_certified_serve_request(
         &context,
         request.request().clone(),
@@ -515,25 +467,32 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         let durable_before_supersession =
             fs::read(&state_path).expect("read terminal response before supersession");
         let temporary_state = state_path.with_extension("norito.tmp");
+        let stage_decision_supersession = |inbound: &InboundBlockMessage, expectation: &str| {
+            let selected = matches!(
+                inbound.message(),
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload:
+                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                    ..
+                }) if HashOf::new(candidate) == request.request_hash()
+            );
+            if selected {
+                command_tx
+                    .stage_selected_serve_rejection(
+                        request.request_hash(),
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                    )
+                    .expect(expectation);
+            }
+            selected
+        };
         let error = ingress
             .try_recv_if_checked(|inbound| {
-                let selected = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload:
-                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == request.request_hash()
+                let selected = stage_decision_supersession(
+                    inbound,
+                    "stage Decision supersession before fault injection",
                 );
                 if selected {
-                    command_tx
-                        .stage_selected_serve_rejection(
-                            request.request_hash(),
-                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                                decided_subject,
-                            ),
-                        )
-                        .expect("stage Decision supersession before fault injection");
                     fs::create_dir(&temporary_state)
                         .expect("block atomic supersession publication");
                 }
@@ -584,25 +543,10 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         fs::remove_dir(&temporary_state).expect("unblock supersession publication");
         let drained = ingress
             .try_recv_if_checked(|inbound| {
-                let selected = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload:
-                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == request.request_hash()
-                );
-                if selected {
-                    command_tx
-                        .stage_selected_serve_rejection(
-                            request.request_hash(),
-                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                                decided_subject,
-                            ),
-                        )
-                        .expect("stage the fully authenticated Decision supersession");
-                }
-                selected
+                stage_decision_supersession(
+                    inbound,
+                    "stage the fully authenticated Decision supersession",
+                )
             })
             .expect("publish live Decision supersession")
             .expect("drain live superseded replay");
@@ -661,29 +605,32 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
             .expect("retire live supersession gate");
         admission.lifecycle_id
     };
-    let (live_restart_tx, _live_restart_rx, _admission) =
-        production_persistent_test_io_command_channel(
-            4,
-            live_serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            Some(decided_subject),
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("restart validates the live supersession outcome");
-    assert_eq!(
-        live_restart_tx
-            .queue
-            .lock()
-            .serves
-            .get(&live_lifecycle_id)
-            .map(|tracked| tracked.state),
-        Some(V2IoServeState::Rejected(
-            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-        ))
+    let restart_rejected =
+        |root: &Path, lifecycle_id: CertifiedServeLifecycleId, expectation: &str| {
+            let opened = production_persistent_test_io_command_channel(
+                4,
+                root,
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect(expectation);
+            assert_eq!(
+                tracked_serve_state(&opened.0, &lifecycle_id),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                ))
+            );
+            opened
+        };
+    let (_live_restart_tx, _live_restart_rx, _admission) = restart_rejected(
+        live_serve_root.path(),
+        live_lifecycle_id,
+        "restart validates the live supersession outcome",
     );
     let terminal_serve_root = TempDir::new().expect("startup terminal supersession root");
     let terminal_lifecycle_id = persist_terminal_serve_fixture(
@@ -694,29 +641,10 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         1,
         &response,
     );
-    let (terminal_restart_tx, _terminal_restart_rx, _admission) =
-        production_persistent_test_io_command_channel(
-            4,
-            terminal_serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            Some(decided_subject),
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("startup converts a superseded response before producer exposure");
-    assert_eq!(
-        terminal_restart_tx
-            .queue
-            .lock()
-            .serves
-            .get(&terminal_lifecycle_id)
-            .map(|tracked| tracked.state),
-        Some(V2IoServeState::Rejected(
-            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-        ))
+    let (_terminal_restart_tx, _terminal_restart_rx, _admission) = restart_rejected(
+        terminal_serve_root.path(),
+        terminal_lifecycle_id,
+        "startup converts a superseded response before producer exposure",
     );
     let raw_serve_root = TempDir::new().expect("post-Decision raw admission root");
     let raw_lifecycle_id = persist_unsealed_serve_fixture(
@@ -727,32 +655,15 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         1,
         Some(9),
     );
-    let (raw_restart_tx, _raw_restart_rx, _admission) =
-        production_persistent_test_io_command_channel(
-            4,
-            raw_serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            Some(decided_subject),
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("post-Decision raw admission is terminalized during startup");
+    let (raw_restart_tx, _raw_restart_rx, _admission) = restart_rejected(
+        raw_serve_root.path(),
+        raw_lifecycle_id,
+        "post-Decision raw admission is terminalized during startup",
+    );
     {
         let state = raw_restart_tx.queue.lock();
         assert!(state.serve_ingress_waiters.is_empty());
         assert!(state.serve_ingress_reservation.is_none());
-        assert_eq!(
-            state
-                .serves
-                .get(&raw_lifecycle_id)
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Rejected(
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-            ))
-        );
     }
 }
 #[test]
@@ -760,13 +671,7 @@ fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let request = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let request = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let via = context.roster[0].validator.clone();
     let body_root = TempDir::new().expect("route-less Serve body root");
     let serve_root = TempDir::new().expect("route-less Serve state root");
@@ -841,13 +746,7 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let invalid = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let invalid = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let mut honest_request = authenticated_serve_request(
         &context,
         &keys[2],
@@ -864,6 +763,13 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
                 .expect("fixture validator proof of possession")
         })
         .collect::<Vec<_>>();
+    let verify_qc = |context: &wire::HeightContext, certificate: &wire::QuorumCertificate| {
+        wire::finality::verify_quorum_certificate_with_validator_pops(
+            context,
+            certificate,
+            &validator_pops,
+        )
+    };
     let honest_signers = (0..context.roster.len())
         .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
         .collect::<Vec<_>>();
@@ -905,13 +811,7 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
         &context,
         honest_request,
         &PeerId::new(keys[2].public_key().clone()),
-        |context, certificate| {
-            wire::finality::verify_quorum_certificate_with_validator_pops(
-                context,
-                certificate,
-                &validator_pops,
-            )
-        },
+        |context, certificate| verify_qc(context, certificate),
     )
     .expect("production verification accepts the distinct honest Serve QC");
     assert!(
@@ -919,13 +819,7 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
             &context,
             invalid.request().clone(),
             &invalid.request().requester,
-            |context, certificate| {
-                wire::finality::verify_quorum_certificate_with_validator_pops(
-                    context,
-                    certificate,
-                    &validator_pops,
-                )
-            },
+            |context, certificate| verify_qc(context, certificate),
         )
         .is_err(),
         "the requester signature is valid, but production QC verification must reject the fixture certificate"
@@ -968,13 +862,7 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
                     &context,
                     request.clone(),
                     requester,
-                    |context, certificate| {
-                        wire::finality::verify_quorum_certificate_with_validator_pops(
-                            context,
-                            certificate,
-                            &validator_pops,
-                        )
-                    },
+                    |context, certificate| verify_qc(context, certificate),
                 )
                 .is_err(),
                 "checked dequeue must observe production QC rejection before draining"
@@ -1091,24 +979,20 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
     assert_ne!(honest_lifecycle, invalid_lifecycle);
     {
         let state = command_tx.queue.lock();
+        let tracked_state =
+            |lifecycle_id| state.serves.get(lifecycle_id).map(|tracked| tracked.state);
         assert_eq!(state.serves.len(), 2);
         assert_eq!(state.serve_by_request.len(), 2);
         assert_eq!(state.serve_by_family.len(), 2);
         assert_eq!(state.next_serve_admission_ordinal, 2);
         assert_eq!(
-            state
-                .serves
-                .get(&invalid_lifecycle)
-                .map(|tracked| tracked.state),
+            tracked_state(&invalid_lifecycle),
             Some(V2IoServeState::Rejected(
                 CertifiedServeNegativeOutcome::InvalidCertificate
             ))
         );
         assert_eq!(
-            state
-                .serves
-                .get(&honest_lifecycle)
-                .map(|tracked| tracked.state),
+            tracked_state(&honest_lifecycle),
             Some(V2IoServeState::AwaitingRetry)
         );
         assert!(
@@ -1132,15 +1016,8 @@ fn durable_raw_admission_restart_locally_seals_before_later_producers() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-    let (request, validator_pops) = production_authenticated_serve_request(
-        &context,
-        &keys,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-        &[0, 1, 2, 3],
-    );
+    let (request, validator_pops) =
+        production_prepare_serve_request(&context, &keys, &proposal, &[0, 1, 2, 3]);
     let higher = authenticated_serve_request(
         &context,
         &keys[1],
@@ -1526,13 +1403,7 @@ fn durable_raw_waiter_rejects_mutated_logical_lineage() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let request = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let request = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let via = context.roster[0].validator.clone();
     let body_root = TempDir::new().expect("raw-lineage mutation body root");
     let serve_root = TempDir::new().expect("raw-lineage mutation Serve root");
@@ -1582,13 +1453,7 @@ fn durable_raw_waiter_rejects_mutated_logical_lineage() {
 fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-    let request = authenticated_serve_request(
-        &service.context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let request = authenticated_prepare_serve_request(&service.context, &keys, &proposal);
     let requester = request.request().requester.clone();
     let via = service.context.roster[0].validator.clone();
     let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
@@ -1623,7 +1488,7 @@ fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
     let reservation_id = admission
         .ingress_reservation_id
         .expect("gated admission retains its physical reservation");
-    let snapshot = {
+    let handoff_snapshot = || {
         let state = command_tx.queue.lock();
         (
             state.serve_barrier,
@@ -1644,6 +1509,7 @@ fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
             state.next_serve_ingress_reservation_ordinal,
         )
     };
+    let snapshot = handoff_snapshot();
     let mismatched = CertifiedServeAdmission {
         lifecycle_id: admission.lifecycle_id,
         kind: admission.kind,
@@ -1661,27 +1527,8 @@ fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
             .expect_err("mismatched physical abort must fail closed")
             .contains("changed its physically drained ingress handoff")
     );
-    let after = {
-        let state = command_tx.queue.lock();
-        (
-            state.serve_barrier,
-            state
-                .serve_ingress_reservation
-                .as_ref()
-                .map(|reservation| (reservation.id, reservation.state)),
-            state
-                .serves
-                .get(&admission.lifecycle_id)
-                .map(|serve| serve.state),
-            state
-                .commands
-                .iter()
-                .map(V2IoCommand::serve_lifecycle_id)
-                .collect::<Vec<_>>(),
-            state.next_serve_admission_ordinal,
-            state.next_serve_ingress_reservation_ordinal,
-        )
-    };
+    let after = handoff_snapshot();
+    let _ = handoff_snapshot;
     assert_eq!(
         after, snapshot,
         "abort mismatch cannot mutate either side of the exact handoff"
@@ -1719,13 +1566,7 @@ fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
     let (service, keys) = fixture_with_block_payload();
     let context = service.context.clone();
     let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-    let request = authenticated_serve_request(
-        &context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let request = authenticated_prepare_serve_request(&context, &keys, &proposal);
     let via = context.roster[0].validator.clone();
     let body_root = TempDir::new().expect("raw-admission failure body root");
     let serve_root = TempDir::new().expect("raw-admission failure Serve root");
@@ -1779,13 +1620,7 @@ fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
 fn fair_ingress_gate_overflow_closes_without_partial_admission() {
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-    let request = authenticated_serve_request(
-        &service.context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let request = authenticated_prepare_serve_request(&service.context, &keys, &proposal);
     let via = service.context.roster[0].validator.clone();
     let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
@@ -1830,13 +1665,7 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-    let authenticated = authenticated_serve_request(
-        &service.context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
-    );
+    let authenticated = authenticated_prepare_serve_request(&service.context, &keys, &proposal);
     let via = service.context.roster[0].validator.clone();
     let body_root = TempDir::new().expect("raw-gate body root");
     let serve_root = TempDir::new().expect("raw-gate Serve root");
@@ -1856,12 +1685,10 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         .expect("valid distinct foreign context");
     let (_, _, foreign_proposal) =
         proposal_body_and_payload(&foreign_service.context, &foreign_keys);
-    let foreign = authenticated_serve_request(
+    let foreign = authenticated_prepare_serve_request(
         &foreign_service.context,
-        &foreign_keys[1],
-        foreign_proposal.round,
-        foreign_proposal.subject,
-        wire::GlobalPhase::Prepare,
+        &foreign_keys,
+        &foreign_proposal,
     );
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(foreign.request(), via.clone(),)),
@@ -2069,8 +1896,7 @@ fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
         .recv_timeout(Duration::from_secs(1))
         .expect("abnormal teardown must stop the worker before draining admitted output");
     permit_holder.join().expect("join admitted-output holder");
-    assert!(output_guard.restart_required());
-    assert!(output_guard.acquire().is_none());
+    assert_output_guard_closed(&output_guard);
 }
 #[test]
 fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
@@ -2130,8 +1956,7 @@ fn io_command_panic_latches_restart_required_before_unwinding() {
         }
     });
     assert!(unwind.is_err());
-    assert!(output_guard.restart_required());
-    assert!(output_guard.acquire().is_none());
+    assert_output_guard_closed(&output_guard);
 }
 #[test]
 fn retire_panic_closes_gate_before_inflight_output_drains() {
@@ -2183,8 +2008,7 @@ fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
     ));
     worker_failure_guard.disarm();
     drop(worker_failure_guard);
-    assert!(!output_guard.restart_required());
-    assert!(output_guard.acquire().is_some());
+    assert_output_guard_open(&output_guard);
 }
 #[test]
 fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delivery() {
@@ -2204,8 +2028,7 @@ fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delive
         }
     });
     assert!(unwind.is_err());
-    assert!(output_guard.restart_required());
-    assert!(output_guard.acquire().is_none());
+    assert_output_guard_closed(&output_guard);
 }
 #[test]
 fn io_worker_explicit_shutdown_leaves_output_guard_open() {
@@ -2214,8 +2037,7 @@ fn io_worker_explicit_shutdown_leaves_output_guard_open() {
         V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), Arc::new(AtomicBool::new(false)));
     worker_failure_guard.disarm();
     drop(worker_failure_guard);
-    assert!(!output_guard.restart_required());
-    assert!(output_guard.acquire().is_some());
+    assert_output_guard_open(&output_guard);
 }
 #[test]
 fn flagged_finalized_disconnect_leaves_output_guard_open() {
@@ -2225,8 +2047,7 @@ fn flagged_finalized_disconnect_leaves_output_guard_open() {
     let worker_failure_guard =
         V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
     drop(worker_failure_guard);
-    assert!(!output_guard.restart_required());
-    assert!(output_guard.acquire().is_some());
+    assert_output_guard_open(&output_guard);
 }
 #[test]
 fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
@@ -2270,8 +2091,7 @@ fn flagged_worker_fail_stop_error_still_latches_restart_required() {
         .is_err()
     );
     drop(worker_failure_guard);
-    assert!(output_guard.restart_required());
-    assert!(output_guard.acquire().is_none());
+    assert_output_guard_closed(&output_guard);
 }
 #[test]
 fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
@@ -2340,6 +2160,175 @@ fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
     assert!(service.output_permit().is_err());
     drop(completion_tx);
 }
+
+fn authenticated_prepare_serve_request(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    proposal: &wire::Proposal,
+) -> AuthenticatedCertifiedBodyRequest {
+    authenticated_serve_request(
+        context,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+    )
+}
+
+fn production_prepare_serve_request(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    proposal: &wire::Proposal,
+    signer_indices: &[usize],
+) -> (AuthenticatedCertifiedBodyRequest, Vec<Vec<u8>>) {
+    production_authenticated_serve_request(
+        context,
+        keys,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+        signer_indices,
+    )
+}
+
+fn exact_output_backpressure(
+    post: Post<NetworkMessage>,
+    ticket: Option<NetworkActorAdmissionTicket>,
+) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+    Err(NetworkActorAdmissionError::Backpressured {
+        message: post,
+        ticket,
+        rank: 1,
+    })
+}
+
+fn install_exact_output_backpressure(service: &mut ProductionV2Services) {
+    service.set_exact_output_admission_hook(exact_output_backpressure);
+}
+
+fn install_counting_exact_output_backpressure(
+    service: &mut ProductionV2Services,
+) -> Arc<AtomicUsize> {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_hook = Arc::clone(&attempts);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+        exact_output_backpressure(post, ticket)
+    });
+    attempts
+}
+
+fn assert_output_guard_closed(output_guard: &ConsensusOutputGuard) {
+    assert!(output_guard.restart_required());
+    assert!(output_guard.acquire().is_none());
+}
+
+fn assert_output_guard_open(output_guard: &ConsensusOutputGuard) {
+    assert!(!output_guard.restart_required());
+    assert!(output_guard.acquire().is_some());
+}
+
+fn tracked_serve_state(
+    command_tx: &V2IoCommandSender,
+    lifecycle_id: &CertifiedServeLifecycleId,
+) -> Option<V2IoServeState> {
+    let state = command_tx.queue.lock();
+    state.serves.get(lifecycle_id).map(|tracked| tracked.state)
+}
+
+fn assert_rejected_before_actor_admission<T: std::fmt::Debug>(
+    service: &mut ProductionV2Services,
+    operation: impl FnOnce(&ProductionV2Services) -> Result<T, String>,
+    error_expectation: &str,
+    error_fragment: &str,
+    pending_inspection_expectation: &str,
+) {
+    let attempts = install_counting_exact_output_backpressure(service);
+    let error = operation(service).expect_err(error_expectation);
+    assert!(error.contains(error_fragment));
+    assert_eq!(attempts.load(Ordering::Relaxed), 0);
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect(pending_inspection_expectation)
+    );
+    assert!(service.output_guard.restart_required());
+}
+
+fn post_history_response_for_rejection(
+    service: &ProductionV2Services,
+    peer: PeerId,
+    message: wire::ConsensusMessageV2,
+    operation_expectation: &str,
+) -> Result<(), String> {
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect(operation_expectation);
+    let result =
+        service.post_durable_history_response_with_permit(peer, message, operation.permit());
+    drop(operation);
+    result
+}
+
+fn signed_worker_finality_artifact(
+    context: &wire::HeightContext,
+    validators: &[KeyPair],
+    view: u64,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+    expectations: [&str; 3],
+) -> wire::finality::V2FinalityArtifact {
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view,
+    };
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let signature_shares = validators[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs: Vec<_> = signature_shares.iter().map(Vec::as_slice).collect();
+    let certificate = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect(expectations[0]),
+    };
+    let artifact = wire::finality::V2FinalityArtifact::new(
+        context.clone(),
+        subject,
+        certificate,
+        validators
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect(expectations[1])
+            })
+            .collect(),
+    );
+    artifact.validate().expect(expectations[2]);
+    artifact
+}
+
 fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
     HashOf::from_untyped_unchecked(Hash::new(label))
 }
@@ -2357,11 +2346,6 @@ pub(in crate::sumeragi) fn durable_finality_fixture(
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
         payload_hash: Hash::new(b"finalized worker payload"),
     };
-    let round = wire::ConsensusRound {
-        context_id: service.context.id(),
-        height: service.context.height,
-        view: 0,
-    };
     let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"worker parent state"),
         Hash::new(b"worker post state"),
@@ -2369,50 +2353,18 @@ pub(in crate::sumeragi) fn durable_finality_fixture(
         1,
         Hash::new(b"worker executed block wire"),
     );
-    let preimage = wire::Vote {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Commit,
+    let artifact = signed_worker_finality_artifact(
+        &service.context,
+        keys,
+        0,
         subject,
         execution_commitment,
-        signer: 0,
-        signature: Vec::new(),
-    }
-    .signature_preimage();
-    let signature_shares = keys[..3]
-        .iter()
-        .map(|key| {
-            Signature::new(key.private_key(), &preimage)
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let signature_refs = signature_shares
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-    let certificate = wire::QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Commit,
-        subject,
-        execution_commitment,
-        signers: vec![0, 1, 2],
-        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate valid worker CommitQC"),
-    };
-    let artifact = wire::finality::V2FinalityArtifact::new(
-        service.context.clone(),
-        subject,
-        certificate,
-        keys.iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("worker fixture validator PoP")
-            })
-            .collect(),
+        [
+            "aggregate valid worker CommitQC",
+            "worker fixture validator PoP",
+            "valid worker finality artifact",
+        ],
     );
-    artifact.validate().expect("valid worker finality artifact");
     (KuraV2CommitReceipt::for_test(&artifact), artifact)
 }
 fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {

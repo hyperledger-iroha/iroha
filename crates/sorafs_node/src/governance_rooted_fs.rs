@@ -626,9 +626,7 @@ fn atomic_temp_target_name(name: &str) -> Option<&str> {
     if target_name.is_empty() {
         return None;
     }
-    let Some((pid, counter)) = suffix.split_once('-') else {
-        return None;
-    };
+    let (pid, counter) = suffix.split_once('-')?;
     if pid.is_empty()
         || counter.is_empty()
         || !pid.bytes().all(|byte| byte.is_ascii_digit())

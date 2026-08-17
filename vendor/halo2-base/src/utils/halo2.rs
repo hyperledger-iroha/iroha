@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 
+use crate::AssignedValue;
 use crate::ff::Field;
 use crate::halo2_proofs::{
     circuit::{AssignedCell, Cell, Region, Value},
@@ -8,7 +9,6 @@ use crate::halo2_proofs::{
     poly::kzg::commitment::ParamsKZG,
 };
 use crate::virtual_region::copy_constraints::{CopyConstraintManager, EXTERNAL_CELL_TYPE_ID};
-use crate::AssignedValue;
 
 pub use keygen::ProvingKeyGenerator;
 
@@ -122,7 +122,7 @@ pub fn constrain_virtual_equals_external<F: Field + Ord>(
         }
         Entry::Vacant(assigned) => {
             // The virtual cell **must** be an external cell
-            assert_eq!(ctx_cell.type_id, EXTERNAL_CELL_TYPE_ID);
+            assert_eq!(ctx_cell.type_id(), EXTERNAL_CELL_TYPE_ID);
             // We map the virtual cell to point to the raw external cell in `copy_manager`
             assigned.insert(external_cell);
         }

@@ -71,9 +71,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         drop(ordinary_turn);
                     }
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionTurnV1::Selected(
-                        _selected,
+                        selected,
                     ) => {
-                        if output_guard.restart_required() {
+                        if selected.restart_required() || output_guard.restart_required() {
                             return Err(V2RunnerError::RestartRequired);
                         }
                     }

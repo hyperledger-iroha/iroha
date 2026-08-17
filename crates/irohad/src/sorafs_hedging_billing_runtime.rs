@@ -7,14 +7,6 @@
 //! bounded freshness policy as daemon readiness; acknowledgement commits
 //! recheck that exact head immediately before durable mutation. The runtime
 //! deliberately has no automatic hedge-execution adapter or execution timer.
-use std::{
-    fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsHedgingBillingRuntime, is_production_runtime_handle};
 use iroha_data_model::NetworkId;
@@ -34,6 +26,14 @@ use sorafs_node::hedging_billing_service::{
     HedgingBillingRuntimeProviderQualificationV1, HedgingBillingService,
     HedgingBillingServiceError, HedgingBillingServicePolicyV1,
     QualifiedHedgingBillingRuntimeProviderV1,
+};
+use std::{
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
@@ -1135,13 +1135,7 @@ fn record_tick_metric(result: &str) {
 fn record_tick_metric(_result: &str) {}
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-        },
-    };
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{account::AccountId, block::BlockHeader};
     use sorafs_manifest::{
@@ -1166,8 +1160,14 @@ mod tests {
         HedgingBillingRuntimeProviderReadinessErrorV1, HedgingBillingRuntimeProviderV1,
         HedgingBillingTransitionAuthorityV1, SignedGovernedBillingStatementV1,
     };
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
     use tempfile::TempDir;
-    use super::*;
     const DISPLAY_CHAIN_NAME: &str = "sorafs-reference-production";
     const GENESIS_SEED: &[u8] = b"sorafs-reference-production-genesis";
     const QUERY_HANDLE: &str = "ledger.billing.finalized.primary";
@@ -1777,7 +1777,7 @@ mod tests {
     fn fresh_runtime(
         state_dir: PathBuf,
         query_ready: Arc<AtomicBool>,
-        head: Arc<Mutex<HedgingBillingFinalizedCursorV1>>,
+        head: &Arc<Mutex<HedgingBillingFinalizedCursorV1>>,
     ) -> HedgingBillingRuntimeHandleV1 {
         let feed_policy = feed_policy();
         let policy = service_policy(&feed_policy);
@@ -1787,7 +1787,7 @@ mod tests {
             &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
-            dependencies_with_head(&policy, QUERY_HANDLE, true, query_ready, Arc::clone(&head)),
+            dependencies_with_head(&policy, QUERY_HANDLE, true, query_ready, Arc::clone(head)),
         )
         .expect("assemble committed hedging/billing runtime");
         seed_fresh_projection(&handle, initial_head);
@@ -1896,10 +1896,10 @@ mod tests {
         let state_dir = temp.path().join("must-not-exist");
         let feed_policy = feed_policy();
         let policy = service_policy(&feed_policy);
-        let deployment_a_label = DISPLAY_CHAIN_NAME;
-        let deployment_b_label = DISPLAY_CHAIN_NAME;
+        let local_display_label = DISPLAY_CHAIN_NAME;
+        let foreign_display_label = DISPLAY_CHAIN_NAME;
         let foreign_network = network_id(b"sorafs-reference-foreign-genesis");
-        assert_eq!(deployment_a_label, deployment_b_label);
+        assert_eq!(local_display_label, foreign_display_label);
         assert_ne!(policy.network_id, foreign_network);
         let error = assemble(
             config(state_dir.clone(), &policy),
@@ -2128,7 +2128,7 @@ mod tests {
         let handle = fresh_runtime(
             temp.path().join("billing-state"),
             Arc::clone(&query_ready),
-            Arc::clone(&head),
+            &head,
         );
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
         set_finalized_head(&head, 4, [0x47; 32], 1_800_000_004);
@@ -2143,11 +2143,7 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let query_ready = Arc::new(AtomicBool::new(true));
         let head = Arc::new(Mutex::new(initial_finalized_head()));
-        let handle = fresh_runtime(
-            temp.path().join("billing-state"),
-            query_ready,
-            Arc::clone(&head),
-        );
+        let handle = fresh_runtime(temp.path().join("billing-state"), query_ready, &head);
         let error = handle
             .with_fresh_projection(|_service, pre_commit_fence| {
                 set_finalized_head(&head, 2, [0x45; 32], 1_800_000_002);
@@ -2164,7 +2160,7 @@ mod tests {
         let handle = fresh_runtime(
             temp.path().join("billing-state"),
             Arc::clone(&query_ready),
-            head,
+            &head,
         );
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
         query_ready.store(false, Ordering::Release);
@@ -2180,7 +2176,7 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let query_ready = Arc::new(AtomicBool::new(true));
         let head = Arc::new(Mutex::new(initial_finalized_head()));
-        let handle = fresh_runtime(temp.path().join("billing-state"), query_ready, head);
+        let handle = fresh_runtime(temp.path().join("billing-state"), query_ready, &head);
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
         {
             let mut freshness = handle.last_successful_tick.lock().expect("freshness state");
@@ -2308,7 +2304,7 @@ mod tests {
         let handle = fresh_runtime(
             temp.path().join("billing-state"),
             Arc::new(AtomicBool::new(true)),
-            Arc::new(Mutex::new(initial_finalized_head())),
+            &Arc::new(Mutex::new(initial_finalized_head())),
         );
         let api: &dyn HedgingBillingRuntimeApiV1 = &handle;
         let anchor = api

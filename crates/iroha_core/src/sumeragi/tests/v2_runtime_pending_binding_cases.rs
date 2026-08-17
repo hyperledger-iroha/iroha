@@ -1,10 +1,5 @@
-use std::collections::VecDeque;
-use crate::sumeragi::v2_core::Generation;
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::peer::PeerId;
-use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
-use tempfile::TempDir;
 use super::*;
+use crate::sumeragi::v2_core::Generation;
 use crate::sumeragi::{
     InboundBlockMessage,
     message::BlockMessage,
@@ -13,6 +8,11 @@ use crate::sumeragi::{
     },
     v2_chunks::encode_payload,
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::peer::PeerId;
+use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
+use std::collections::VecDeque;
+use tempfile::TempDir;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FakeCommand {
     record: Option<u8>,
@@ -889,7 +889,7 @@ fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
             "projection exposed forbidden constituent API: {forbidden}"
         );
     }
-    let runtime = include_str!("../v2_runtime.rs");
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let permit = runtime
         .split_once("struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1")
         .expect("locate runtime-private projection permit")

@@ -1,9 +1,9 @@
 #![allow(clippy::type_complexity)]
 use super::*;
+use crate::QuantumCell::{Constant, Witness};
 use crate::utils::biguint_to_fe;
 use crate::utils::testing::base_test;
-use crate::QuantumCell::{Constant, Witness};
-use crate::{gates::flex_gate::GateInstructions, QuantumCell};
+use crate::{QuantumCell, gates::flex_gate::GateInstructions};
 use itertools::Itertools;
 use num_bigint::BigUint;
 use test_case::test_case;
@@ -78,10 +78,12 @@ pub fn test_div_unsafe(inputs: &[QuantumCell<Fr>]) -> Fr {
 #[test_case(&[1, 1].map(Fr::from); "assert_is_const(1,1)")]
 #[test_case(&[0, 1].map(Fr::from); "assert_is_const(0,1)")]
 pub fn test_assert_is_const(inputs: &[Fr]) {
-    base_test().expect_satisfied(inputs[0] == inputs[1]).run_gate(|ctx, chip| {
-        let a = ctx.load_witness(inputs[0]);
-        chip.assert_is_const(ctx, &a, &inputs[1]);
-    });
+    base_test()
+        .expect_satisfied(inputs[0] == inputs[1])
+        .run_gate(|ctx, chip| {
+            let a = ctx.load_witness(inputs[0]);
+            chip.assert_is_const(ctx, &a, &inputs[1]);
+        });
 }
 
 #[test_case((vec![Witness(Fr::one()); 5], vec![Witness(Fr::one()); 5]) => Fr::from(5) ; "inner_product(): 1 * 1 + ... + 1 * 1 == 5")]
@@ -115,7 +117,9 @@ pub fn test_inner_product_with_sums(
     input: (Vec<QuantumCell<Fr>>, Vec<QuantumCell<Fr>>),
 ) -> Vec<Fr> {
     base_test().run_gate(|ctx, chip| {
-        chip.inner_product_with_sums(ctx, input.0, input.1).map(|a| *a.value()).collect()
+        chip.inner_product_with_sums(ctx, input.0, input.1)
+            .map(|a| *a.value())
+            .collect()
     })
 }
 
@@ -123,8 +127,11 @@ pub fn test_inner_product_with_sums(
 pub fn test_sum_products_with_coeff_and_var(
     input: (Vec<(Fr, QuantumCell<Fr>, QuantumCell<Fr>)>, QuantumCell<Fr>),
 ) -> Fr {
-    base_test()
-        .run_gate(|ctx, chip| *chip.sum_products_with_coeff_and_var(ctx, input.0, input.1).value())
+    base_test().run_gate(|ctx, chip| {
+        *chip
+            .sum_products_with_coeff_and_var(ctx, input.0, input.1)
+            .value()
+    })
 }
 
 #[test_case(&[1, 0].map(Fr::from).map(Witness) => Fr::from(0) ; "and(): 1 && 0 == 0")]
@@ -156,14 +163,20 @@ pub fn test_or_and(inputs: &[QuantumCell<Fr>]) -> Fr {
 pub fn test_bits_to_indicator(bits: &[u8]) -> Vec<Fr> {
     base_test().run_gate(|ctx, chip| {
         let a = ctx.assign_witnesses(bits.iter().map(|x| Fr::from(*x as u64)));
-        chip.bits_to_indicator(ctx, &a).iter().map(|a| *a.value()).collect()
+        chip.bits_to_indicator(ctx, &a)
+            .iter()
+            .map(|a| *a.value())
+            .collect()
     })
 }
 
 #[test_case(Witness(Fr::from(0)),3 => [1,0,0].map(Fr::from).to_vec(); "idx_to_indicator(): 0 -> [1, 0, 0]")]
 pub fn test_idx_to_indicator(idx: QuantumCell<Fr>, len: usize) -> Vec<Fr> {
     base_test().run_gate(|ctx, chip| {
-        chip.idx_to_indicator(ctx, idx, len).iter().map(|a| *a.value()).collect()
+        chip.idx_to_indicator(ctx, idx, len)
+            .iter()
+            .map(|a| *a.value())
+            .collect()
     })
 }
 
@@ -186,10 +199,16 @@ Fr::from(1) =>
 "select_array_by_indicator(1): [[1,2,3], [4,5,6], [7,8,9]] -> [4,5,6]")]
 pub fn test_select_array_by_indicator(array2d: Vec<Vec<Fr>>, idx: Fr) -> Vec<Fr> {
     base_test().run_gate(|ctx, chip| {
-        let array2d = array2d.into_iter().map(|a| ctx.assign_witnesses(a)).collect_vec();
+        let array2d = array2d
+            .into_iter()
+            .map(|a| ctx.assign_witnesses(a))
+            .collect_vec();
         let idx = ctx.load_witness(idx);
         let ind = chip.idx_to_indicator(ctx, idx, array2d.len());
-        chip.select_array_by_indicator(ctx, &array2d, &ind).iter().map(|a| *a.value()).collect()
+        chip.select_array_by_indicator(ctx, &array2d, &ind)
+            .iter()
+            .map(|a| *a.value())
+            .collect()
     })
 }
 
@@ -210,7 +229,10 @@ pub fn test_is_equal(inputs: &[QuantumCell<Fr>]) -> Fr {
 pub fn test_num_to_bits(num: usize, bits: usize) -> Vec<Fr> {
     base_test().run_gate(|ctx, chip| {
         let num = ctx.load_witness(Fr::from(num as u64));
-        chip.num_to_bits(ctx, num, bits).iter().map(|a| *a.value()).collect()
+        chip.num_to_bits(ctx, num, bits)
+            .iter()
+            .map(|a| *a.value())
+            .collect()
     })
 }
 

@@ -1350,10 +1350,11 @@ mod tests {
         );
         archive
     }
+    type VisitedArchive = (BundleArchiveSummary, Vec<(String, Vec<u8>)>);
     fn visit_all(
         archive: &[u8],
         archive_limits: BundleArchiveLimits,
-    ) -> Result<(BundleArchiveSummary, Vec<(String, Vec<u8>)>), BundleArchiveError> {
+    ) -> Result<VisitedArchive, BundleArchiveError> {
         let mut visited = Vec::new();
         let summary = visit_gzip_ustar(Cursor::new(archive), archive_limits, |entry, payload| {
             let mut bytes = Vec::new();
