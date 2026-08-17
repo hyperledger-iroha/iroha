@@ -961,6 +961,7 @@ def _privacy_projection(config_path: Path) -> dict[str, Any]:
 
 def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, str]:
     hashes: dict[str, str] = {}
+    expected_hash_literal = renderer._format_literal("hash", expected_hash.upper())
     for index, slug in enumerate(SLUGS, start=1):
         root = output / "rendered" / slug
         config_path = root / "config.toml"
@@ -968,7 +969,7 @@ def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, st
         genesis = config["genesis"]
         if (
             genesis.get("file") != str(output / "genesis.signed.nrt")
-            or genesis.get("expected_hash") != expected_hash
+            or genesis.get("expected_hash") != expected_hash_literal
         ):
             fail(f"rendered {slug} config is not bound to the signed bundle genesis")
         issuer = config["torii"].get("privacy_bootle_lantern_issuer")

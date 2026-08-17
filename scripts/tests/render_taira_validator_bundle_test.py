@@ -387,6 +387,16 @@ def _genesis_instructions(payload: dict) -> list[dict]:
     ]
 
 
+def _asset_alias_projection(payload: dict) -> dict[str, str]:
+    return {
+        instruction["SetAssetDefinitionAlias"]["asset_definition_id"]: instruction[
+            "SetAssetDefinitionAlias"
+        ]["alias"]
+        for instruction in _genesis_instructions(payload)
+        if "SetAssetDefinitionAlias" in instruction
+    }
+
+
 def _contract_deployment_gate_projection(payload: dict) -> dict:
     instructions = _genesis_instructions(payload)
     sponsor_revisions = [
@@ -464,13 +474,19 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
         "code_registration_grants": [
             {
                 "destination": TAIRA_GENESIS_DEPLOYER_ID,
-                "object": {"name": "CanRegisterSmartContractCode"},
+                "object": {
+                    "name": "CanRegisterSmartContractCode",
+                    "payload": None,
+                },
             }
         ],
         "account_registration_grants": [
             {
                 "destination": TAIRA_GENESIS_DEPLOYER_ID,
-                "object": {"name": "CanRegisterAccount"},
+                "object": {
+                    "name": "CanRegisterAccount",
+                    "payload": {"domain": "wonderland.universal"},
+                },
             }
         ],
         "deployer_gas_mints": [
@@ -498,6 +514,75 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
         not in selector_wire_ids
     )
     assert "iroha.custom" not in selector_wire_ids
+
+
+def test_checked_in_taira_genesis_permission_payloads_match_typed_shapes() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    permission_grants = [
+        instruction["Grant"]["Permission"]
+        for instruction in _genesis_instructions(genesis)
+        if "Permission" in instruction.get("Grant", {})
+    ]
+
+    assert permission_grants == [
+        {
+            "destination": TAIRA_GENESIS_DEPLOYER_ID,
+            "object": {
+                "name": "CanEnrollFeeSponsorProgram",
+                "payload": {
+                    "program_id": {
+                        "sponsor": TAIRA_GENESIS_DEPLOYER_ID,
+                        "name": "cbsi_web",
+                    }
+                },
+            },
+        },
+        {
+            "destination": TAIRA_GENESIS_DEPLOYER_ID,
+            "object": {
+                "name": "CanRegisterSmartContractCode",
+                "payload": None,
+            },
+        },
+        {
+            "destination": TAIRA_GENESIS_DEPLOYER_ID,
+            "object": {
+                "name": "CanRegisterAccount",
+                "payload": {"domain": "wonderland.universal"},
+            },
+        },
+        {
+            "destination": TAIRA_GENESIS_DEPLOYER_ID,
+            "object": {"name": "CanEnactGovernance", "payload": None},
+        },
+        {
+            "destination": TAIRA_CITIZEN_ID,
+            "object": {"name": "CanSetParameters", "payload": None},
+        },
+        {
+            "destination": TAIRA_CITIZEN_ID,
+            "object": {"name": "CanReadAllLedgerData", "payload": None},
+        },
+    ]
+    object_payload_names = {
+        grant["object"]["name"]
+        for grant in permission_grants
+        if isinstance(grant["object"]["payload"], dict)
+    }
+    assert object_payload_names == {
+        "CanEnrollFeeSponsorProgram",
+        "CanRegisterAccount",
+    }
+
+
+def test_checked_in_taira_genesis_aliases_name_only_active_physical_dataspaces() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+
+    assert _asset_alias_projection(genesis) == {
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw": "xor#universal",
+        "7ZepsJTHCVLKsrFFNZGSRGZgvBhv": "sbd#cbsi",
+        "61CtjvNd9T3THAR65GsMVHr82Bjc": "xor#sora.universal",
+    }
 
 
 def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> None:
@@ -1029,11 +1114,12 @@ def test_bundle_local_release_render_binds_every_runtime_path_inside_reset(
 
     assert len(written) == 4
     assert not (bundle_root / "rendered/.gitignore").exists()
+    expected_hash_literal = MODULE._format_literal("hash", expected_hash.upper())
     for index, config_path in enumerate(written, start=1):
         root = config_path.parent
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
         assert config["genesis"]["file"] == str(bundle_root / "genesis.signed.nrt")
-        assert config["genesis"]["expected_hash"] == expected_hash
+        assert config["genesis"]["expected_hash"] == expected_hash_literal
         issuer = config["torii"]["privacy_bootle_lantern_issuer"]
         assert issuer["state_dir"] == str(
             root / "runtime/privacy/bootle-lantern/issuer"
@@ -1118,7 +1204,7 @@ def test_render_bundle_binds_exact_genesis_hash_after_signing(tmp_path: Path) ->
     _write_roster(roster_path)
     _write_secrets(secrets_path)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
-    expected_hash = "00" * 31 + "01"
+    expected_hash = "ab" * 31 + "cd"
 
     written = MODULE.render_bundle(
         base_config_path,
@@ -1129,7 +1215,9 @@ def test_render_bundle_binds_exact_genesis_hash_after_signing(tmp_path: Path) ->
     )
 
     config = written[0].read_text(encoding="utf-8")
-    assert f'expected_hash = "{expected_hash}"' in config
+    expected_hash_literal = MODULE._format_literal("hash", expected_hash.upper())
+    assert expected_hash_literal == f"hash:{expected_hash.upper()}#BF3A"
+    assert f'expected_hash = "{expected_hash_literal}"' in config
     assert MODULE.GENESIS_EXPECTED_HASH_PLACEHOLDER not in config
 
 
@@ -1629,6 +1717,7 @@ def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
     assert _contract_deployment_gate_projection(
         rendered
     ) == _contract_deployment_gate_projection(checked_in)
+    assert _asset_alias_projection(rendered) == _asset_alias_projection(checked_in)
     assert (
         rendered["transactions"][0]["parameters"]["custom"]
         == checked_in["transactions"][0]["parameters"]["custom"]

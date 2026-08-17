@@ -137,6 +137,7 @@ use std::{
 };
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
+#[path = "soracloud_runtime/remote_stream_token_auth.rs"]
 mod remote_stream_token_auth;
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1: u32 = 1;
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
@@ -408,7 +409,7 @@ fn read_soracloud_regular_file_bounded(
             path.display()
         ))
     })?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(maximum_bytes.saturating_add(1))
         .read_to_end(&mut payload)?;
     let observed = u64::try_from(payload.len()).unwrap_or(u64::MAX);

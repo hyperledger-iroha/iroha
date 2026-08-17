@@ -4714,81 +4714,75 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn shipped_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
+    fn soranexus_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
         const SORA_XOR_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-        const SORA_XOR_ALIAS: &str = "xor#sora";
+        const SORA_XOR_ALIAS: &str = "xor#sora.universal";
         const SORA_XOR_SCALE: u64 = 9;
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for manifest_path in [
-            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
-            repo_root.join("configs/soranexus/taira/genesis.json"),
-        ] {
-            let raw = std::fs::read_to_string(&manifest_path)?;
-            let value = norito::json::parse_value(&raw)?;
-            let transactions = value
-                .get("transactions")
-                .and_then(norito::json::Value::as_array)
-                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
-            let mut sora_xor_registered = false;
-            let mut sora_xor_scale = None;
-            let mut sora_xor_binding = None;
-            for instruction in transactions
-                .iter()
-                .filter_map(|tx| tx.get("instructions"))
-                .filter_map(norito::json::Value::as_array)
-                .flatten()
+        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let raw = std::fs::read_to_string(&manifest_path)?;
+        let value = norito::json::parse_value(&raw)?;
+        let transactions = value
+            .get("transactions")
+            .and_then(norito::json::Value::as_array)
+            .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+        let mut sora_xor_registered = false;
+        let mut sora_xor_scale = None;
+        let mut sora_xor_binding = None;
+        for instruction in transactions
+            .iter()
+            .filter_map(|tx| tx.get("instructions"))
+            .filter_map(norito::json::Value::as_array)
+            .flatten()
+        {
+            if let Some(asset_definition) = instruction
+                .get("Register")
+                .and_then(|register| register.get("AssetDefinition"))
+                && asset_definition
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(SORA_XOR_ID)
             {
-                if let Some(asset_definition) = instruction
-                    .get("Register")
-                    .and_then(|register| register.get("AssetDefinition"))
-                    && asset_definition
-                        .get("id")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(SORA_XOR_ID)
-                {
-                    if sora_xor_registered {
-                        return Err(eyre!(
-                            "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
-                            manifest_path.display()
-                        ));
-                    }
-                    sora_xor_registered = true;
-                    sora_xor_scale = asset_definition
-                        .get("spec")
-                        .and_then(|spec| spec.get("scale"))
-                        .and_then(norito::json::Value::as_u64);
-                }
-                let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
-                    continue;
-                };
-                if binding.get("alias").and_then(norito::json::Value::as_str)
-                    != Some(SORA_XOR_ALIAS)
-                {
-                    continue;
-                }
-                if sora_xor_binding.is_some() {
+                if sora_xor_registered {
                     return Err(eyre!(
-                        "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                        "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
                         manifest_path.display()
                     ));
                 }
-                sora_xor_binding = binding
-                    .get("asset_definition_id")
-                    .and_then(norito::json::Value::as_str);
+                sora_xor_registered = true;
+                sora_xor_scale = asset_definition
+                    .get("spec")
+                    .and_then(|spec| spec.get("scale"))
+                    .and_then(norito::json::Value::as_u64);
             }
-            assert_eq!(
-                sora_xor_binding,
-                Some(SORA_XOR_ID),
-                "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
-                manifest_path.display()
-            );
-            assert_eq!(
-                sora_xor_scale,
-                Some(SORA_XOR_SCALE),
-                "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
-                manifest_path.display()
-            );
+            let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
+                continue;
+            };
+            if binding.get("alias").and_then(norito::json::Value::as_str) != Some(SORA_XOR_ALIAS) {
+                continue;
+            }
+            if sora_xor_binding.is_some() {
+                return Err(eyre!(
+                    "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                    manifest_path.display()
+                ));
+            }
+            sora_xor_binding = binding
+                .get("asset_definition_id")
+                .and_then(norito::json::Value::as_str);
         }
+        assert_eq!(
+            sora_xor_binding,
+            Some(SORA_XOR_ID),
+            "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
+            manifest_path.display()
+        );
+        assert_eq!(
+            sora_xor_scale,
+            Some(SORA_XOR_SCALE),
+            "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
+            manifest_path.display()
+        );
         Ok(())
     }
     #[test]

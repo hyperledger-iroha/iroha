@@ -442,10 +442,47 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
     }
 }
 #[test]
-fn citizen_registration_rejects_authority_mismatch_without_bond_transfer() {
+fn initial_genesis_authority_can_bootstrap_prefunded_citizen_bond() {
     let def_id: AssetDefinitionId = xor_definition_id();
     let state = configure_state(&def_id, 0);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 10_u64.into(),
+    }
+    .execute(&BOB_ID, &mut tx)
+    .expect("signed initial genesis may seed an exact prefunded citizen");
+
+    let record = tx
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .expect("initial genesis stores the citizen record");
+    assert_eq!(record.owner, *ALICE_ID);
+    assert_eq!(record.amount, Quantity::from(10_u64));
+    let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
+    let escrow_asset_id = AssetId::new(def_id, BOB_ID.clone());
+    assert_eq!(
+        **tx.world
+            .asset_mut(&alice_asset_id)
+            .expect("alice asset present"),
+        Quantity::from(990_u64),
+    );
+    assert_eq!(
+        **tx.world
+            .asset_mut(&escrow_asset_id)
+            .expect("escrow asset present"),
+        Quantity::from(10_u64),
+    );
+}
+#[test]
+fn citizen_registration_rejects_authority_mismatch_without_bond_transfer() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+    let state = configure_state(&def_id, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let err = RegisterCitizen {

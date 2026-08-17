@@ -43,6 +43,9 @@ def projection_config_text() -> str:
     """Return one complete deploy projection with an explicit receipt signer."""
 
     public_key, private_key, _ = receipt_keypair(1)
+    expected_hash = deploy.validator_renderer._format_literal(
+        "hash", ("00" * 31 + "01").upper()
+    )
     return f'''chain = "{deploy.CHAIN_ID}"
 chain_discriminant = {deploy.CHAIN_DISCRIMINANT}
 trusted_peers = [
@@ -70,5 +73,5 @@ soravpn_spool_bps = 250
 [genesis]
 file = "/private/reset/genesis.signed.nrt"
 public_key = "ed0120{'AB' * 32}"
-expected_hash = "{'00' * 31 + '01'}"
+expected_hash = "{expected_hash}"
 '''

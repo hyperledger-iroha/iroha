@@ -1561,6 +1561,9 @@ def validate_config_projection(
     kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
+    expected_hash_literal = validator_renderer._format_literal(
+        "hash", genesis_expected_hash.upper()
+    )
     if (
         config.get("chain") != CHAIN_ID
         or config.get("chain_discriminant") != CHAIN_DISCRIMINANT
@@ -1611,7 +1614,7 @@ def validate_config_projection(
     if (
         genesis.get("file") != str(bundle / "genesis.signed.nrt")
         or genesis.get("public_key") != genesis_public_key
-        or genesis.get("expected_hash") != genesis_expected_hash
+        or genesis.get("expected_hash") != expected_hash_literal
     ):
         fail(
             "validator config does not bind the reset bundle signed genesis, "

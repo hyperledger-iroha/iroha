@@ -217,7 +217,7 @@
         },
         {
           "SetAssetDefinitionAlias": {
-            "alias": "xor#sora",
+            "alias": "xor#sora.universal",
             "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "lease_expiry_ms": null
           }
@@ -579,7 +579,8 @@
             "Permission": {
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
-                "name": "CanRegisterSmartContractCode"
+                "name": "CanRegisterSmartContractCode",
+                "payload": null
               }
             }
           }
@@ -589,7 +590,10 @@
             "Permission": {
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
-                "name": "CanRegisterAccount"
+                "name": "CanRegisterAccount",
+                "payload": {
+                  "domain": "wonderland.universal"
+                }
               }
             }
           }
@@ -599,7 +603,8 @@
             "Permission": {
               "destination": "testu\uff9b1P\uff75Em\uff77jMZZ\uff91\uff99e\uff71\uff81\uff8e\uff85\uff82\uff8amECepdb\uff8e\uff732uW\uff83\uff78\uff8a\uff98v\uff75i2\uff66P1Y18A",
               "object": {
-                "name": "CanEnactGovernance"
+                "name": "CanEnactGovernance",
+                "payload": null
               }
             }
           }
@@ -617,7 +622,8 @@
             "Permission": {
               "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanSetParameters"
+                "name": "CanSetParameters",
+                "payload": null
               }
             }
           }
@@ -627,7 +633,8 @@
             "Permission": {
               "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanReadAllLedgerData"
+                "name": "CanReadAllLedgerData",
+                "payload": null
               }
             }
           }

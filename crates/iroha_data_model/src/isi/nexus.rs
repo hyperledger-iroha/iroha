@@ -100,6 +100,9 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Create a staged sponsor-owned fee sponsor program.
+    ///
+    /// Ordinary execution requires the sponsor or its delegated manager. The authenticated
+    /// initial genesis may compose the sponsor-owned record before any block is committed.
     pub struct CreateFeeSponsorProgram {
         /// Initial fail-closed lifecycle record to persist.
         pub program: FeeSponsorProgram,
@@ -207,6 +210,9 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Transfer assets into a program-isolated fee vault allocation.
+    ///
+    /// During authenticated initial genesis, funding may debit only the exact sponsor's prefunded
+    /// balance. Later execution retains the ordinary sponsor/manager and asset-debit checks.
     pub struct FundFeeSponsorProgram {
         /// Program receiving the allocation.
         pub program_id: FeeSponsorProgramId,

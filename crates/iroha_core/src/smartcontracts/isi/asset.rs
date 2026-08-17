@@ -1568,7 +1568,7 @@ pub mod isi {
     #[derive(Debug)]
     enum NumericMovementDebitAuthorization {
         ExactUser(AccountId),
-        GenesisStake(AccountId),
+        InitialGenesisBootstrap(AccountId),
         Protocol,
     }
     #[derive(Debug)]
@@ -1604,7 +1604,21 @@ pub mod isi {
         /// Lock a governance voting bond.
         GovernanceBond(Vec<u8>),
         /// Lock a citizenship bond.
-        CitizenshipBond(Vec<u8>),
+        CitizenshipBond {
+            /// Exact citizen whose prefunded balance supplies the bond.
+            source_authority: AccountId,
+            /// Whether the signed initial genesis is seeding the citizen record.
+            initial_genesis: bool,
+            /// Exact citizen and amount binding.
+            binding: Vec<u8>,
+        },
+        /// Fund a sponsor-owned fee vault from signed initial genesis.
+        InitialGenesisFeeSponsorFunding {
+            /// Exact sponsor whose prefunded balance supplies the vault.
+            source_authority: AccountId,
+            /// Exact program, source, custody destination, and amount binding.
+            binding: Vec<u8>,
+        },
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
         /// Fund a VPN lease retained record.
@@ -1687,7 +1701,7 @@ pub mod isi {
                 destination_admission: NumericAssetDestinationAdmissionPolicy::ImplicitReceive,
             }
         }
-        /// Bind an embedded voluntary debit to an exact user or genesis stake authority.
+        /// Bind an embedded voluntary debit to an exact user or initial-genesis authority.
         fn embedded_user(
             submitting_authority: &AccountId,
             purpose: EmbeddedNumericAssetMovementPurpose,
@@ -1730,7 +1744,7 @@ pub mod isi {
                     binding,
                 } => (
                     if genesis {
-                        NumericMovementDebitAuthorization::GenesisStake(source_authority)
+                        NumericMovementDebitAuthorization::InitialGenesisBootstrap(source_authority)
                     } else {
                         NumericMovementDebitAuthorization::ExactUser(source_authority)
                     },
@@ -1742,9 +1756,25 @@ pub mod isi {
                     "governance-bond",
                     binding,
                 ),
-                EmbeddedNumericAssetMovementPurpose::CitizenshipBond(binding) => (
-                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                EmbeddedNumericAssetMovementPurpose::CitizenshipBond {
+                    source_authority,
+                    initial_genesis,
+                    binding,
+                } => (
+                    if initial_genesis {
+                        NumericMovementDebitAuthorization::InitialGenesisBootstrap(source_authority)
+                    } else {
+                        NumericMovementDebitAuthorization::ExactUser(source_authority)
+                    },
                     "citizenship-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::InitialGenesisFeeSponsorFunding {
+                    source_authority,
+                    binding,
+                } => (
+                    NumericMovementDebitAuthorization::InitialGenesisBootstrap(source_authority),
+                    "initial-genesis-fee-sponsor-funding",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::NativeEscrow(binding) => (
@@ -1955,13 +1985,12 @@ pub mod isi {
                     )?;
                     Ok(NumericAssetTransferAuthorityPolicy::ProtocolAuthorized)
                 }
-                NumericMovementDebitAuthorization::GenesisStake(source_authority) => {
-                    if !state_transaction._curr_block.is_genesis()
-                        || !state_transaction.block_hashes.is_empty()
+                NumericMovementDebitAuthorization::InitialGenesisBootstrap(source_authority) => {
+                    if !crate::executor::is_initial_genesis_context(state_transaction)
                         || source_id.account() != source_authority
                     {
                         return Err(InstructionExecutionError::InvariantViolation(
-                            "genesis stake debit requires the exact stake owner during genesis bootstrap"
+                            "initial-genesis debit requires the exact prefunded source owner"
                                 .into(),
                         ));
                     }
@@ -3684,7 +3713,8 @@ pub mod isi {
         destination_id: AssetId,
         amount: Quantity,
     ) -> Result<(), Error> {
-        if authority != owner
+        let initial_genesis = crate::executor::is_initial_genesis_context(state_transaction);
+        if (authority != owner && !initial_genesis)
             || source_id.account() != owner
             || source_id.definition() != &state_transaction.gov.citizenship_asset_id
             || destination_id.account() != &state_transaction.gov.citizenship_escrow_account
@@ -3702,7 +3732,53 @@ pub mod isi {
             amount,
             NumericAssetMovementAuthorization::embedded_user(
                 authority,
-                EmbeddedNumericAssetMovementPurpose::CitizenshipBond(binding),
+                EmbeddedNumericAssetMovementPurpose::CitizenshipBond {
+                    source_authority: owner.clone(),
+                    initial_genesis,
+                    binding,
+                },
+            ),
+        )
+    }
+    /// Fund one sponsor-owned fee vault from the sponsor's exact prefunded genesis balance.
+    pub(crate) fn execute_initial_genesis_fee_sponsor_funding_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        source_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let destination = state_transaction
+            .nexus
+            .fees
+            .sponsor_vault_custody_account_id
+            .clone();
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        if !crate::executor::is_initial_genesis_context(state_transaction)
+            || source_id.account() != &program_id.sponsor
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "fee sponsor genesis funding requires the exact sponsor source during initial genesis"
+                    .into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            program_id.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                submitting_authority,
+                EmbeddedNumericAssetMovementPurpose::InitialGenesisFeeSponsorFunding {
+                    source_authority: program_id.sponsor.clone(),
+                    binding,
+                },
             ),
         )
     }
