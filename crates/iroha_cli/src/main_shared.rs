@@ -8261,6 +8261,7 @@ mod cli_integration_harness_tests {
     use iroha_crypto::Algorithm;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
@@ -8334,41 +8335,6 @@ mod cli_integration_harness_tests {
             .expect_err("invalid JSON must fail");
         assert!(err.to_string().contains("failed to parse JSON"));
     }
-    // Small helper: sort optional-JSON-key ascending/descending, then compute window bounds
-    fn sort_and_bounds<T, Get>(
-        items: &mut Vec<T>,
-        key: Option<Name>,
-        desc: bool,
-        get: Get,
-        offset: usize,
-        limit: Option<usize>,
-        fetch: usize,
-    ) -> (usize, usize, usize)
-    where
-        Get: for<'a> Fn(&'a T, &'a Name) -> Option<&'a Json>,
-    {
-        if let Some(k) = key {
-            items.sort_by(|a, b| {
-                let la = get(a, &k);
-                let lb = get(b, &k);
-                match (la, lb) {
-                    (Some(l), Some(r)) => {
-                        let ord = l.cmp(r);
-                        if desc { ord.reverse() } else { ord }
-                    }
-                    (Some(_), None) => CmpOrdering::Less,
-                    (None, Some(_)) => CmpOrdering::Greater,
-                    (None, None) => CmpOrdering::Equal,
-                }
-            });
-        }
-        let start = offset.min(items.len());
-        let end = limit
-            .map(|l| (start + l).min(items.len()))
-            .unwrap_or(items.len());
-        let first_end = start.saturating_add(fetch).min(end);
-        (start, end, first_end)
-    }
     #[test]
     fn parse_selector_and_apply_to_builder() {
         // Selector tuple parses from null under the lightweight DSL.
@@ -8385,75 +8351,500 @@ mod cli_integration_harness_tests {
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         assert!(out.is_empty());
     }
-    struct SortExec;
-    impl QueryExecutor for SortExec {
-        type Cursor = ();
+
+    trait HarnessQueryFixture {
+        type Item: Clone;
+
+        fn ranked_three() -> Vec<Self::Item>;
+        fn ranked_five(seed: u8) -> Vec<Self::Item>;
+        fn positioned_five(seed: u8) -> Vec<Self::Item>;
+        fn metadata<'a>(item: &'a Self::Item, key: &Name) -> Option<&'a Json>;
+        fn batch(items: Vec<Self::Item>) -> QueryOutputBatchBox;
+
+        fn sort_by_metadata(items: &mut [Self::Item], sorting: &Sorting) {
+            let Some(key) = sorting.sort_by_metadata_key.as_ref() else {
+                return;
+            };
+            let descending = matches!(
+                sorting.order,
+                Some(iroha::data_model::query::parameters::SortOrder::Desc)
+            );
+            items.sort_by(|left, right| {
+                match (Self::metadata(left, key), Self::metadata(right, key)) {
+                    (Some(left), Some(right)) => {
+                        let order = left.cmp(right);
+                        if descending { order.reverse() } else { order }
+                    }
+                    (Some(_), None) => CmpOrdering::Less,
+                    (None, Some(_)) => CmpOrdering::Greater,
+                    (None, None) => CmpOrdering::Equal,
+                }
+            });
+        }
+    }
+
+    struct DomainFixture;
+    impl HarnessQueryFixture for DomainFixture {
+        type Item = Domain;
+
+        fn ranked_three() -> Vec<Self::Item> {
+            [("d1", Some(2), 0x10), ("d2", Some(1), 0x11), ("d3", None, 0x12)]
+                .into_iter()
+                .map(|(name, rank, seed)| {
+                    let owner = sample_account_id("land", seed);
+                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
+                        .build(owner.account());
+                    if let Some(rank) = rank {
+                        domain.metadata_mut().insert(
+                            "rank".parse().unwrap(),
+                            Json::from(norito::json!(rank)),
+                        );
+                    }
+                    domain
+                })
+                .collect()
+        }
+
+        fn ranked_five(seed: u8) -> Vec<Self::Item> {
+            [("d0", Some(2)), ("d1", Some(4)), ("d2", None), ("d3", Some(1)), ("d4", Some(3))]
+                .into_iter()
+                .map(|(name, rank)| {
+                    let owner = sample_account_id("universal", seed);
+                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
+                        .build(&owner);
+                    if let Some(rank) = rank {
+                        domain.metadata_mut().insert(
+                            "rank".parse().unwrap(),
+                            Json::from(norito::json!(rank)),
+                        );
+                    }
+                    domain
+                })
+                .collect()
+        }
+
+        fn positioned_five(seed: u8) -> Vec<Self::Item> {
+            (0..5)
+                .map(|index| {
+                    let owner = sample_account_id("universal", seed + index as u8);
+                    Domain::new(
+                        DomainId::try_new(&format!("d{index}"), "universal").unwrap(),
+                    )
+                    .build(&owner)
+                })
+                .collect()
+        }
+
+        fn metadata<'a>(item: &'a Self::Item, key: &Name) -> Option<&'a Json> {
+            item.metadata().get(key)
+        }
+
+        fn batch(items: Vec<Self::Item>) -> QueryOutputBatchBox {
+            QueryOutputBatchBox::Domain(items)
+        }
+    }
+
+    struct AccountFixture;
+    impl HarnessQueryFixture for AccountFixture {
+        type Item = iroha::data_model::account::Account;
+
+        fn ranked_three() -> Vec<Self::Item> {
+            use iroha::data_model::account::Account;
+
+            let ids = [0x20, 0x21, 0x22].map(|seed| sample_account_id("land", seed));
+            let authority = ids[0].clone();
+            let mut accounts: Vec<_> = ids
+                .into_iter()
+                .map(|id| Account::new(id).build(&authority))
+                .collect();
+            let key: Name = "rank".parse().unwrap();
+            accounts[0]
+                .metadata
+                .insert(key.clone(), Json::from(norito::json!(2)));
+            accounts[1]
+                .metadata
+                .insert(key, Json::from(norito::json!(1)));
+            accounts
+        }
+
+        fn ranked_five(seed: u8) -> Vec<Self::Item> {
+            use iroha::data_model::account::Account;
+
+            let mut accounts: Vec<_> = (0..5)
+                .map(|index| {
+                    let id = sample_account_id("land", seed + index as u8);
+                    Account::new(id.clone()).build(&id)
+                })
+                .collect();
+            let key: Name = "rank".parse().unwrap();
+            for (index, rank) in [(0, 2), (1, 4), (3, 1), (4, 3)] {
+                accounts[index]
+                    .metadata
+                    .insert(key.clone(), Json::from(norito::json!(rank)));
+            }
+            accounts
+        }
+
+        fn positioned_five(seed: u8) -> Vec<Self::Item> {
+            use iroha::data_model::account::Account;
+
+            (0..5)
+                .map(|index| {
+                    let id = sample_account_id("land", seed + index as u8);
+                    let mut account = Account::new(id.clone()).build(&id);
+                    account.metadata.insert(
+                        "pos".parse().unwrap(),
+                        Json::from(norito::json!(index)),
+                    );
+                    account
+                })
+                .collect()
+        }
+
+        fn metadata<'a>(item: &'a Self::Item, key: &Name) -> Option<&'a Json> {
+            item.metadata().get(key)
+        }
+
+        fn batch(items: Vec<Self::Item>) -> QueryOutputBatchBox {
+            QueryOutputBatchBox::Account(items)
+        }
+    }
+
+    struct AssetDefinitionFixture;
+    impl HarnessQueryFixture for AssetDefinitionFixture {
+        type Item = iroha::data_model::asset::definition::AssetDefinition;
+
+        fn ranked_three() -> Vec<Self::Item> {
+            use iroha::data_model::asset::{AssetBalancePolicy, definition::AssetDefinition};
+
+            let owner = sample_account_id("land", 0x30);
+            let domain = DomainId::try_new("land", "universal").unwrap();
+            let mut definitions: Vec<_> = ["gold", "silver", "bronze"]
+                .into_iter()
+                .map(|name| {
+                    let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        domain.clone(),
+                        name.parse().unwrap(),
+                    );
+                    AssetDefinition::numeric(id, name.to_owned(), AssetBalancePolicy::Global, None)
+                        .build(owner.account())
+                })
+                .collect();
+            let key: Name = "rank".parse().unwrap();
+            definitions[0]
+                .metadata_mut()
+                .insert(key.clone(), Json::from(norito::json!(2)));
+            definitions[1]
+                .metadata_mut()
+                .insert(key, Json::from(norito::json!(1)));
+            definitions
+        }
+
+        fn ranked_five(seed: u8) -> Vec<Self::Item> {
+            let mut definitions = Self::definitions(seed);
+            let key: Name = "rank".parse().unwrap();
+            for (index, rank) in [(0, 2), (1, 4), (3, 1), (4, 3)] {
+                definitions[index]
+                    .metadata_mut()
+                    .insert(key.clone(), Json::from(norito::json!(rank)));
+            }
+            definitions
+        }
+
+        fn positioned_five(seed: u8) -> Vec<Self::Item> {
+            let mut definitions = Self::definitions(seed);
+            for (index, definition) in definitions.iter_mut().enumerate() {
+                definition.metadata_mut().insert(
+                    "pos".parse().unwrap(),
+                    Json::from(norito::json!(index)),
+                );
+            }
+            definitions
+        }
+
+        fn metadata<'a>(item: &'a Self::Item, key: &Name) -> Option<&'a Json> {
+            item.metadata().get(key)
+        }
+
+        fn batch(items: Vec<Self::Item>) -> QueryOutputBatchBox {
+            QueryOutputBatchBox::AssetDefinition(items)
+        }
+    }
+    impl AssetDefinitionFixture {
+        fn definitions(seed: u8) -> Vec<iroha::data_model::asset::definition::AssetDefinition> {
+            use iroha::data_model::asset::{AssetBalancePolicy, definition::AssetDefinition};
+
+            let domain = DomainId::try_new("land", "universal").unwrap();
+            let owner = sample_account_id("land", seed);
+            (0..5)
+                .map(|index| {
+                    let name = format!("ad{index}");
+                    let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        domain.clone(),
+                        name.parse().unwrap(),
+                    );
+                    AssetDefinition::numeric(id, name, AssetBalancePolicy::Global, None)
+                        .build(owner.account())
+                })
+                .collect()
+        }
+    }
+
+    struct NftFixture;
+    impl HarnessQueryFixture for NftFixture {
+        type Item = iroha::data_model::nft::Nft;
+
+        fn ranked_three() -> Vec<Self::Item> {
+            use iroha::data_model::nft::Nft;
+
+            let owner = sample_account_id("art", 0x70);
+            let mut nfts: Vec<_> = ["n1$art", "n2$art", "n3$art"]
+                .into_iter()
+                .map(|id| Nft::new(id.parse().unwrap(), Default::default()).build(owner.account()))
+                .collect();
+            let key: Name = "rank".parse().unwrap();
+            nfts[0]
+                .content
+                .insert(key.clone(), Json::from(norito::json!(2)));
+            nfts[1]
+                .content
+                .insert(key, Json::from(norito::json!(1)));
+            nfts
+        }
+
+        fn ranked_five(seed: u8) -> Vec<Self::Item> {
+            let mut nfts = Self::nfts(seed);
+            let key: Name = "rank".parse().unwrap();
+            for (index, rank) in [(0, 2), (1, 4), (3, 1), (4, 3)] {
+                nfts[index]
+                    .content
+                    .insert(key.clone(), Json::from(norito::json!(rank)));
+            }
+            nfts
+        }
+
+        fn positioned_five(seed: u8) -> Vec<Self::Item> {
+            let mut nfts = Self::nfts(seed);
+            for (index, nft) in nfts.iter_mut().enumerate() {
+                nft.content.insert(
+                    "pos".parse().unwrap(),
+                    Json::from(norito::json!(index)),
+                );
+            }
+            nfts
+        }
+
+        fn metadata<'a>(item: &'a Self::Item, key: &Name) -> Option<&'a Json> {
+            item.content().get(key)
+        }
+
+        fn batch(items: Vec<Self::Item>) -> QueryOutputBatchBox {
+            QueryOutputBatchBox::Nft(items)
+        }
+    }
+    impl NftFixture {
+        fn nfts(seed: u8) -> Vec<iroha::data_model::nft::Nft> {
+            use iroha::data_model::nft::Nft;
+
+            let owner = sample_account_id("art", seed);
+            (0..5)
+                .map(|index| {
+                    Nft::new(
+                        format!("n{index}$art").parse().unwrap(),
+                        Default::default(),
+                    )
+                    .build(owner.account())
+                })
+                .collect()
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum HarnessRows {
+        RankedThree,
+        RankedFive(u8),
+        PositionedFive(u8),
+    }
+
+    struct HarnessQueryExecutor<F: HarnessQueryFixture> {
+        rows: HarnessRows,
+        starts: Option<&'static AtomicUsize>,
+        continues: Option<&'static AtomicUsize>,
+        _fixture: std::marker::PhantomData<F>,
+    }
+    impl<F: HarnessQueryFixture> HarnessQueryExecutor<F> {
+        fn ranked_three() -> Self {
+            Self {
+                rows: HarnessRows::RankedThree,
+                starts: None,
+                continues: None,
+                _fixture: std::marker::PhantomData,
+            }
+        }
+
+        fn ranked_five(
+            seed: u8,
+            starts: &'static AtomicUsize,
+            continues: &'static AtomicUsize,
+        ) -> Self {
+            Self {
+                rows: HarnessRows::RankedFive(seed),
+                starts: Some(starts),
+                continues: Some(continues),
+                _fixture: std::marker::PhantomData,
+            }
+        }
+
+        fn positioned_five(
+            seed: u8,
+            starts: &'static AtomicUsize,
+            continues: &'static AtomicUsize,
+        ) -> Self {
+            Self {
+                rows: HarnessRows::PositionedFive(seed),
+                starts: Some(starts),
+                continues: Some(continues),
+                _fixture: std::marker::PhantomData,
+            }
+        }
+    }
+
+    struct HarnessCursor<F: HarnessQueryFixture> {
+        items: Vec<F::Item>,
+        index: usize,
+        end: usize,
+        fetch: usize,
+        continues: &'static AtomicUsize,
+    }
+    impl<F: HarnessQueryFixture> QueryExecutor for HarnessQueryExecutor<F> {
+        type Cursor = HarnessCursor<F>;
         type Error = eyre::Report;
+
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
+
         fn start_query(
             &self,
-            q: QueryWithParams,
+            query: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
-            // Build three domains with metadata key `rank`: 2, 1, and None
-            let domain_id1: iroha::data_model::domain::DomainId =
-                DomainId::try_new("d1", "universal").unwrap();
-            let domain_id2: iroha::data_model::domain::DomainId =
-                DomainId::try_new("d2", "universal").unwrap();
-            let domain_id3: iroha::data_model::domain::DomainId =
-                DomainId::try_new("d3", "universal").unwrap();
-            let owner1 = sample_account_id("land", 0x10);
-            let owner2 = sample_account_id("land", 0x11);
-            let owner3 = sample_account_id("land", 0x12);
-            let mut d1 = Domain::new(domain_id1).build(owner1.account());
-            let mut d2 = Domain::new(domain_id2).build(owner2.account());
-            let d3 = Domain::new(domain_id3).build(owner3.account());
-            d1.metadata_mut()
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-            d2.metadata_mut()
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-            // Apply sorting if provided
-            let mut v = vec![d1, d2, d3];
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                v.sort_by(|a, b| {
-                    let la = a.metadata().get(&key);
-                    let lb = b.metadata().get(&key);
-                    match (la, lb) {
-                        (Some(l), Some(r)) => {
-                            let ord = l.cmp(r);
-                            if desc { ord.reverse() } else { ord }
-                        }
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                });
+            if let Some(starts) = self.starts {
+                starts.fetch_add(1, Ordering::SeqCst);
             }
+            let (mut items, paginated) = match self.rows {
+                HarnessRows::RankedThree => (F::ranked_three(), false),
+                HarnessRows::RankedFive(seed) => (F::ranked_five(seed), true),
+                HarnessRows::PositionedFive(seed) => (F::positioned_five(seed), true),
+            };
+            if !matches!(self.rows, HarnessRows::PositionedFive(_)) {
+                F::sort_by_metadata(&mut items, &query.params.sorting);
+            }
+            if !paginated {
+                return Ok((
+                    QueryOutputBatchBoxTuple::from_batch(F::batch(items)),
+                    Some(0),
+                    None,
+                ));
+            }
+
+            let fetch = query
+                .params
+                .fetch_size
+                .fetch_size
+                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
+                .get()
+                .try_into()
+                .unwrap_or(100);
+            let offset = query.params.pagination.offset_value() as usize;
+            let limit = query
+                .params
+                .pagination
+                .limit_value()
+                .map(|value| value.get() as usize);
+            let start = offset.min(items.len());
+            let end = limit
+                .map(|limit| (start + limit).min(items.len()))
+                .unwrap_or(items.len());
+            let first_end = start.saturating_add(fetch).min(end);
+            let first = items[start..first_end].to_vec();
+            let remaining = end.saturating_sub(first_end) as u64;
+            let cursor = if remaining > 0 {
+                Some(HarnessCursor {
+                    items,
+                    index: first_end,
+                    end,
+                    fetch,
+                    continues: self
+                        .continues
+                        .expect("paginated harness must count continuations"),
+                })
+            } else {
+                None
+            };
             Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(v)),
-                Some(0),
-                None,
+                QueryOutputBatchBoxTuple::from_batch(F::batch(first)),
+                Some(remaining),
+                cursor,
             ))
         }
+
         fn continue_query(
-            _cursor: Self::Cursor,
+            cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
-            unreachable!("single batch only")
+            cursor.continues.fetch_add(1, Ordering::SeqCst);
+            let next_end = cursor.index.saturating_add(cursor.fetch).min(cursor.end);
+            let batch = cursor.items[cursor.index..next_end].to_vec();
+            let remaining = cursor.end.saturating_sub(next_end) as u64;
+            let next = if remaining > 0 {
+                Some(HarnessCursor {
+                    items: cursor.items,
+                    index: next_end,
+                    end: cursor.end,
+                    fetch: cursor.fetch,
+                    continues: cursor.continues,
+                })
+            } else {
+                None
+            };
+            Ok((
+                QueryOutputBatchBoxTuple::from_batch(F::batch(batch)),
+                Some(remaining),
+                next,
+            ))
         }
     }
+
+    static PAGED_DOMAINS_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGED_DOMAINS_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSD_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSD_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSA_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSA_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSA_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSA_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSAD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSAD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSAD_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSAD_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSN_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSN_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PSN_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PSN_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGED_ACCOUNTS_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGED_ACCOUNTS_CONTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGED_ADS_STARTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGED_ADS_CONTS: AtomicUsize = AtomicUsize::new(0);
+
     #[test]
     fn metadata_sorting_end_to_end() {
-        let exec = SortExec;
+        let exec = HarnessQueryExecutor::<DomainFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
@@ -8472,7 +8863,7 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn metadata_sorting_domains_desc_end_to_end() {
-        let exec = SortExec;
+        let exec = HarnessQueryExecutor::<DomainFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
@@ -8488,75 +8879,11 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "d2");
         assert_eq!(out[2].id().name().as_ref(), "d3");
     }
-    struct SortAccountsExec;
-    impl QueryExecutor for SortAccountsExec {
-        type Cursor = ();
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            use iroha::data_model::account::Account;
-            use iroha::data_model::domain::DomainId;
-            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let id1 = sample_account_id("land", 0x20);
-            let id2 = sample_account_id("land", 0x21);
-            let id3 = sample_account_id("land", 0x22);
-            // Build accounts; builder API needs an authority, use id1 for simplicity
-            let mut a1 = Account::new(id1.clone()).build(&id1);
-            let mut a2 = Account::new(id2.clone()).build(&id1);
-            let a3 = Account::new(id3.clone()).build(&id1);
-            // Insert ranks: a2=1, a1=2, a3=None
-            a1.metadata
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-            a2.metadata
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-            // Apply sorting if provided
-            let mut v = vec![a1, a2, a3];
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                v.sort_by(|a, b| {
-                    let la = a.metadata().get(&key);
-                    let lb = b.metadata().get(&key);
-                    match (la, lb) {
-                        (Some(l), Some(r)) => {
-                            let ord = l.cmp(r);
-                            if desc { ord.reverse() } else { ord }
-                        }
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(v)),
-                Some(0),
-                None,
-            ))
-        }
-        fn continue_query(
-            _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            unreachable!("single batch only")
-        }
-    }
     #[test]
     fn metadata_sorting_accounts_end_to_end() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
-        let exec = SortAccountsExec;
+        let exec = HarnessQueryExecutor::<AccountFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
@@ -8593,7 +8920,7 @@ mod cli_integration_harness_tests {
     fn metadata_sorting_accounts_desc_end_to_end() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
-        let exec = SortAccountsExec;
+        let exec = HarnessQueryExecutor::<AccountFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
@@ -8616,105 +8943,11 @@ mod cli_integration_harness_tests {
             .collect();
         assert_eq!(ranks, vec![Some(2), Some(1), None]);
     }
-    struct SortAssetDefsExec;
-    impl QueryExecutor for SortAssetDefsExec {
-        type Cursor = ();
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            use iroha::data_model::asset::definition::AssetDefinition;
-            use iroha::data_model::asset::id::AssetDefinitionId;
-            use iroha::data_model::domain::DomainId;
-            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let owner = sample_account_id("land", 0x30);
-            let id1: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("land", "universal").unwrap(),
-                    "gold".parse().unwrap(),
-                );
-            let id2: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("land", "universal").unwrap(),
-                    "silver".parse().unwrap(),
-                );
-            let id3: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("land", "universal").unwrap(),
-                    "bronze".parse().unwrap(),
-                );
-            let mut ad1 = AssetDefinition::numeric(
-                id1,
-                "gold".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(owner.account());
-            let mut ad2 = AssetDefinition::numeric(
-                id2,
-                "silver".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(owner.account());
-            let ad3 = AssetDefinition::numeric(
-                id3,
-                "bronze".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(owner.account());
-            // Insert ranks: ad1=2, ad2=1, ad3=None
-            ad1.metadata_mut()
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-            ad2.metadata_mut()
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-            let mut v = vec![ad1, ad2, ad3];
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                v.sort_by(|a, b| {
-                    let la = a.metadata().get(&key);
-                    let lb = b.metadata().get(&key);
-                    match (la, lb) {
-                        (Some(l), Some(r)) => {
-                            let ord = l.cmp(r);
-                            if desc { ord.reverse() } else { ord }
-                        }
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(v)),
-                Some(0),
-                None,
-            ))
-        }
-        fn continue_query(
-            _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            unreachable!("single batch only")
-        }
-    }
     #[test]
     fn metadata_sorting_asset_defs_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
-        let exec = SortAssetDefsExec;
+        let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
@@ -8735,7 +8968,7 @@ mod cli_integration_harness_tests {
     fn metadata_sorting_asset_defs_desc_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
-        let exec = SortAssetDefsExec;
+        let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
@@ -8752,114 +8985,14 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "silver");
         assert_eq!(out[2].id().name().as_ref(), "bronze");
     }
-    // Pagination + fetch_size over Domains: ensure offset/limit and batching are respected
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static PAGED_DOMAINS_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PAGED_DOMAINS_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PaginatedDomainsExec;
-    enum DomCursor {
-        Domains {
-            items: Vec<Domain>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PaginatedDomainsExec {
-        type Cursor = DomCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::domain::DomainId;
-            // Build 5 domains d0..d4
-            let mut domains = Vec::new();
-            for i in 0..5 {
-                let name = format!("d{i}");
-                let did = DomainId::try_new(&name, "universal").unwrap();
-                let owner = sample_account_id("universal", 0x40 + i as u8);
-                domains.push(Domain::new(did).build(&owner));
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(domains.len());
-            let end = limit
-                .map(|l| (start + l).min(domains.len()))
-                .unwrap_or(domains.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = domains[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(DomCursor::Domains {
-                    items: domains,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                DomCursor::Domains {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PAGED_DOMAINS_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(DomCursor::Domains {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_and_fetch_size_domains() {
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
-        let exec = PaginatedDomainsExec;
+        let exec = HarnessQueryExecutor::<DomainFixture>::positioned_five(
+            0x40,
+            &PAGED_DOMAINS_STARTS,
+            &PAGED_DOMAINS_CONTS,
+        );
         PAGED_DOMAINS_STARTS.store(0, Ordering::SeqCst);
         PAGED_DOMAINS_CONTS.store(0, Ordering::SeqCst);
         let builder = QueryBuilder::new(&exec, FindDomains)
@@ -8880,248 +9013,15 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_DOMAINS_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PAGED_DOMAINS_CONTS.load(Ordering::SeqCst), 1);
     }
-    // Pagination + sorting combined for Domains (ascending and descending)
-    enum PSDCursor {
-        Domains {
-            items: Vec<Domain>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    static PSD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedDomainsExecAsc;
-    impl QueryExecutor for PagedSortedDomainsExecAsc {
-        type Cursor = PSDCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::domain::DomainId;
-            // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
-            let mut domains = Vec::new();
-            let mk = |name: &str, rank: Option<i64>| {
-                let did = DomainId::try_new(name, "universal").unwrap();
-                let owner = sample_account_id("universal", 0x50);
-                let mut d = Domain::new(did).build(&owner);
-                if let Some(r) = rank {
-                    d.metadata_mut()
-                        .insert("rank".parse().unwrap(), Json::from(norito::json!(r)));
-                }
-                d
-            };
-            domains.push(mk("d0", Some(2)));
-            domains.push(mk("d1", Some(4)));
-            domains.push(mk("d2", None));
-            domains.push(mk("d3", Some(1)));
-            domains.push(mk("d4", Some(3)));
-            let desc = matches!(
-                q.params.sorting.order,
-                Some(iroha::data_model::query::parameters::SortOrder::Desc)
-            );
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let (start, end, first_end) = sort_and_bounds(
-                &mut domains,
-                q.params.sorting.sort_by_metadata_key.clone(),
-                desc,
-                |d, k| d.metadata().get(k),
-                offset,
-                limit,
-                fetch,
-            );
-            let first = domains[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSDCursor::Domains {
-                    items: domains,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSDCursor::Domains {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSD_ASC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSDCursor::Domains {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
-    static PSD_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSD_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedDomainsExecDesc;
-    impl QueryExecutor for PagedSortedDomainsExecDesc {
-        type Cursor = PSDCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::domain::DomainId;
-            let mut domains = Vec::new();
-            let mk = |name: &str, rank: Option<i64>| {
-                let did = DomainId::try_new(name, "universal").unwrap();
-                let owner = sample_account_id("universal", 0x51);
-                let mut d = Domain::new(did).build(&owner);
-                if let Some(r) = rank {
-                    d.metadata_mut()
-                        .insert("rank".parse().unwrap(), Json::from(norito::json!(r)));
-                }
-                d
-            };
-            domains.push(mk("d0", Some(2)));
-            domains.push(mk("d1", Some(4)));
-            domains.push(mk("d2", None));
-            domains.push(mk("d3", Some(1)));
-            domains.push(mk("d4", Some(3)));
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                domains.sort_by(|a, b| {
-                    let la = a.metadata().get(&key);
-                    let lb = b.metadata().get(&key);
-                    match (la, lb, desc) {
-                        (Some(l), Some(r), false) => l.cmp(r),
-                        (Some(l), Some(r), true) => r.cmp(l),
-                        (Some(_), None, _) => std::cmp::Ordering::Less,
-                        (None, Some(_), _) => std::cmp::Ordering::Greater,
-                        (None, None, _) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get() as usize;
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(domains.len());
-            let end = limit
-                .map(|l| (start + l).min(domains.len()))
-                .unwrap_or(domains.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = domains[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSDCursor::Domains {
-                    items: domains,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSDCursor::Domains {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSD_DESC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSDCursor::Domains {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_sorting_domains_asc() {
         PSD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSD_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedDomainsExecAsc;
+        let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
+            0x50,
+            &PSD_ASC_STARTS,
+            &PSD_ASC_CONTS,
+        );
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9151,7 +9051,11 @@ mod cli_integration_harness_tests {
     fn pagination_sorting_domains_desc() {
         PSD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSD_DESC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedDomainsExecDesc;
+        let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
+            0x51,
+            &PSD_DESC_STARTS,
+            &PSD_DESC_CONTS,
+        );
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9177,262 +9081,17 @@ mod cli_integration_harness_tests {
         assert_eq!(PSD_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSD_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-    // Sorting + pagination + batching for Accounts
-    static PSA_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSA_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedAccountsExecAsc;
-    enum PSACursor {
-        Accounts {
-            items: Vec<iroha::data_model::account::Account>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PagedSortedAccountsExecAsc {
-        type Cursor = PSACursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::Account;
-            use iroha::data_model::domain::DomainId;
-            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
-            let mut accounts: Vec<Account> = (0..5)
-                .map(|index| {
-                    let id = sample_account_id("land", 0xA0 + index as u8);
-                    // owner for builder is arbitrary for this harness
-                    Account::new(id.clone()).build(&id)
-                })
-                .collect();
-            let key: Name = "rank".parse().unwrap();
-            accounts[0]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(2)));
-            accounts[1]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(4)));
-            // accounts[2] -> no rank
-            accounts[3]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(1)));
-            accounts[4]
-                .metadata
-                .insert(key, Json::from(norito::json!(3)));
-            let desc = matches!(
-                q.params.sorting.order,
-                Some(iroha::data_model::query::parameters::SortOrder::Desc)
-            );
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let (start, end, first_end) = sort_and_bounds(
-                &mut accounts,
-                q.params.sorting.sort_by_metadata_key.clone(),
-                desc,
-                |a, k| a.metadata().get(k),
-                offset,
-                limit,
-                fetch,
-            );
-            let first = accounts[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSACursor::Accounts {
-                    items: accounts,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSACursor::Accounts {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSA_ASC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSACursor::Accounts {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
-    static PSA_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSA_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedAccountsExecDesc;
-    impl QueryExecutor for PagedSortedAccountsExecDesc {
-        type Cursor = PSACursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::Account;
-            use iroha::data_model::domain::DomainId;
-            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let mut accounts: Vec<Account> = (0..5)
-                .map(|index| {
-                    let id = sample_account_id("land", 0xB0 + index as u8);
-                    Account::new(id.clone()).build(&id)
-                })
-                .collect();
-            let key: Name = "rank".parse().unwrap();
-            accounts[0]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(2)));
-            accounts[1]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(4)));
-            accounts[3]
-                .metadata
-                .insert(key.clone(), Json::from(norito::json!(1)));
-            accounts[4]
-                .metadata
-                .insert(key, Json::from(norito::json!(3)));
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                accounts.sort_by(|a, b| {
-                    let la = a.metadata().get(&key);
-                    let lb = b.metadata().get(&key);
-                    match (la, lb, desc) {
-                        (Some(l), Some(r), false) => l.cmp(r),
-                        (Some(l), Some(r), true) => r.cmp(l),
-                        (Some(_), None, _) => std::cmp::Ordering::Less,
-                        (None, Some(_), _) => std::cmp::Ordering::Greater,
-                        (None, None, _) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get() as usize;
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(accounts.len());
-            let end = limit
-                .map(|l| (start + l).min(accounts.len()))
-                .unwrap_or(accounts.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = accounts[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSACursor::Accounts {
-                    items: accounts,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSACursor::Accounts {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSA_DESC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSACursor::Accounts {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_sorting_accounts_asc() {
         use iroha::data_model::prelude::FindAccounts;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSA_ASC_STARTS.store(0, Ordering::SeqCst);
         PSA_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedAccountsExecAsc;
+        let exec = HarnessQueryExecutor::<AccountFixture>::ranked_five(
+            0xA0,
+            &PSA_ASC_STARTS,
+            &PSA_ASC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9467,7 +9126,11 @@ mod cli_integration_harness_tests {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSA_DESC_STARTS.store(0, Ordering::SeqCst);
         PSA_DESC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedAccountsExecDesc;
+        let exec = HarnessQueryExecutor::<AccountFixture>::ranked_five(
+            0xB0,
+            &PSA_DESC_STARTS,
+            &PSA_DESC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -9496,158 +9159,17 @@ mod cli_integration_harness_tests {
         assert_eq!(PSA_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSA_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-    // Sorting + pagination + batching for AssetDefinitions
-    static PSAD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSAD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedAssetDefsExecAsc;
-    enum PSADCursor {
-        Ads {
-            items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PagedSortedAssetDefsExecAsc {
-        type Cursor = PSADCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::asset::definition::AssetDefinition;
-            use iroha::data_model::asset::id::AssetDefinitionId;
-            use iroha::data_model::domain::DomainId;
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let owner = sample_account_id("land", 0x60);
-            // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
-            let ids: Vec<AssetDefinitionId> = (0..5)
-                .map(|i| {
-                    AssetDefinitionId::derive_from_components(
-                        domain.clone(),
-                        format!("ad{i}").parse().unwrap(),
-                    )
-                })
-                .collect();
-            let mut defs: Vec<AssetDefinition> = ids
-                .into_iter()
-                .enumerate()
-                .map(|(index, id)| {
-                    AssetDefinition::numeric(
-                        id,
-                        format!("ad{index}"),
-                        iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
-                    )
-                    .build(owner.account())
-                })
-                .collect();
-            let key: Name = "rank".parse().unwrap();
-            defs[0]
-                .metadata_mut()
-                .insert(key.clone(), Json::from(norito::json!(2)));
-            defs[1]
-                .metadata_mut()
-                .insert(key.clone(), Json::from(norito::json!(4)));
-            // defs[2] -> no rank
-            defs[3]
-                .metadata_mut()
-                .insert(key.clone(), Json::from(norito::json!(1)));
-            defs[4]
-                .metadata_mut()
-                .insert(key, Json::from(norito::json!(3)));
-            let desc = matches!(
-                q.params.sorting.order,
-                Some(iroha::data_model::query::parameters::SortOrder::Desc)
-            );
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let (start, end, first_end) = sort_and_bounds(
-                &mut defs,
-                q.params.sorting.sort_by_metadata_key.clone(),
-                desc,
-                |ad, k| ad.metadata().get(k),
-                offset,
-                limit,
-                fetch,
-            );
-            let first = defs[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSADCursor::Ads {
-                    items: defs,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSADCursor::Ads {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSAD_ASC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSADCursor::Ads {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
-                            batch,
-                        )),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_sorting_asset_defs_asc() {
         use iroha::data_model::prelude::FindAssetsDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSAD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSAD_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedAssetDefsExecAsc;
+        let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_five(
+            0x60,
+            &PSAD_ASC_STARTS,
+            &PSAD_ASC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9681,153 +9203,13 @@ mod cli_integration_harness_tests {
     fn pagination_sorting_asset_defs_desc() {
         use iroha::data_model::prelude::FindAssetsDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
-        static PSAD_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
-        static PSAD_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
-        struct PagedSortedAssetDefsExecDesc;
-        impl QueryExecutor for PagedSortedAssetDefsExecDesc {
-            type Cursor = PSADCursor;
-            type Error = eyre::Report;
-            fn execute_singular_query(
-                &self,
-                _query: iroha::data_model::query::SingularQueryBox,
-            ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-                unreachable!("not used in this test")
-            }
-            fn start_query(
-                &self,
-                q: QueryWithParams,
-            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-            {
-                PSAD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::asset::definition::AssetDefinition;
-                use iroha::data_model::asset::id::AssetDefinitionId;
-                use iroha::data_model::domain::DomainId;
-                let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-                let owner = sample_account_id("land", 0x61);
-                let ids: Vec<AssetDefinitionId> = (0..5)
-                    .map(|i| {
-                        AssetDefinitionId::derive_from_components(
-                            domain.clone(),
-                            format!("ad{i}").parse().unwrap(),
-                        )
-                    })
-                    .collect();
-                let mut defs: Vec<AssetDefinition> = ids
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, id)| {
-                        AssetDefinition::numeric(
-                            id,
-                            format!("ad{index}"),
-                            iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
-                        )
-                        .build(owner.account())
-                    })
-                    .collect();
-                let key: Name = "rank".parse().unwrap();
-                defs[0]
-                    .metadata_mut()
-                    .insert(key.clone(), Json::from(norito::json!(2)));
-                defs[1]
-                    .metadata_mut()
-                    .insert(key.clone(), Json::from(norito::json!(4)));
-                defs[3]
-                    .metadata_mut()
-                    .insert(key.clone(), Json::from(norito::json!(1)));
-                defs[4]
-                    .metadata_mut()
-                    .insert(key, Json::from(norito::json!(3)));
-                if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                    let desc = matches!(
-                        q.params.sorting.order,
-                        Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                    );
-                    defs.sort_by(|a, b| {
-                        let la = a.metadata().get(&key);
-                        let lb = b.metadata().get(&key);
-                        match (la, lb, desc) {
-                            (Some(l), Some(r), false) => l.cmp(r),
-                            (Some(l), Some(r), true) => r.cmp(l),
-                            (Some(_), None, _) => std::cmp::Ordering::Less,
-                            (None, Some(_), _) => std::cmp::Ordering::Greater,
-                            (None, None, _) => std::cmp::Ordering::Equal,
-                        }
-                    });
-                }
-                let fetch: usize = q
-                    .params
-                    .fetch_size
-                    .fetch_size
-                    .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                    .get() as usize;
-                let offset: usize = q.params.pagination.offset_value() as usize;
-                let limit: Option<usize> =
-                    q.params.pagination.limit_value().map(|n| n.get() as usize);
-                let start = offset.min(defs.len());
-                let end = limit
-                    .map(|l| (start + l).min(defs.len()))
-                    .unwrap_or(defs.len());
-                let first_end = start.saturating_add(fetch).min(end);
-                let first = defs[start..first_end].to_vec();
-                let remaining = end.saturating_sub(first_end) as u64;
-                let next = if remaining > 0 {
-                    Some(PSADCursor::Ads {
-                        items: defs,
-                        idx: first_end,
-                        end,
-                        fetch,
-                    })
-                } else {
-                    None
-                };
-                Ok((
-                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
-                        first,
-                    )),
-                    Some(remaining),
-                    next,
-                ))
-            }
-            fn continue_query(
-                cursor: Self::Cursor,
-            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-            {
-                match cursor {
-                    PSADCursor::Ads {
-                        items,
-                        idx,
-                        end,
-                        fetch,
-                    } => {
-                        PSAD_DESC_CONTS.fetch_add(1, Ordering::SeqCst);
-                        let next_end = idx.saturating_add(fetch).min(end);
-                        let batch = items[idx..next_end].to_vec();
-                        let remaining = end.saturating_sub(next_end) as u64;
-                        let next = if remaining > 0 {
-                            Some(PSADCursor::Ads {
-                                items,
-                                idx: next_end,
-                                end,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        Ok((
-                            QueryOutputBatchBoxTuple::from_batch(
-                                QueryOutputBatchBox::AssetDefinition(batch),
-                            ),
-                            Some(remaining),
-                            next,
-                        ))
-                    }
-                }
-            }
-        }
         PSAD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSAD_DESC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedAssetDefsExecDesc;
+        let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_five(
+            0x61,
+            &PSAD_DESC_STARTS,
+            &PSAD_DESC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -9857,75 +9239,11 @@ mod cli_integration_harness_tests {
         assert_eq!(PSAD_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSAD_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-    // NFT sorting by content metadata
-    struct SortNftsExec;
-    impl QueryExecutor for SortNftsExec {
-        type Cursor = ();
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            use iroha::data_model::domain::DomainId;
-            use iroha::data_model::nft::{Nft, NftId};
-            let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-            let owner = sample_account_id("art", 0x70);
-            let id1: NftId = "n1$art".parse().unwrap();
-            let id2: NftId = "n2$art".parse().unwrap();
-            let id3: NftId = "n3$art".parse().unwrap();
-            let mut n1 = Nft::new(id1, Default::default()).build(owner.account());
-            let mut n2 = Nft::new(id2, Default::default()).build(owner.account());
-            let n3 = Nft::new(id3, Default::default()).build(owner.account());
-            n1.content
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-            n2.content
-                .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-            let mut v = vec![n1, n2, n3];
-            let desc = matches!(
-                q.params.sorting.order,
-                Some(iroha::data_model::query::parameters::SortOrder::Desc)
-            );
-            // No pagination in this executor; keep simple sort for single-batch end-to-end test
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                v.sort_by(|a, b| {
-                    let la = a.content().get(&key);
-                    let lb = b.content().get(&key);
-                    match (la, lb) {
-                        (Some(l), Some(r)) => {
-                            let ord = l.cmp(r);
-                            if desc { ord.reverse() } else { ord }
-                        }
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(v)),
-                Some(0),
-                None,
-            ))
-        }
-        fn continue_query(
-            _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            unreachable!("single batch only")
-        }
-    }
     #[test]
     fn metadata_sorting_nfts_end_to_end() {
         use iroha::data_model::nft::Nft;
         use iroha::data_model::prelude::FindNfts;
-        let exec = SortNftsExec;
+        let exec = HarnessQueryExecutor::<NftFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
@@ -9946,7 +9264,7 @@ mod cli_integration_harness_tests {
     fn metadata_sorting_nfts_desc_end_to_end() {
         use iroha::data_model::nft::Nft;
         use iroha::data_model::prelude::FindNfts;
-        let exec = SortNftsExec;
+        let exec = HarnessQueryExecutor::<NftFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
@@ -9963,148 +9281,17 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "n2");
         assert_eq!(out[2].id().name().as_ref(), "n3");
     }
-    // Sorting + pagination + batching for NFTs
-    static PSN_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PSN_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PagedSortedNftsExecAsc;
-    enum PSNCursor {
-        Nfts {
-            items: Vec<iroha::data_model::nft::Nft>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PagedSortedNftsExecAsc {
-        type Cursor = PSNCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::domain::DomainId;
-            use iroha::data_model::nft::{Nft, NftId};
-            let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-            let owner = sample_account_id("art", 0x71);
-            // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
-            let ids: Vec<NftId> = (0..5)
-                .map(|i| format!("n{i}$art").parse().unwrap())
-                .collect();
-            let mut nfts: Vec<Nft> = ids
-                .into_iter()
-                .map(|id| Nft::new(id, Default::default()).build(owner.account()))
-                .collect();
-            let key: Name = "rank".parse().unwrap();
-            nfts[0]
-                .content
-                .insert(key.clone(), Json::from(norito::json!(2)));
-            nfts[1]
-                .content
-                .insert(key.clone(), Json::from(norito::json!(4)));
-            // nfts[2] -> no rank
-            nfts[3]
-                .content
-                .insert(key.clone(), Json::from(norito::json!(1)));
-            nfts[4].content.insert(key, Json::from(norito::json!(3)));
-            if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                let desc = matches!(
-                    q.params.sorting.order,
-                    Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                );
-                nfts.sort_by(|a, b| {
-                    let la = a.content().get(&key);
-                    let lb = b.content().get(&key);
-                    match (la, lb, desc) {
-                        (Some(l), Some(r), false) => l.cmp(r),
-                        (Some(l), Some(r), true) => r.cmp(l),
-                        (Some(_), None, _) => std::cmp::Ordering::Less,
-                        (None, Some(_), _) => std::cmp::Ordering::Greater,
-                        (None, None, _) => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(nfts.len());
-            let end = limit
-                .map(|l| (start + l).min(nfts.len()))
-                .unwrap_or(nfts.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = nfts[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(PSNCursor::Nfts {
-                    items: nfts,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                PSNCursor::Nfts {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PSN_ASC_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(PSNCursor::Nfts {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_sorting_nfts_asc() {
         use iroha::data_model::prelude::FindNfts;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSN_ASC_STARTS.store(0, Ordering::SeqCst);
         PSN_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedNftsExecAsc;
+        let exec = HarnessQueryExecutor::<NftFixture>::ranked_five(
+            0x71,
+            &PSN_ASC_STARTS,
+            &PSN_ASC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -10130,133 +9317,13 @@ mod cli_integration_harness_tests {
     fn pagination_sorting_nfts_desc() {
         use iroha::data_model::prelude::FindNfts;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
-        static PSN_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
-        static PSN_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
-        struct PagedSortedNftsExecDesc;
-        impl QueryExecutor for PagedSortedNftsExecDesc {
-            type Cursor = PSNCursor;
-            type Error = eyre::Report;
-            fn execute_singular_query(
-                &self,
-                _query: iroha::data_model::query::SingularQueryBox,
-            ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-                unreachable!("not used in this test")
-            }
-            fn start_query(
-                &self,
-                q: QueryWithParams,
-            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-            {
-                PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::domain::DomainId;
-                use iroha::data_model::nft::{Nft, NftId};
-                let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-                let owner = sample_account_id("art", 0x72);
-                let ids: Vec<NftId> = (0..5)
-                    .map(|i| format!("n{i}$art").parse().unwrap())
-                    .collect();
-                let mut nfts: Vec<Nft> = ids
-                    .into_iter()
-                    .map(|id| Nft::new(id, Default::default()).build(owner.account()))
-                    .collect();
-                let key: Name = "rank".parse().unwrap();
-                nfts[0]
-                    .content
-                    .insert(key.clone(), Json::from(norito::json!(2)));
-                nfts[1]
-                    .content
-                    .insert(key.clone(), Json::from(norito::json!(4)));
-                // nfts[2] none
-                nfts[3]
-                    .content
-                    .insert(key.clone(), Json::from(norito::json!(1)));
-                nfts[4].content.insert(key, Json::from(norito::json!(3)));
-                if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
-                    let desc = matches!(
-                        q.params.sorting.order,
-                        Some(iroha::data_model::query::parameters::SortOrder::Desc)
-                    );
-                    nfts.sort_by(|a, b| {
-                        let la = a.content().get(&key);
-                        let lb = b.content().get(&key);
-                        match (la, lb, desc) {
-                            (Some(l), Some(r), false) => l.cmp(r),
-                            (Some(l), Some(r), true) => r.cmp(l),
-                            (Some(_), None, _) => std::cmp::Ordering::Less,
-                            (None, Some(_), _) => std::cmp::Ordering::Greater,
-                            (None, None, _) => std::cmp::Ordering::Equal,
-                        }
-                    });
-                }
-                let fetch: usize = q
-                    .params
-                    .fetch_size
-                    .fetch_size
-                    .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                    .get() as usize;
-                let offset: usize = q.params.pagination.offset_value() as usize;
-                let limit: Option<usize> =
-                    q.params.pagination.limit_value().map(|n| n.get() as usize);
-                let start = offset.min(nfts.len());
-                let end = limit
-                    .map(|l| (start + l).min(nfts.len()))
-                    .unwrap_or(nfts.len());
-                let first_end = start.saturating_add(fetch).min(end);
-                let first = nfts[start..first_end].to_vec();
-                let remaining = end.saturating_sub(first_end) as u64;
-                let next = if remaining > 0 {
-                    Some(PSNCursor::Nfts {
-                        items: nfts,
-                        idx: first_end,
-                        end,
-                        fetch,
-                    })
-                } else {
-                    None
-                };
-                Ok((
-                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(first)),
-                    Some(remaining),
-                    next,
-                ))
-            }
-            fn continue_query(
-                cursor: Self::Cursor,
-            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-            {
-                match cursor {
-                    PSNCursor::Nfts {
-                        items,
-                        idx,
-                        end,
-                        fetch,
-                    } => {
-                        PSN_DESC_CONTS.fetch_add(1, Ordering::SeqCst);
-                        let next_end = idx.saturating_add(fetch).min(end);
-                        let batch = items[idx..next_end].to_vec();
-                        let remaining = end.saturating_sub(next_end) as u64;
-                        let next = if remaining > 0 {
-                            Some(PSNCursor::Nfts {
-                                items,
-                                idx: next_end,
-                                end,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        Ok((
-                            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(batch)),
-                            Some(remaining),
-                            next,
-                        ))
-                    }
-                }
-            }
-        }
         PSN_DESC_STARTS.store(0, Ordering::SeqCst);
         PSN_DESC_CONTS.store(0, Ordering::SeqCst);
-        let exec = PagedSortedNftsExecDesc;
+        let exec = HarnessQueryExecutor::<NftFixture>::ranked_five(
+            0x72,
+            &PSN_DESC_STARTS,
+            &PSN_DESC_CONTS,
+        );
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -10278,116 +9345,16 @@ mod cli_integration_harness_tests {
         assert_eq!(PSN_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSN_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-    // Pagination for Accounts and Asset Definitions
-    static PAGED_ACCOUNTS_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PAGED_ACCOUNTS_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PaginatedAccountsExec;
-    enum AccCursor {
-        Accounts {
-            items: Vec<iroha::data_model::account::Account>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PaginatedAccountsExec {
-        type Cursor = AccCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::Account;
-            use iroha::data_model::domain::DomainId;
-            // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
-            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let mut accounts = Vec::new();
-            for i in 0..5 {
-                let id = sample_account_id("land", 0x80 + i as u8);
-                // owner is arbitrary in builder path
-                let mut a = Account::new(id.clone()).build(&id);
-                a.metadata
-                    .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
-                accounts.push(a);
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(accounts.len());
-            let end = limit
-                .map(|l| (start + l).min(accounts.len()))
-                .unwrap_or(accounts.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = accounts[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(AccCursor::Accounts {
-                    items: accounts,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            let AccCursor::Accounts {
-                items,
-                idx,
-                end,
-                fetch,
-            } = cursor;
-            PAGED_ACCOUNTS_CONTS.fetch_add(1, Ordering::SeqCst);
-            let next_end = idx.saturating_add(fetch).min(end);
-            let batch = items[idx..next_end].to_vec();
-            let remaining = end.saturating_sub(next_end) as u64;
-            let next = if remaining > 0 {
-                Some(AccCursor::Accounts {
-                    items,
-                    idx: next_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
-                Some(remaining),
-                next,
-            ))
-        }
-    }
     #[test]
     fn pagination_and_fetch_size_accounts() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
-        let exec = PaginatedAccountsExec;
+        let exec = HarnessQueryExecutor::<AccountFixture>::positioned_five(
+            0x80,
+            &PAGED_ACCOUNTS_STARTS,
+            &PAGED_ACCOUNTS_CONTS,
+        );
         PAGED_ACCOUNTS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ACCOUNTS_CONTS.store(0, Ordering::SeqCst);
         let builder = QueryBuilder::new(&exec, FindAccounts)
@@ -10413,130 +9380,16 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_ACCOUNTS_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PAGED_ACCOUNTS_CONTS.load(Ordering::SeqCst), 1);
     }
-    static PAGED_ADS_STARTS: AtomicUsize = AtomicUsize::new(0);
-    static PAGED_ADS_CONTS: AtomicUsize = AtomicUsize::new(0);
-    struct PaginatedAssetDefsExec;
-    enum AdCursor {
-        Ads {
-            items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-            idx: usize,
-            end: usize,
-            fetch: usize,
-        },
-    }
-    impl QueryExecutor for PaginatedAssetDefsExec {
-        type Cursor = AdCursor;
-        type Error = eyre::Report;
-        fn execute_singular_query(
-            &self,
-            _query: iroha::data_model::query::SingularQueryBox,
-        ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
-            unreachable!("not used in this test")
-        }
-        fn start_query(
-            &self,
-            q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::asset::definition::AssetDefinition;
-            use iroha::data_model::asset::id::AssetDefinitionId;
-            use iroha::data_model::domain::DomainId;
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let owner = sample_account_id("land", 0x90);
-            // Build 5 defs ad0..ad4 and tag pos metadata
-            let mut defs = Vec::new();
-            for i in 0..5 {
-                let id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
-                    domain.clone(),
-                    format!("ad{i}").parse().unwrap(),
-                );
-                let mut ad = AssetDefinition::numeric(
-                    id,
-                    format!("ad{i}"),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(owner.account());
-                ad.metadata_mut()
-                    .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
-                defs.push(ad);
-            }
-            let fetch: usize = q
-                .params
-                .fetch_size
-                .fetch_size
-                .unwrap_or(iroha::data_model::query::parameters::DEFAULT_FETCH_SIZE)
-                .get()
-                .try_into()
-                .unwrap_or(100);
-            let offset: usize = q.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = q.params.pagination.limit_value().map(|n| n.get() as usize);
-            let start = offset.min(defs.len());
-            let end = limit
-                .map(|l| (start + l).min(defs.len()))
-                .unwrap_or(defs.len());
-            let first_end = start.saturating_add(fetch).min(end);
-            let first = defs[start..first_end].to_vec();
-            let remaining = end.saturating_sub(first_end) as u64;
-            let next = if remaining > 0 {
-                Some(AdCursor::Ads {
-                    items: defs,
-                    idx: first_end,
-                    end,
-                    fetch,
-                })
-            } else {
-                None
-            };
-            Ok((
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(first)),
-                Some(remaining),
-                next,
-            ))
-        }
-        fn continue_query(
-            cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
-        {
-            match cursor {
-                AdCursor::Ads {
-                    items,
-                    idx,
-                    end,
-                    fetch,
-                } => {
-                    PAGED_ADS_CONTS.fetch_add(1, Ordering::SeqCst);
-                    let next_end = idx.saturating_add(fetch).min(end);
-                    let batch = items[idx..next_end].to_vec();
-                    let remaining = end.saturating_sub(next_end) as u64;
-                    let next = if remaining > 0 {
-                        Some(AdCursor::Ads {
-                            items,
-                            idx: next_end,
-                            end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
-                            batch,
-                        )),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-            }
-        }
-    }
     #[test]
     fn pagination_and_fetch_size_asset_defs() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
-        let exec = PaginatedAssetDefsExec;
+        let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::positioned_five(
+            0x90,
+            &PAGED_ADS_STARTS,
+            &PAGED_ADS_CONTS,
+        );
         PAGED_ADS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ADS_CONTS.store(0, Ordering::SeqCst);
         let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)

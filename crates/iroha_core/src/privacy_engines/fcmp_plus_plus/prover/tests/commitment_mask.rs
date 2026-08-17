@@ -6,107 +6,46 @@ use super::*;
 #[test]
 fn prover_input_constructor_takes_secret_bytes_before_validation() {
     let source = include_str!("../../prover.rs");
-    let constructor = source
-        .split_once("impl FcmpProverInputV1 {")
-        .expect("prover input impl")
-        .1
-        .split_once("#[cfg(test)]\n    fn duplicate_for_test")
-        .expect("constructor boundary")
-        .0;
-    assert_eq!(
-        constructor
-            .matches("ProverSecretCopyValueV1::take(&mut")
-            .count(),
-        2
+    let constructor = source_part!(source;
+        "impl FcmpProverInputV1 {" => "#[cfg(test)]\n    fn duplicate_for_test");
+    assert_source_point_order(
+        constructor,
+        &[
+            SourcePoint::Last("ProverSecretCopyValueV1::take(&mut"),
+            SourcePoint::First("let spend_x_encoding ="),
+            SourcePoint::First("let output_y_encoding ="),
+            SourcePoint::First(
+                "let mut spend_x_scalar = spend_x_encoding.into_scalar_owner_v1()",
+            ),
+            SourcePoint::First(
+                "let mut output_y_scalar = output_y_encoding.into_scalar_owner_v1()",
+            ),
+            SourcePoint::First("if leaves.is_empty()"),
+            SourcePoint::First("let output_present = ct_digest_slice_contains("),
+            SourcePoint::First("let duplicate_leaf = ct_has_duplicate_digests("),
+            SourcePoint::First("let zero_spend = bool::from("),
+            SourcePoint::First("if zero_spend || !output_present"),
+            SourcePoint::First("if duplicate_leaf"),
+            SourcePoint::Last("decoded.push("),
+            SourcePoint::First("let mut input = Self {"),
+            SourcePoint::First(
+                "core::mem::swap(&mut input.spend_x, &mut spend_x_scalar.0)",
+            ),
+            SourcePoint::First("drop(spend_x_scalar)"),
+            SourcePoint::First(
+                "core::mem::swap(&mut input.output_y, &mut output_y_scalar.0)",
+            ),
+            SourcePoint::First("drop(output_y_scalar)"),
+            SourcePoint::First("Ok(input)"),
+        ],
     );
-    let last_take = constructor
-        .rfind("ProverSecretCopyValueV1::take(&mut")
-        .expect("last input take");
-    let spend_x_validation = constructor
-        .find("let spend_x_encoding =")
-        .expect("spend-x scalar validation");
-    let output_y_validation = constructor
-        .find("let output_y_encoding =")
-        .expect("output-y scalar validation");
-    let spend_x_decode = constructor
-        .find("let mut spend_x_scalar = spend_x_encoding.into_scalar_owner_v1()")
-        .expect("spend-x owner decode");
-    let output_y_decode = constructor
-        .find("let mut output_y_scalar = output_y_encoding.into_scalar_owner_v1()")
-        .expect("output-y owner decode");
-    let shape_validation = constructor
-        .find("if leaves.is_empty()")
-        .expect("path shape validation");
-    let output_present = constructor
-        .find("let output_present = ct_digest_slice_contains(")
-        .expect("hidden output membership");
-    let duplicate_leaf = constructor
-        .find("let duplicate_leaf = ct_has_duplicate_digests(")
-        .expect("duplicate hidden output scan");
-    let zero_spend = constructor
-        .find("let zero_spend = bool::from(")
-        .expect("late zero-spend validation");
-    let combined_rejection = constructor
-        .find("if zero_spend || !output_present")
-        .expect("combined zero-spend and membership rejection");
-    let duplicate_rejection = constructor
-        .find("if duplicate_leaf")
-        .expect("duplicate output rejection");
-    let last_decoded_branch = constructor
-        .rfind("decoded.push(")
-        .expect("last decoded branch owner transfer");
-    let destination = constructor
-        .find("let mut input = Self {")
-        .expect("zeroed final destination");
-    let spend_x_swap = constructor
-        .find("core::mem::swap(&mut input.spend_x, &mut spend_x_scalar.0)")
-        .expect("spend-x owner transfer");
-    let spend_x_drop = constructor
-        .find("drop(spend_x_scalar)")
-        .expect("spend-x source clear");
-    let output_y_swap = constructor
-        .find("core::mem::swap(&mut input.output_y, &mut output_y_scalar.0)")
-        .expect("output-y owner transfer");
-    let output_y_drop = constructor
-        .find("drop(output_y_scalar)")
-        .expect("output-y source clear");
-    let returned = constructor.find("Ok(input)").expect("final owner return");
-    assert!(
-        last_take < spend_x_validation
-            && spend_x_validation < output_y_validation
-            && output_y_validation < spend_x_decode
-            && spend_x_decode < output_y_decode
-            && output_y_decode < shape_validation
-            && shape_validation < output_present
-            && output_present < duplicate_leaf
-            && duplicate_leaf < zero_spend
-            && zero_spend < combined_rejection
-            && combined_rejection < duplicate_rejection
-            && duplicate_rejection < last_decoded_branch
-            && last_decoded_branch < destination
-            && destination < spend_x_swap
-            && spend_x_swap < spend_x_drop
-            && spend_x_drop < output_y_swap
-            && output_y_swap < output_y_drop
-            && output_y_drop < returned
-    );
-    assert!(!constructor.contains("Zeroizing::new(spend_x)"));
-    assert!(!constructor.contains("Zeroizing::new(output_y)"));
-    assert!(constructor.contains("spend_x: Scalar::ZERO"));
-    assert!(constructor.contains("output_y: Scalar::ZERO"));
-    assert_eq!(constructor.matches("core::mem::swap(").count(), 2);
-    assert_eq!(constructor.matches("drop(").count(), 2);
-    assert!(!constructor.contains(".expose_copy()"));
-    assert!(!constructor.contains("callback"));
-    assert!(!constructor.contains("FnOnce"));
-    assert_eq!(
-        constructor
-            .matches("ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(")
-            .count(),
-        2
-    );
-    assert_eq!(constructor.matches(".into_scalar_owner_v1()").count(), 2);
-    for forbidden in [
+    source_has!(constructor; "spend_x: Scalar::ZERO", "output_y: Scalar::ZERO");
+    source_lacks!(constructor;
+        "Zeroizing::new(spend_x)",
+        "Zeroizing::new(output_y)",
+        ".expose_copy()",
+        "callback",
+        "FnOnce",
         "validate_edwards_scalar",
         "Scalar::from_canonical_bytes",
         "CtOption",
@@ -120,123 +59,81 @@ fn prover_input_constructor_takes_secret_bytes_before_validation() {
         "Result<Scalar",
         ".clone()",
         "Deref",
-    ] {
-        assert!(!constructor.contains(forbidden), "retained {forbidden}");
-    }
-    assert_eq!(
-        constructor
-            .matches("let scalar = decode_secret_helioselene_scalar_v1(encoded)?")
-            .count(),
-        1
+        "decoded_branch.push(decode_",
+        "decode_helioselene_scalar(*encoded)",
+        "decode_field25519_scalar(*encoded)",
     );
-    assert_eq!(
-        constructor
-            .matches("let scalar = decode_secret_field25519_scalar_v1(encoded)?")
-            .count(),
-        1
+    source_counts!(constructor;
+        "ProverSecretCopyValueV1::take(&mut" => 2,
+        "core::mem::swap(" => 2,
+        "drop(" => 2,
+        "ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(" => 2,
+        ".into_scalar_owner_v1()" => 2,
+        "let scalar = decode_secret_helioselene_scalar_v1(encoded)?" => 1,
+        "let scalar = decode_secret_field25519_scalar_v1(encoded)?" => 1,
+        "require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?" => 2,
+        "push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?" => 2,
+        "push_secret_scalar_v1(" => 0,
     );
-    assert_eq!(
-        constructor
-            .matches("require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?")
-            .count(),
-        2
+    assert_source_point_order(
+        constructor,
+        &[
+            SourcePoint::Nth(
+                "require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?",
+                0,
+            ),
+            SourcePoint::First("let scalar = decode_secret_helioselene_scalar_v1(encoded)?"),
+            SourcePoint::Nth(
+                "push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?",
+                0,
+            ),
+            SourcePoint::Nth(
+                "require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?",
+                1,
+            ),
+            SourcePoint::First("let scalar = decode_secret_field25519_scalar_v1(encoded)?"),
+            SourcePoint::Nth(
+                "push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?",
+                1,
+            ),
+        ],
     );
-    assert_eq!(
-        constructor
-            .matches("push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?")
-            .count(),
-        2
+    let lifecycle = source_part!(source;
+        "impl Zeroize for FcmpProverInputV1" =>
+        "impl core::fmt::Debug for FcmpProverInputV1");
+    source_counts!(lifecycle; ".zeroize()" => 7);
+    source_has!(lifecycle; "impl Drop for FcmpProverInputV1", "self.zeroize();");
+    let owned_cycle_push = source_part!(source;
+        "fn push_owned_secret_cycle_scalar_v1<F: ProofScalar + Zeroize>(" =>
+        "fn push_secret_scalar_v1<F: ProofScalar + Zeroize>(");
+    assert_source_point_order(
+        owned_cycle_push,
+        &[
+            SourcePoint::First("let allocation_capacity = values.capacity()"),
+            SourcePoint::First("let allocation_ptr = values.as_ptr()"),
+            SourcePoint::First(
+                "let preflight = require_preallocated_push(values.len(), allocation_capacity)",
+            ),
+            SourcePoint::First("if let Err(error) = preflight"),
+            SourcePoint::First("drop(value)"),
+            SourcePoint::First("values.push(F::ZERO)"),
+            SourcePoint::First("let destination = values.len() - 1"),
+            SourcePoint::First("value.move_into(&mut values[destination])"),
+            SourcePoint::Nth(
+                "debug_assert_eq!(values.capacity(), allocation_capacity)",
+                1,
+            ),
+            SourcePoint::Nth("debug_assert_eq!(values.as_ptr(), allocation_ptr)", 1),
+        ],
     );
-    assert_eq!(constructor.matches("push_secret_scalar_v1(").count(), 0);
-    let helios_decode = constructor
-        .find("let scalar = decode_secret_helioselene_scalar_v1(encoded)?")
-        .expect("owned Helioselene decode");
-    let first_branch_preflight = constructor
-        .find("require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?")
-        .expect("Helioselene destination preflight");
-    let helios_handoff = constructor[helios_decode..]
-        .find("push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?")
-        .map(|position| helios_decode + position)
-        .expect("owned Helioselene handoff");
-    let field_decode = constructor
-        .find("let scalar = decode_secret_field25519_scalar_v1(encoded)?")
-        .expect("owned Field25519 decode");
-    let second_branch_preflight = constructor[helios_handoff..]
-        .find("require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?")
-        .map(|position| helios_handoff + position)
-        .expect("Field25519 destination preflight");
-    let field_handoff = constructor[field_decode..]
-        .find("push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?")
-        .map(|position| field_decode + position)
-        .expect("owned Field25519 handoff");
-    assert!(first_branch_preflight < helios_decode && helios_decode < helios_handoff);
-    assert!(helios_handoff < second_branch_preflight && second_branch_preflight < field_decode);
-    assert!(field_decode < field_handoff);
-    assert!(!constructor.contains("decoded_branch.push(decode_"));
-    assert!(!constructor.contains("decode_helioselene_scalar(*encoded)"));
-    assert!(!constructor.contains("decode_field25519_scalar(*encoded)"));
-    let lifecycle = source
-        .split_once("impl Zeroize for FcmpProverInputV1")
-        .expect("prover-input zeroize")
-        .1
-        .split_once("impl core::fmt::Debug for FcmpProverInputV1")
-        .expect("prover-input lifecycle boundary")
-        .0;
-    assert_eq!(lifecycle.matches(".zeroize()").count(), 7);
-    assert!(lifecycle.contains("impl Drop for FcmpProverInputV1"));
-    assert!(lifecycle.contains("self.zeroize();"));
-
-    let owned_cycle_push = source
-        .split_once("fn push_owned_secret_cycle_scalar_v1<F: ProofScalar + Zeroize>(")
-        .expect("owned cycle scalar insertion")
-        .1
-        .split_once("fn push_secret_scalar_v1<F: ProofScalar + Zeroize>(")
-        .expect("owned cycle scalar insertion boundary")
-        .0;
-    let steps = [
-        "let allocation_capacity = values.capacity()",
-        "let allocation_ptr = values.as_ptr()",
-        "let preflight = require_preallocated_push(values.len(), allocation_capacity)",
-        "if let Err(error) = preflight",
-        "drop(value)",
-        "values.push(F::ZERO)",
-        "let destination = values.len() - 1",
-        "value.move_into(&mut values[destination])",
-    ];
-    let positions = steps.map(|step| {
-        owned_cycle_push
-            .find(step)
-            .unwrap_or_else(|| panic!("missing owned cycle insertion step {step}"))
-    });
-    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-    let transfer = owned_cycle_push
-        .find("value.move_into(&mut values[destination])")
-        .expect("owned cycle scalar transfer");
-    let post_capacity = owned_cycle_push[transfer..]
-        .find("debug_assert_eq!(values.capacity(), allocation_capacity)")
-        .map(|position| transfer + position)
-        .expect("post-transfer capacity check");
-    let post_pointer = owned_cycle_push[post_capacity..]
-        .find("debug_assert_eq!(values.as_ptr(), allocation_ptr)")
-        .map(|position| post_capacity + position)
-        .expect("post-transfer pointer check");
-    assert!(transfer < post_capacity && post_capacity < post_pointer);
-    assert_eq!(
-        owned_cycle_push
-            .matches("debug_assert_eq!(values.capacity(), allocation_capacity)")
-            .count(),
-        2
+    source_counts!(owned_cycle_push;
+        "debug_assert_eq!(values.capacity(), allocation_capacity)" => 2,
+        "debug_assert_eq!(values.as_ptr(), allocation_ptr)" => 2,
+        "drop(value)" => 1,
+        "values.push(F::ZERO)" => 1,
+        "value.move_into(" => 1,
     );
-    assert_eq!(
-        owned_cycle_push
-            .matches("debug_assert_eq!(values.as_ptr(), allocation_ptr)")
-            .count(),
-        2
-    );
-    assert_eq!(owned_cycle_push.matches("drop(value)").count(), 1);
-    assert_eq!(owned_cycle_push.matches("values.push(F::ZERO)").count(), 1);
-    assert_eq!(owned_cycle_push.matches("value.move_into(").count(), 1);
-    for forbidden in [
+    source_lacks!(owned_cycle_push;
         "value.expose_copy()",
         "value.as_ref()",
         "values.push(*",
@@ -244,12 +141,7 @@ fn prover_input_constructor_takes_secret_bytes_before_validation() {
         "callback",
         "FnOnce",
         "Deref",
-    ] {
-        assert!(
-            !owned_cycle_push.contains(forbidden),
-            "retained owned cycle insertion {forbidden}"
-        );
-    }
+    );
 }
 #[test]
 fn prover_input_scalar_owner_handoff_covers_every_exit() {

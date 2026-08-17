@@ -1217,7 +1217,7 @@ TSV has
 SHA-256
 `5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
 The separate canonical production module/test TSV has SHA-256
-`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`;
+`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`;
 the newest rows bind the proposal-height namespace for exact retired attempts,
 canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical

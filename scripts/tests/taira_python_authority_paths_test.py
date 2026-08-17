@@ -694,6 +694,7 @@ def _deploy_plans(tmp_path: Path) -> tuple[SimpleNamespace, SimpleNamespace, Sim
         boi_qualified_handoff=SimpleNamespace(root=qualified_root),
         boi_qualified_inventory_sha256="3" * 64,
         boi_qualification_receipt_id="4" * 64,
+        binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
         cargo_lock_sha256="5" * 64,
         dpn_validator_release_commit="6" * 40,
         receipt_id="7" * 64,
@@ -701,10 +702,14 @@ def _deploy_plans(tmp_path: Path) -> tuple[SimpleNamespace, SimpleNamespace, Sim
         reset_manifest_sha256="9" * 64,
         restart_generation="a" * 64,
         source_commit="b" * 40,
+        supervisor_sha256=hashlib.sha256(supervisor.read_bytes()).hexdigest(),
         workspace_source_manifest_sha256="c" * 64,
     )
     bundle = SimpleNamespace(
         root=bundle_root,
+        bundle_bytes=1,
+        free_bytes=deploy.DEFAULT_MINIMUM_FREE_BYTES,
+        fsync_latency_ms=1.0,
         manifest_sha256="d" * 64,
         peers=tuple(peers),
     )
@@ -715,6 +720,58 @@ def _deploy_plans(tmp_path: Path) -> tuple[SimpleNamespace, SimpleNamespace, Sim
         supervisor_sha256=hashlib.sha256(supervisor.read_bytes()).hexdigest(),
     )
     return admission, bundle, sources
+
+
+def test_deploy_public_dry_run_uses_authenticated_nonconsuming_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeAuthority()
+    fake.install(monkeypatch)
+    admission, bundle, sources = _deploy_plans(tmp_path)
+    monkeypatch.setattr(deploy, "require_sealed_external_tool_identity", lambda: None)
+    monkeypatch.setattr(deploy, "validate_arguments", lambda _args: None)
+    monkeypatch.setattr(
+        deploy, "verify_deployment_admission", lambda _args: admission
+    )
+    monkeypatch.setattr(deploy, "validate_bundle", lambda *_args, **_kwargs: bundle)
+    monkeypatch.setattr(deploy, "validate_sources", lambda *_args, **_kwargs: sources)
+    monkeypatch.setattr(deploy, "require_inputs_match_admission", lambda *_args: None)
+    monkeypatch.setattr(
+        deploy, "require_admission_archive_unchanged", lambda _admission: None
+    )
+    monkeypatch.setattr(
+        deploy,
+        "capture_old_cohort",
+        lambda *_args, **_kwargs: tuple(
+            SimpleNamespace(
+                path=tmp_path / f"{slug}.plist",
+                managed=SimpleNamespace(child_was_present=True),
+            )
+            for slug in deploy.SLUGS
+        ),
+    )
+    args = argparse.Namespace(
+        allow_absent_old_child=False,
+        apply=False,
+        bundle=bundle.root,
+        expected_dpn_validator_release_commit=(
+            admission.dpn_validator_release_commit
+        ),
+        expected_production_reset_manifest_sha256=admission.reset_manifest_sha256,
+        expected_source_commit=admission.source_commit,
+        maximum_fsync_latency_ms=deploy.DEFAULT_MAXIMUM_FSYNC_LATENCY_MS,
+        minimum_free_bytes=deploy.DEFAULT_MINIMUM_FREE_BYTES,
+    )
+    report = deploy.execute(args, ops=SimpleNamespace())
+    assert report["mode"] == "verified-read-only-dry-run"
+    assert report["admission_receipt_consumed"] is False
+    assert report["deploy_authority_status"] == "verified"
+    assert fake.apply_consumptions == 0
+    assert fake.finalizations == 0
+    assert [event[:2] for event in fake.events] == [
+        ("preflight", "deploy-issuance"),
+        ("authorize", "deploy-issuance"),
+    ]
 
 
 def test_deploy_fake_lease_dry_run_apply_and_finalize_semantics(

@@ -1296,16 +1296,12 @@ mod tests {
             NonZeroU32::new(lane_count).expect("lane count"),
             mappings
                 .iter()
-                .map(|(lane_id, shard_id)| {
-                    let mut metadata = BTreeMap::new();
-                    metadata.insert("da_shard_id".to_string(), shard_id.to_string());
-                    ModelLaneConfig {
-                        id: LaneId::new(*lane_id),
-                        dataspace_id: DataSpaceId::UNIVERSAL,
-                        alias: format!("lane{lane_id}"),
-                        metadata,
-                        ..ModelLaneConfig::default()
-                    }
+                .map(|(lane_id, shard_id)| ModelLaneConfig {
+                    id: LaneId::new(*lane_id),
+                    shard_id: Some(ShardId::new(*shard_id)),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    alias: format!("lane{lane_id}"),
+                    ..ModelLaneConfig::default()
                 })
                 .collect(),
         )
@@ -1455,16 +1451,12 @@ mod tests {
     fn record_records_rolls_back_when_later_record_regresses() {
         let lane_config = {
             let lanes = (0..=1)
-                .map(|lane_id| {
-                    let mut metadata = BTreeMap::new();
-                    metadata.insert("da_shard_id".to_string(), lane_id.to_string());
-                    ModelLaneConfig {
-                        id: LaneId::new(lane_id),
-                        dataspace_id: DataSpaceId::UNIVERSAL,
-                        alias: format!("lane{lane_id}"),
-                        metadata,
-                        ..ModelLaneConfig::default()
-                    }
+                .map(|lane_id| ModelLaneConfig {
+                    id: LaneId::new(lane_id),
+                    shard_id: Some(ShardId::new(lane_id)),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    alias: format!("lane{lane_id}"),
+                    ..ModelLaneConfig::default()
                 })
                 .collect();
             let catalog = LaneCatalog::new(NonZeroU32::new(2).expect("lane count"), lanes)
@@ -1560,6 +1552,7 @@ mod tests {
             NonZeroU32::new(1).expect("lane count"),
             vec![ModelLaneConfig {
                 id: LaneId::new(0),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "lane".to_string(),
                 description: None,
@@ -2113,11 +2106,7 @@ mod tests {
                 ModelLaneConfig {
                     id: LaneId::new(1),
                     alias: "lane1".into(),
-                    metadata: {
-                        let mut map = BTreeMap::new();
-                        map.insert("da_shard_id".to_string(), "5".to_string());
-                        map
-                    },
+                    shard_id: Some(ShardId::new(5)),
                     ..ModelLaneConfig::default()
                 },
             ],

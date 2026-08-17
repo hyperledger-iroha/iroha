@@ -639,7 +639,7 @@ impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
         dataspace_id: DataSpaceId,
         height: u64,
     ) -> bool {
-        crate::state::nexus_active_lane_dataspace_at_height(lane_id, self.nexus(), height)
+        crate::state::consensus_lane_dataspace_at_height(lane_id, self.nexus(), height)
             == Some(dataspace_id)
     }
     fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {

@@ -5,6 +5,7 @@
 //! encrypted Ed25519 key, one administrator-issued run ledger, one consume-once
 //! replay ledger, and one predecessor-bound audit chain.
 
+mod native_evidence;
 mod protocol;
 mod sandbox;
 mod service;

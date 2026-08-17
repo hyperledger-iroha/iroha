@@ -1085,7 +1085,7 @@ impl SumeragiRelayCapacityGeometry {
 /// Terminal disposition of one exact daemon relay occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SumeragiRelayTerminalOutcome {
-    /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
+    /// Ordinary ingress accepted or coalesced.
     Delivered,
     /// Its authenticated reply authority retired before ingress succeeded.
     Retired,
@@ -2491,7 +2491,7 @@ fn obsolete_sumeragi_relay_terminal_meta(
     SumeragiRelayTerminalOutcome,
 )> {
     NetworkRelayShared::retired_sumeragi_message_meta(message)
-        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
+        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Failed))
 }
 fn certified_merge_sidecar_ingress_reply_route(
     _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
@@ -5428,11 +5428,11 @@ mod network_relay_tests {
         );
     }
     #[test]
-    fn obsolete_sumeragi_relay_message_completes_as_delivered() {
+    fn obsolete_sumeragi_relay_message_fails_closed() {
         assert_eq!(
             obsolete_sumeragi_relay_terminal_meta(&retired_vrf_commit_msg())
                 .map(|(_, _, _, outcome)| outcome),
-            Some(SumeragiRelayTerminalOutcome::Delivered)
+            Some(SumeragiRelayTerminalOutcome::Failed)
         );
         assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
     }

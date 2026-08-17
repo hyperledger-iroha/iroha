@@ -1688,16 +1688,11 @@ fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
             alice_id.clone(),
         ))],
     );
-    let state = state_with_asset_definitions(
-        vec![
-            AssetDefinition::numeric(
-                asset_definition,
-                "voucher".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&bob_id),
-        ],
+    let state = state_with_bound_numeric_asset_definition(
+        &asset_definition,
+        "voucher#bob",
+        "voucher",
+        &bob_id,
         router.dataspace_catalog.as_ref().clone(),
         router.lane_catalog.as_ref().clone(),
     );

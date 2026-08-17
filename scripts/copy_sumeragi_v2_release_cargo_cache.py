@@ -11,10 +11,12 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import secrets
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -167,6 +169,1235 @@ VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
 class CacheCopyError(RuntimeError):
     """The inherited Cargo cache is unsafe, unstable, or too large."""
+
+
+_MACHO_MAGIC = {
+    b"\xce\xfa\xed\xfe": ("<", False),
+    b"\xfe\xed\xfa\xce": (">", False),
+    b"\xcf\xfa\xed\xfe": ("<", True),
+    b"\xfe\xed\xfa\xcf": (">", True),
+}
+_MACHO_FAT_MAGIC = {
+    b"\xca\xfe\xba\xbe": (">", False),
+    b"\xbe\xba\xfe\xca": ("<", False),
+    b"\xca\xfe\xba\xbf": (">", True),
+    b"\xbf\xba\xfe\xca": ("<", True),
+}
+_MACHO_DEPENDENCY_COMMANDS = frozenset(
+    {
+        0x0C,  # LC_LOAD_DYLIB
+        0x18 | 0x80000000,  # LC_LOAD_WEAK_DYLIB
+        0x1F | 0x80000000,  # LC_REEXPORT_DYLIB
+        0x20,  # LC_LAZY_LOAD_DYLIB
+        0x23 | 0x80000000,  # LC_LOAD_UPWARD_DYLIB
+    }
+)
+_MACHO_ID_DYLIB = 0x0D
+_MACHO_RPATH = 0x1C | 0x80000000
+_MACHO_CODE_SIGNATURE = 0x1D
+_MACHO_SEGMENT = 0x01
+_MACHO_SEGMENT_64 = 0x19
+_MACHO_MAX_SLICES = 64
+_MACHO_MAX_COMMANDS = 4096
+
+
+def _macho_uint(
+    data: bytes, offset: int, size: int, endian: str, limit: int, label: str,
+) -> int:
+    if offset < 0 or size not in {4, 8} or offset + size > limit:
+        raise CacheCopyError(f"Mach-O {label} is out of bounds")
+    code = "I" if size == 4 else "Q"
+    return int(struct.unpack_from(endian + code, data, offset)[0])
+
+
+def _macho_c_string(
+    data: bytes, start: int, limit: int, label: str,
+) -> str:
+    if start < 0 or start >= limit:
+        raise CacheCopyError(f"Mach-O {label} offset is out of bounds")
+    end = data.find(b"\0", start, limit)
+    if end < 0:
+        raise CacheCopyError(f"Mach-O {label} is not NUL terminated")
+    if any(data[end + 1:limit]):
+        raise CacheCopyError(f"Mach-O {label} has nonzero command padding")
+    try:
+        value = data[start:end].decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise CacheCopyError(f"Mach-O {label} is not UTF-8") from error
+    if not value or "\0" in value or "\n" in value or "\r" in value:
+        raise CacheCopyError(f"Mach-O {label} is unsafe")
+    return value
+
+
+def _parse_macho_thin(
+    data: bytes, offset: int, size: int, label: str,
+) -> dict[str, object]:
+    """Strictly parse one bounded thin Mach-O slice."""
+
+    limit = offset + size
+    if offset < 0 or size < 4 or limit > len(data):
+        raise CacheCopyError(f"Mach-O slice is out of bounds: {label}")
+    format_value = _MACHO_MAGIC.get(data[offset:offset + 4])
+    if format_value is None:
+        raise CacheCopyError(f"Mach-O slice has unsupported magic: {label}")
+    endian, is_64 = format_value
+    header_size = 32 if is_64 else 28
+    if size < header_size:
+        raise CacheCopyError(f"Mach-O header is truncated: {label}")
+    cpu_type = _macho_uint(data, offset + 4, 4, endian, limit, "CPU type")
+    cpu_subtype = _macho_uint(
+        data, offset + 8, 4, endian, limit, "CPU subtype",
+    )
+    file_type = _macho_uint(data, offset + 12, 4, endian, limit, "file type")
+    command_count = _macho_uint(
+        data, offset + 16, 4, endian, limit, "load-command count",
+    )
+    command_bytes = _macho_uint(
+        data, offset + 20, 4, endian, limit, "load-command byte length",
+    )
+    if command_count == 0 or command_count > _MACHO_MAX_COMMANDS:
+        raise CacheCopyError(f"Mach-O load-command count is invalid: {label}")
+    command_start = offset + header_size
+    command_end = command_start + command_bytes
+    if command_end < command_start or command_end > limit:
+        raise CacheCopyError(f"Mach-O load-command table is out of bounds: {label}")
+
+    commands: list[dict[str, object]] = []
+    cursor = command_start
+    code_signature: dict[str, int] | None = None
+    linkedit: dict[str, int] | None = None
+    for index in range(command_count):
+        if cursor + 8 > command_end:
+            raise CacheCopyError(f"Mach-O load command is truncated: {label}")
+        command = _macho_uint(data, cursor, 4, endian, command_end, "command")
+        command_size = _macho_uint(
+            data, cursor + 4, 4, endian, command_end, "command size",
+        )
+        if (
+            command_size < 8
+            or command_size % 4 != 0
+            or cursor + command_size > command_end
+        ):
+            raise CacheCopyError(f"Mach-O load-command size is invalid: {label}")
+        record: dict[str, object] = {
+            "index": index,
+            "command": command,
+            "offset": cursor,
+            "size": command_size,
+            "raw": data[cursor:cursor + command_size],
+        }
+        if command in _MACHO_DEPENDENCY_COMMANDS | {_MACHO_ID_DYLIB}:
+            if command_size < 24:
+                raise CacheCopyError(f"Mach-O dylib command is truncated: {label}")
+            name_offset = _macho_uint(
+                data, cursor + 8, 4, endian, cursor + command_size,
+                "install-name",
+            )
+            if name_offset < 24:
+                raise CacheCopyError(f"Mach-O install-name offset is invalid: {label}")
+            record.update(
+                {
+                    "name": _macho_c_string(
+                        data, cursor + name_offset, cursor + command_size,
+                        "install-name",
+                    ),
+                    "name_offset": name_offset,
+                    "timestamp": _macho_uint(
+                        data, cursor + 12, 4, endian, cursor + command_size,
+                        "dylib timestamp",
+                    ),
+                    "current_version": _macho_uint(
+                        data, cursor + 16, 4, endian, cursor + command_size,
+                        "dylib current version",
+                    ),
+                    "compatibility_version": _macho_uint(
+                        data, cursor + 20, 4, endian, cursor + command_size,
+                        "dylib compatibility version",
+                    ),
+                }
+            )
+        elif command == _MACHO_RPATH:
+            if command_size < 12:
+                raise CacheCopyError(f"Mach-O rpath command is truncated: {label}")
+            path_offset = _macho_uint(
+                data, cursor + 8, 4, endian, cursor + command_size, "rpath",
+            )
+            if path_offset < 12:
+                raise CacheCopyError(f"Mach-O rpath offset is invalid: {label}")
+            record.update(
+                {
+                    "name": _macho_c_string(
+                        data, cursor + path_offset, cursor + command_size,
+                        "rpath",
+                    ),
+                    "name_offset": path_offset,
+                }
+            )
+        elif command == _MACHO_CODE_SIGNATURE:
+            if command_size != 16 or code_signature is not None:
+                raise CacheCopyError(
+                    f"Mach-O code-signature command is invalid: {label}"
+                )
+            data_offset = _macho_uint(
+                data, cursor + 8, 4, endian, cursor + command_size,
+                "code-signature offset",
+            )
+            data_size = _macho_uint(
+                data, cursor + 12, 4, endian, cursor + command_size,
+                "code-signature size",
+            )
+            if (
+                data_size == 0
+                or data_offset < command_end - offset
+                or data_offset + data_size > size
+            ):
+                raise CacheCopyError(f"Mach-O code signature is out of bounds: {label}")
+            code_signature = {
+                "command_offset": cursor,
+                "data_offset": offset + data_offset,
+                "data_size": data_size,
+            }
+        elif command in {_MACHO_SEGMENT, _MACHO_SEGMENT_64}:
+            segment_64 = command == _MACHO_SEGMENT_64
+            minimum = 72 if segment_64 else 56
+            if command_size < minimum:
+                raise CacheCopyError(f"Mach-O segment command is truncated: {label}")
+            segment_name = data[cursor + 8:cursor + 24]
+            zero = segment_name.find(b"\0")
+            rendered_segment = segment_name if zero < 0 else segment_name[:zero]
+            if rendered_segment == b"__LINKEDIT":
+                if linkedit is not None:
+                    raise CacheCopyError(f"Mach-O __LINKEDIT is duplicated: {label}")
+                word_size = 8 if segment_64 else 4
+                file_offset_field = cursor + (40 if segment_64 else 32)
+                file_size_field = cursor + (48 if segment_64 else 36)
+                linkedit = {
+                    "command_offset": cursor,
+                    "vm_size_offset": cursor + (32 if segment_64 else 28),
+                    "file_offset": _macho_uint(
+                        data, file_offset_field, word_size, endian,
+                        cursor + command_size, "__LINKEDIT offset",
+                    ),
+                    "file_size_offset": file_size_field,
+                    "file_size": _macho_uint(
+                        data, file_size_field, word_size, endian,
+                        cursor + command_size, "__LINKEDIT size",
+                    ),
+                    "word_size": word_size,
+                }
+        commands.append(record)
+        cursor += command_size
+    if cursor != command_end:
+        raise CacheCopyError(f"Mach-O load-command byte length disagrees: {label}")
+    if code_signature is not None:
+        signature_end = code_signature["data_offset"] + code_signature["data_size"]
+        if signature_end != limit:
+            raise CacheCopyError(f"Mach-O code signature is not final: {label}")
+        if linkedit is None:
+            raise CacheCopyError(f"Mach-O signed image lacks __LINKEDIT: {label}")
+        linkedit_end = (
+            offset + linkedit["file_offset"] + linkedit["file_size"]
+        )
+        if linkedit_end != limit:
+            raise CacheCopyError(
+                f"Mach-O __LINKEDIT does not contain its signature: {label}"
+            )
+    return {
+        "offset": offset,
+        "size": size,
+        "endian": endian,
+        "is_64": is_64,
+        "cpu_type": cpu_type,
+        "cpu_subtype": cpu_subtype,
+        "file_type": file_type,
+        "header_size": header_size,
+        "command_start": command_start,
+        "command_end": command_end,
+        "command_count": command_count,
+        "command_bytes": command_bytes,
+        "commands": commands,
+        "code_signature": code_signature,
+        "linkedit": linkedit,
+    }
+
+
+def _parse_macho(data: bytes, label: str) -> list[dict[str, object]] | None:
+    """Return strict slice metadata, or ``None`` for a non-Mach-O file."""
+
+    if len(data) < 4:
+        return None
+    if data[:4] in _MACHO_MAGIC:
+        return [_parse_macho_thin(data, 0, len(data), label)]
+    fat_format = _MACHO_FAT_MAGIC.get(data[:4])
+    if fat_format is None:
+        return None
+    endian, fat_64 = fat_format
+    if len(data) < 8:
+        raise CacheCopyError(f"Mach-O fat header is truncated: {label}")
+    count = _macho_uint(data, 4, 4, endian, len(data), "fat slice count")
+    if count == 0 or count > _MACHO_MAX_SLICES:
+        raise CacheCopyError(f"Mach-O fat slice count is invalid: {label}")
+    entry_size = 32 if fat_64 else 20
+    table_end = 8 + count * entry_size
+    if table_end > len(data):
+        raise CacheCopyError(f"Mach-O fat slice table is truncated: {label}")
+    ranges: list[tuple[int, int]] = []
+    slices: list[dict[str, object]] = []
+    seen_architectures: set[tuple[int, int]] = set()
+    for index in range(count):
+        cursor = 8 + index * entry_size
+        cpu_type = _macho_uint(
+            data, cursor, 4, endian, table_end, "fat CPU type",
+        )
+        cpu_subtype = _macho_uint(
+            data, cursor + 4, 4, endian, table_end, "fat CPU subtype",
+        )
+        word_size = 8 if fat_64 else 4
+        slice_offset = _macho_uint(
+            data, cursor + 8, word_size, endian, table_end, "fat slice offset",
+        )
+        slice_size = _macho_uint(
+            data, cursor + 8 + word_size, word_size, endian, table_end,
+            "fat slice size",
+        )
+        align_offset = cursor + (24 if fat_64 else 16)
+        alignment = _macho_uint(
+            data, align_offset, 4, endian, table_end, "fat slice alignment",
+        )
+        if (
+            slice_size == 0
+            or slice_offset < table_end
+            or slice_offset + slice_size > len(data)
+            or alignment > 63
+            or slice_offset % (1 << alignment) != 0
+        ):
+            raise CacheCopyError(f"Mach-O fat slice is out of bounds: {label}")
+        architecture = (cpu_type, cpu_subtype)
+        if architecture in seen_architectures:
+            raise CacheCopyError(f"Mach-O fat architecture is duplicated: {label}")
+        seen_architectures.add(architecture)
+        ranges.append((slice_offset, slice_offset + slice_size))
+        parsed = _parse_macho_thin(data, slice_offset, slice_size, label)
+        if (
+            parsed["cpu_type"] != cpu_type
+            or parsed["cpu_subtype"] != cpu_subtype
+        ):
+            raise CacheCopyError(f"Mach-O fat architecture disagrees: {label}")
+        slices.append(parsed)
+    ordered = sorted(ranges)
+    if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
+        raise CacheCopyError(f"Mach-O fat slices overlap: {label}")
+    return slices
+
+
+_MACHO_SYSTEM_PREFIXES = ("/System/Library/", "/usr/lib/")
+_MACHO_DEPENDENCY_DIRECTORY = "iroha-loader-deps"
+_MACHO_SAFE_BASENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+_MACHO_TRANSCRIPT_FORMAT = "iroha-sumeragi-v2-framework-python-mach-o-transcript"
+_MACHO_TOOL_ARCHIVES = {
+    "install_name_tool": (
+        "release-bootstrap.install-name-tool.v1",
+        "mach-o-tools/bin/install_name_tool",
+    ),
+    "install_name_tool_library": (
+        "release-bootstrap.install-name-tool-libcodedirectory.v1",
+        "mach-o-tools/lib/libcodedirectory.dylib",
+    ),
+    "codesign": (
+        "release-bootstrap.codesign.v1",
+        "mach-o-tools/bin/codesign",
+    ),
+}
+
+
+def _macho_digest_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "strict")).hexdigest()
+
+
+def _macho_path_parts(value: str, label: str) -> tuple[str, ...]:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or path.is_absolute()
+        or path.as_posix() != value
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise CacheCopyError(f"Mach-O archive path is unsafe: {label}")
+    _bounded_relative(value)
+    return path.parts
+
+
+def _macho_archive_join(parent: str, value: str, label: str) -> str:
+    rendered = posixpath.normpath(posixpath.join(parent, value))
+    if rendered in {"", ".", ".."} or rendered.startswith("../"):
+        raise CacheCopyError(f"Mach-O install-name escapes its archive: {label}")
+    _macho_path_parts(rendered, label)
+    return rendered
+
+
+def _macho_source_file(
+    path: Path, archive_path: str, label: str,
+) -> dict[str, object] | None:
+    """Read one stable source and return it only when it is Mach-O."""
+
+    _macho_path_parts(archive_path, label)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise CacheCopyError(f"Mach-O dependency is unavailable: {label}") from error
+    if resolved != path:
+        path = resolved
+    data, metadata = _read_regular(path, label)
+    if (
+        metadata.st_uid not in {0, os.geteuid()}
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or metadata.st_nlink != 1
+    ):
+        raise CacheCopyError(f"Mach-O source metadata is unsafe: {label}")
+    slices = _parse_macho(data, label)
+    if slices is None:
+        return None
+    return {
+        "source": path,
+        "archive_path": archive_path,
+        "data": data,
+        "metadata": metadata,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "slices": slices,
+    }
+
+
+def _framework_python_internal_macho_images(
+    version_root: Path,
+    source_python: Path,
+    framework: str,
+    stdlib_name: str,
+) -> dict[Path, dict[str, object]]:
+    """Read every Mach-O image in the isolated framework source closure."""
+
+    omitted = _framework_python_omitted_paths(stdlib_name)
+    sources: list[tuple[Path, str]] = [
+        (source_python, "bin/python3"),
+        (version_root / framework, framework),
+    ]
+    for root_name in ("Resources", "lib"):
+        root = version_root / root_name
+        pending = [(root, root_name)]
+        while pending:
+            directory, relative = pending.pop()
+            try:
+                entries = tuple(sorted(os.scandir(directory), key=lambda item: item.name))
+            except OSError as error:
+                raise CacheCopyError(
+                    f"could not discover framework Mach-O sources: {relative}"
+                ) from error
+            for entry in entries:
+                child_relative = f"{relative}/{entry.name}"
+                if _path_is_omitted(child_relative, omitted):
+                    continue
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    raise CacheCopyError(
+                        f"framework Mach-O source is unavailable: {child_relative}"
+                    ) from error
+                if stat.S_ISDIR(metadata.st_mode):
+                    pending.append((Path(entry.path), child_relative))
+                elif stat.S_ISREG(metadata.st_mode):
+                    sources.append((Path(entry.path), child_relative))
+                elif not stat.S_ISLNK(metadata.st_mode):
+                    raise CacheCopyError(
+                        f"framework Mach-O source is special: {child_relative}"
+                    )
+
+    images: dict[Path, dict[str, object]] = {}
+    archive_paths: set[str] = set()
+    for source, archive_path in sorted(sources, key=lambda item: item[1]):
+        image = _macho_source_file(
+            source, archive_path, f"framework Mach-O {archive_path}",
+        )
+        if image is None:
+            continue
+        resolved = source.resolve(strict=True)
+        if resolved in images or archive_path in archive_paths:
+            raise CacheCopyError("framework Mach-O image mapping is not unique")
+        images[resolved] = image
+        archive_paths.add(archive_path)
+    return images
+
+
+def _macho_rpaths(slices: list[dict[str, object]], label: str) -> tuple[str, ...]:
+    observed: tuple[str, ...] | None = None
+    for slice_value in slices:
+        commands = slice_value["commands"]
+        assert isinstance(commands, list)
+        current = tuple(
+            str(command["name"])
+            for command in commands
+            if command["command"] == _MACHO_RPATH
+        )
+        if observed is None:
+            observed = current
+        elif current != observed:
+            raise CacheCopyError(f"Mach-O slice rpaths disagree: {label}")
+    return observed or ()
+
+
+def _resolve_macho_source_name(
+    name: str,
+    image: dict[str, object],
+    source_python: Path,
+    *,
+    rpaths: tuple[str, ...],
+) -> Path | None:
+    """Resolve one non-system source dependency without loader fallbacks."""
+
+    if name.startswith(_MACHO_SYSTEM_PREFIXES):
+        return None
+    source = image["source"]
+    slices = image["slices"]
+    assert isinstance(source, Path) and isinstance(slices, list)
+    file_types = {int(slice_value["file_type"]) for slice_value in slices}
+    if len(file_types) != 1:
+        raise CacheCopyError("Mach-O slice file types disagree")
+    executable_parent = source.parent if file_types == {2} else source_python.parent
+
+    def expand(value: str) -> Path | None:
+        if value.startswith("@loader_path/"):
+            return source.parent / value.removeprefix("@loader_path/")
+        if value.startswith("@executable_path/"):
+            return executable_parent / value.removeprefix("@executable_path/")
+        if value.startswith("/"):
+            return Path(value)
+        return None
+
+    candidates: list[Path] = []
+    if name.startswith("@rpath/"):
+        suffix = name.removeprefix("@rpath/")
+        for rpath in rpaths:
+            expanded = expand(rpath)
+            if expanded is not None:
+                candidates.append(expanded / suffix)
+    else:
+        expanded = expand(name)
+        if expanded is not None:
+            candidates.append(expanded)
+    resolved: list[Path] = []
+    for candidate in candidates:
+        try:
+            value = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if value not in resolved:
+            resolved.append(value)
+    if len(resolved) != 1:
+        raise CacheCopyError(
+            "Mach-O dependency does not resolve to exactly one source: "
+            f"{image['archive_path']}"
+        )
+    return resolved[0]
+
+
+def _framework_python_macho_closure(
+    version_root: Path,
+    source_python: Path,
+    framework: str,
+    stdlib_name: str,
+) -> tuple[dict[Path, dict[str, object]], dict[str, Path]]:
+    """Discover the exact recursive non-system framework loader closure."""
+
+    images = _framework_python_internal_macho_images(
+        version_root, source_python, framework, stdlib_name,
+    )
+    by_archive = {
+        str(image["archive_path"]): source for source, image in images.items()
+    }
+    pending = list(sorted(images))
+    external_sources: dict[str, Path] = {}
+    while pending:
+        source = pending.pop(0)
+        image = images[source]
+        slices = image["slices"]
+        assert isinstance(slices, list)
+        rpaths = _macho_rpaths(slices, str(image["archive_path"]))
+        dependency_names: set[str] = set()
+        for slice_value in slices:
+            commands = slice_value["commands"]
+            assert isinstance(commands, list)
+            for command in commands:
+                if command["command"] in _MACHO_DEPENDENCY_COMMANDS:
+                    dependency_names.add(str(command["name"]))
+        for name in sorted(dependency_names):
+            target = _resolve_macho_source_name(
+                name, image, source_python, rpaths=rpaths,
+            )
+            if target is None or target in images:
+                continue
+            basename = target.name
+            if _MACHO_SAFE_BASENAME_RE.fullmatch(basename) is None:
+                raise CacheCopyError("Mach-O dependency basename is unsafe")
+            target_data, target_metadata = _read_regular(
+                target, "external framework Mach-O dependency",
+            )
+            target_digest = hashlib.sha256(target_data).hexdigest()
+            archive_path = (
+                f"lib/{stdlib_name}/{_MACHO_DEPENDENCY_DIRECTORY}/"
+                f"{target_digest}-{basename}"
+            )
+            if archive_path in by_archive and by_archive[archive_path] != target:
+                raise CacheCopyError("Mach-O dependency archive name collides")
+            target_image = _macho_source_file(
+                target, archive_path, "external framework Mach-O dependency",
+            )
+            if target_image is None:
+                raise CacheCopyError("external framework dependency is not Mach-O")
+            if (
+                target_image["metadata"].st_dev != target_metadata.st_dev
+                or target_image["metadata"].st_ino != target_metadata.st_ino
+                or target_image["sha256"] != target_digest
+            ):
+                raise CacheCopyError("external framework dependency changed")
+            images[target] = target_image
+            by_archive[archive_path] = target
+            external_sources[archive_path] = target
+            pending.append(target)
+            pending.sort()
+    return images, external_sources
+
+
+def _macho_relative_install_name(source_archive: str, target_archive: str) -> str:
+    relative = posixpath.relpath(
+        target_archive, posixpath.dirname(source_archive) or ".",
+    )
+    if relative in {"", ".", ".."} or relative.startswith("../../../../../../"):
+        raise CacheCopyError("Mach-O relative install-name is unsafe")
+    return "@loader_path/" + relative
+
+
+def _framework_python_macho_plan(
+    images: dict[Path, dict[str, object]], source_python: Path,
+) -> list[dict[str, object]]:
+    """Return the deterministic path-free rewrite plan for the closure."""
+
+    source_to_archive = {
+        source: str(image["archive_path"]) for source, image in images.items()
+    }
+    plan: list[dict[str, object]] = []
+    for source, image in sorted(
+        images.items(), key=lambda item: str(item[1]["archive_path"]),
+    ):
+        archive_path = str(image["archive_path"])
+        slices = image["slices"]
+        assert isinstance(slices, list)
+        rpaths = _macho_rpaths(slices, archive_path)
+        slice_operations: list[tuple[tuple[object, ...], ...]] = []
+        for slice_value in slices:
+            commands = slice_value["commands"]
+            assert isinstance(commands, list)
+            operations: list[tuple[object, ...]] = []
+            for command in commands:
+                command_value = int(command["command"])
+                if command_value in _MACHO_DEPENDENCY_COMMANDS:
+                    old = str(command["name"])
+                    target = _resolve_macho_source_name(
+                        old, image, source_python, rpaths=rpaths,
+                    )
+                    if target is None:
+                        continue
+                    target_archive = source_to_archive.get(target)
+                    if target_archive is None:
+                        raise CacheCopyError("Mach-O dependency escaped its closure")
+                    if archive_path == "bin/python3":
+                        replacement = "@executable_path/../" + target_archive
+                    elif archive_path == "Resources/Python.app/Contents/MacOS/Python":
+                        replacement = "@executable_path/../../../../" + target_archive
+                    else:
+                        replacement = _macho_relative_install_name(
+                            archive_path, target_archive,
+                        )
+                    if old != replacement:
+                        operations.append(("change", old, replacement))
+            slice_operations.append(tuple(sorted(set(operations))))
+        if not slice_operations:
+            continue
+        if any(value != slice_operations[0] for value in slice_operations[1:]):
+            raise CacheCopyError(
+                f"Mach-O slice rewrite plans disagree: {archive_path}"
+            )
+        operations = slice_operations[0]
+        if operations:
+            plan.append(
+                {
+                    "path": archive_path,
+                    "source": source,
+                    "source_sha256": image["sha256"],
+                    "source_size": len(image["data"]),
+                    "operations": operations,
+                }
+            )
+    return plan
+
+
+def _validate_framework_python_macho_plan(
+    plan: list[dict[str, object]], version_root: Path, framework: str,
+) -> None:
+    """Require the two exact launcher rewrites and unique dependent rewrites."""
+
+    paths = [item.get("path") for item in plan if isinstance(item, dict)]
+    if len(paths) != len(plan) or paths != sorted(paths) or len(set(paths)) != len(paths):
+        raise CacheCopyError("framework Mach-O rewrite plan is not deterministic")
+    source_name = str(version_root / framework)
+    launcher_operations = {
+        "bin/python3": (
+            ("change", source_name, "@executable_path/../" + framework),
+        ),
+        "Resources/Python.app/Contents/MacOS/Python": (
+            (
+                "change",
+                source_name,
+                "@executable_path/../../../../" + framework,
+            ),
+        ),
+    }
+    for path, expected in launcher_operations.items():
+        matches = [item for item in plan if item.get("path") == path]
+        if len(matches) != 1 or matches[0].get("operations") != expected:
+            raise CacheCopyError(
+                f"framework Mach-O launcher rewrite is not exact: {path}"
+            )
+    for item in plan:
+        path = item.get("path")
+        operations = item.get("operations")
+        if (
+            not isinstance(path, str)
+            or not isinstance(item.get("source"), Path)
+            or not isinstance(item.get("source_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", item["source_sha256"]) is None
+            or type(item.get("source_size")) is not int
+            or not 0 <= item["source_size"] <= MAXIMUM_FILE_BYTES
+            or not isinstance(operations, tuple)
+            or not operations
+            or any(
+                not isinstance(operation, tuple)
+                or len(operation) != 3
+                or operation[0] != "change"
+                or not isinstance(operation[1], str)
+                or not isinstance(operation[2], str)
+                or not operation[2].startswith(("@loader_path/", "@executable_path/"))
+                for operation in operations
+            )
+        ):
+            raise CacheCopyError("framework Mach-O rewrite plan is malformed")
+        _macho_path_parts(path, "framework Mach-O rewrite plan")
+
+
+def _macho_tool_snapshot(
+    path: Path, expected_sha256: str, label: str, *, executable: bool,
+) -> dict[str, object]:
+    if (
+        not path.is_absolute()
+        or Path(os.path.abspath(path)) != path
+        or path.resolve(strict=True) != path
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        raise CacheCopyError(f"{label} path or digest is not exact")
+    parent_fd, parent_identity = _open_directory(path.parent, f"{label} parent")
+    try:
+        before = _entry_stat(parent_fd, path.name, label)
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid not in {0, os.geteuid()}
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or before.st_nlink != 1
+            or before.st_size > MAXIMUM_FILE_BYTES
+        ):
+            raise CacheCopyError(f"{label} metadata is unsafe")
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if not _unchanged(before, opened):
+                raise CacheCopyError(f"{label} changed while opened")
+            payload = bytearray()
+            while block := os.read(descriptor, 1024 * 1024):
+                payload.extend(block)
+                if len(payload) > MAXIMUM_FILE_BYTES:
+                    raise CacheCopyError(f"{label} exceeds its bound")
+            after = os.fstat(descriptor)
+            if len(payload) != opened.st_size or not _unchanged(opened, after):
+                raise CacheCopyError(f"{label} changed while read")
+        finally:
+            os.close(descriptor)
+        _revalidate_entry(parent_fd, path.name, after, label)
+        _revalidate_directory_path(path.parent, parent_identity, f"{label} parent")
+    finally:
+        os.close(parent_fd)
+    data = bytes(payload)
+    metadata = after
+    digest = hashlib.sha256(data).hexdigest()
+    if (
+        digest != expected_sha256
+        or metadata.st_uid not in {0, os.geteuid()}
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or metadata.st_nlink != 1
+        or (executable and metadata.st_mode & 0o111 == 0)
+    ):
+        raise CacheCopyError(f"{label} is not one authenticated tool input")
+    slices = _parse_macho(data, label)
+    if slices is None:
+        raise CacheCopyError(f"{label} is not Mach-O")
+    return {
+        "path": path,
+        "data": data,
+        "metadata": metadata,
+        "sha256": digest,
+        "slices": slices,
+    }
+
+
+def _macho_tool_dependency_names(
+    snapshot: dict[str, object], label: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    slices = snapshot["slices"]
+    assert isinstance(slices, list)
+    dependencies: tuple[str, ...] | None = None
+    rpaths: tuple[str, ...] | None = None
+    for slice_value in slices:
+        commands = slice_value["commands"]
+        assert isinstance(commands, list)
+        current_dependencies = tuple(
+            str(command["name"])
+            for command in commands
+            if command["command"] in _MACHO_DEPENDENCY_COMMANDS
+        )
+        current_rpaths = tuple(
+            str(command["name"])
+            for command in commands
+            if command["command"] == _MACHO_RPATH
+        )
+        if dependencies is None:
+            dependencies = current_dependencies
+            rpaths = current_rpaths
+        elif dependencies != current_dependencies or rpaths != current_rpaths:
+            raise CacheCopyError(f"{label} Mach-O slices disagree")
+    return dependencies or (), rpaths or ()
+
+
+def _validate_framework_macho_tools(
+    install_name_tool: Path,
+    expected_install_name_tool_sha256: str,
+    install_name_tool_library: Path,
+    expected_install_name_tool_library_sha256: str,
+    codesign: Path,
+    expected_codesign_sha256: str,
+) -> dict[str, dict[str, object]]:
+    """Authenticate the exact closed Mach-O rewrite/sign tool inputs."""
+
+    snapshots = {
+        "install_name_tool": _macho_tool_snapshot(
+            install_name_tool, expected_install_name_tool_sha256,
+            "install_name_tool", executable=True,
+        ),
+        "install_name_tool_library": _macho_tool_snapshot(
+            install_name_tool_library,
+            expected_install_name_tool_library_sha256,
+            "install_name_tool libcodedirectory", executable=False,
+        ),
+        "codesign": _macho_tool_snapshot(
+            codesign, expected_codesign_sha256, "codesign", executable=True,
+        ),
+    }
+    expected_library = (
+        install_name_tool.parent.parent / "lib" / "libcodedirectory.dylib"
+    )
+    if install_name_tool_library != expected_library:
+        raise CacheCopyError(
+            "install_name_tool libcodedirectory is not its exact adjacent closure"
+        )
+    install_dependencies, install_rpaths = _macho_tool_dependency_names(
+        snapshots["install_name_tool"], "install_name_tool",
+    )
+    if (
+        "@rpath/libcodedirectory.dylib" not in install_dependencies
+        or install_rpaths != ("@executable_path/../lib",)
+        or any(
+            not name.startswith(_MACHO_SYSTEM_PREFIXES)
+            and name != "@rpath/libcodedirectory.dylib"
+            for name in install_dependencies
+        )
+    ):
+        raise CacheCopyError("install_name_tool loader closure is not exact")
+    library_dependencies, _ = _macho_tool_dependency_names(
+        snapshots["install_name_tool_library"],
+        "install_name_tool libcodedirectory",
+    )
+    codesign_dependencies, _ = _macho_tool_dependency_names(
+        snapshots["codesign"], "codesign",
+    )
+    if any(
+        not name.startswith(_MACHO_SYSTEM_PREFIXES)
+        for name in (*library_dependencies, *codesign_dependencies)
+    ):
+        raise CacheCopyError("Mach-O signing tool closure leaves system libraries")
+    return snapshots
+
+
+def _path_free_macho_tool_records(
+    tools: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    if set(tools) != set(_MACHO_TOOL_ARCHIVES):
+        raise CacheCopyError("framework Mach-O tool set is not exact")
+    records: dict[str, dict[str, object]] = {}
+    for name in sorted(tools):
+        metadata = tools[name]["metadata"]
+        data = tools[name]["data"]
+        assert isinstance(metadata, os.stat_result) and isinstance(data, bytes)
+        archive_id, archive_name = _MACHO_TOOL_ARCHIVES[name]
+        records[name] = {
+            "archive_id": archive_id,
+            "archive_name": archive_name,
+            "mode": format(stat.S_IMODE(metadata.st_mode), "04o"),
+            "sha256": tools[name]["sha256"],
+            "size_bytes": len(data),
+        }
+    return records
+
+
+def _run_framework_macho_tool(
+    executable: Path,
+    arguments: list[str],
+    sanitized_arguments: list[str],
+    *,
+    runtime_root: Path,
+    operation: str,
+    required_stderr_line: bytes | None = None,
+) -> dict[str, object]:
+    """Run one authenticated tool under a closed environment and attest it."""
+
+    argv = [str(executable), *arguments]
+    result = subprocess.run(
+        argv,
+        cwd=runtime_root,
+        env={
+            "HOME": str(runtime_root.parent),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": str(executable.parent),
+            "TMPDIR": str(runtime_root.parent),
+        },
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30,
+    )
+    if (
+        result.returncode != 0
+        or result.stdout != b""
+        or len(result.stderr) > 64 * 1024
+        or (
+            required_stderr_line is not None
+            and result.stderr.splitlines().count(required_stderr_line) != 1
+        )
+    ):
+        raise CacheCopyError(f"framework Mach-O {operation} failed")
+    actual_argv = _canonical_payload({"argv": argv})
+    return {
+        "operation": operation,
+        "argv": [operation, *sanitized_arguments],
+        "argv_sha256": hashlib.sha256(actual_argv).hexdigest(),
+        "exit_status": result.returncode,
+        "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
+        "stdout_size_bytes": len(result.stdout),
+        "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+        "stderr_size_bytes": len(result.stderr),
+    }
+
+
+def _runtime_macho_target(
+    name: str,
+    archive_path: str,
+    file_type: int,
+    rpaths: tuple[str, ...],
+    image_paths: set[str],
+) -> str | None:
+    if name.startswith(_MACHO_SYSTEM_PREFIXES):
+        return None
+    parent = posixpath.dirname(archive_path)
+    executable_parent = parent if file_type == 2 else "bin"
+
+    def expand(value: str) -> str | None:
+        if value.startswith("@loader_path/"):
+            return _macho_archive_join(
+                parent, value.removeprefix("@loader_path/"), archive_path,
+            )
+        if value.startswith("@executable_path/"):
+            return _macho_archive_join(
+                executable_parent,
+                value.removeprefix("@executable_path/"), archive_path,
+            )
+        return None
+
+    candidates: list[str] = []
+    if name.startswith("@rpath/"):
+        suffix = name.removeprefix("@rpath/")
+        for rpath in rpaths:
+            expanded = expand(rpath)
+            if expanded is not None:
+                candidate = _macho_archive_join(expanded, suffix, archive_path)
+                if candidate in image_paths and candidate not in candidates:
+                    candidates.append(candidate)
+    else:
+        expanded = expand(name)
+        if expanded is not None and expanded in image_paths:
+            candidates.append(expanded)
+    if len(candidates) != 1:
+        raise CacheCopyError(
+            f"archived Mach-O dependency is not internally exact: {archive_path}"
+        )
+    return candidates[0]
+
+
+def _framework_runtime_macho_projection(
+    runtime_root: Path, framework: str,
+) -> dict[str, object]:
+    """Independently parse and close every Mach-O dependency in the archive."""
+
+    image_values: dict[str, tuple[bytes, list[dict[str, object]]]] = {}
+    pending = [(runtime_root, "")]
+    while pending:
+        directory, relative = pending.pop()
+        try:
+            entries = tuple(sorted(os.scandir(directory), key=lambda item: item.name))
+        except OSError as error:
+            raise CacheCopyError("archived Mach-O closure is unreadable") from error
+        for entry in entries:
+            archive_path = entry.name if not relative else f"{relative}/{entry.name}"
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append((Path(entry.path), archive_path))
+            elif stat.S_ISREG(metadata.st_mode):
+                data, after = _read_regular(
+                    Path(entry.path), f"archived Mach-O candidate {archive_path}",
+                )
+                if (metadata.st_dev, metadata.st_ino) != (after.st_dev, after.st_ino):
+                    raise CacheCopyError("archived Mach-O candidate changed")
+                slices = _parse_macho(data, archive_path)
+                if slices is not None:
+                    image_values[archive_path] = (data, slices)
+            elif not stat.S_ISLNK(metadata.st_mode):
+                raise CacheCopyError("archived Mach-O closure contains a special entry")
+    image_paths = set(image_values)
+    required = {
+        "bin/python3", framework,
+        "Resources/Python.app/Contents/MacOS/Python",
+    }
+    if not required <= image_paths:
+        raise CacheCopyError("archived Mach-O indispensable closure is incomplete")
+    images: list[dict[str, object]] = []
+    for archive_path in sorted(image_values):
+        data, slices = image_values[archive_path]
+        slice_records: list[dict[str, object]] = []
+        for slice_value in slices:
+            commands = slice_value["commands"]
+            assert isinstance(commands, list)
+            rpaths = tuple(
+                str(command["name"])
+                for command in commands
+                if command["command"] == _MACHO_RPATH
+            )
+            dependencies: list[dict[str, object]] = []
+            for command in commands:
+                if command["command"] not in _MACHO_DEPENDENCY_COMMANDS:
+                    continue
+                install_name = str(command["name"])
+                target = _runtime_macho_target(
+                    install_name, archive_path, int(slice_value["file_type"]),
+                    rpaths, image_paths,
+                )
+                if target is None:
+                    dependency = {
+                        "command": command["command"],
+                        "binding": "system",
+                        "install_name_sha256": _macho_digest_text(install_name),
+                    }
+                else:
+                    dependency = {
+                        "command": command["command"],
+                        "binding": "archive",
+                        "install_name": install_name,
+                        "target": target,
+                    }
+                dependencies.append(dependency)
+            if slice_value["code_signature"] is None:
+                raise CacheCopyError(
+                    f"archived Mach-O image is unsigned: {archive_path}"
+                )
+            slice_records.append(
+                {
+                    "cpu_type": slice_value["cpu_type"],
+                    "cpu_subtype": slice_value["cpu_subtype"],
+                    "file_type": slice_value["file_type"],
+                    "dependencies": dependencies,
+                    "id_dylib_sha256": [
+                        _macho_digest_text(str(command["name"]))
+                        for command in commands
+                        if command["command"] == _MACHO_ID_DYLIB
+                    ],
+                    "rpath_sha256": [
+                        _macho_digest_text(value) for value in rpaths
+                    ],
+                    "code_signature": "embedded",
+                }
+            )
+        images.append(
+            {
+                "path": archive_path,
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "slices": slice_records,
+            }
+        )
+    by_path = {str(image["path"]): image for image in images}
+    launch_expectations = {
+        "bin/python3": "@executable_path/../" + framework,
+        "Resources/Python.app/Contents/MacOS/Python": (
+            "@executable_path/../../../../" + framework
+        ),
+    }
+    for path, expected_name in launch_expectations.items():
+        image = by_path[path]
+        slices = image["slices"]
+        assert isinstance(slices, list)
+        for slice_value in slices:
+            dependencies = slice_value["dependencies"]
+            assert isinstance(dependencies, list)
+            matches = [
+                dependency for dependency in dependencies
+                if dependency.get("binding") == "archive"
+                and dependency.get("target") == framework
+            ]
+            if len(matches) != 1 or matches[0].get("install_name") != expected_name:
+                raise CacheCopyError(
+                    f"archived framework launcher binding is wrong: {path}"
+                )
+    return {
+        "format": "iroha-sumeragi-v2-framework-python-mach-o",
+        "schema_version": 1,
+        "image_count": len(images),
+        "images": images,
+    }
+
+
+def _apply_framework_macho_plan(
+    runtime_root: Path,
+    plan: list[dict[str, object]],
+    tools: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    """Apply, sign, and attest the exact deterministic closure rewrite plan."""
+
+    transforms: list[dict[str, object]] = []
+    install_tool = tools["install_name_tool"]["path"]
+    codesign = tools["codesign"]["path"]
+    assert isinstance(install_tool, Path) and isinstance(codesign, Path)
+    for item in plan:
+        archive_path = str(item["path"])
+        destination = runtime_root / archive_path
+        before, _ = _read_regular(destination, f"Mach-O transform {archive_path}")
+        if (
+            len(before) != item["source_size"]
+            or hashlib.sha256(before).hexdigest() != item["source_sha256"]
+        ):
+            raise CacheCopyError("Mach-O transform source copy is not exact")
+        operations = item["operations"]
+        assert isinstance(operations, tuple)
+        arguments: list[str] = []
+        sanitized: list[str] = []
+        operation_records: list[dict[str, object]] = []
+        for operation in operations:
+            if operation[0] != "change" or len(operation) != 3:
+                raise CacheCopyError("Mach-O rewrite operation is unsupported")
+            old, replacement = str(operation[1]), str(operation[2])
+            arguments.extend(["-change", old, replacement])
+            sanitized.extend(
+                ["-change", "sha256:" + _macho_digest_text(old), replacement]
+            )
+            operation_records.append(
+                {
+                    "operation": "change",
+                    "source_install_name_sha256": _macho_digest_text(old),
+                    "replacement": replacement,
+                }
+            )
+        arguments.append(str(destination))
+        sanitized.append("archive:" + archive_path)
+        install_record = _run_framework_macho_tool(
+            install_tool, arguments, sanitized, runtime_root=runtime_root,
+            operation="install-name-rewrite",
+        )
+        pre_sign, _ = _read_regular(
+            destination, f"rewritten Mach-O {archive_path}",
+        )
+        if pre_sign == before:
+            raise CacheCopyError("Mach-O rewrite did not change its image")
+        sign_record = _run_framework_macho_tool(
+            codesign,
+            ["--force", "--sign", "-", "--timestamp=none", str(destination)],
+            ["--force", "--sign", "-", "--timestamp=none", "archive:" + archive_path],
+            runtime_root=runtime_root,
+            operation="ad-hoc-sign",
+        )
+        post_sign, _ = _read_regular(
+            destination, f"signed Mach-O {archive_path}",
+        )
+        if post_sign == pre_sign:
+            raise CacheCopyError("Mach-O ad-hoc signature did not change its image")
+        verify_record = _run_framework_macho_tool(
+            codesign,
+            ["--verify", "--strict", "--verbose=4", str(destination)],
+            ["--verify", "--strict", "--verbose=4", "archive:" + archive_path],
+            runtime_root=runtime_root,
+            operation="code-signature-verify",
+        )
+        display_record = _run_framework_macho_tool(
+            codesign,
+            ["--display", "--verbose=4", str(destination)],
+            ["--display", "--verbose=4", "archive:" + archive_path],
+            runtime_root=runtime_root,
+            operation="code-signature-display",
+            required_stderr_line=b"Signature=adhoc",
+        )
+        parsed = _parse_macho(post_sign, archive_path)
+        if parsed is None or any(
+            slice_value["code_signature"] is None for slice_value in parsed
+        ):
+            raise CacheCopyError("signed Mach-O image has no embedded signature")
+        transforms.append(
+            {
+                "path": archive_path,
+                "operation_id": "relocate-and-ad-hoc-sign:" + archive_path,
+                "source_sha256": item["source_sha256"],
+                "source_size_bytes": item["source_size"],
+                "pre_sign_sha256": hashlib.sha256(pre_sign).hexdigest(),
+                "pre_sign_size_bytes": len(pre_sign),
+                "post_sign_sha256": hashlib.sha256(post_sign).hexdigest(),
+                "post_sign_size_bytes": len(post_sign),
+                "operations": operation_records,
+                "commands": [
+                    install_record,
+                    sign_record,
+                    verify_record,
+                    display_record,
+                ],
+            }
+        )
+    return transforms
 
 
 def _unchanged(before: os.stat_result, after: os.stat_result) -> bool:

@@ -13249,14 +13249,17 @@ pub(crate) fn nexus_active_lane_dataspace_at_height(
 ///
 /// Static lanes in one dataspace share one validator cohort, so only the
 /// lowest active stake-elected lane owns its canonical lane-keyed storage rows.
-/// Nexus-disabled and autoscale-managed lanes retain their exact-lane behavior.
+/// Disabled Nexus admits only the canonical `SINGLE`/`UNIVERSAL` owner;
+/// autoscale-managed lanes retain their exact-lane behavior.
 pub(crate) fn nexus_staking_authority_lane_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
 ) -> Option<LaneId> {
     if !nexus.enabled {
-        return Some(lane_id);
+        return (consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
+            == Some(DataSpaceId::UNIVERSAL))
+        .then_some(LaneId::SINGLE);
     }
     let dataspace_id = nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)?;
     let lane = nexus
@@ -30945,7 +30948,10 @@ impl State {
             block_height,
         )
     }
-    /// Resolve the authoritative validator peer ids for a lane from manifests or staking state.
+    /// Resolve the authoritative validator peer ids for a lane.
+    ///
+    /// Canonical single-lane consensus uses the commit topology; enabled Nexus
+    /// lanes derive authority from their manifest or staking state.
     pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
         self.authoritative_lane_peer_ids_at_height(lane_id, self.lane_authority_height())
     }
@@ -30955,22 +30961,24 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Vec<PeerId> {
-        let Some(inputs) = self.lane_authority_inputs(lane_id, block_height) else {
-            return Vec::new();
-        };
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
         let manifest_registry = self.lane_manifests.read().clone();
-        Self::authoritative_lane_peer_ids_with_inputs(
+        let commit_topology = self.commit_topology_snapshot();
+        Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
             lane_id,
+            validator_mode,
             manifest_registry.as_ref(),
-            &inputs,
+            &nexus,
+            &commit_topology,
             block_height,
         )
     }
     /// Return whether a lane is active at the committed lane-authority height.
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
-        self.lane_authority_inputs(lane_id, self.lane_authority_height())
-            .is_some()
+        let nexus = self.nexus_snapshot();
+        consensus_lane_dataspace_at_height(lane_id, &nexus, self.lane_authority_height()).is_some()
     }
     /// Resolve the only lane allowed to own staking storage at the committed authority height.
     pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
@@ -31271,9 +31279,18 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        _commit_topology: &[PeerId],
+        commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
+        if !nexus.enabled {
+            return if consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
+                == Some(DataSpaceId::UNIVERSAL)
+            {
+                commit_topology.to_vec()
+            } else {
+                Vec::new()
+            };
+        }
         let Some(inputs) =
             Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
         else {
@@ -58365,10 +58382,7 @@ impl StateTransaction<'_, '_> {
     /// Return whether a lane is active for authority checks at this transaction's block height.
     #[inline]
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
-        if !self.nexus.enabled {
-            return true;
-        }
-        nexus_active_lane_dataspace_at_height(lane_id, &self.nexus, self.block_height()).is_some()
+        consensus_lane_dataspace_at_height(lane_id, &self.nexus, self.block_height()).is_some()
     }
     /// Load a committed block by height from Kura for the current transaction context.
     #[must_use]

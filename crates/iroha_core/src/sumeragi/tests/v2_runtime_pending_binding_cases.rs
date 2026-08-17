@@ -844,71 +844,7 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         "a substituted Sign effect cannot reuse the retained replay evidence"
     );
 }
-#[test]
-fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
-    let replay = include_str!("../v2_lifecycle_replay_authority.rs");
-    let projection = replay
-        .split_once(
-            "/// Complete replay-authorized projection of one recovered follow-on Vote Sign.",
-        )
-        .expect("locate next-WAL Vote projection")
-        .1
-        .split_once("/// Canonical structural evidence for a recovered ProposalIntent")
-        .expect("locate end of projection storage shape")
-        .0;
-    for retained in [
-        "seal: RecoveredLifecycleNextWalVoteSealV1",
-        "pending: PendingRuntimeEffectBinding",
-        "candidate: CandidateAdmission",
-    ] {
-        assert!(
-            projection.contains(retained),
-            "projection discarded executable authority: {retained}"
-        );
-    }
-    assert!(!projection.contains("derive(Clone"));
-    let implementation = replay
-        .split_once("impl RecoveredLifecycleNextWalVoteCandidateProjectionV1")
-        .expect("locate next-WAL Vote projection implementation")
-        .1
-        .split_once("fn recovered_next_wal_vote_candidate_shape_is_exact")
-        .expect("locate end of next-WAL Vote projection implementation")
-        .0;
-    for forbidden in [
-        "fn effect(",
-        "fn pending(",
-        "fn candidate(",
-        "fn key(",
-        "fn wal_identity(",
-        "fn validated(",
-        "fn into_parts(",
-        "fn into_candidate(",
-    ] {
-        assert!(
-            !implementation.contains(forbidden),
-            "projection exposed forbidden constituent API: {forbidden}"
-        );
-    }
-    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
-    let permit = runtime
-        .split_once("struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1")
-        .expect("locate runtime-private projection permit")
-        .1
-        .split_once("/// Runtime-private one-shot permit for a recovered-frame pending owner")
-        .expect("locate end of runtime-private projection permit")
-        .0;
-    assert!(permit.contains("_linearity:"));
-    let seam = runtime
-        .split_once("fn project_recovered_lifecycle_next_wal_vote_candidate(")
-        .expect("locate consuming runtime projection seam")
-        .1
-        .split_once("/// Consume one adapter-authenticated recovered control token")
-        .expect("locate end of runtime projection seam")
-        .0;
-    assert!(seam.contains("seal: RecoveredLifecycleNextWalVoteSealV1"));
-    assert!(seam.contains("RecoveredLifecycleNextWalVoteSealV1"));
-    assert!(seam.contains("seal.into_candidate_projection("));
-}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_next_wal_vote_projection_surface_is_affine_and_closed);
 #[test]
 fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     let (context, keys) = authenticated_runtime_context();

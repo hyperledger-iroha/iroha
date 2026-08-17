@@ -2247,6 +2247,29 @@ mod tests {
         );
     }
     #[test]
+    fn disabled_nexus_relay_route_requires_canonical_single_lane_coordinates() {
+        let mut nexus = Nexus::default();
+        nexus.enabled = false;
+        assert!(v2_relay_route_is_active(
+            &nexus,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            1,
+        ));
+        assert!(!v2_relay_route_is_active(
+            &nexus,
+            LaneId::SINGLE,
+            DataSpaceId::new(7),
+            1,
+        ));
+        assert!(!v2_relay_route_is_active(
+            &nexus,
+            LaneId::new(1),
+            DataSpaceId::UNIVERSAL,
+            1,
+        ));
+    }
+    #[test]
     fn latest_lane_block_tips_reject_conflicting_descriptor_hashes_at_same_height() {
         let routing = routing_for_lane_dataspaces(&[(1, 11)]);
         let domains = plan_lane_consensus_domains(

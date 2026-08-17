@@ -957,14 +957,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         id: lane,
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
@@ -1737,14 +1730,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         id: lane,
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
@@ -1921,14 +1907,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         id: lane,
         dataspace_id: dsid,
         alias: "replayed".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
@@ -2159,14 +2138,7 @@ fn axt_replay_entries_expire_after_retention_window() {
         id: lane,
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let mut nexus = nexus_with_lane_catalog(lane_catalog);
@@ -3030,14 +3002,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
         id: LaneId::new(0),
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
@@ -3150,14 +3115,7 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         id: LaneId::new(0),
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog =
         LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("lane catalog populated");
@@ -3799,14 +3757,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         id: LaneId::new(0),
         dataspace_id: dsid,
         alias: "primary".to_owned(),
-        description: None,
-        visibility: LaneVisibility::Public,
-        lane_type: None,
-        governance: None,
-        settlement: None,
-        storage: LaneStorageProfile::FullReplica,
-        proof_scheme: DaProofScheme::default(),
-        metadata: BTreeMap::new(),
+        ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);

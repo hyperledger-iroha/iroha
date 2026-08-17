@@ -105,10 +105,8 @@ use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
 };
 use iroha_crypto::{Hash, HashOf};
-#[allow(unused_imports)]
 use iroha_data_model::nexus::{
-    AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
+    DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
     FeeSponsorBeneficiaryEpochBudgetWindow, FeeSponsorBlockBudgetWindow,
     FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow, FeeSponsorProgramEpochBudgetWindow,
     FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LaneLifecyclePlan,
@@ -3218,9 +3216,8 @@ fn ensure_routing_plan_active_at_height(
 ) -> Result<(), RoutingResolveError> {
     for leg in plan.legs() {
         let route = leg.route;
-        if crate::state::nexus_active_lane_dataspace_at_height(route.lane_id, nexus, block_height)
+        if crate::state::consensus_lane_dataspace_at_height(route.lane_id, nexus, block_height)
             != Some(route.dataspace_id)
-            && !route_uses_legacy_default_public_lane(route, nexus)
         {
             return Err(RoutingResolveError::InactiveLane {
                 lane_id: route.lane_id,
@@ -3229,37 +3226,6 @@ fn ensure_routing_plan_active_at_height(
         }
     }
     Ok(())
-}
-fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) -> bool {
-    if nexus.enabled || route.lane_id != LaneId::SINGLE {
-        return false;
-    }
-    let Some(default_lane) = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == LaneId::SINGLE)
-    else {
-        return false;
-    };
-    if default_lane.dataspace_id != DataSpaceId::UNIVERSAL
-        || default_lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-        || default_lane
-            .metadata
-            .contains_key(AUTOSCALE_META_CREATED_HEIGHT)
-        || default_lane
-            .metadata
-            .contains_key(AUTOSCALE_META_DRAIN_STATE)
-        || default_lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
-    {
-        return false;
-    }
-    route.dataspace_id == DataSpaceId::UNIVERSAL
-        || !nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .any(|lane| lane.dataspace_id == route.dataspace_id)
 }
 fn resolve_routing_plan_against_nexus_at_height(
     plan: RoutingPlan,
@@ -3303,15 +3269,7 @@ pub(crate) fn queue_plan_authoritative_peers_in_view_at_height(
     route: RoutingDecision,
     proposal_height: u64,
 ) -> Vec<PeerId> {
-    let validator_set =
-        state_view.authoritative_lane_peer_ids_at_height(route.lane_id, proposal_height);
-    if !validator_set.is_empty() {
-        return validator_set;
-    }
-    if route_uses_legacy_default_public_lane(route, state_view.nexus()) {
-        return state_view.commit_topology().to_vec();
-    }
-    Vec::new()
+    state_view.authoritative_lane_peer_ids_at_height(route.lane_id, proposal_height)
 }
 fn state_view_height_for_routing(state_view: &StateView<'_>) -> u64 {
     u64::try_from(state_view.height()).unwrap_or(u64::MAX)
@@ -13365,14 +13323,12 @@ impl Queue {
                 }
                 .into());
             };
-            let exact_route_active = crate::state::nexus_active_lane_dataspace_at_height(
+            let exact_route_active = crate::state::consensus_lane_dataspace_at_height(
                 leg.route.lane_id,
                 state_view.nexus(),
                 proposal_height,
             ) == Some(leg.route.dataspace_id);
-            if !exact_route_active
-                && !route_uses_legacy_default_public_lane(leg.route, state_view.nexus())
-            {
+            if !exact_route_active {
                 return Err(RoutingResolveError::InactiveLane {
                     lane_id: leg.route.lane_id,
                     dataspace_id: leg.route.dataspace_id,
@@ -13631,8 +13587,8 @@ impl Queue {
     }
     /// Resolve the exact authority roster used by durable queue-plan admission.
     ///
-    /// The legacy single-lane deployment uses the global commit topology;
-    /// multilane deployments use the lane authority source at `proposal_height`.
+    /// The state authority source resolves both the canonical single-lane
+    /// topology and lane-specific multilane committees at `proposal_height`.
     /// The lifecycle admission guard keeps the catalog generation stable while
     /// the roster is captured.
     #[must_use]
@@ -19250,11 +19206,12 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_MANAGED,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
+            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
+            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, ManifestVersion,
+            ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -22901,7 +22858,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         install_single_validator_topology_for_queue_test(&state, 0xA0);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -22955,7 +22912,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation() {
+    fn queue_plan_admission_context_binds_single_lane_topology_and_contiguous_generation() {
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -22965,7 +22922,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply canonical single-lane state");
         let validators = (0_u8..4)
             .map(|seed| {
                 let key_pair = iroha_crypto::KeyPair::from_seed(
@@ -22983,6 +22940,27 @@ pub mod tests {
             }
             topology.commit();
         }
+        assert_eq!(
+            state.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, 1),
+            validators
+        );
+        assert!(
+            state
+                .authoritative_lane_peer_ids_at_height(LaneId::new(1), 1)
+                .is_empty()
+        );
+        {
+            let state_view = state.view();
+            assert_eq!(
+                state_view.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, 1),
+                validators
+            );
+            assert!(
+                state_view
+                    .authoritative_lane_peer_ids_at_height(LaneId::new(1), 1)
+                    .is_empty()
+            );
+        }
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test_with_router_for_routes(
             config_factory(),
@@ -22996,7 +22974,7 @@ pub mod tests {
         let tx = accepted_tx_by_someone(&time_source);
         let plan = queue
             .route_plan_with_state(&tx, &state)
-            .expect("resolve legacy single-lane plan");
+            .expect("resolve canonical single-lane plan");
         let context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture exact queue-plan admission context");
@@ -23022,40 +23000,6 @@ pub mod tests {
                 context.proposal_height,
             ),
             validators
-        );
-        let dynamic_dataspace = DataSpaceId::new(73);
-        let dynamic_queue = Queue::test_with_router_for_routes(
-            config_factory(),
-            &time_source,
-            Arc::new(StaticRouter {
-                lane: LaneId::SINGLE,
-                dataspace: dynamic_dataspace,
-            }),
-            &[],
-        );
-        let dynamic_tx = accepted_tx_by_someone(&time_source);
-        let dynamic_plan = dynamic_queue
-            .route_plan_with_state(&dynamic_tx, &state)
-            .expect("disabled-Nexus legacy default lane permits dynamic dataspaces");
-        assert_eq!(
-            dynamic_plan.coordinator_route(),
-            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace)
-        );
-        let dynamic_context = dynamic_queue
-            .plan_admission_context_with_state(&state, &dynamic_plan)
-            .expect("legacy dynamic-dataspace context must use the default lane incarnation");
-        assert_eq!(dynamic_context.route_incarnations.len(), 1);
-        assert_eq!(
-            dynamic_context.route_incarnations[0].leg.route,
-            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace)
-        );
-        assert_eq!(
-            dynamic_context.route_incarnations[0].lane_incarnation,
-            coordinator.lane_incarnation
-        );
-        assert_eq!(
-            dynamic_context.route_incarnations[0].validator_set_hash,
-            HashOf::new(&validators)
         );
         seed_committed_height_for_queue_test(&state, 1);
         let height_bound_context = queue
@@ -23083,7 +23027,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         let validator_key =
             iroha_crypto::KeyPair::from_seed(vec![0x95; 32], iroha_crypto::Algorithm::Ed25519);
         {
@@ -24769,7 +24713,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         install_single_validator_topology_for_queue_test(&state, 0xA2);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -24834,7 +24778,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         install_single_validator_topology_for_queue_test(&state, 0xA3);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -24907,7 +24851,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         install_single_validator_topology_for_queue_test(&state, 0xA4);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -24983,7 +24927,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         install_single_validator_topology_for_queue_test(&state, 0xA5);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -25174,7 +25118,7 @@ pub mod tests {
         nexus.enabled = false;
         state
             .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+            .expect("apply disabled Nexus state for canonical single-lane route test");
         let validator_key =
             iroha_crypto::KeyPair::from_seed(vec![0x96; 32], iroha_crypto::Algorithm::Ed25519);
         {
@@ -27725,13 +27669,7 @@ pub mod tests {
     include!("queue/queue_metadata_and_admission_tests.rs");
     include!("queue/instruction_and_state_routing_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
-    fn config_factory() -> Config {
-        Config {
-            transaction_time_to_live: Duration::from_secs(100),
-            capacity: 100.try_into().unwrap(),
-            ..Config::default()
-        }
-    }
+    include!("queue/config_factory_test_support.rs");
     fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
         let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
         let mut nexus = state.nexus_snapshot();

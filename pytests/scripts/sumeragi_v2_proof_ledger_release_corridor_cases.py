@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
+        "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "afd73a96a4e243923a5a01a97f95dc82da971fdf13486dd73d38479456512537"
+        "78e9b337ff6e90cf7b2aafa9f3d774d823037b3621f0d952eebc5e1f0afd2954"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -1656,7 +1656,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "network_relay_tests::",
-            "obsolete_sumeragi_relay_message_completes_as_delivered",
+            "obsolete_sumeragi_relay_message_fails_closed",
             irohad_main_source,
         ),
         (

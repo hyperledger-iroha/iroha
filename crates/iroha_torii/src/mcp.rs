@@ -8296,9 +8296,18 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
         "/v1/node/capabilities",
     )
 }
-static_manual_tool_wrapper!(iroha_node_query_projection_checkpoint_plan_tool, "iroha.node.query_projection_checkpoint_plan");
-static_manual_tool_wrapper!(iroha_node_query_projection_checkpoint_publish_tool, "iroha.node.query_projection_checkpoint_publish");
-static_manual_tool_wrapper!(iroha_node_query_projection_shard_catalog_tool, "iroha.node.query_projection_shard_catalog");
+static_manual_tool_wrapper!(
+    iroha_node_query_projection_checkpoint_plan_tool,
+    "iroha.node.query_projection_checkpoint_plan"
+);
+static_manual_tool_wrapper!(
+    iroha_node_query_projection_checkpoint_publish_tool,
+    "iroha.node.query_projection_checkpoint_publish"
+);
+static_manual_tool_wrapper!(
+    iroha_node_query_projection_shard_catalog_tool,
+    "iroha.node.query_projection_shard_catalog"
+);
 fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.node.query_projection_checkpoint",

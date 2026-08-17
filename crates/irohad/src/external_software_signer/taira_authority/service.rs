@@ -2,18 +2,20 @@
 
 use super::super::{
     SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
-    SoftwareSignerWrappingKeyV1,
+    SoftwareSignerRoleV1, SoftwareSignerRotationSuccessorV1, SoftwareSignerServiceV1,
+    SoftwareSignerSignatureReceiptV1, SoftwareSignerWrappingKeyV1,
+    verify_software_signer_rotation_successor,
 };
 use super::{
     protocol::{
         AuthorityAdminCommandV1, FinalizePrivacyGenesisV1, OperationResponseV1, OperationStatusV1,
         ReplayConsumptionV1, RunAssignmentV1, StoredAuthorizationV1,
-        StoredDeploymentFinalizationV1, StoredRunAssignmentV1, TAIRA_AUTHORITY_BINDING_MAGIC_V1,
-        TAIRA_AUTHORITY_MAX_ARTIFACT_BYTES_V1, TAIRA_AUTHORITY_MAX_ARTIFACTS_V1,
-        TAIRA_AUTHORITY_MAX_JSON_BYTES_V1, TAIRA_AUTHORITY_MAX_TOTAL_ARTIFACT_BYTES_V1,
-        TAIRA_AUTHORITY_PROTOCOL_VERSION_V1, TairaAuthorityArtifactManifestEntryV1,
-        TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1, sha256,
+        StoredDeploymentFinalizationV1, StoredRotationHandoffV1, StoredRunAssignmentV1,
+        TAIRA_AUTHORITY_BINDING_MAGIC_V1, TAIRA_AUTHORITY_MAX_ARTIFACT_BYTES_V1,
+        TAIRA_AUTHORITY_MAX_ARTIFACTS_V1, TAIRA_AUTHORITY_MAX_JSON_BYTES_V1,
+        TAIRA_AUTHORITY_MAX_TOTAL_ARTIFACT_BYTES_V1, TAIRA_AUTHORITY_PROTOCOL_VERSION_V1,
+        TairaAuthorityArtifactManifestEntryV1, TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1,
+        sha256,
     },
     store::{
         create_private_subdirectory, directory_contains_only_records, load_canonical_records,
@@ -47,9 +49,9 @@ const ASSIGNMENTS_DIRECTORY_V1: &str = "authority-run-assignments-v1";
 const CONSUMPTIONS_DIRECTORY_V1: &str = "authority-replay-consumptions-v1";
 const RECEIPTS_DIRECTORY_V1: &str = "authority-receipts-v1";
 const DEPLOYMENT_FINALIZATIONS_DIRECTORY_V1: &str = "authority-deployment-finalizations-v1";
+const ROTATION_HANDOFFS_DIRECTORY_V1: &str = "authority-rotation-handoffs-v1";
 const PRIVACY_GENESIS_FINALIZATION_DIRECTORY_V1: &str = "privacy-genesis-finalization-v1";
-const PUBLIC_SOAK_OBSERVATION_BINDING_DIRECTORY_V1: &str =
-    "public-soak-observation-binding-v1";
+const PUBLIC_SOAK_OBSERVATION_BINDING_DIRECTORY_V1: &str = "public-soak-observation-binding-v1";
 const MAX_RUN_LIFETIME_MILLIS_V1: u64 = 24 * 60 * 60 * 1_000;
 const ASSIGNMENT_SIGNING_DOMAIN_V1: &[u8] = b"iroha:taira:run-assignment:v1\0";
 const RECEIPT_OPERATION_DOMAIN_V1: &[u8] = b"iroha:taira:durable-receipt-operation:v1\0";
@@ -66,8 +68,7 @@ const PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.taira.public-v2-24h-soak.authority-envelope-signature.v1\0";
 const PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.taira.public-v2-24h-soak.durable-admission-signature.v1\0";
-const PUBLIC_SOAK_REPLAY_NAMESPACE_V1: &str =
-    "iroha.taira.public-v2-24h-soak-authority-replay.v1";
+const PUBLIC_SOAK_REPLAY_NAMESPACE_V1: &str = "iroha.taira.public-v2-24h-soak-authority-replay.v1";
 const PUBLIC_SOAK_MAX_AUTHORITY_LIFETIME_MILLIS_V1: u64 = 15 * 60 * 1_000;
 
 /// Public inputs used to provision one isolated authority role.
@@ -124,11 +125,33 @@ impl std::fmt::Display for TairaAuthorityErrorV1 {
 
 impl std::error::Error for TairaAuthorityErrorV1 {}
 
+fn validate_qualification_service_identity(
+    role: TairaAuthorityRoleV1,
+    service_uid: u32,
+) -> Result<(), TairaAuthorityErrorV1> {
+    if role != TairaAuthorityRoleV1::Qualification {
+        return Ok(());
+    }
+    if service_uid != 0 {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    // Unit tests exercise the service directly without opening production
+    // sockets.  Every production build must provision, recover, and report
+    // readiness for qualification only from a real root service process so
+    // its sandbox can drop to the unrelated host nobody identity.
+    #[cfg(not(test))]
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    Ok(())
+}
+
 struct AuthorityStateV1 {
     assignments: BTreeMap<[u8; 32], StoredRunAssignmentV1>,
     consumptions: BTreeMap<[u8; 32], ReplayConsumptionV1>,
     authorizations: BTreeMap<[u8; 32], StoredAuthorizationV1>,
     deployment_finalizations: BTreeMap<[u8; 32], StoredDeploymentFinalizationV1>,
+    rotation_handoffs: BTreeMap<[u8; 32], StoredRotationHandoffV1>,
 }
 
 /// One opened authority role backed by the existing encrypted signer and audit journal.
@@ -205,6 +228,7 @@ impl TairaAuthorityServiceV1 {
         retained_genesis_key: Option<KeyPair>,
         observation_binding: Option<TairaAuthorityPublicBindingV1>,
     ) -> Result<Self, TairaAuthorityErrorV1> {
+        validate_qualification_service_identity(provisioning.role, provisioning.service_uid)?;
         if (provisioning.role == TairaAuthorityRoleV1::PrivacyGovernance)
             != retained_genesis_key.is_some()
         {
@@ -251,6 +275,7 @@ impl TairaAuthorityServiceV1 {
             CONSUMPTIONS_DIRECTORY_V1,
             RECEIPTS_DIRECTORY_V1,
             DEPLOYMENT_FINALIZATIONS_DIRECTORY_V1,
+            ROTATION_HANDOFFS_DIRECTORY_V1,
             PRIVACY_GENESIS_FINALIZATION_DIRECTORY_V1,
             PUBLIC_SOAK_OBSERVATION_BINDING_DIRECTORY_V1,
         ] {
@@ -266,6 +291,7 @@ impl TairaAuthorityServiceV1 {
                 consumptions: BTreeMap::new(),
                 authorizations: BTreeMap::new(),
                 deployment_finalizations: BTreeMap::new(),
+                rotation_handoffs: BTreeMap::new(),
             }),
             privacy_genesis_finalized: provisioning.role == TairaAuthorityRoleV1::PrivacyGovernance,
             public_soak_observation_binding: observation_binding,
@@ -310,11 +336,13 @@ impl TairaAuthorityServiceV1 {
             return Err(TairaAuthorityErrorV1::Binding);
         };
         let role = role.parse().map_err(|()| TairaAuthorityErrorV1::Binding)?;
+        validate_qualification_service_identity(role, signer_binding.service_uid)?;
         let assignments_path = state_directory.join(ASSIGNMENTS_DIRECTORY_V1);
         let consumptions_path = state_directory.join(CONSUMPTIONS_DIRECTORY_V1);
         let receipts_path = state_directory.join(RECEIPTS_DIRECTORY_V1);
         let deployment_finalizations_path =
             state_directory.join(DEPLOYMENT_FINALIZATIONS_DIRECTORY_V1);
+        let rotation_handoffs_path = state_directory.join(ROTATION_HANDOFFS_DIRECTORY_V1);
         let privacy_finalization_path =
             state_directory.join(PRIVACY_GENESIS_FINALIZATION_DIRECTORY_V1);
         let observation_binding_path =
@@ -324,6 +352,7 @@ impl TairaAuthorityServiceV1 {
             &consumptions_path,
             &receipts_path,
             &deployment_finalizations_path,
+            &rotation_handoffs_path,
             &privacy_finalization_path,
             &observation_binding_path,
         ] {
@@ -337,6 +366,8 @@ impl TairaAuthorityServiceV1 {
         let authorizations =
             load_canonical_records(&receipts_path).map_err(|()| TairaAuthorityErrorV1::State)?;
         let deployment_finalizations = load_canonical_records(&deployment_finalizations_path)
+            .map_err(|()| TairaAuthorityErrorV1::State)?;
+        let rotation_handoffs = load_canonical_records(&rotation_handoffs_path)
             .map_err(|()| TairaAuthorityErrorV1::State)?;
         let privacy_finalizations: BTreeMap<[u8; 32], FinalizePrivacyGenesisV1> =
             load_canonical_records(&privacy_finalization_path)
@@ -364,6 +395,7 @@ impl TairaAuthorityServiceV1 {
             &consumptions,
             &authorizations,
             &deployment_finalizations,
+            &rotation_handoffs,
         )?;
         let service = Self {
             state_directory,
@@ -374,6 +406,7 @@ impl TairaAuthorityServiceV1 {
                 consumptions,
                 authorizations,
                 deployment_finalizations,
+                rotation_handoffs,
             }),
             privacy_genesis_finalized: role == TairaAuthorityRoleV1::PrivacyGovernance,
             public_soak_observation_binding,
@@ -422,6 +455,76 @@ impl TairaAuthorityServiceV1 {
         self.signer
             .attest_protocol_response(response_digest)
             .map_err(|_| TairaAuthorityErrorV1::Crypto)
+    }
+
+    pub(super) fn recover_rotation_handoff_from_predecessor(
+        &self,
+        previous: &TairaAuthorityPublicBindingV1,
+    ) -> Result<(), TairaAuthorityErrorV1> {
+        previous
+            .validate()
+            .map_err(|()| TairaAuthorityErrorV1::Binding)?;
+        let current = self.public_binding()?;
+        if previous == &current {
+            return Ok(());
+        }
+        if previous.role != self.role {
+            return Err(TairaAuthorityErrorV1::Binding);
+        }
+        let successor = self
+            .signer
+            .taira_current_rotation_successor(&previous.signer)
+            .map_err(|_| TairaAuthorityErrorV1::Binding)?;
+        let stored = stored_rotation_handoff(previous.clone(), successor)?;
+        let operation_id = rotation_operation_id(&stored.command)?;
+        persist_canonical_once(
+            &self.state_directory.join(ROTATION_HANDOFFS_DIRECTORY_V1),
+            operation_id,
+            &stored,
+        )
+        .map_err(|()| TairaAuthorityErrorV1::State)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TairaAuthorityErrorV1::State)?;
+        if let Some(existing) = state.rotation_handoffs.get(&operation_id) {
+            if existing != &stored {
+                return Err(TairaAuthorityErrorV1::Conflict);
+            }
+        } else {
+            state.rotation_handoffs.insert(operation_id, stored);
+        }
+        Ok(())
+    }
+
+    pub(super) fn binding_for_admin_request(
+        &self,
+        digest: [u8; 32],
+        command: &AuthorityAdminCommandV1,
+    ) -> Result<TairaAuthorityPublicBindingV1, TairaAuthorityErrorV1> {
+        let current = self.public_binding()?;
+        if current
+            .sha256()
+            .map_err(|()| TairaAuthorityErrorV1::Binding)?
+            == digest
+        {
+            return Ok(current);
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| TairaAuthorityErrorV1::State)?;
+        state
+            .rotation_handoffs
+            .values()
+            .find(|handoff| {
+                handoff.previous_binding.sha256().ok() == Some(digest)
+                    && handoff.successor_binding == current
+                    && (matches!(command, AuthorityAdminCommandV1::Status)
+                        || command == &handoff.command)
+            })
+            .map(|handoff| handoff.previous_binding.clone())
+            .ok_or(TairaAuthorityErrorV1::Binding)
     }
 
     fn validate_public_soak_observation_binding(
@@ -555,6 +658,18 @@ impl TairaAuthorityServiceV1 {
                 &record.receipt,
             )
             .map_err(|_| TairaAuthorityErrorV1::State)?;
+        if self
+            .signer
+            .taira_journal_commit_predecessor(
+                record.operation_id,
+                &record.signing_payload,
+                &record.receipt,
+            )
+            .map_err(|_| TairaAuthorityErrorV1::State)?
+            != record.previous_audit_head
+        {
+            return Err(TairaAuthorityErrorV1::State);
+        }
         let live = self.provenance()?;
         if live.audit_sequence < record.receipt.commit_sequence
             || (live.audit_sequence == record.receipt.commit_sequence
@@ -670,7 +785,7 @@ impl TairaAuthorityServiceV1 {
                 return Err(TairaAuthorityErrorV1::Conflict);
             }
             artifacts.revalidate()?;
-            verify_stored_authorization(&self.signer, existing)?;
+            verify_stored_authorization(&self.signer, self.role, existing)?;
             return Ok(OperationResponseV1 {
                 status: OperationStatusV1::Replayed,
                 result_json: authorization_result_json(existing, self.role, true)?,
@@ -700,36 +815,57 @@ impl TairaAuthorityServiceV1 {
                 result_json: dry_run_result_json(&request)?,
             });
         }
-        let qualification_probe_results = if self.role == TairaAuthorityRoleV1::Qualification {
-            Some(
+        let role_result = match self.role {
+            TairaAuthorityRoleV1::NativeEvidence => {
+                Some(super::native_evidence::validate_native_evidence_v1(
+                    &request.subject,
+                    &request.manifest,
+                    artifacts.files_mut(),
+                )?)
+            }
+            TairaAuthorityRoleV1::Qualification => Some(
                 super::sandbox::run_qualification_probes(artifacts.files_mut(), &request.manifest)?
                     .to_json_value(),
-            )
-        } else {
-            None
+            ),
+            _ => None,
         };
-        let consumption = ReplayConsumptionV1 {
+        let candidate_consumption = ReplayConsumptionV1 {
             run_id: request.run_id,
             operation_id: request.operation_id,
             request_sha256: request.request_sha256,
             subject_sha256: request.subject_sha256,
             artifact_manifest_sha256: request.manifest_sha256,
+            consumed_at_unix_millis: now_unix_millis,
         };
-        if let Some(existing) = state.consumptions.get(&request.run_id) {
-            if existing != &consumption {
+        let existing_consumption = state.consumptions.get(&request.run_id).cloned();
+        if let Some(existing) = &existing_consumption {
+            if !same_consumption_request(existing, &candidate_consumption) {
                 return Err(TairaAuthorityErrorV1::Conflict);
             }
+        }
+        let admitted_at_unix_millis = existing_consumption
+            .as_ref()
+            .map_or(now_unix_millis, |existing| existing.consumed_at_unix_millis);
+        if self.role == TairaAuthorityRoleV1::PublicSoakReplayAdmission {
+            // The broker must authenticate the independently signed observation
+            // before the replay identifier is consumed durably.  Crash recovery
+            // checks it at the already-recorded admission time.
+            self.verify_public_soak_replay_observation(&request, admitted_at_unix_millis)?;
+        }
+        let consumption = if let Some(existing) = existing_consumption {
+            existing
         } else {
             persist_canonical_once(
                 &self.state_directory.join(CONSUMPTIONS_DIRECTORY_V1),
                 request.run_id,
-                &consumption,
+                &candidate_consumption,
             )
             .map_err(|()| TairaAuthorityErrorV1::State)?;
             state
                 .consumptions
-                .insert(request.run_id, consumption.clone());
-        }
+                .insert(request.run_id, candidate_consumption.clone());
+            candidate_consumption
+        };
         if let Some(validated) = governance_validation {
             let stored = self.issue_governance_transaction(
                 &request,
@@ -757,23 +893,22 @@ impl TairaAuthorityServiceV1 {
                 | TairaAuthorityRoleV1::PublicSoakReplayAdmission
         ) {
             let stored = match self.role {
-                TairaAuthorityRoleV1::PublicSoakObservation => self
-                    .issue_public_soak_observation(
-                        &request,
-                        consumption,
-                        now_unix_millis,
-                        assignment.expires_at_unix_millis,
-                    )?,
+                TairaAuthorityRoleV1::PublicSoakObservation => self.issue_public_soak_observation(
+                    &request,
+                    consumption,
+                    admitted_at_unix_millis,
+                    assignment.expires_at_unix_millis,
+                )?,
                 TairaAuthorityRoleV1::PublicSoakReplayAdmission => self
                     .issue_public_soak_replay_admission(
                         &request,
                         consumption,
-                        now_unix_millis,
+                        admitted_at_unix_millis,
                     )?,
                 _ => unreachable!("matched public-soak roles"),
             };
             artifacts.revalidate()?;
-            verify_stored_authorization(&self.signer, &stored)?;
+            verify_stored_authorization(&self.signer, self.role, &stored)?;
             persist_canonical_once(
                 &self.state_directory.join(RECEIPTS_DIRECTORY_V1),
                 request.operation_id,
@@ -792,7 +927,7 @@ impl TairaAuthorityServiceV1 {
             &request,
             assignment.issued_at_unix_millis,
             assignment.expires_at_unix_millis,
-            qualification_probe_results,
+            role_result,
         )?;
         let envelope_signing_payload = taira_signing_payload(&claims)?;
         let envelope_receipt = receipt_from_response(
@@ -811,7 +946,7 @@ impl TairaAuthorityServiceV1 {
             self.role,
             &request,
             &authority_envelope_json,
-            now_unix_millis,
+            admitted_at_unix_millis,
             &envelope_receipt,
         )?;
         let receipt_signing_payload = durable_receipt_signing_payload(&receipt_claims)?;
@@ -834,7 +969,8 @@ impl TairaAuthorityServiceV1 {
         artifacts.revalidate()?;
         let stored = StoredAuthorizationV1 {
             consumption,
-            admitted_at_unix_millis: now_unix_millis,
+            request_json: request.canonical_request_json.clone(),
+            admitted_at_unix_millis,
             authority_envelope_json,
             durable_receipt_json,
             envelope_signing_payload,
@@ -842,7 +978,7 @@ impl TairaAuthorityServiceV1 {
             receipt_signing_payload,
             durable_receipt,
         };
-        verify_stored_authorization(&self.signer, &stored)?;
+        verify_stored_authorization(&self.signer, self.role, &stored)?;
         persist_canonical_once(
             &self.state_directory.join(RECEIPTS_DIRECTORY_V1),
             request.operation_id,
@@ -1158,6 +1294,7 @@ impl TairaAuthorityServiceV1 {
         let authority_envelope_json = canonical_json_line(&Value::Object(envelope))?;
         Ok(StoredAuthorizationV1 {
             consumption,
+            request_json: request.canonical_request_json.clone(),
             admitted_at_unix_millis: validated.issued_at_unix_millis,
             authority_envelope_json,
             durable_receipt_json,
@@ -1177,8 +1314,7 @@ impl TairaAuthorityServiceV1 {
     ) -> Result<StoredAuthorizationV1, TairaAuthorityErrorV1> {
         let (completed_at, subject_digest) = validate_public_soak_observation_subject(request)?;
         if issued_at_unix_millis < completed_at
-            || issued_at_unix_millis - completed_at
-                > PUBLIC_SOAK_MAX_AUTHORITY_LIFETIME_MILLIS_V1
+            || issued_at_unix_millis - completed_at > PUBLIC_SOAK_MAX_AUTHORITY_LIFETIME_MILLIS_V1
         {
             return Err(TairaAuthorityErrorV1::Rejected);
         }
@@ -1204,10 +1340,7 @@ impl TairaAuthorityServiceV1 {
             "replay_namespace".into(),
             Value::from(PUBLIC_SOAK_REPLAY_NAMESPACE_V1),
         );
-        claims.insert(
-            "replay_id".into(),
-            Value::from(hex::encode(request.run_id)),
-        );
+        claims.insert("replay_id".into(), Value::from(hex::encode(request.run_id)));
         claims.insert(
             "issued_at_unix_ms".into(),
             Value::from(issued_at_unix_millis),
@@ -1219,16 +1352,12 @@ impl TairaAuthorityServiceV1 {
             Value::from("iroha.taira.public-v2-24h-soak-authority-envelope.v1"),
         );
         envelope.insert("schema_version".into(), Value::from(1_u64));
-        envelope.insert(
-            "authority_key_id".into(),
-            Value::from(authority_key_id),
-        );
+        envelope.insert("authority_key_id".into(), Value::from(authority_key_id));
         envelope.insert("signature_algorithm".into(), Value::from("ed25519"));
         envelope.insert("claims".into(), Value::Object(claims));
         let unsigned = canonical_json_line(&Value::Object(envelope.clone()))?;
-        let mut message = Vec::with_capacity(
-            PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1.len() + unsigned.len(),
-        );
+        let mut message =
+            Vec::with_capacity(PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1.len() + unsigned.len());
         message.extend_from_slice(PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1);
         message.extend_from_slice(&unsigned);
         let signing_payload = taira_validated_message_payload(
@@ -1249,6 +1378,7 @@ impl TairaAuthorityServiceV1 {
         let authority_envelope_json = canonical_json_line(&Value::Object(envelope))?;
         Ok(StoredAuthorizationV1 {
             consumption,
+            request_json: request.canonical_request_json.clone(),
             admitted_at_unix_millis: issued_at_unix_millis,
             authority_envelope_json,
             durable_receipt_json: b"{}\n".to_vec(),
@@ -1359,9 +1489,8 @@ impl TairaAuthorityServiceV1 {
         durable.insert("signature_algorithm".into(), Value::from("ed25519"));
         durable.insert("claims".into(), Value::Object(claims));
         let unsigned = canonical_json_line(&Value::Object(durable.clone()))?;
-        let mut message = Vec::with_capacity(
-            PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1.len() + unsigned.len(),
-        );
+        let mut message =
+            Vec::with_capacity(PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1.len() + unsigned.len());
         message.extend_from_slice(PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1);
         message.extend_from_slice(&unsigned);
         let signing_payload = taira_validated_message_payload(
@@ -1381,6 +1510,7 @@ impl TairaAuthorityServiceV1 {
         );
         Ok(StoredAuthorizationV1 {
             consumption,
+            request_json: request.canonical_request_json.clone(),
             admitted_at_unix_millis,
             authority_envelope_json: envelope_json,
             durable_receipt_json: canonical_json_line(&Value::Object(durable))?,
@@ -1457,7 +1587,16 @@ impl TairaAuthorityServiceV1 {
         {
             return Err(TairaAuthorityErrorV1::Conflict);
         }
-        verify_stored_authorization(&self.signer, stored)?;
+        if self.role == TairaAuthorityRoleV1::PublicSoakReplayAdmission {
+            // Historical verification revalidates both signatures at the
+            // recorded admission time and deliberately does not mutate replay
+            // state.
+            self.verify_public_soak_replay_observation(
+                &request.base,
+                stored.admitted_at_unix_millis,
+            )?;
+        }
+        verify_stored_authorization(&self.signer, self.role, stored)?;
         artifacts.revalidate()?;
         Ok(OperationResponseV1 {
             status: OperationStatusV1::Ok,
@@ -1489,7 +1628,32 @@ impl TairaAuthorityServiceV1 {
                 if self.privacy_genesis_finalized {
                     return Err(TairaAuthorityErrorV1::Conflict);
                 }
-                self.forward_admin(AdminCommandV1::Rotate {
+                let command = AuthorityAdminCommandV1::Rotate {
+                    operation_id,
+                    expected_audit_head,
+                    expected_key_revision,
+                    new_key_revision,
+                    new_policy_revision,
+                    new_policy_digest,
+                };
+                if let Some(existing) = self
+                    .state
+                    .lock()
+                    .map_err(|_| TairaAuthorityErrorV1::State)?
+                    .rotation_handoffs
+                    .get(&operation_id)
+                    .cloned()
+                {
+                    if existing.command != command {
+                        return Err(TairaAuthorityErrorV1::Conflict);
+                    }
+                    return Ok(OperationResponseV1 {
+                        status: OperationStatusV1::Replayed,
+                        result_json: existing.result_json,
+                    });
+                }
+                let previous_binding = self.public_binding()?;
+                let signer_command = AdminCommandV1::Rotate {
                     operation_id,
                     expected_audit_head,
                     expected_key_revision,
@@ -1497,10 +1661,31 @@ impl TairaAuthorityServiceV1 {
                     new_policy_revision,
                     new_policy_digest,
                     algorithm: SoftwareSignerKeyAlgorithmV1::Ed25519,
-                })?;
+                };
+                self.forward_admin(signer_command)?;
+                let successor = self
+                    .signer
+                    .taira_rotation_successor(&previous_binding.signer, operation_id)
+                    .map_err(|_| TairaAuthorityErrorV1::State)?;
+                let stored = stored_rotation_handoff(previous_binding, successor)?;
+                if stored.command != command {
+                    return Err(TairaAuthorityErrorV1::State);
+                }
+                persist_canonical_once(
+                    &self.state_directory.join(ROTATION_HANDOFFS_DIRECTORY_V1),
+                    operation_id,
+                    &stored,
+                )
+                .map_err(|()| TairaAuthorityErrorV1::State)?;
+                let result_json = stored.result_json.clone();
+                self.state
+                    .lock()
+                    .map_err(|_| TairaAuthorityErrorV1::State)?
+                    .rotation_handoffs
+                    .insert(operation_id, stored);
                 Ok(OperationResponseV1 {
                     status: OperationStatusV1::Ok,
-                    result_json: self.status_json()?,
+                    result_json,
                 })
             }
             AuthorityAdminCommandV1::Revoke {
@@ -1525,6 +1710,7 @@ impl TairaAuthorityServiceV1 {
 
     pub(super) fn status_json(&self) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
         let binding = self.public_binding()?;
+        validate_qualification_service_identity(self.role, binding.signer.service_uid)?;
         let provenance = self.provenance()?;
         let mut object = Map::new();
         object.insert(
@@ -1599,6 +1785,206 @@ impl TairaAuthorityServiceV1 {
         }
         Ok(())
     }
+}
+
+fn rotation_operation_id(
+    command: &AuthorityAdminCommandV1,
+) -> Result<[u8; 32], TairaAuthorityErrorV1> {
+    match command {
+        AuthorityAdminCommandV1::Rotate { operation_id, .. } => Ok(*operation_id),
+        _ => Err(TairaAuthorityErrorV1::State),
+    }
+}
+
+fn stored_rotation_handoff(
+    previous_binding: TairaAuthorityPublicBindingV1,
+    successor: SoftwareSignerRotationSuccessorV1,
+) -> Result<StoredRotationHandoffV1, TairaAuthorityErrorV1> {
+    let successor_binding = TairaAuthorityPublicBindingV1 {
+        magic: TAIRA_AUTHORITY_BINDING_MAGIC_V1,
+        version: TAIRA_AUTHORITY_PROTOCOL_VERSION_V1,
+        role: previous_binding.role,
+        signer: successor.successor.clone(),
+    };
+    previous_binding
+        .validate()
+        .and_then(|()| successor_binding.validate())
+        .map_err(|()| TairaAuthorityErrorV1::Binding)?;
+    let command = AuthorityAdminCommandV1::Rotate {
+        operation_id: successor.operation_id,
+        expected_audit_head: successor.predecessor_audit_head,
+        expected_key_revision: previous_binding.signer.key_revision,
+        new_key_revision: successor_binding.signer.key_revision,
+        new_policy_revision: successor_binding.signer.policy_revision,
+        new_policy_digest: successor_binding.signer.policy_digest,
+    };
+    let signer_command = AdminCommandV1::Rotate {
+        operation_id: successor.operation_id,
+        expected_audit_head: successor.predecessor_audit_head,
+        expected_key_revision: previous_binding.signer.key_revision,
+        new_key_revision: successor_binding.signer.key_revision,
+        new_policy_revision: successor_binding.signer.policy_revision,
+        new_policy_digest: successor_binding.signer.policy_digest,
+        algorithm: SoftwareSignerKeyAlgorithmV1::Ed25519,
+    };
+    if successor.request_digest
+        != admin_request_digest(
+            previous_binding
+                .signer
+                .digest()
+                .map_err(|()| TairaAuthorityErrorV1::Binding)?,
+            &signer_command,
+        )
+        .map_err(|()| TairaAuthorityErrorV1::Binding)?
+    {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    let successor_binding_bytes =
+        norito::encode_canonical(&successor_binding).map_err(|_| TairaAuthorityErrorV1::State)?;
+    let mut result = Map::new();
+    result.insert(
+        "schema".into(),
+        Value::from("iroha.taira.authority-rotation-handoff.v1"),
+    );
+    result.insert("role".into(), Value::from(previous_binding.role.as_str()));
+    result.insert("status".into(), Value::from("successor-ready"));
+    result.insert(
+        "operation_id".into(),
+        Value::from(hex::encode(successor.operation_id)),
+    );
+    result.insert(
+        "expected_audit_head".into(),
+        Value::from(hex::encode(successor.predecessor_audit_head)),
+    );
+    result.insert(
+        "expected_key_revision".into(),
+        Value::from(previous_binding.signer.key_revision),
+    );
+    result.insert(
+        "new_key_revision".into(),
+        Value::from(successor_binding.signer.key_revision),
+    );
+    result.insert(
+        "new_policy_revision".into(),
+        Value::from(successor_binding.signer.policy_revision),
+    );
+    result.insert(
+        "new_policy_sha256".into(),
+        Value::from(hex::encode(successor_binding.signer.policy_digest)),
+    );
+    result.insert(
+        "previous_binding_sha256".into(),
+        Value::from(hex::encode(
+            previous_binding
+                .sha256()
+                .map_err(|()| TairaAuthorityErrorV1::Binding)?,
+        )),
+    );
+    result.insert(
+        "successor_binding_sha256".into(),
+        Value::from(hex::encode(
+            successor_binding
+                .sha256()
+                .map_err(|()| TairaAuthorityErrorV1::Binding)?,
+        )),
+    );
+    result.insert(
+        "successor_binding_norito_base64".into(),
+        Value::from(encode_base64_standard(&successor_binding_bytes)),
+    );
+    result.insert(
+        "journal_record_norito_base64".into(),
+        Value::from(encode_base64_standard(&successor.journal_record)),
+    );
+    result.insert("audit_sequence".into(), Value::from(successor.sequence));
+    result.insert(
+        "committed_audit_head".into(),
+        Value::from(hex::encode(successor.audit_head)),
+    );
+    Ok(StoredRotationHandoffV1 {
+        command,
+        previous_binding,
+        successor_binding,
+        journal_record: successor.journal_record,
+        result_json: canonical_json_line(&Value::Object(result))?,
+    })
+}
+
+pub(super) fn verify_rotation_handoff_json(
+    previous_binding: &TairaAuthorityPublicBindingV1,
+    handoff_json: &[u8],
+) -> Result<TairaAuthorityPublicBindingV1, TairaAuthorityErrorV1> {
+    let value = parse_canonical_json(handoff_json)?;
+    let object = exact_object(
+        &value,
+        &[
+            "audit_sequence",
+            "committed_audit_head",
+            "expected_audit_head",
+            "expected_key_revision",
+            "journal_record_norito_base64",
+            "new_key_revision",
+            "new_policy_revision",
+            "new_policy_sha256",
+            "operation_id",
+            "previous_binding_sha256",
+            "role",
+            "schema",
+            "status",
+            "successor_binding_norito_base64",
+            "successor_binding_sha256",
+        ],
+    )?;
+    let journal_record =
+        decode_base64_standard(required_str(object, "journal_record_norito_base64")?)?;
+    let successor =
+        verify_software_signer_rotation_successor(&previous_binding.signer, &journal_record)
+            .map_err(|_| TairaAuthorityErrorV1::Binding)?;
+    let expected = stored_rotation_handoff(previous_binding.clone(), successor)?;
+    if expected.result_json != handoff_json {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    let encoded_successor =
+        decode_base64_standard(required_str(object, "successor_binding_norito_base64")?)?;
+    let decoded_successor: TairaAuthorityPublicBindingV1 =
+        norito::decode_canonical(&encoded_successor).map_err(|_| TairaAuthorityErrorV1::Binding)?;
+    if norito::encode_canonical(&decoded_successor).map_err(|_| TairaAuthorityErrorV1::Binding)?
+        != encoded_successor
+        || decoded_successor != expected.successor_binding
+    {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    Ok(decoded_successor)
+}
+
+pub(super) fn rotation_handoff_matches_installed_successor(
+    handoff_json: &[u8],
+    installed: &TairaAuthorityPublicBindingV1,
+) -> bool {
+    let Ok(value) = parse_canonical_json(handoff_json) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let Some(encoded) = object
+        .get("successor_binding_norito_base64")
+        .and_then(Value::as_str)
+        .and_then(|value| decode_base64_standard(value).ok())
+    else {
+        return false;
+    };
+    let Ok(decoded) = norito::decode_canonical::<TairaAuthorityPublicBindingV1>(&encoded) else {
+        return false;
+    };
+    norito::encode_canonical(&decoded).ok().as_deref() == Some(encoded.as_slice())
+        && &decoded == installed
+        && object.get("role").and_then(Value::as_str) == Some(installed.role.as_str())
+        && object.get("status").and_then(Value::as_str) == Some("successor-ready")
+        && object
+            .get("successor_binding_sha256")
+            .and_then(Value::as_str)
+            == installed.sha256().ok().map(hex::encode).as_deref()
 }
 
 pub(super) fn now_unix_millis() -> Result<u64, TairaAuthorityErrorV1> {
@@ -1738,14 +2124,27 @@ fn receipt_from_response(
 
 fn verify_stored_authorization(
     signer: &SoftwareSignerServiceV1,
+    expected_role: TairaAuthorityRoleV1,
     stored: &StoredAuthorizationV1,
 ) -> Result<(), TairaAuthorityErrorV1> {
+    let request = parse_client_request(&stored.request_json, expected_role)?;
+    if request.operation_id != stored.consumption.operation_id
+        || request.run_id != stored.consumption.run_id
+        || request.request_sha256 != stored.consumption.request_sha256
+        || request.subject_sha256 != stored.consumption.subject_sha256
+        || request.manifest_sha256 != stored.consumption.artifact_manifest_sha256
+        || (expected_role == TairaAuthorityRoleV1::DeployIssuance
+            && request.deploy_disposition != Some(DeployDispositionV1::Apply))
+    {
+        return Err(TairaAuthorityErrorV1::State);
+    }
     let SoftwareSignerPurposeBindingV1::TairaAuthority { role } =
         &stored.envelope_receipt.provenance.binding.purpose_binding
     else {
         return Err(TairaAuthorityErrorV1::Binding);
     };
-    if stored.envelope_receipt.provenance.binding.role != SoftwareSignerRoleV1::TairaAuthority
+    if role != expected_role.as_str()
+        || stored.envelope_receipt.provenance.binding.role != SoftwareSignerRoleV1::TairaAuthority
         || stored.durable_receipt.provenance.binding != stored.envelope_receipt.provenance.binding
     {
         return Err(TairaAuthorityErrorV1::Binding);
@@ -1766,11 +2165,19 @@ fn verify_stored_authorization(
             &stored.envelope_receipt,
         )
         .map_err(|_| TairaAuthorityErrorV1::State)?;
-    if role == "privacy-governance" {
+    if matches!(
+        role.as_str(),
+        "privacy-governance" | "public-soak-observation" | "public-soak-replay-admission"
+    ) {
         if !stored.receipt_signing_payload.is_empty()
             || stored.durable_receipt != stored.envelope_receipt
         {
             return Err(TairaAuthorityErrorV1::State);
+        }
+        if expected_role == TairaAuthorityRoleV1::PrivacyGovernance {
+            verify_governance_single_commit_sidecars(signer, &request, stored)?;
+        } else {
+            verify_public_soak_single_commit_sidecars(expected_role, &request, stored)?;
         }
         return Ok(());
     }
@@ -1796,6 +2203,284 @@ fn verify_stored_authorization(
         .map_err(|_| TairaAuthorityErrorV1::State)
 }
 
+fn verify_governance_single_commit_sidecars(
+    signer: &SoftwareSignerServiceV1,
+    request: &ParsedClientRequestV1,
+    stored: &StoredAuthorizationV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    let binding = &stored.envelope_receipt.provenance.binding;
+    let subject_json = canonical_json_line(&request.subject)?;
+    let validated = privacy_governance::validate_assigned_privacy_governance_request_v1(
+        &subject_json,
+        binding.client_uid,
+        stored.admitted_at_unix_millis,
+    )
+    .map_err(|_| TairaAuthorityErrorV1::State)?;
+    if sha256(&stored.envelope_signing_payload) != validated.transaction_payload_sha256
+        || stored.admitted_at_unix_millis != validated.issued_at_unix_millis
+    {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+
+    let builder = TransactionBuilder::decode_payload(&stored.envelope_signing_payload)
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    let authority_account_id = builder.payload().authority.to_string();
+    let signature = Signature::try_from_bytes(&stored.envelope_receipt.signature)
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    let signed = builder.build_with_signature(signature);
+    signed
+        .verify_signature()
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    let signed_transaction = signed.encode_versioned();
+    let signed_transaction_sha256 = sha256(&signed_transaction);
+
+    let receipt_value = parse_canonical_json(&stored.durable_receipt_json)?;
+    let receipt = exact_object(
+        &receipt_value,
+        &[
+            "administrator_uid",
+            "audit_committed_head_sha256",
+            "audit_live_head_sha256",
+            "audit_previous_head_sha256",
+            "audit_sequence",
+            "authority_envelope_schema",
+            "authority_account_id",
+            "authority_public_key",
+            "binding_schema",
+            "binding_sha256",
+            "broker_binary_sha256",
+            "kernel_peer_uid",
+            "key_revision",
+            "operation_id",
+            "policy_revision",
+            "policy_sha256",
+            "replay_namespace",
+            "request_id",
+            "request_sha256",
+            "response_attestation_base64",
+            "response_attestation_sha256",
+            "schema",
+            "schema_version",
+            "service_id",
+            "service_uid",
+            "signer_role",
+            "signed_transaction_norito_base64",
+            "signed_transaction_sha256",
+            "status",
+            "transaction_hash_hex",
+        ],
+    )?;
+    let authority_binding = TairaAuthorityPublicBindingV1 {
+        magic: TAIRA_AUTHORITY_BINDING_MAGIC_V1,
+        version: TAIRA_AUTHORITY_PROTOCOL_VERSION_V1,
+        role: TairaAuthorityRoleV1::PrivacyGovernance,
+        signer: binding.clone(),
+    };
+    let previous_audit_head = signer
+        .taira_journal_commit_predecessor(
+            stored.consumption.operation_id,
+            &stored.envelope_signing_payload,
+            &stored.envelope_receipt,
+        )
+        .map_err(|_| TairaAuthorityErrorV1::State)?;
+    if required_str(receipt, "schema")? != "iroha.taira.privacy_governance_authority_receipt"
+        || required_u64(receipt, "schema_version")? != 1
+        || required_str(receipt, "authority_envelope_schema")?
+            != "iroha.taira.privacy_governance_authority.v1"
+        || required_str(receipt, "binding_schema")?
+            != "iroha.taira.privacy_governance_authority_binding"
+        || required_str(receipt, "status")? != "signed"
+        || required_str(receipt, "replay_namespace")?
+            != "iroha.taira.privacy_governance_authority_replay.v1"
+        || required_str(receipt, "service_id")? != "taira-authority-privacy-governance-v1"
+        || required_str(receipt, "signer_role")? != "privacy-governance"
+        || required_digest(receipt, "request_id")? != validated.request_id
+        || required_digest(receipt, "request_sha256")? != validated.request_sha256
+        || required_digest(receipt, "operation_id")? != validated.operation_id
+        || required_digest(receipt, "signed_transaction_sha256")? != signed_transaction_sha256
+        || required_digest(receipt, "policy_sha256")? != binding.policy_digest
+        || required_digest(receipt, "binding_sha256")?
+            != authority_binding
+                .sha256()
+                .map_err(|()| TairaAuthorityErrorV1::State)?
+        || required_digest(receipt, "audit_previous_head_sha256")? != previous_audit_head
+        || required_digest(receipt, "audit_committed_head_sha256")?
+            != stored.envelope_receipt.commit_audit_head
+        || required_digest(receipt, "audit_live_head_sha256")?
+            != stored.envelope_receipt.commit_audit_head
+        || required_u64(receipt, "audit_sequence")? != stored.envelope_receipt.commit_sequence
+        || required_u64(receipt, "key_revision")? != binding.key_revision
+        || required_u64(receipt, "policy_revision")? != binding.policy_revision
+        || required_u64(receipt, "service_uid")? != u64::from(binding.service_uid)
+        || required_u64(receipt, "administrator_uid")? != u64::from(binding.administrator_uid)
+        || required_nonnegative_u64(receipt, "kernel_peer_uid")? != u64::from(binding.client_uid)
+        || required_str(receipt, "authority_account_id")? != authority_account_id
+        || required_str(receipt, "authority_public_key")? != binding.public_key.to_string()
+        || required_str(receipt, "signed_transaction_norito_base64")?
+            != encode_base64_standard(&signed_transaction)
+        || required_str(receipt, "transaction_hash_hex")? != hex::encode(signed.hash().as_ref())
+        || required_str(receipt, "response_attestation_base64")?
+            != encode_base64_standard(&stored.envelope_receipt.response_attestation)
+        || required_digest(receipt, "response_attestation_sha256")?
+            != sha256(&stored.envelope_receipt.response_attestation)
+    {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+
+    let envelope_value = parse_canonical_json(&stored.authority_envelope_json)?;
+    let envelope = exact_object(
+        &envelope_value,
+        &[
+            "audit_head",
+            "audit_sequence",
+            "claims",
+            "role",
+            "schema",
+            "schema_version",
+            "signature",
+            "signature_algorithm",
+        ],
+    )?;
+    let claims = exact_object(
+        envelope.get("claims").ok_or(TairaAuthorityErrorV1::State)?,
+        &[
+            "request_id",
+            "signed_transaction_sha256",
+            "transaction_payload_sha256",
+        ],
+    )?;
+    if required_str(envelope, "schema")? != "iroha.taira.privacy_governance_authority.v1"
+        || required_u64(envelope, "schema_version")? != 1
+        || required_str(envelope, "role")? != "privacy-governance"
+        || required_str(envelope, "signature_algorithm")? != "ed25519"
+        || required_str(envelope, "signature")? != hex::encode(&stored.envelope_receipt.signature)
+        || required_u64(envelope, "audit_sequence")? != stored.envelope_receipt.commit_sequence
+        || required_digest(envelope, "audit_head")? != stored.envelope_receipt.commit_audit_head
+        || required_digest(claims, "request_id")? != validated.request_id
+        || required_digest(claims, "transaction_payload_sha256")?
+            != validated.transaction_payload_sha256
+        || required_digest(claims, "signed_transaction_sha256")? != signed_transaction_sha256
+    {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+    // The executable digest is not a caller-selected authority, but it must
+    // remain a syntactically valid nonzero commitment in historical receipts.
+    required_digest(receipt, "broker_binary_sha256")?;
+    Ok(())
+}
+
+fn verify_public_soak_single_commit_sidecars(
+    role: TairaAuthorityRoleV1,
+    request: &ParsedClientRequestV1,
+    stored: &StoredAuthorizationV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    let (signed_document, signature_purpose, signature_domain) = match role {
+        TairaAuthorityRoleV1::PublicSoakObservation => {
+            if stored.durable_receipt_json != b"{}\n" {
+                return Err(TairaAuthorityErrorV1::State);
+            }
+            (
+                parse_canonical_json(&stored.authority_envelope_json)?,
+                "public-soak-observation-envelope-v1",
+                PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1,
+            )
+        }
+        TairaAuthorityRoleV1::PublicSoakReplayAdmission => (
+            parse_canonical_json(&stored.durable_receipt_json)?,
+            "public-soak-durable-admission-v1",
+            PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1,
+        ),
+        _ => return Err(TairaAuthorityErrorV1::State),
+    };
+    let mut signed_object = signed_document
+        .as_object()
+        .ok_or(TairaAuthorityErrorV1::State)?
+        .clone();
+    let signature = signed_object
+        .remove("signature")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or(TairaAuthorityErrorV1::State)?;
+    if signature != hex::encode(&stored.envelope_receipt.signature) {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+    let unsigned = canonical_json_line(&Value::Object(signed_object))?;
+    let mut message = Vec::with_capacity(signature_domain.len() + unsigned.len());
+    message.extend_from_slice(signature_domain);
+    message.extend_from_slice(&unsigned);
+    if stored.envelope_signing_payload
+        != taira_validated_message_payload(role, signature_purpose, &message)?
+    {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+    if role == TairaAuthorityRoleV1::PublicSoakReplayAdmission {
+        let request_subject = request
+            .subject
+            .as_object()
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        let stored_envelope = parse_canonical_json(&stored.authority_envelope_json)?;
+        if request_subject.get("authority_envelope") != Some(&stored_envelope)
+            || required_digest(request_subject, "authority_envelope_sha256")?
+                != sha256(&stored.authority_envelope_json)
+        {
+            return Err(TairaAuthorityErrorV1::State);
+        }
+        let durable = signed_document
+            .as_object()
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        let durable_claims = durable
+            .get("claims")
+            .and_then(Value::as_object)
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        if required_digest(durable_claims, "authority_envelope_sha256")?
+            != sha256(&stored.authority_envelope_json)
+        {
+            return Err(TairaAuthorityErrorV1::State);
+        }
+        let envelope = parse_canonical_json(&stored.authority_envelope_json)?;
+        let envelope = envelope.as_object().ok_or(TairaAuthorityErrorV1::State)?;
+        let envelope_claims = envelope
+            .get("claims")
+            .and_then(Value::as_object)
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        for field in ["authority_key_id", "replay_id", "subject_digest"] {
+            let envelope_value = if field == "authority_key_id" {
+                envelope.get(field)
+            } else {
+                envelope_claims.get(field)
+            };
+            if durable_claims.get(field) != envelope_value {
+                return Err(TairaAuthorityErrorV1::State);
+            }
+        }
+        if required_u64(durable_claims, "admitted_at_unix_ms")? != stored.admitted_at_unix_millis {
+            return Err(TairaAuthorityErrorV1::State);
+        }
+    } else {
+        let (_, subject_digest) = validate_public_soak_observation_subject(request)?;
+        let envelope = signed_document
+            .as_object()
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        let claims = envelope
+            .get("claims")
+            .and_then(Value::as_object)
+            .ok_or(TairaAuthorityErrorV1::State)?;
+        if required_digest(claims, "subject_digest")? != subject_digest
+            || required_u64(claims, "issued_at_unix_ms")? != stored.admitted_at_unix_millis
+        {
+            return Err(TairaAuthorityErrorV1::State);
+        }
+    }
+    Ok(())
+}
+
+fn same_consumption_request(left: &ReplayConsumptionV1, right: &ReplayConsumptionV1) -> bool {
+    left.run_id == right.run_id
+        && left.operation_id == right.operation_id
+        && left.request_sha256 == right.request_sha256
+        && left.subject_sha256 == right.subject_sha256
+        && left.artifact_manifest_sha256 == right.artifact_manifest_sha256
+}
+
 fn validate_recovered_state(
     role: TairaAuthorityRoleV1,
     signer: &SoftwareSignerServiceV1,
@@ -1803,6 +2488,7 @@ fn validate_recovered_state(
     consumptions: &BTreeMap<[u8; 32], ReplayConsumptionV1>,
     authorizations: &BTreeMap<[u8; 32], StoredAuthorizationV1>,
     deployment_finalizations: &BTreeMap<[u8; 32], StoredDeploymentFinalizationV1>,
+    rotation_handoffs: &BTreeMap<[u8; 32], StoredRotationHandoffV1>,
 ) -> Result<(), TairaAuthorityErrorV1> {
     for (run_id, assignment) in assignments {
         if assignment.assignment.role != role || assignment.assignment.run_id != *run_id {
@@ -1826,7 +2512,10 @@ fn validate_recovered_state(
             .map_err(|_| TairaAuthorityErrorV1::State)?;
     }
     for (run_id, consumption) in consumptions {
-        if consumption.run_id != *run_id || !assignments.contains_key(run_id) {
+        if consumption.run_id != *run_id
+            || consumption.consumed_at_unix_millis == 0
+            || !assignments.contains_key(run_id)
+        {
             return Err(TairaAuthorityErrorV1::State);
         }
     }
@@ -1837,7 +2526,7 @@ fn validate_recovered_state(
         {
             return Err(TairaAuthorityErrorV1::State);
         }
-        verify_stored_authorization(signer, authorization)?;
+        verify_stored_authorization(signer, role, authorization)?;
     }
     if role != TairaAuthorityRoleV1::DeployIssuance && !deployment_finalizations.is_empty() {
         return Err(TairaAuthorityErrorV1::State);
@@ -1877,6 +2566,19 @@ fn validate_recovered_state(
             return Err(TairaAuthorityErrorV1::State);
         }
     }
+    if role == TairaAuthorityRoleV1::PrivacyGovernance && !rotation_handoffs.is_empty() {
+        return Err(TairaAuthorityErrorV1::State);
+    }
+    for (operation_id, handoff) in rotation_handoffs {
+        if rotation_operation_id(&handoff.command)? != *operation_id
+            || handoff.previous_binding.role != role
+            || handoff.successor_binding.role != role
+            || verify_rotation_handoff_json(&handoff.previous_binding, &handoff.result_json)?
+                != handoff.successor_binding
+        {
+            return Err(TairaAuthorityErrorV1::State);
+        }
+    }
     Ok(())
 }
 
@@ -1889,6 +2591,7 @@ struct ParsedClientRequestV1 {
     manifest_value: Value,
     manifest_sha256: [u8; 32],
     manifest: Vec<TairaAuthorityArtifactManifestEntryV1>,
+    canonical_request_json: Vec<u8>,
     deploy_disposition: Option<DeployDispositionV1>,
     deployment_result: Option<DeploymentResultV1>,
     wire_request_sha256: [u8; 32],
@@ -2038,6 +2741,7 @@ fn parse_client_request_with_schema(
     }
     let canonical_request = canonical_json_line(&Value::Object(identity))?;
     let wire_request = canonical_json_line(&value)?;
+    let wire_request_sha256 = sha256(&wire_request);
     Ok(ParsedClientRequestV1 {
         operation_id,
         run_id,
@@ -2047,9 +2751,10 @@ fn parse_client_request_with_schema(
         manifest_value,
         manifest_sha256: sha256(&manifest_bytes),
         manifest,
+        canonical_request_json: wire_request,
         deploy_disposition,
         deployment_result,
-        wire_request_sha256: sha256(&wire_request),
+        wire_request_sha256,
     })
 }
 
@@ -2363,9 +3068,8 @@ fn taira_validated_message_payload(
         Value::from(hex::encode(signing_message)),
     );
     let wrapper = canonical_json_core(&Value::Object(wrapper))?;
-    let mut payload = Vec::with_capacity(
-        TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1.len() + wrapper.len(),
-    );
+    let mut payload =
+        Vec::with_capacity(TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1.len() + wrapper.len());
     payload.extend_from_slice(TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1);
     payload.extend_from_slice(&wrapper);
     Ok(payload)
@@ -2390,9 +3094,7 @@ fn validate_public_soak_observation_subject(
     Ok((completed_at, digest))
 }
 
-fn validate_public_soak_subject_core(
-    value: &Value,
-) -> Result<[u8; 32], TairaAuthorityErrorV1> {
+fn validate_public_soak_subject_core(value: &Value) -> Result<[u8; 32], TairaAuthorityErrorV1> {
     let subject = exact_object(
         value,
         &[
@@ -2410,9 +3112,7 @@ fn validate_public_soak_subject_core(
             "workload",
         ],
     )?;
-    if required_str(subject, "schema")?
-        != "iroha.taira.public-v2-24h-soak-authority-subject.v1"
-    {
+    if required_str(subject, "schema")? != "iroha.taira.public-v2-24h-soak-authority-subject.v1" {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
     let receipt = exact_object(
@@ -2445,7 +3145,12 @@ fn validate_public_soak_subject_core(
         required_digest(prerequisites, "deploy_handoff_sha256")?,
         required_digest(prerequisites, "publication_handoff_sha256")?,
     ];
-    if prerequisite_digests.into_iter().collect::<BTreeSet<_>>().len() != 3 {
+    if prerequisite_digests
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 3
+    {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
     validate_digest_count_object(subject, "anchor", "sha256", "validator_count")?;
@@ -2538,8 +3243,7 @@ fn validate_public_soak_envelope(
         ],
     )?;
     let expected_key_id = hex::encode(binding.signer.public_key_digest);
-    if required_str(envelope, "schema")?
-        != "iroha.taira.public-v2-24h-soak-authority-envelope.v1"
+    if required_str(envelope, "schema")? != "iroha.taira.public-v2-24h-soak-authority-envelope.v1"
         || required_u64(envelope, "schema_version")? != 1
         || required_str(envelope, "signature_algorithm")? != "ed25519"
         || required_str(envelope, "authority_key_id")? != expected_key_id
@@ -2559,8 +3263,7 @@ fn validate_public_soak_envelope(
             "subject_digest",
         ],
     )?;
-    if required_str(claims, "schema")?
-        != "iroha.taira.public-v2-24h-soak-authority-claims.v1"
+    if required_str(claims, "schema")? != "iroha.taira.public-v2-24h-soak-authority-claims.v1"
         || required_str(claims, "replay_namespace")? != PUBLIC_SOAK_REPLAY_NAMESPACE_V1
         || required_digest(claims, "subject_digest")? != expected_subject_digest
     {
@@ -2581,14 +3284,13 @@ fn validate_public_soak_envelope(
     parse_digest(&replay_id)?;
     let signature_bytes = hex::decode(required_str(envelope, "signature")?)
         .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
-    let signature = Signature::try_from_bytes(&signature_bytes)
-        .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+    let signature =
+        Signature::try_from_bytes(&signature_bytes).map_err(|_| TairaAuthorityErrorV1::Rejected)?;
     let mut unsigned = envelope.clone();
     unsigned.remove("signature");
     let unsigned = canonical_json_line(&Value::Object(unsigned))?;
-    let mut signing_message = Vec::with_capacity(
-        PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1.len() + unsigned.len(),
-    );
+    let mut signing_message =
+        Vec::with_capacity(PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1.len() + unsigned.len());
     signing_message.extend_from_slice(PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1);
     signing_message.extend_from_slice(&unsigned);
     signature

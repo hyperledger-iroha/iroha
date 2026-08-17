@@ -218,6 +218,112 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
     return bundle
 
 
+def _write_reset_manifest(bundle: Path, manifest: dict[str, object]) -> None:
+    _write(
+        bundle / "reset-manifest.json",
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+
+def _kagemusha_projection(release_root: Path) -> dict[str, object]:
+    return {
+        "schema": MODULE.KAGEMUSHA_CONFIG_PROJECTION_SCHEMA,
+        "release_root": str(release_root),
+        "release_policy_path": str(
+            release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+        ),
+        "artifact_dir": str(release_root / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH),
+        "catalog_qualification_seal_path": str(
+            release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+        ),
+        "max_decoded_bytes": MODULE.KAGEMUSHA_MAX_DECODED_BYTES,
+    }
+
+
+def _configure_kagemusha_bundle(
+    bundle: Path,
+    release_root: Path,
+    *,
+    materialize_external_release: bool,
+) -> tuple[str, str]:
+    policy = b"canonical Kagemusha release policy\n"
+    release_manifest = b"canonical Kagemusha release manifest\n"
+    policy_sha256 = hashlib.sha256(policy).hexdigest()
+    release_manifest_sha256 = hashlib.sha256(release_manifest).hexdigest()
+    if materialize_external_release:
+        _write(
+            release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH,
+            policy,
+        )
+        release_dir = (
+            release_root
+            / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+            / release_manifest_sha256
+        )
+        _write(release_dir / "manifest.norito", release_manifest)
+        _write(
+            release_dir / "manifest.norito.sha256",
+            f"{release_manifest_sha256}\n".encode("ascii"),
+        )
+        _write(
+            release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH,
+            b"canonical bounded qualification seal\n",
+        )
+
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    projection = _kagemusha_projection(release_root)
+    for slug in MODULE.SLUGS:
+        config_path = bundle / "rendered" / slug / "config.toml"
+        config = config_path.read_text(encoding="utf-8") + f"""
+
+[settlement.offline]
+kagemusha_release_policy_path = "{projection['release_policy_path']}"
+kagemusha_artifact_dir = "{projection['artifact_dir']}"
+kagemusha_catalog_qualification_seal_path = "{projection['catalog_qualification_seal_path']}"
+kagemusha_max_decoded_bytes = {projection['max_decoded_bytes']}
+"""
+        _write(config_path, config.encode())
+        manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    manifest.update(
+        {
+            "kagemusha_activation_authority": "test-kagemusha-activation-authority",
+            "kagemusha_config_projection": projection,
+            "kagemusha_config_projection_sha256": hashlib.sha256(
+                MODULE._canonical_kagemusha_config_projection_bytes(projection)
+            ).hexdigest(),
+            "kagemusha_release_policy_sha256": policy_sha256,
+            "kagemusha_release_root": str(release_root),
+        }
+    )
+    _write_reset_manifest(bundle, manifest)
+    return policy_sha256, release_manifest_sha256
+
+
+def _allow_test_owned_kagemusha_release(
+    monkeypatch: pytest.MonkeyPatch,
+    release_root: Path,
+) -> None:
+    """Exercise custody checks below a test-owned temporary trust boundary."""
+
+    capture = MODULE._capture_root_controlled_kagemusha_paths
+
+    def capture_test_paths(root: Path, **kwargs: object):
+        assert root == release_root
+        return capture(
+            root,
+            **kwargs,
+            _trust_boundary=release_root,
+            _trusted_uid=os.getuid(),
+        )
+
+    monkeypatch.setattr(
+        MODULE,
+        "_capture_root_controlled_kagemusha_paths",
+        capture_test_paths,
+    )
+
+
 def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.BundlePlan:
     manifest_raw = (bundle / "reset-manifest.json").read_bytes()
     return MODULE.validate_bundle(
@@ -309,6 +415,53 @@ def test_projection_parser_keeps_hash_inside_quoted_address() -> None:
     assert config["torii"]["address"] == "addr:127.0.0.1:8080#1234"
 
 
+def test_projection_parser_extracts_managed_kagemusha_fields() -> None:
+    release_root = Path("/srv/iroha-kagemusha/taira-v4-r1")
+    expected = _kagemusha_projection(release_root)
+    text = _projection_config_text() + f"""
+
+[settlement.offline]
+kagemusha_release_policy_path = "{expected['release_policy_path']}"
+kagemusha_artifact_dir = "{expected['artifact_dir']}"
+kagemusha_catalog_qualification_seal_path = "{expected['catalog_qualification_seal_path']}"
+kagemusha_max_decoded_bytes = {expected['max_decoded_bytes']}
+"""
+
+    config = MODULE.parse_config_projection_text(text, "validator config")
+
+    assert config["settlement"]["offline"] == {
+        "kagemusha_release_policy_path": expected["release_policy_path"],
+        "kagemusha_artifact_dir": expected["artifact_dir"],
+        "kagemusha_catalog_qualification_seal_path": expected[
+            "catalog_qualification_seal_path"
+        ],
+        "kagemusha_max_decoded_bytes": expected["max_decoded_bytes"],
+    }
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    (
+        'kagemusha_artifact_dir = "/hidden/catalog"',
+        'settlement.offline.kagemusha_artifact_dir = "/hidden/catalog"',
+        '"kagemusha_artifact_dir" = "/hidden/catalog"',
+        (
+            '[settlement.offline]\n'
+            '"kagemusha\\u005fartifact_dir" = "/hidden/catalog"'
+        ),
+        'settlement = { offline = { kagemusha_artifact_dir = "/hidden/catalog" } }',
+    ),
+)
+def test_projection_parser_rejects_noncanonical_managed_kagemusha_assignment(
+    assignment: str,
+) -> None:
+    with pytest.raises(MODULE.DeploymentError, match="managed Kagemusha"):
+        MODULE.parse_config_projection_text(
+            _projection_config_text() + f"\n{assignment}\n",
+            "validator config",
+        )
+
+
 def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) -> None:
     binary_sha = "a" * 64
     source_commit = "b" * 40
@@ -323,6 +476,323 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert [peer.torii_port for peer in plan.peers] == list(MODULE.TORII_PORTS)
     assert [peer.p2p_port for peer in plan.peers] == list(MODULE.P2P_PORTS)
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
+
+
+def test_bundle_preflight_binds_kagemusha_projection_and_bounded_external_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import prepare_taira_empty_reset_bundle as reset_composer
+
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _policy_sha256, manifest_sha256 = _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    second_manifest = b"second canonical Kagemusha release manifest\n"
+    second_manifest_sha256 = hashlib.sha256(second_manifest).hexdigest()
+    second_release_dir = (
+        release_root
+        / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+        / second_manifest_sha256
+    )
+    _write(second_release_dir / "manifest.norito", second_manifest)
+    _write(
+        second_release_dir / "manifest.norito.sha256",
+        f"{second_manifest_sha256}\n".encode("ascii"),
+    )
+
+    plan = _validate(bundle, binary_sha, source_commit)
+
+    projection = _kagemusha_projection(release_root)
+    assert projection == reset_composer._kagemusha_config_projection(release_root)
+    assert MODULE._canonical_kagemusha_config_projection_bytes(
+        projection
+    ) == reset_composer.canonical_json_bytes(projection)
+    expected_projection_sha256 = hashlib.sha256(
+        MODULE._canonical_kagemusha_config_projection_bytes(projection)
+    ).hexdigest()
+    assert plan.kagemusha_config_projection_sha256 == expected_projection_sha256
+    assert plan.kagemusha_external_release is not None
+    external = plan.kagemusha_external_release
+    assert external.bounded_material_present is True
+    assert external.protected_path_identities
+    expected_manifest_digests = tuple(
+        sorted((manifest_sha256, second_manifest_sha256))
+    )
+    assert external.manifest_directory_digests == expected_manifest_digests
+    expected_inventory = {
+        "schema": MODULE.KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA,
+        "manifest_sha256": list(expected_manifest_digests),
+    }
+    assert external.manifest_directory_inventory_sha256 == hashlib.sha256(
+        MODULE.taira_authority_client.canonical_json_bytes(expected_inventory)
+    ).hexdigest()
+    assert external.qualification_seal_sha256 == hashlib.sha256(
+        b"canonical bounded qualification seal\n"
+    ).hexdigest()
+    subject = MODULE._kagemusha_authority_subject(plan)
+    assert subject["config_projection_sha256"] == expected_projection_sha256
+    assert subject["bounded_material_present"] is True
+    assert subject["external_release_verified"] is False
+    assert subject["manifest_directory_digests"] == list(
+        expected_manifest_digests
+    )
+    artifact_names = {
+        artifact.name for artifact in MODULE._kagemusha_authority_artifacts(plan)
+    }
+    expected_artifact_names = {
+        "kagemusha/policy/release-policy-v1.norito",
+        "kagemusha/seals/catalog-qualification-v1.norito",
+    }
+    for digest in expected_manifest_digests:
+        expected_artifact_names.add(
+            f"kagemusha/catalog/{digest}/manifest.norito"
+        )
+        expected_artifact_names.add(
+            f"kagemusha/catalog/{digest}/manifest.norito.sha256"
+        )
+    assert artifact_names == expected_artifact_names
+    preflight_fields = MODULE._kagemusha_report_fields(
+        plan, exact_binary_config_verified=False
+    )
+    assert preflight_fields["kagemusha_external_release_material_present"] is True
+    assert preflight_fields["kagemusha_external_release_verified"] is False
+    assert preflight_fields["kagemusha_exact_binary_config_verified"] is False
+    assert (
+        preflight_fields["kagemusha_external_release_status"]
+        == "blocked-exact-installed-binary-config-pending"
+    )
+
+
+def test_bundle_preflight_marks_unavailable_kagemusha_release_blocked(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "not-installed-kagemusha-release"
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=False,
+    )
+
+    plan = _validate(bundle, binary_sha, source_commit)
+    fields = MODULE._kagemusha_report_fields(
+        plan, exact_binary_config_verified=False
+    )
+
+    assert plan.kagemusha_external_release is not None
+    assert plan.kagemusha_external_release.bounded_material_present is False
+    assert fields["kagemusha_external_release_verified"] is False
+    assert (
+        fields["kagemusha_external_release_status"]
+        == "blocked-external-release-unavailable"
+    )
+    assert fields["kagemusha_exact_binary_config_verified"] is False
+
+
+def test_bundle_preflight_rejects_hidden_kagemusha_config_without_manifest(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text(encoding="utf-8") + """
+
+[settlement.offline]
+kagemusha_artifact_dir = "/hidden/catalog"
+"""
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="differs from the reset manifest"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_kagemusha_projection_digest_drift(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["kagemusha_config_projection_sha256"] = "0" * 64
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="SHA-256 is not canonical"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("schema", "projection is not canonical"),
+        ("extra-key", "projection keys are not exact"),
+        ("partial-top-level", "partial Kagemusha projection"),
+    ),
+)
+def test_bundle_preflight_requires_exact_kagemusha_manifest_schema_and_keys(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "schema":
+        manifest["kagemusha_config_projection"]["schema"] = "wrong"
+        manifest["kagemusha_config_projection_sha256"] = hashlib.sha256(
+            MODULE._canonical_kagemusha_config_projection_bytes(
+                manifest["kagemusha_config_projection"]
+            )
+        ).hexdigest()
+    elif mutation == "extra-key":
+        manifest["kagemusha_config_projection"]["unreviewed"] = True
+        manifest["kagemusha_config_projection_sha256"] = hashlib.sha256(
+            MODULE._canonical_kagemusha_config_projection_bytes(
+                manifest["kagemusha_config_projection"]
+            )
+        ).hexdigest()
+    else:
+        del manifest["kagemusha_activation_authority"]
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_one_peer_kagemusha_projection_drift(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    slug = MODULE.SLUGS[-1]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text(encoding="utf-8").replace(
+        str(MODULE.KAGEMUSHA_MAX_DECODED_BYTES),
+        str(MODULE.KAGEMUSHA_MAX_DECODED_BYTES - 1),
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="differs from the reset manifest"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_available_kagemusha_policy_or_manifest_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _policy_sha256, manifest_sha256 = _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    _write(policy_path, b"substituted policy\n")
+    with pytest.raises(MODULE.DeploymentError, match="release policy differs"):
+        _validate(bundle, binary_sha, source_commit)
+
+    _write(policy_path, b"canonical Kagemusha release policy\n")
+    sidecar = (
+        release_root
+        / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+        / manifest_sha256
+        / "manifest.norito.sha256"
+    )
+    _write(sidecar, f"{'0' * 64}\n".encode("ascii"))
+    with pytest.raises(MODULE.DeploymentError, match="digest sidecar"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_writable_kagemusha_external_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    policy_path.chmod(0o620)
+
+    with pytest.raises(MODULE.DeploymentError, match="unsafe protected Kagemusha"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_kagemusha_external_identity_recheck_rejects_same_byte_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    plan = _validate(bundle, binary_sha, source_commit)
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    replacement = policy_path.with_name("replacement.norito")
+    _write(replacement, policy_path.read_bytes())
+    os.replace(replacement, policy_path)
+
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="protected Kagemusha external release changed after preflight",
+    ):
+        MODULE.require_kagemusha_external_release_unchanged(
+            plan,
+            phase="after preflight",
+        )
 
 
 def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
@@ -425,7 +895,9 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     ]
     assert all(
         kwargs["stdin"] is MODULE.subprocess.DEVNULL
-        and kwargs["capture_output"] is True
+        and kwargs["stdout"] is MODULE.subprocess.DEVNULL
+        and kwargs["stderr"] is MODULE.subprocess.DEVNULL
+        and "capture_output" not in kwargs
         and kwargs["timeout"] == MODULE.CONFIG_CHECK_TIMEOUT_SECONDS
         and kwargs["env"] == {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
         and callable(kwargs["preexec_fn"])
@@ -459,6 +931,85 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
         )
 
     assert calls == 2
+
+
+def test_kagemusha_dry_run_readiness_requires_exact_installed_binary_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"exact installed candidate"
+    digest = hashlib.sha256(body).hexdigest()
+    install_root = tmp_path / "install"
+    installed = install_root / "binaries" / digest / "iroha3d"
+    _write(installed, body)
+    installed.chmod(0o700)
+    bundle = SimpleNamespace(
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=True,
+            manifest_directory_digests=(),
+            manifest_directory_inventory_sha256=None,
+            expected_policy_sha256="6" * 64,
+            qualification_seal_sha256=None,
+        ),
+    )
+    sources = SimpleNamespace(binary_sha256=digest)
+    events: list[str] = []
+    monkeypatch.setattr(MODULE, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(
+        MODULE,
+        "require_root_controlled_file",
+        lambda path, *, executable: path.lstat(),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_kagemusha_external_release_unchanged",
+        lambda _bundle, *, phase: events.append(phase),
+    )
+
+    def accept(path: Path, checked_bundle: object) -> None:
+        assert path == installed
+        assert checked_bundle is bundle
+        events.append("exact-check")
+
+    assert MODULE.validate_dry_run_kagemusha_exact_config(
+        sources,
+        bundle,
+        checker=accept,
+    )
+    fields = MODULE._kagemusha_report_fields(
+        bundle,
+        exact_binary_config_verified=True,
+    )
+    assert fields["kagemusha_external_release_material_present"] is True
+    assert fields["kagemusha_exact_binary_config_verified"] is True
+    assert fields["kagemusha_external_release_verified"] is True
+    assert MODULE._kagemusha_authority_subject(
+        bundle,
+        exact_binary_config_verified=True,
+    )["external_release_verified"] is True
+    assert events == [
+        "before exact dry-run config validation",
+        "exact-check",
+        "after exact dry-run config validation",
+    ]
+
+    events.clear()
+
+    def reject(_path: Path, _bundle: object) -> None:
+        events.append("semantic-reject")
+        raise MODULE.DeploymentError("injected semantic rejection")
+
+    with pytest.raises(MODULE.DeploymentError, match="semantic rejection"):
+        MODULE.validate_dry_run_kagemusha_exact_config(
+            sources,
+            bundle,
+            checker=reject,
+        )
+    assert events == [
+        "before exact dry-run config validation",
+        "semantic-reject",
+    ]
 
 
 def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
@@ -1978,7 +2529,27 @@ def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
         MODULE.verify_restored_snapshot(snapshot, ops)
 
 
-def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("material_present", "expected_mode", "expected_status"),
+    (
+        (
+            False,
+            "blocked-kagemusha-external-release-dry-run",
+            "blocked-external-release-unavailable",
+        ),
+        (
+            True,
+            "blocked-kagemusha-semantic-validation-dry-run",
+            "blocked-exact-installed-binary-config-pending",
+        ),
+    ),
+)
+def test_dry_run_execute_never_calls_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    material_present: bool,
+    expected_mode: str,
+    expected_status: str,
+) -> None:
     events: list[str] = []
     admission = SimpleNamespace(
         archive_sha256="0" * 64,
@@ -1998,6 +2569,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         bundle_bytes=1,
         free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         fsync_latency_ms=1.0,
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=material_present,
+            manifest_directory_inventory_sha256=None,
+            qualification_seal_sha256=None,
+        ),
     )
     sources = SimpleNamespace(
         binary_sha256="a" * 64,
@@ -2018,6 +2595,16 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         lambda _args: events.append("admission-verify") or admission,
     )
     monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_dry_run_kagemusha_exact_config",
+        lambda *_args: False,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_kagemusha_external_release_unchanged",
+        lambda *_args, phase: events.append(f"kagemusha-recheck:{phase}"),
+    )
     monkeypatch.setattr(
         MODULE,
         "require_admission_archive_unchanged",
@@ -2096,7 +2683,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     report = MODULE._execute_after_provisioned_authority_contracts(
         args, ops=MODULE.SystemOps()
     )
-    assert report["mode"] == "verified-read-only-dry-run"
+    assert report["mode"] == expected_mode
+    assert report["deployment_ready"] is False
+    assert report["kagemusha_config_projection_sha256"] == "5" * 64
+    assert report["kagemusha_external_release_material_present"] is material_present
+    assert report["kagemusha_external_release_verified"] is False
+    assert report["kagemusha_external_release_status"] == expected_status
     assert report["applied"] is False
     assert report["admission_receipt_consumed"] is False
     assert report["boi_artifact_inventory_sha256"] == "2" * 64
@@ -2106,8 +2698,95 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         "admission-verify",
         "capture",
         "archive-recheck",
+        "kagemusha-recheck:immediately before dry-run authority",
         "authority:False",
+        "kagemusha-recheck:immediately after dry-run authority",
     ]
+
+
+def test_apply_rejects_missing_kagemusha_material_before_authority_or_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    admission = SimpleNamespace(
+        binary_sha256="a" * 64,
+        supervisor_sha256="b" * 64,
+        source_commit="c" * 40,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+        restart_generation="9" * 64,
+    )
+    bundle = SimpleNamespace(
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=False,
+        ),
+    )
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
+    monkeypatch.setattr(
+        MODULE,
+        "verify_deployment_admission",
+        lambda _args: events.append("admission") or admission,
+    )
+    monkeypatch.setattr(MODULE, "validate_bundle", lambda *_args, **_kwargs: bundle)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_sources",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *_args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, **_kwargs: pytest.fail("apply reached deploy authority"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "consume_admission_receipt",
+        lambda *_args: pytest.fail("apply reached receipt consumption"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "exclusive_deployment_lock",
+        lambda: pytest.fail("blocked apply acquired deployment lock"),
+    )
+    args = argparse.Namespace(
+        bundle=Path("/bundle"),
+        binary=Path("/binary"),
+        supervisor=Path("/supervisor"),
+        admission_archive=Path("/candidate.tar.gz"),
+        admission_authority_dir=Path("/authority"),
+        supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
+        expected_source_commit="c" * 40,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+        expected_cargo_lock_sha256="d" * 64,
+        expected_workspace_source_manifest_sha256="e" * 64,
+        expected_receipt_id="f" * 64,
+        expected_artifact_handoff_sha256="9" * 64,
+        expected_production_reset_manifest_sha256="a" * 64,
+        trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
+        release_manifest_verifier=Path("/sorafs-validate"),
+        trusted_release_manifest_verifier_sha256="2" * 64,
+        health_timeout_seconds=240,
+        minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
+        maximum_fsync_latency_ms=250,
+        allow_absent_old_child=False,
+        operator_network_id="taira",
+        operator_private_key_file=Path("/operator.key"),
+        apply=True,
+    )
+
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="requires protected bounded external release material",
+    ):
+        MODULE._execute_after_provisioned_authority_contracts(
+            args,
+            ops=MODULE.SystemOps(),
+        )
+    assert events == ["admission"]
 
 
 def test_deployment_admission_requires_and_binds_qualified_boi_result(

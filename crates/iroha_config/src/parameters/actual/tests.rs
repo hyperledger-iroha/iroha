@@ -5,6 +5,7 @@ mod tests {
         metadata::Metadata,
         nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
+
     #[test]
     fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
         let lanes = sora_lane_catalog();
@@ -1204,6 +1205,31 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
             sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+        let mut left = Nexus::default();
+        left.fees.successful_claim_fee_exempt_authorities = vec![
+            "authority-b".to_owned(),
+            "authority-a".to_owned(),
+            "authority-a".to_owned(),
+        ];
+        let mut right = left.clone();
+        right.fees.successful_claim_fee_exempt_authorities =
+            vec!["authority-a".to_owned(), "authority-b".to_owned()];
+
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "set order and duplicate entries must not affect the signed Nexus/AMX commitment"
+        );
+
+        right.fees.successful_claim_fee_exempt_authorities = vec!["authority-c".to_owned()];
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "changing the canonical authority set must change the signed commitment"
         );
     }
     fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {

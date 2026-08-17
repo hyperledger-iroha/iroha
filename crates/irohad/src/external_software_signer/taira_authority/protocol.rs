@@ -191,6 +191,11 @@ pub fn validate_taira_authority_registry_v1(
     let mut keys = BTreeSet::new();
     for binding in bindings {
         binding.validate()?;
+        if (binding.role == TairaAuthorityRoleV1::Qualification)
+            != (binding.signer.service_uid == 0)
+        {
+            return Err(());
+        }
         if !roles.insert(binding.role)
             || !handles.insert(binding.signer.handle.clone())
             || !identities.insert(binding.signer.service_id.clone())
@@ -382,11 +387,18 @@ pub(super) struct ReplayConsumptionV1 {
     pub request_sha256: [u8; 32],
     pub subject_sha256: [u8; 32],
     pub artifact_manifest_sha256: [u8; 32],
+    /// Stable admission time persisted before the first signature.  Retrying a
+    /// request after a crash must reconstruct byte-identical signed claims.
+    pub consumed_at_unix_millis: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct StoredAuthorizationV1 {
     pub consumption: ReplayConsumptionV1,
+    /// Canonical original authorize request.  Recovery re-runs role semantics
+    /// against these exact bytes instead of trusting fields copied into a
+    /// sidecar receipt.
+    pub request_json: Vec<u8>,
     pub admitted_at_unix_millis: u64,
     pub authority_envelope_json: Vec<u8>,
     pub durable_receipt_json: Vec<u8>,
@@ -406,6 +418,15 @@ pub(super) struct StoredDeploymentFinalizationV1 {
     pub finalized_at_unix_millis: u64,
     pub signing_payload: Vec<u8>,
     pub receipt: SoftwareSignerSignatureReceiptV1,
+    pub result_json: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct StoredRotationHandoffV1 {
+    pub command: AuthorityAdminCommandV1,
+    pub previous_binding: TairaAuthorityPublicBindingV1,
+    pub successor_binding: TairaAuthorityPublicBindingV1,
+    pub journal_record: Vec<u8>,
     pub result_json: Vec<u8>,
 }
 

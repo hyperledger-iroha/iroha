@@ -1738,54 +1738,7 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     assert_eq!(task.validated_receipt().durable().round(), commit.round);
     assert!(!executor.status().fail_closed);
 }
-#[test]
-fn apply_worker_request_has_no_runtime_ownership_sidecar() {
-    let source = include_str!("../v2_effects.rs");
-    let task = source
-        .split_once("pub(crate) struct ApplyTask {")
-        .expect("ApplyTask has one declaration")
-        .1
-        .split_once("impl ApplyTask {")
-        .expect("ApplyTask implementation follows its declaration")
-        .0;
-    for required in ["authorized_owner_tag: EventTag", "lifecycle_ordinal: u128"] {
-        assert!(task.contains(required), "ApplyTask omitted {required}");
-    }
-    assert!(!task.contains("RuntimeEffectOwnership"));
-    let pending = source
-        .split_once("struct PendingApply {")
-        .expect("ordinary Apply pending state has one declaration")
-        .1
-        .split_once("struct ReadyBody {")
-        .expect("ReadyBody follows ordinary Apply pending state")
-        .0;
-    assert!(pending.contains("ownership: RuntimeEffectOwnership"));
-    let preflight = source
-        .split_once("fn preflight_pending_application_owner(")
-        .expect("ordinary Apply owner has one exact preflight")
-        .1
-        .split_once("fn preflight_deferred_work_owner(")
-        .expect("deferred work preflight follows Apply preflight")
-        .0;
-    assert!(
-        preflight
-            .contains("task.lifecycle_ordinal() != pending.ownership.owner().lifecycle_ordinal()")
-    );
-    let completion = source
-        .split_once("pub(crate) fn complete_application")
-        .expect("Apply completion has one production entrypoint")
-        .1
-        .split_once("/// Current bounded operational status.")
-        .expect("status follows Apply completion")
-        .0;
-    let owner_preflight = completion
-        .find("preflight_pending_application_owner(completion.work_id, pending)")
-        .expect("Apply completion revalidates the retained runtime owner");
-    let task_borrow = completion
-        .find("let task = &pending.task;")
-        .expect("Apply completion borrows the task after owner validation");
-    assert!(owner_preflight < task_borrow);
-}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(apply_worker_request_has_no_runtime_ownership_sidecar);
 #[test]
 fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     let fixture = Fixture::new();

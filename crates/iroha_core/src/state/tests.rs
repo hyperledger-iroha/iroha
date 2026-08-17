@@ -68,7 +68,7 @@ use iroha_data_model::{
         LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement, LaneId,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneStorageProfile,
         LaneVisibility, ManifestVersion, ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneUnbonding, RemoteSpendIntent, SpendOp, TouchManifest,
+        PublicLaneUnbonding, RemoteSpendIntent, ShardId, SpendOp, TouchManifest,
     },
     peer::PeerId,
     proof::{ProofId, ProofRecord, ProofStatus},
@@ -227,6 +227,7 @@ macro_rules! public_lane {
     ($id:expr, $dataspace_id:expr, $alias:expr) => {
         LaneConfig {
             id: $id,
+            shard_id: None,
             dataspace_id: $dataspace_id,
             alias: $alias,
             description: None,
@@ -6135,7 +6136,7 @@ state_test! { sync autoscale_elastic_lane_config_uses_policy_dataspace_and_manag
 }
 #[test]
 fn autoscale_elastic_lane_config_inherits_public_base_profile_and_rejects_restricted_base() {
-    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::MerkleSha256, metadata: BTreeMap::new(), } };
+    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), shard_id: None, dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::MerkleSha256, metadata: BTreeMap::new(), } };
     base_lane
         .metadata
         .insert("security.profile".to_owned(), "strict".to_owned());
@@ -14480,7 +14481,7 @@ state_test! { sync lanes_requiring_state_reset_tracks_manifest_policy_changes
 }
 state_test! { sync lanes_requiring_state_reset_tracks_shard_mapping_changes
     let lane_id = LaneId::new(1);
-    let_row! { mapped_lane = |shard_id: u32| { let mut metadata = BTreeMap::new(); metadata.insert("da_shard_id".to_string(), shard_id.to_string()); LaneConfig { id: lane_id, alias: "mapped-shard".to_string(), metadata, ..LaneConfig::default() } } };
+    let_row! { mapped_lane = |shard_id: u32| LaneConfig { id: lane_id, shard_id: Some(ShardId::new(shard_id)), alias: "mapped-shard".to_string(), ..LaneConfig::default() } };
     let_row! { previous_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), mapped_lane(5)]) .expect("previous catalog") };
     let_row! { current_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), mapped_lane(7)]) .expect("current catalog") };
     let previous = RuntimeLaneConfig::from_catalog(&previous_catalog);
@@ -21239,15 +21240,11 @@ impl SameLaneDaResetCase {
                 (initial, updated)
             }
             Self::ShardMapping => {
-                let mapped = |shard_id: u32| {
-                    let mut metadata = BTreeMap::new();
-                    metadata.insert("da_shard_id".to_owned(), shard_id.to_string());
-                    LaneConfig {
-                        id: lane_id,
-                        alias: "mapped-shard".to_owned(),
-                        metadata,
-                        ..LaneConfig::default()
-                    }
+                let mapped = |shard_id: u32| LaneConfig {
+                    id: lane_id,
+                    shard_id: Some(ShardId::new(shard_id)),
+                    alias: "mapped-shard".to_owned(),
+                    ..LaneConfig::default()
                 };
                 (mapped(5), mapped(7))
             }
@@ -25256,6 +25253,39 @@ state_test! { sync lane_active_for_authority_respects_future_created_autoscale_h
     seed_latest_lane_authority_height_for_test(&state, 7);
     assert!(state.is_lane_active_for_authority(lane_id));
 }
+state_test! { sync disabled_nexus_authority_activity_accepts_only_canonical_single_lane
+    let state = blank_test_state();
+    state.nexus.write().enabled = false;
+    let noncanonical_lane = LaneId::new(1);
+    assert!(state.is_lane_active_for_authority(LaneId::SINGLE));
+    assert!(!state.is_lane_active_for_authority(noncanonical_lane));
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    let state_transaction = state_block.transaction();
+    assert!(state_transaction.is_lane_active_for_authority(LaneId::SINGLE));
+    assert!(!state_transaction.is_lane_active_for_authority(noncanonical_lane));
+}
+state_test! { sync disabled_nexus_staking_authority_accepts_only_canonical_single_lane
+    let state = blank_test_state();
+    state.nexus.write().enabled = false;
+    let noncanonical_lane = LaneId::new(1);
+    assert_eq!(
+        state.staking_authority_lane(LaneId::SINGLE),
+        Some(LaneId::SINGLE)
+    );
+    assert_eq!(state.staking_authority_lane(noncanonical_lane), None);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    let state_transaction = state_block.transaction();
+    assert_eq!(
+        state_transaction.staking_authority_lane(LaneId::SINGLE),
+        Some(LaneId::SINGLE)
+    );
+    assert_eq!(
+        state_transaction.staking_authority_lane(noncanonical_lane),
+        None
+    );
+}
 fn commit_topology_signers_for_lane_relay_test(
     state: &State,
     lane_id: LaneId,
@@ -27676,7 +27706,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
     let lane_count = nonzero!(2_u32);
-    let_row! { catalog = LaneCatalog::new( lane_count, vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "lane1".to_string(), metadata: { let mut map = BTreeMap::new(); map.insert("da_shard_id".to_string(), "5".to_string()); map }, ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { catalog = LaneCatalog::new( lane_count, vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
@@ -27739,7 +27769,7 @@ state_test! { sync resharding_clears_stale_shard_cursors
         let_row! { cursor = cursors .get(initial_shard) .expect("cursor stored under original shard") };
         assert_eq!(cursor.last_block_height, 3);
     }
-    let_row! { reshard_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "reshard-target".to_owned(), metadata: { let mut map = BTreeMap::new(); map.insert("da_shard_id".to_string(), "5".to_string()); map }, ..LaneConfig::default() }, ], ) .expect("reshard catalog") };
+    let_row! { reshard_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(5)), alias: "reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("reshard catalog") };
     let reshard_config = RuntimeLaneConfig::from_catalog(&reshard_catalog);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -27824,9 +27854,7 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
 fn hydrate_da_indexes_replays_multi_shard_bundle() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let mut lane_one_meta = BTreeMap::new();
-    lane_one_meta.insert("da_shard_id".to_string(), "5".to_string());
-    let_row! { catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "lane1".to_string(), metadata: lane_one_meta, ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
@@ -29396,9 +29424,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
     let target_lane = LaneId::new(1);
-    let mut metadata = BTreeMap::new();
-    metadata.insert("da_shard_id".to_string(), "1".to_string());
-    let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "cursor-reshard-target".to_owned(), metadata: metadata.clone(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(1)), alias: "cursor-reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
@@ -29416,9 +29442,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
         .advance_da_shard_cursors_from_bundle(2, std::slice::from_ref(&record))
         .expect("advance cursor");
     state.persist_da_shard_cursor_journal();
-    let mut updated_metadata = metadata;
-    updated_metadata.insert("da_shard_id".to_string(), "3".to_string());
-    let_row! { updated_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "cursor-reshard-target".to_owned(), metadata: updated_metadata, ..LaneConfig::default() }, ], ) .expect("updated catalog") };
+    let_row! { updated_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(3)), alias: "cursor-reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("updated catalog") };
     let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -30667,7 +30691,7 @@ state_test! { sync axt_policy_snapshot_metrics_record_cache_hit
         block.axt_policies.insert(dsid, policy);
         block.commit();
     }
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(5_u32), vec![LaneConfig { id: policy.target_lane, dataspace_id: dsid, alias: "axt-cache-hit".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("AXT cache-hit test lane catalog") };
+    let_row! { lane_catalog = LaneCatalog::new( nonzero!(5_u32), vec![LaneConfig { id: policy.target_lane, shard_id: None, dataspace_id: dsid, alias: "axt-cache-hit".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("AXT cache-hit test lane catalog") };
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
     nexus.routing_policy.default_lane = policy.target_lane;
@@ -31350,7 +31374,7 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
     let dsid = DataSpaceId::new(81);
     let lane = LaneId::new(0);
     let manifest_root = [0x77; 32];
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: lane, dataspace_id: dsid, alias: "primary".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("lane catalog") };
+    let_row! { lane_catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: lane, shard_id: None, dataspace_id: dsid, alias: "primary".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("lane catalog") };
     let_row! { mut nexus = iroha_config::parameters::actual::Nexus { lane_catalog: lane_catalog.clone(), lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog), dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dsid, alias: "axt-replay".to_owned(), description: None, fault_tolerance: 1, }]) .expect("axt replay dataspace catalog"), ..Default::default() } };
     nexus.axt.slot_length_ms = NonZeroU64::new(10).expect("slot length");
     nexus.axt.replay_retention_slots = NonZeroU64::new(4).expect("retention");

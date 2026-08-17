@@ -437,8 +437,9 @@ All previously blocked ingest TODOs have been implemented and verified:
   beside manifests so DA-5 schedulers can launch sampling challenges from canonical data; the
   `Sora-PDP-Commitment` header now ships with both `/v1/da/ingest` and `/v1/da/manifests/{ticket}`
   responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
-- **Shard cursor journal** — lane metadata may specify `da_shard_id` (defaulting to `lane_id`), and
-  Sumeragi now persists the highest `(epoch, sequence)` per `(shard_id, lane_id)` into
+- **Shard cursor journal** — a lane's typed `shard_id` override selects its DA/storage shard
+  (defaulting to `lane_id` when absent), and Sumeragi now persists the highest
+  `(epoch, sequence)` per `(shard_id, lane_id)` into
   `da-shard-cursors.norito` alongside the DA spool so restarts drop resharded/unknown lanes and keep
   replay deterministic. The in-memory shard cursor index now fails fast on commitments for
   unmapped lanes instead of defaulting to the lane id, making cursor advancement and replay errors

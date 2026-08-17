@@ -175,7 +175,7 @@ use iroha_data_model::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
         FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
-        UniversalAccountId,
+        ShardId, UniversalAccountId,
     },
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
@@ -8814,73 +8814,8 @@ impl StreamingSoravpn {
     }
 }
 #[cfg(test)]
-mod streaming_soranet_tests {
-    use super::*;
-    #[test]
-    fn streaming_soranet_rejects_zero_window_segments() {
-        let mut emitter = Emitter::<ParseError>::new();
-        let config = StreamingSoranet {
-            enabled: true,
-            exit_multiaddr: WithOrigin::inline(
-                defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
-            ),
-            padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
-            access_kind: WithOrigin::inline(defaults::streaming::soranet::ACCESS_KIND.to_string()),
-            channel_salt: None,
-            provision_spool_dir: WithOrigin::inline(PathBuf::from(
-                defaults::streaming::soranet::PROVISION_SPOOL_DIR,
-            )),
-            provision_spool_max_bytes: WithOrigin::inline(
-                defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
-            ),
-            provision_window_segments: WithOrigin::inline(0),
-            provision_queue_capacity: WithOrigin::inline(
-                defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
-            ),
-        };
-        assert!(config.parse(&mut emitter).is_none());
-        let err = emitter
-            .into_result()
-            .expect_err("zero window segments must be rejected");
-        let debug = format!("{err:?}");
-        assert!(
-            debug.contains("streaming.soranet.provision_window_segments"),
-            "unexpected error payload: {debug}"
-        );
-    }
-    #[test]
-    fn streaming_soranet_rejects_zero_queue_capacity() {
-        let mut emitter = Emitter::<ParseError>::new();
-        let config = StreamingSoranet {
-            enabled: true,
-            exit_multiaddr: WithOrigin::inline(
-                defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
-            ),
-            padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
-            access_kind: WithOrigin::inline(defaults::streaming::soranet::ACCESS_KIND.to_string()),
-            channel_salt: None,
-            provision_spool_dir: WithOrigin::inline(PathBuf::from(
-                defaults::streaming::soranet::PROVISION_SPOOL_DIR,
-            )),
-            provision_spool_max_bytes: WithOrigin::inline(
-                defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
-            ),
-            provision_window_segments: WithOrigin::inline(
-                defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
-            ),
-            provision_queue_capacity: WithOrigin::inline(0),
-        };
-        assert!(config.parse(&mut emitter).is_none());
-        let err = emitter
-            .into_result()
-            .expect_err("zero queue capacity must be rejected");
-        let debug = format!("{err:?}");
-        assert!(
-            debug.contains("streaming.soranet.provision_queue_capacity"),
-            "unexpected error payload: {debug}"
-        );
-    }
-}
+#[path = "user/streaming_soranet_tests.rs"]
+mod streaming_soranet_tests;
 #[cfg(test)]
 mod streaming_soravpn_tests {
     use super::*;
@@ -9357,6 +9292,7 @@ pub struct LaneDescriptor {
     #[config(default)]
     pub metadata: BTreeMap<String, String>,
 }
+const RETIRED_LANE_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
 /// User-level configuration for one physical execution, storage, and validator boundary.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct DataSpaceDescriptor {
@@ -9425,17 +9361,15 @@ pub enum LaneValidatorModeConfig {
     AdminManaged,
 }
 #[derive(Debug, Error)]
-#[error("invalid lane validator mode `{0}` (expected stake-elected or admin-managed)")]
+#[error("invalid lane validator mode `{0}` (expected `stake_elected` or `admin_managed`)")]
 /// Error returned when parsing a validator mode fails.
 pub struct LaneValidatorModeParseError(String);
 impl FromStr for LaneValidatorModeConfig {
     type Err = LaneValidatorModeParseError;
     fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "stake" | "stake-elected" | "stake_elected" | "staking" => Ok(Self::StakeElected),
-            "admin" | "admin-managed" | "admin_managed" | "peer-admin" | "permissioned" => {
-                Ok(Self::AdminManaged)
-            }
+        match raw {
+            "stake_elected" => Ok(Self::StakeElected),
+            "admin_managed" => Ok(Self::AdminManaged),
             other => Err(LaneValidatorModeParseError(other.to_owned())),
         }
     }
@@ -9445,16 +9379,19 @@ impl json::JsonDeserialize for LaneValidatorModeConfig {
         let value = parser.parse_string()?;
         value.parse().map_err(|_| json::Error::InvalidField {
             field: "nexus.staking.validator_mode".into(),
-            message: format!("expected stake-elected or admin-managed, got {value}"),
+            message: format!("expected `stake_elected` or `admin_managed`, got `{value}`"),
         })
     }
 }
 impl json::JsonSerialize for LaneValidatorModeConfig {
     fn json_serialize(&self, out: &mut String) {
-        out.push_str(match self {
-            Self::StakeElected => "stake_elected",
-            Self::AdminManaged => "admin_managed",
-        });
+        json::write_json_string(
+            match self {
+                Self::StakeElected => "stake_elected",
+                Self::AdminManaged => "admin_managed",
+            },
+            out,
+        );
     }
 }
 impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
@@ -11364,6 +11301,14 @@ impl Nexus {
                             );
                             lane_errors = true;
                             None
+                        } else if key == RETIRED_LANE_SHARD_ID_METADATA_KEY {
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] metadata key `{key}` is reserved; use the typed `shard_id` field"
+                                ),
+                            ));
+                            lane_errors = true;
+                            None
                         } else if key == AUTOSCALE_META_MANAGED
                             || key == AUTOSCALE_META_CREATED_HEIGHT
                             || key == AUTOSCALE_META_DRAIN_STATE
@@ -11381,11 +11326,7 @@ impl Nexus {
                         }
                     })
                     .collect();
-                if let Some(shard_id) = descriptor.shard_id {
-                    lane_metadata
-                        .metadata
-                        .insert("da_shard_id".to_string(), shard_id.to_string());
-                }
+                lane_metadata.shard_id = descriptor.shard_id.map(ShardId::new);
                 lane_entries.push(lane_metadata);
             }
         }
@@ -31211,7 +31152,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use crate::parameters::{
         actual, defaults,
-        user::{SoracloudRuntime, SoracloudRuntimeHuggingFace},
+        user::{LaneValidatorModeConfig, SoracloudRuntime, SoracloudRuntimeHuggingFace},
     };
     use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
@@ -31809,7 +31750,7 @@ policy_digest_hex = "{policy_digest_hex}"
         Value::Table(routing)
     }
     #[test]
-    fn nexus_lane_shard_id_uses_canonical_metadata_key() {
+    fn nexus_lane_shard_id_has_one_typed_configuration_surface() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
         nexus.insert("enabled".into(), Value::Boolean(true));
@@ -31818,11 +31759,6 @@ policy_digest_hex = "{policy_digest_hex}"
         {
             let sharded = sharded.as_table_mut().expect("lane descriptor table");
             sharded.insert("shard_id".into(), Value::Integer(9));
-            sharded
-                .get_mut("metadata")
-                .and_then(Value::as_table_mut)
-                .expect("lane metadata table")
-                .insert("da_shard_id".into(), Value::String("7".into()));
         }
         nexus.insert(
             "lane_catalog".into(),
@@ -31839,11 +31775,61 @@ policy_digest_hex = "{policy_digest_hex}"
             .find(|lane| lane.id == lane_id)
             .expect("configured sharded lane");
         assert_eq!(
-            lane.metadata.get("da_shard_id").map(String::as_str),
-            Some("9"),
-            "the dedicated shard_id field must override normalized raw metadata"
+            lane.shard_id,
+            Some(iroha_data_model::nexus::ShardId::new(9)),
+            "the typed shard_id field must survive catalog construction"
         );
+        assert!(!lane.metadata.contains_key("da_shard_id"));
         assert_eq!(actual.nexus.lane_config.shard_id(lane_id), 9);
+
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        let mut lane = lane_descriptor(0, "primary");
+        lane.as_table_mut()
+            .and_then(|lane| lane.get_mut("metadata"))
+            .and_then(Value::as_table_mut)
+            .expect("lane metadata table")
+            .insert("da_shard_id".into(), Value::String("9".into()));
+        nexus.insert("lane_catalog".into(), Value::Array(vec![lane]));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("the internal shard metadata key must not be a configuration alias");
+        assert!(format!("{error:?}").contains("use the typed `shard_id` field"));
+    }
+    #[test]
+    fn lane_validator_mode_json_roundtrips_canonical_values_only() {
+        for (mode, canonical) in [
+            (LaneValidatorModeConfig::StakeElected, "stake_elected"),
+            (LaneValidatorModeConfig::AdminManaged, "admin_managed"),
+        ] {
+            let encoded = norito::json::to_string(&mode).expect("serialize validator mode");
+            assert_eq!(encoded, format!("\"{canonical}\""));
+            assert_eq!(
+                norito::json::from_str::<LaneValidatorModeConfig>(&encoded)
+                    .expect("deserialize canonical validator mode"),
+                mode
+            );
+        }
+        for alias in [
+            "stake",
+            "stake-elected",
+            "staking",
+            "admin",
+            "admin-managed",
+            "peer-admin",
+            "permissioned",
+            "STAKE_ELECTED",
+            " admin_managed",
+        ] {
+            assert!(
+                alias.parse::<LaneValidatorModeConfig>().is_err(),
+                "non-canonical alias `{alias}` must be rejected"
+            );
+            let encoded_alias = format!("\"{alias}\"");
+            assert!(
+                norito::json::from_str::<LaneValidatorModeConfig>(&encoded_alias).is_err(),
+                "JSON must reject non-canonical alias `{alias}`"
+            );
+        }
     }
     fn checked_onboarding_authority_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)

@@ -14,6 +14,7 @@ use super::{
     service::{
         TairaAuthorityErrorV1, TairaAuthorityProvisioningV1, TairaAuthorityServiceV1,
         now_unix_millis, parse_digest, response_for_error,
+        rotation_handoff_matches_installed_successor, verify_rotation_handoff_json,
     },
 };
 use crate::external_software_signer::{
@@ -241,9 +242,14 @@ impl TairaAuthorityServerV1 {
         service: Arc<TairaAuthorityServiceV1>,
         policy: TairaAuthorityEndpointPolicyV1,
     ) -> Result<Self, TairaAuthorityErrorV1> {
-        if service.public_binding()? != policy.binding
-            || rustix::process::geteuid().as_raw() != policy.binding.signer.service_uid
-        {
+        let current = service.public_binding()?;
+        if current != policy.binding {
+            // A crash after the old-key-attested journal rotation but before
+            // root installs the successor must still allow the exact rotation
+            // handoff to be recovered through the old fixed binding.
+            service.recover_rotation_handoff_from_predecessor(&policy.binding)?;
+        }
+        if rustix::process::geteuid().as_raw() != current.signer.service_uid {
             return Err(TairaAuthorityErrorV1::Binding);
         }
         Ok(Self { service, policy })
@@ -403,9 +409,7 @@ fn serve_one(
         }
         let request: AuthorityAdminRequestV1 =
             decode_body(&frame.body).map_err(|()| TairaAuthorityErrorV1::Rejected)?;
-        if request.binding_sha256 != binding_sha256 {
-            return Err(TairaAuthorityErrorV1::Binding);
-        }
+        service.binding_for_admin_request(request.binding_sha256, &request.command)?;
         let response = service
             .administer(request.command, now_unix_millis()?)
             .unwrap_or_else(response_for_error);
@@ -468,6 +472,16 @@ fn serve_one(
     };
     let encoded = encode_frame(kind, &response).map_err(|()| TairaAuthorityErrorV1::State)?;
     write_frame(&mut stream, &encoded)
+}
+
+#[cfg(test)]
+pub(super) fn serve_one_for_test(
+    stream: UnixStream,
+    administrator: bool,
+    authenticated_uid: u32,
+    service: &TairaAuthorityServiceV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    serve_one(stream, administrator, authenticated_uid, service)
 }
 
 fn exchange<Request, Response>(
@@ -791,6 +805,8 @@ enum Command {
     VerifyReceipt(ArtifactArgs),
     Status(RoleArgs),
     Rotate(RotateArgs),
+    /// Atomically install an old-key-attested successor at the fixed root path.
+    InstallRotation(RoleArgs),
     Revoke(RevokeArgs),
 }
 
@@ -941,6 +957,7 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
                 .map_err(cli_error)?;
             write_stdout(&output)
         }
+        Command::InstallRotation(args) => cli_install_rotation(args.role),
         Command::Revoke(args) => {
             let client = load_fixed_client(args.role).map_err(cli_error)?;
             client
@@ -958,6 +975,36 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
             write_stdout(&output)
         }
     }
+}
+
+fn cli_install_rotation(role: TairaAuthorityRoleV1) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err("authority command failed");
+    }
+    let (binding_path, _, _, _) = fixed_paths(role);
+    let previous =
+        read_public_binding(&binding_path, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if previous.role != role {
+        return Err("authority command failed");
+    }
+    let handoff = read_stdin_bounded().map_err(cli_error)?;
+    let successor = match verify_rotation_handoff_json(&previous, &handoff) {
+        Ok(successor) => successor,
+        Err(_) if rotation_handoff_matches_installed_successor(&handoff, &previous) => {
+            return write_stdout(&handoff);
+        }
+        Err(error) => return Err(cli_error(error)),
+    };
+    let expected_service_id = format!("taira-authority-{}-v1", role.as_str());
+    let expected_administrator_id = format!("taira-authority-{}-administrator-v1", role.as_str());
+    if successor.role != role
+        || successor.signer.service_id != expected_service_id
+        || successor.signer.administrator_id != expected_administrator_id
+    {
+        return Err("authority command failed");
+    }
+    install_fixed_successor_binding(&binding_path, &previous, &successor)?;
+    write_stdout(&handoff)
 }
 
 fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
@@ -1168,6 +1215,65 @@ fn write_binding_new(
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| "authority output failed")
+}
+
+fn install_fixed_successor_binding(
+    path: &Path,
+    previous: &TairaAuthorityPublicBindingV1,
+    successor: &TairaAuthorityPublicBindingV1,
+) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != 0
+        || !absolute_normal(path)
+        || previous.role != successor.role
+        || previous.signer.handle != successor.signer.handle
+        || previous.signer.service_id != successor.signer.service_id
+        || previous.signer.administrator_id != successor.signer.administrator_id
+        || previous.signer.service_uid != successor.signer.service_uid
+        || previous.signer.client_uid != successor.signer.client_uid
+        || previous.signer.administrator_uid != successor.signer.administrator_uid
+        || previous.signer.audit_genesis_digest != successor.signer.audit_genesis_digest
+        || successor.signer.key_revision <= previous.signer.key_revision
+        || successor.signer.policy_revision <= previous.signer.policy_revision
+    {
+        return Err("authority binding installation failed");
+    }
+    let parent = path
+        .parent()
+        .ok_or("authority binding installation failed")?;
+    let pending = parent.join(".binding-v1.rotation-pending");
+    let encoded =
+        norito::encode_canonical(successor).map_err(|_| "authority binding installation failed")?;
+    if pending.exists() {
+        let recovered =
+            read_public_binding(&pending, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+        if recovered != *successor {
+            return Err("authority binding installation failed");
+        }
+    } else {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&pending)
+            .map_err(|_| "authority binding installation failed")?;
+        file.write_all(&encoded)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| "authority binding installation failed")?;
+        let recovered =
+            read_public_binding(&pending, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+        if recovered != *successor {
+            return Err("authority binding installation failed");
+        }
+    }
+    fs::rename(&pending, path).map_err(|_| "authority binding installation failed")?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "authority binding installation failed")?;
+    let installed = read_public_binding(path, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if installed != *successor {
+        return Err("authority binding installation failed");
+    }
+    Ok(())
 }
 
 const fn cli_error(_: TairaAuthorityErrorV1) -> &'static str {

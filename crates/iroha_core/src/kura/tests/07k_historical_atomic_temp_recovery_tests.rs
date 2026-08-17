@@ -22,7 +22,7 @@ fn write_historical_atomic_temp_fixture(
     path
 }
 #[test]
-fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_inventory() {
+fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp() {
     let temp_dir = TempDir::new().expect("historical atomic-temp fault directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -39,7 +39,7 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
         lane.lane_id,
         lane.dataspace_id,
         2,
-        "atomic-temp-legacy",
+        "atomic-temp-obsolete",
         &signer,
     );
     let first = historical_autonomous_recovery_record_for_kura(
@@ -50,7 +50,7 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
     let second = historical_autonomous_recovery_record_for_kura(
         &second_payload,
         &signer,
-        b"atomic-temp-legacy",
+        b"atomic-temp-obsolete",
     );
     let (kura, _) = Kura::new(&config, &lane_config).expect("historical atomic-temp Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
@@ -74,11 +74,8 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
                 })
         })
         .expect("dedicated historical publication residue exists");
-    let legacy_temp = write_historical_atomic_temp_fixture(
-        &directory,
-        &format!("{LEGACY_HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}legacy-fixture"),
-        &second,
-    );
+    let obsolete_temp =
+        write_historical_atomic_temp_fixture(&directory, ".kura-sidecar-obsolete-fixture", &second);
     let first_stable = Kura::historical_autonomous_recovery_path_for_entry(
         lane,
         temp_dir.path(),
@@ -91,17 +88,34 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
     );
     assert!(!first_stable.exists() && !second_stable.exists());
     drop(kura);
+    let startup_error = match Kura::new(&config, &lane_config) {
+        Ok(_) => panic!("startup must reject an obsolete historical publication residue"),
+        Err(error) => error,
+    };
+    assert!(
+        startup_error
+            .to_string()
+            .contains("unknown, malformed, or ambiguous entry"),
+        "unexpected obsolete-residue diagnostic: {startup_error}"
+    );
+    assert!(
+        !first_stable.exists() && !second_stable.exists(),
+        "whole-inventory rejection must precede every temporary promotion"
+    );
+    assert!(dedicated_temp.exists() && obsolete_temp.exists());
+
+    std::fs::remove_file(&obsolete_temp).expect("remove rejected obsolete residue");
     let (reopened, _) = Kura::new(&config, &lane_config)
-        .expect("startup authenticates and promotes dedicated plus legacy residues");
+        .expect("startup promotes the authenticated current-format residue");
     assert_eq!(
         std::fs::read(&first_stable).expect("read recovered dedicated stable seal"),
         historical_autonomous_recovery_record_bytes(&first),
     );
-    assert_eq!(
-        std::fs::read(&second_stable).expect("read recovered legacy stable seal"),
-        historical_autonomous_recovery_record_bytes(&second),
+    assert!(
+        !second_stable.exists(),
+        "rejecting the obsolete residue must not synthesize its stable record"
     );
-    assert!(!dedicated_temp.exists() && !legacy_temp.exists());
+    assert!(!dedicated_temp.exists());
     drop(reopened);
     let (reopened_again, _) = Kura::new(&config, &lane_config)
         .expect("historical atomic-temp recovery is restart-idempotent");
@@ -110,11 +124,7 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
             .historical_autonomous_lane_recovery_record_matches(&first)
             .expect("revalidate dedicated recovered record"),
     );
-    assert!(
-        reopened_again
-            .historical_autonomous_lane_recovery_record_matches(&second)
-            .expect("revalidate legacy recovered record"),
-    );
+    assert!(!second_stable.exists());
 }
 #[test]
 fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry() {

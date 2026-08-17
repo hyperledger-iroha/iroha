@@ -211,24 +211,20 @@ include!("gossip_routing_metadata_tests.rs");
 include!("gossip_route_validation_tests.rs");
 include!("drain_revalidation_tests.rs");
 #[test]
-fn legacy_default_route_rejects_every_consensus_autoscale_marker() {
-    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(4_242));
-    for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
-        let mut nexus = Nexus::default();
-        nexus.enabled = false;
-        let mut lane = nexus.lane_catalog.lanes()[0].clone();
-        lane.metadata
-            .insert(marker.to_owned(), "malformed-but-reserved".to_owned());
-        nexus.lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane])
-            .expect("single-lane malformed-marker fixture");
-        assert!(
-            !route_uses_legacy_default_public_lane(route, &nexus),
-            "reserved marker {marker} must disable the legacy routing exception"
-        );
-    }
+fn disabled_nexus_consensus_route_accepts_only_single_universal() {
+    let mut nexus = Nexus::default();
+    nexus.enabled = false;
+    assert_eq!(
+        crate::state::consensus_lane_dataspace_at_height(LaneId::SINGLE, &nexus, 1),
+        Some(DataSpaceId::UNIVERSAL)
+    );
+    assert_eq!(
+        crate::state::consensus_lane_dataspace_at_height(LaneId::new(1), &nexus, 1),
+        None
+    );
 }
 #[test]
-fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
+fn state_backed_queue_routes_canonical_disabled_nexus_single_lane() {
     let mut state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),

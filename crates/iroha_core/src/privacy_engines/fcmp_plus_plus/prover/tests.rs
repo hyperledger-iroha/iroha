@@ -162,6 +162,46 @@ fn assert_source_counts(source: &str, expected: &[(&str, usize)]) {
         assert_eq!(source.matches(needle).count(), *count, "count for {needle}");
     }
 }
+#[derive(Clone, Copy)]
+enum SourcePoint<'a> {
+    First(&'a str),
+    Last(&'a str),
+    Nth(&'a str, usize),
+}
+fn source_point_position(source: &str, point: SourcePoint<'_>) -> usize {
+    match point {
+        SourcePoint::First(needle) => source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing first source point {needle}")),
+        SourcePoint::Last(needle) => source
+            .rfind(needle)
+            .unwrap_or_else(|| panic!("missing last source point {needle}")),
+        SourcePoint::Nth(needle, index) => {
+            assert!(!needle.is_empty(), "source point needle must not be empty");
+            let mut search_start = 0;
+            let mut position = None;
+            for _ in 0..=index {
+                let offset = source[search_start..]
+                    .find(needle)
+                    .unwrap_or_else(|| panic!("missing source point {needle} at index {index}"));
+                let absolute = search_start + offset;
+                position = Some(absolute);
+                search_start = absolute + needle.len();
+            }
+            position.expect("source point loop executes at least once")
+        }
+    }
+}
+fn assert_source_point_order(source: &str, expected: &[SourcePoint<'_>]) {
+    let mut previous = None;
+    for point in expected {
+        let position = source_point_position(source, *point);
+        if let Some(previous) = previous {
+            assert!(previous < position, "source points are out of order");
+        }
+        previous = Some(position);
+    }
+}
 macro_rules! source_part {
     ($source:expr; $start:expr => $end:expr) => {
         source_section($source, $start, $end)

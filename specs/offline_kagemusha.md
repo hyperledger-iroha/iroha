@@ -583,6 +583,127 @@ candidate:
 ci/check_kagemusha_production_readiness.sh candidate
 ```
 
+### Authenticated source-seal projection controller
+
+Cargo 1.93 keeps `--unit-graph` behind `-Z unstable-options`; `cargo metadata`
+cannot represent command-selected feature or intra-package unit edges and must
+not be used to manufacture this evidence. A separate reviewed controller must
+capture the genuine V1 unit graph from a pinned Cargo that supports that
+interface, assert that the supplied raw bytes are that capture, use the exact
+semantic command carried by the projection, and then apply
+`cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1`.
+That normalization is exact:
+
+- preserve `version`, unit order, dependency indices, and every Cargo 1.93
+  field; emit one root and require every unit to be reachable;
+- each unit has exactly `dependencies`, `features`, `mode`, `pkg_id`,
+  `platform`, `profile`, and `target`;
+- each target has exactly `crate_types`, `doc`, `doctest`, `edition`, `kind`,
+  `name`, `src_path`, and `test`, plus optional `required-features`; no target
+  field is discarded;
+- each profile has exactly `codegen_backend`, `codegen_units`,
+  `debug_assertions`, `debuginfo`, `incremental`, `lto`, `name`, `opt_level`,
+  `overflow_checks`, `panic`, `rpath`, `split_debuginfo`, and `strip`; no
+  profile field is discarded;
+- each dependency has exactly `extern_crate_name`, `index`, `noprelude`, and
+  `public`;
+- replace each absolute target source with its forward-slash,
+  package-root-relative path, replace an absolute path-package URI with the
+  literal `<PACKAGE_ROOT>` token, and replace any controller source-cache root
+  with `<SOURCE_CACHE>`; raw absolute paths are forbidden;
+- sort and deduplicate set-like string arrays, roots, and dependencies (by
+  `(index, extern_crate_name)`), but do not reorder units; finally emit
+  duplicate-free ASCII JSON with sorted object keys, compact separators, and
+  one trailing LF.
+
+The validator preserves the Cargo 1.93 field inventory rather than projecting
+away fields it does not currently consume. The selected root must retain
+`doc:true`, `test:true`, required features `dev-tools`,
+`kagemusha-candidate-evidence-lab`, and `zk-halo2-ipa`, and the release profile
+must retain `overflow_checks:false`, null `codegen_backend` and
+`split_debuginfo`, and `strip:{"resolved":{"Named":"debuginfo"}}`. The
+three-unit test graph is explicitly synthetic protocol coverage. This
+repository currently contains no authenticated raw Cargo unit graph, complete
+normalized release graph, or controller capture receipt; no test fixture or
+field census is production Cargo evidence.
+
+The canonical execution policy is
+`iroha.kagemusha.source_seal_projection_execution_policy.v1`, is bounded at
+64 KiB, and has exactly `schema`, `cargo`, `rustc`, and `unit_graph`.
+`cargo` and `rustc` each have exactly `binary_sha256`, `binary_size_bytes`,
+`version_argv`, and `version_stdout_lines`. Their direct executable digests are
+nonzero, sizes are bounded at 512 MiB, version output is bounded canonical
+ASCII, the first line identifies a 1.93 tool, and the only version commands are
+`["<DIRECT_CARGO>","-Vv"]` and
+`["<DIRECT_RUSTC>","-Vv"]` respectively. The controller must authenticate
+those direct binaries independently; the producer does not open a tool binary.
+
+`unit_graph` has exactly `capture_argv`, `capture_environment`,
+`normalization`, `raw_sha256`, `raw_size_bytes`, `normalized_sha256`, and
+`normalized_size_bytes`. The exact capture argv is:
+
+```text
+<DIRECT_CARGO> -Z unstable-options build --unit-graph
+  --release --locked --offline
+  --target aarch64-apple-darwin
+  --target-dir <FRESH_EXTERNAL_TARGET_DIR>
+  -p iroha_core
+  --features iroha_core/dev-tools,iroha_core/kagemusha-candidate-source-seal,iroha_core/kagemusha-candidate-evidence-lab
+  --bin kagemusha_recursive_spend_v4_bundle --jobs 1
+```
+
+The controller must run from an otherwise empty environment. In the recorded
+policy it replaces the actual authenticated Cargo command path and fresh target
+directory with the two argv placeholders above, and replaces only the actual
+absolute Cargo-home and rustc paths with the environment placeholders below.
+Every other name and value is exact:
+
+```json
+{"CARGO_ENCODED_RUSTFLAGS":"","CARGO_HOME":"<OWNER_CONTROLLED_CACHE_ONLY_CARGO_HOME>","CARGO_NET_OFFLINE":"true","HOME":"/var/empty","LANG":"C","LC_ALL":"C","PATH":"/usr/bin:/bin","RUSTC":"<DIRECT_RUSTC>","RUSTC_WORKSPACE_WRAPPER":"","RUSTC_WRAPPER":"","RUSTFLAGS":"","TZ":"UTC"}
+```
+
+The policy binds both raw and normalized graph sizes and SHA-256 values plus
+the exact normalization identifier. Request, production, and independent
+verification each read both graph artifacts through separate external SHA-256
+pins, then require both byte lengths and digests to equal the policy. This
+authenticates the transferred bytes but does not prove that Cargo emitted the
+raw bytes or that the external controller normalized them correctly; those two
+claims remain explicit external trust requirements and cannot be described as
+an in-repository Cargo receipt. Candidate-build `--cargo-sha256` and
+`--rustc-sha256` must equal the policy tool digests; this equality is an
+authenticated launcher precondition until the candidate consumer accepts the
+policy as a separate input.
+
+The reviewed controller runs
+`scripts/produce_kagemusha_v4_source_seal_projection.py` through an explicitly
+digest-pinned Python interpreter; the file is intentionally mode `100644` and
+is never PATH-executed. Its three phases are `request`, detached SSH signing in
+namespace `iroha-kagemusha-source-seal-projection-v1`, and `produce`. A second
+controller must run `verify` over the published projection. Request,
+authorization, signature, allowed-signers policy, explicit revocation policy,
+execution policy, raw graph, normalized graph, reviewed closure, and projection
+are all passed with exact SHA-256 pins. The producer derives source authority
+from the verified signed commit, recomputes all graph counts (including
+`iroha_core` units by equality with the selected root's opaque package ID),
+reconstructs the projection, and feeds it through the candidate consumer before
+publishing.
+Publication first completes and fsyncs a private same-directory temporary,
+creates the final name with an atomic no-replace hard link, fsyncs the parent,
+authenticates the final inode and bytes, removes the temporary, and fsyncs the
+parent again. A post-link error is commit-uncertain and requires authenticating
+the final path rather than blindly retrying. Each raw or normalized graph is
+bounded at 16 MiB; the producer, candidate consumer, and promotion gate share
+one inclusive 16 KiB projection bound.
+
+The controller's truthful capture of Cargo's unstable unit graph remains an
+irreducible external trust requirement. The SSH signature makes that authority
+explicit and substitution-detectable; it does not make a hand-authored graph a
+real Cargo graph. The promotion gate treats the independently verified
+projection digest as an external trust anchor. A root-owned file and digest pin
+alone are insufficient: the authenticated launcher must successfully run the
+documented `verify` command in the Taira runbook immediately before passing the
+same projection path and digest to promotion.
+
 For promotion, a separately authenticated launcher must install the reviewed
 checkout at a root-owned path whose complete path, `ci/` directory, and gate
 file are not group/world writable. It must verify the gate digest before

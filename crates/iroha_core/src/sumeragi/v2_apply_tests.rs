@@ -200,6 +200,29 @@ fn reconcile_lane_reservation_ownership(
         }
     }
 }
+#[test]
+fn reservation_route_accepts_only_canonical_disabled_single_lane_coordinates() {
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.enabled = false;
+    assert!(reservation_route_is_active(
+        &nexus,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+    ));
+    assert!(!reservation_route_is_active(
+        &nexus,
+        LaneId::SINGLE,
+        DataSpaceId::new(7),
+        1,
+    ));
+    assert!(!reservation_route_is_active(
+        &nexus,
+        LaneId::new(1),
+        DataSpaceId::UNIVERSAL,
+        1,
+    ));
+}
 /// Focused preflight harness for synthetic merge entries which deliberately
 /// lack a durable Kura carrier. Production cleanup additionally requires the
 /// canonical carrier/source-outcome authentication path.

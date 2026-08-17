@@ -3739,46 +3739,7 @@ mod tests {
             LifecycleState::Terminal(TerminalOutcome::Cancelled)
         );
     }
-    #[test]
-    fn certified_fetch_completion_source_keeps_the_durable_cut_ordered() {
-        let source = include_str!("v2_lifecycle_selector.rs");
-        let transaction = source
-            .split("pub(crate) fn complete_certified_fetch_body_persistence(")
-            .nth(1)
-            .expect("one consuming certified-Fetch completion transaction")
-            .split("fn publish_certified_fetch_ready_authority(")
-            .next()
-            .expect("test-only reducer helper follows the transaction");
-        let ordered = [
-            "prepare_lifecycle_ingress_selector(",
-            "certified_fetch_current_location(",
-            "prepare_selected_certified_fetch_completion(",
-            "bind_durable_body_receipt(receipt)",
-            "prepare_certified_fetch_ready_projection(",
-            "prepare_lifecycle_certified_fetch_completion(",
-            "prepare_certified_body_fetch_owner_removal(",
-            "matches_selected_response(",
-            "into_exact_certified_fetch_dequeue(",
-            "begin_fail_stop_operation()",
-            "persist_exact_staged_successor()",
-            "exact_dequeue.commit(ingress)",
-            "commit_after_exact_dequeue(dequeued)",
-            "ready.commit()",
-            "commit_lifecycle_certified_fetch_completion",
-            "service_prepared.commit(operation.permit())",
-            "work_ack.commit()",
-            "operation.complete()",
-        ];
-        let mut cursor = 0;
-        for required in ordered {
-            let relative = transaction[cursor..]
-                .find(required)
-                .unwrap_or_else(|| panic!("completion transaction omitted {required}"));
-            cursor += relative + required.len();
-        }
-        assert!(!transaction.contains("runtime_lifecycle_ordinal"));
-        assert!(!transaction.contains("BodyAvailableReservation"));
-    }
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(certified_fetch_completion_source_keeps_the_durable_cut_ordered);
     #[test]
     fn certified_response_maps_to_formal_untrusted_resource_source() {
         assert!(lifecycle_ingress_resource_is_untrusted(

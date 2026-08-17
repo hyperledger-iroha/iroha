@@ -2886,6 +2886,15 @@ fn prepare_v2_lane_payload_plan_inner(
         unavailable_indices: BTreeSet::new(),
     })
 }
+fn v2_relay_route_is_active(
+    nexus: &Nexus,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    proposal_height: u64,
+) -> bool {
+    crate::state::consensus_lane_dataspace_at_height(lane_id, nexus, proposal_height)
+        == Some(dataspace_id)
+}
 fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> {
     let nexus = state.nexus_snapshot();
     let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
@@ -2917,12 +2926,12 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
                     && relay.lane_block_descriptor_hash.is_some()
                     && state.lane_incarnation_at_height(relay.lane_id, proposal_height)
                         == Some(relay.lane_incarnation)
-                    && (!nexus.enabled
-                        || crate::state::nexus_active_lane_dataspace_at_height(
-                            relay.lane_id,
-                            &nexus,
-                            proposal_height,
-                        ) == Some(relay.dataspace_id))
+                    && v2_relay_route_is_active(
+                        &nexus,
+                        relay.lane_id,
+                        relay.dataspace_id,
+                        proposal_height,
+                    )
                     && reset_heights
                         .get(&relay.lane_id)
                         .is_none_or(|reset_height| relay.block_height > *reset_height)
