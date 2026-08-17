@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -147,6 +148,18 @@ I105_ALPHABET = tuple(BASE58_ALPHABET) + (
 I105_INDEX = {symbol: index for index, symbol in enumerate(I105_ALPHABET)}
 I105_CHECKSUM_LEN = 6
 I105_BECH32M_CONST = 0x2BC830A3
+RECEIPT_PUBLIC_KEY_RE = re.compile(r"e70121(?:02|03)[0-9A-F]{64}")
+RECEIPT_PRIVATE_KEY_RE = re.compile(r"812620[0-9A-F]{64}")
+RECEIPT_PUBLIC_KEY_PREFIX = "e70121"
+RECEIPT_PRIVATE_KEY_PREFIX = "812620"
+RECEIPT_NODE_ID_DOMAIN = b"iroha.taira.receipt-signer.node-id.v1\x00"
+RECEIPT_NODE_ID_PREFIX = "taira-node:receipt-signer:secp256k1:sha256:"
+SECP256K1_FIELD_MODULUS = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+SECP256K1_GROUP_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+SECP256K1_GENERATOR = (
+    0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+    0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8,
+)
 
 
 @dataclass(frozen=True)
@@ -159,6 +172,9 @@ class ValidatorEntry:
     private_key: str
     soranet_transport_public_key: str
     soranet_transport_private_key: str
+    receipt_public_key: str | None
+    receipt_private_key: str | None
+    receipt_node_id: str | None
     pop_hex: str
     public_address: str
     network_address: str
@@ -207,6 +223,9 @@ class ValidatorSecrets:
     private_key: str
     soranet_transport_public_key: str
     soranet_transport_private_key: str
+    receipt_public_key: str
+    receipt_private_key: str
+    receipt_node_id: str
 
 
 @dataclass(frozen=True)
@@ -313,6 +332,22 @@ def _validate_privacy_issuer_template(
     ):
         raise ValueError(
             "config template privacy issuer provider binding differs from Taira V1"
+        )
+
+
+def _validate_receipt_signer_template(template: dict[str, Any]) -> None:
+    """Keep validator-specific receipt material out of the shared template."""
+
+    torii = template.get("torii")
+    if not isinstance(torii, dict):
+        raise ValueError("config template must define a `[torii]` table")
+    planted = sorted(
+        {"receipt_public_key", "receipt_private_key"}.intersection(torii)
+    )
+    if planted:
+        raise ValueError(
+            "config template must not contain validator receipt signer material: "
+            + ", ".join(planted)
         )
 
 
@@ -1089,12 +1124,167 @@ def _validate_ed25519_public_key(value: str, context: str) -> None:
         )
 
 
+def _secp256k1_add(
+    left: tuple[int, int] | None,
+    right: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    """Add two affine secp256k1 points for receipt-key validation."""
+
+    if left is None:
+        return right
+    if right is None:
+        return left
+    x1, y1 = left
+    x2, y2 = right
+    if x1 == x2 and (y1 + y2) % SECP256K1_FIELD_MODULUS == 0:
+        return None
+    if left == right:
+        slope = (
+            3
+            * x1
+            * x1
+            * pow(2 * y1, -1, SECP256K1_FIELD_MODULUS)
+        ) % SECP256K1_FIELD_MODULUS
+    else:
+        slope = (
+            (y2 - y1)
+            * pow(x2 - x1, -1, SECP256K1_FIELD_MODULUS)
+        ) % SECP256K1_FIELD_MODULUS
+    x3 = (slope * slope - x1 - x2) % SECP256K1_FIELD_MODULUS
+    y3 = (slope * (x1 - x3) - y1) % SECP256K1_FIELD_MODULUS
+    return x3, y3
+
+
+def _secp256k1_public_payload(private_payload: bytes) -> bytes:
+    """Derive one compressed SEC1 public key from an exact secret scalar."""
+
+    scalar = int.from_bytes(private_payload, "big")
+    if not 1 <= scalar < SECP256K1_GROUP_ORDER:
+        raise ValueError("receipt private key scalar is outside the secp256k1 group")
+    point: tuple[int, int] | None = None
+    addend: tuple[int, int] | None = SECP256K1_GENERATOR
+    while scalar:
+        if scalar & 1:
+            point = _secp256k1_add(point, addend)
+        addend = _secp256k1_add(addend, addend)
+        scalar >>= 1
+    if point is None:  # pragma: no cover - excluded by the scalar bound
+        raise ValueError("receipt private key maps to the point at infinity")
+    x, y = point
+    return bytes((2 | (y & 1),)) + x.to_bytes(32, "big")
+
+
+def receipt_node_id(receipt_public_key: str) -> str:
+    """Derive the canonical public lifecycle node ID from a receipt key."""
+
+    if RECEIPT_PUBLIC_KEY_RE.fullmatch(receipt_public_key) is None:
+        raise ValueError(
+            "receipt public key must be one canonical compressed secp256k1 "
+            "multihash"
+        )
+    payload = bytes.fromhex(receipt_public_key[len(RECEIPT_PUBLIC_KEY_PREFIX) :])
+    x = int.from_bytes(payload[1:], "big")
+    if x >= SECP256K1_FIELD_MODULUS:
+        raise ValueError("receipt public key x-coordinate is outside secp256k1")
+    curve_y_squared = (pow(x, 3, SECP256K1_FIELD_MODULUS) + 7) % (
+        SECP256K1_FIELD_MODULUS
+    )
+    curve_y = pow(
+        curve_y_squared,
+        (SECP256K1_FIELD_MODULUS + 1) // 4,
+        SECP256K1_FIELD_MODULUS,
+    )
+    if pow(curve_y, 2, SECP256K1_FIELD_MODULUS) != curve_y_squared:
+        raise ValueError("receipt public key is not a secp256k1 curve point")
+    digest = hashlib.sha256(
+        RECEIPT_NODE_ID_DOMAIN + receipt_public_key.encode("ascii")
+    ).hexdigest()
+    return RECEIPT_NODE_ID_PREFIX + digest
+
+
+def validate_receipt_keypair(
+    public_key: str,
+    private_key: str,
+    context: str,
+) -> str:
+    """Validate one canonical non-BLS Torii receipt keypair."""
+
+    try:
+        node_id = receipt_node_id(public_key)
+    except ValueError as error:
+        raise ValueError(f"{context} {error}") from error
+    if RECEIPT_PRIVATE_KEY_RE.fullmatch(private_key) is None:
+        raise ValueError(
+            f"{context} receipt private key must be one canonical secp256k1 "
+            "private multihash"
+        )
+    private_payload = bytes.fromhex(
+        private_key[len(RECEIPT_PRIVATE_KEY_PREFIX) :]
+    )
+    try:
+        derived_payload = _secp256k1_public_payload(private_payload)
+    except ValueError as error:
+        raise ValueError(f"{context} {error}") from error
+    configured_payload = bytes.fromhex(
+        public_key[len(RECEIPT_PUBLIC_KEY_PREFIX) :]
+    )
+    if derived_payload != configured_payload:
+        raise ValueError(
+            f"{context} receipt public/private keys do not form one secp256k1 keypair"
+        )
+    return node_id
+
+
+def receipt_signer_map(
+    validators: list[ValidatorEntry],
+) -> dict[str, dict[str, object]]:
+    """Return the ordered secret-free receipt-signer identity projection."""
+
+    result: dict[str, dict[str, object]] = {}
+    seen_nodes: set[str] = set()
+    seen_keys: set[str] = set()
+    for validator in validators:
+        public_key = validator.receipt_public_key
+        private_key = validator.receipt_private_key
+        if public_key is None or private_key is None:
+            raise ValueError(
+                f"validator `{validator.slug}` is missing its runtime-only Torii "
+                "receipt keypair"
+            )
+        node_id = validate_receipt_keypair(
+            public_key,
+            private_key,
+            f"validator `{validator.slug}`",
+        )
+        if node_id != validator.receipt_node_id:
+            raise ValueError(
+                f"validator `{validator.slug}` receipt node ID changed after loading"
+            )
+        if node_id in seen_nodes or public_key in seen_keys:
+            raise ValueError("validator Torii receipt signer identities are duplicated")
+        seen_nodes.add(node_id)
+        seen_keys.add(public_key)
+        result[validator.slug] = {
+            "node_id": node_id,
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": public_key[
+                    len(RECEIPT_PUBLIC_KEY_PREFIX) :
+                ].lower(),
+            },
+        }
+    return result
+
+
 def load_secret_material(path: Path) -> SecretMaterial:
     """Load per-validator private keys plus shared runtime-only secret material."""
 
     payload = _load_toml(path)
     validators_raw = _load_optional_validator_tables(payload, f"secrets file {path}")
     secrets: dict[str, ValidatorSecrets] = {}
+    seen_receipt_public_keys: set[str] = set()
+    seen_receipt_private_keys: set[str] = set()
+    seen_receipt_node_ids: set[str] = set()
     for raw in validators_raw:
         slug = _require_string(raw, "slug", f"secrets file `{path}`")
         private_key = _require_string(raw, "private_key", f"secrets file `{slug}`")
@@ -1106,6 +1296,21 @@ def load_secret_material(path: Path) -> SecretMaterial:
         soranet_transport_private_key = _require_string(
             raw,
             "soranet_transport_private_key",
+            f"secrets file `{slug}`",
+        )
+        receipt_public_key = _require_string(
+            raw,
+            "receipt_public_key",
+            f"secrets file `{slug}`",
+        )
+        receipt_private_key = _require_string(
+            raw,
+            "receipt_private_key",
+            f"secrets file `{slug}`",
+        )
+        receipt_node_id = validate_receipt_keypair(
+            receipt_public_key,
+            receipt_private_key,
             f"secrets file `{slug}`",
         )
         if slug in secrets:
@@ -1122,10 +1327,36 @@ def load_secret_material(path: Path) -> SecretMaterial:
                 f"secrets file `{slug}` must not reuse the BLS validator private key "
                 "as its SoraNet transport private key"
             )
+        if receipt_public_key in seen_receipt_public_keys:
+            raise ValueError(
+                f"secrets file `{path}` duplicates a Torii receipt public key"
+            )
+        if receipt_private_key in seen_receipt_private_keys:
+            raise ValueError(
+                f"secrets file `{path}` duplicates a Torii receipt private key"
+            )
+        if receipt_node_id in seen_receipt_node_ids:
+            raise ValueError(
+                f"secrets file `{path}` aliases a Torii receipt node ID"
+            )
+        if receipt_private_key in {private_key, soranet_transport_private_key}:
+            raise ValueError(
+                f"secrets file `{slug}` must use a distinct Torii receipt private key"
+            )
+        if receipt_public_key == soranet_transport_public_key:
+            raise ValueError(
+                f"secrets file `{slug}` must use a distinct Torii receipt public key"
+            )
+        seen_receipt_public_keys.add(receipt_public_key)
+        seen_receipt_private_keys.add(receipt_private_key)
+        seen_receipt_node_ids.add(receipt_node_id)
         secrets[slug] = ValidatorSecrets(
             private_key=private_key,
             soranet_transport_public_key=soranet_transport_public_key,
             soranet_transport_private_key=soranet_transport_private_key,
+            receipt_public_key=receipt_public_key,
+            receipt_private_key=receipt_private_key,
+            receipt_node_id=receipt_node_id,
         )
     shared_raw = payload.get("shared", {})
     if not isinstance(shared_raw, dict):
@@ -1517,6 +1748,8 @@ def load_roster(
     seen_account_ids: set[str] = set()
     seen_public_keys: set[str] = set()
     seen_soranet_transport_public_keys: set[str] = set()
+    seen_receipt_public_keys: set[str] = set()
+    seen_receipt_node_ids: set[str] = set()
     seen_public_addresses: set[str] = set()
     seen_torii_public_addresses: set[str] = set()
     for index, raw in enumerate(validators_raw, start=1):
@@ -1529,6 +1762,11 @@ def load_roster(
                 f"validator entry #{index} slug must be exactly `{expected_slug}`"
             )
         public_key = _require_string(raw, "public_key", f"validator `{slug}`")
+        if "receipt_public_key" in raw or "receipt_private_key" in raw:
+            raise ValueError(
+                f"validator `{slug}` Torii receipt keys must come only from the "
+                "runtime-only --secrets file"
+            )
         validator_secrets = secrets_by_slug.get(slug)
         private_key_value = raw.get(
             "private_key",
@@ -1569,6 +1807,21 @@ def load_roster(
                 "provide it inline or via --secrets"
             )
         soranet_transport_private_key = soranet_transport_private_key_value.strip()
+        receipt_public_key = (
+            validator_secrets.receipt_public_key
+            if validator_secrets is not None
+            else None
+        )
+        receipt_private_key = (
+            validator_secrets.receipt_private_key
+            if validator_secrets is not None
+            else None
+        )
+        receipt_node_id = (
+            validator_secrets.receipt_node_id
+            if validator_secrets is not None
+            else None
+        )
         pop_hex = _require_string(raw, "pop_hex", f"validator `{slug}`")
         public_address = _canonical_socket_address(
             _require_string(raw, "public_address", f"validator `{slug}`"),
@@ -1607,6 +1860,15 @@ def load_roster(
                 "validator soranet_transport_public_key "
                 f"`{soranet_transport_public_key}` is duplicated"
             )
+        if (
+            receipt_public_key is not None
+            and receipt_public_key in seen_receipt_public_keys
+        ):
+            raise ValueError(
+                f"validator receipt_public_key `{receipt_public_key}` is duplicated"
+            )
+        if receipt_node_id is not None and receipt_node_id in seen_receipt_node_ids:
+            raise ValueError(f"validator receipt node_id `{receipt_node_id}` is duplicated")
         if public_address in seen_public_addresses:
             raise ValueError(
                 f"validator public_address `{public_address}` is duplicated"
@@ -1620,6 +1882,10 @@ def load_roster(
         seen_account_ids.add(account_id)
         seen_public_keys.add(public_key)
         seen_soranet_transport_public_keys.add(soranet_transport_public_key)
+        if receipt_public_key is not None:
+            seen_receipt_public_keys.add(receipt_public_key)
+        if receipt_node_id is not None:
+            seen_receipt_node_ids.add(receipt_node_id)
         seen_public_addresses.add(public_address)
         seen_torii_public_addresses.add(torii_public_address.strip())
         validators.append(
@@ -1630,6 +1896,9 @@ def load_roster(
                 private_key=private_key,
                 soranet_transport_public_key=soranet_transport_public_key,
                 soranet_transport_private_key=soranet_transport_private_key,
+                receipt_public_key=receipt_public_key,
+                receipt_private_key=receipt_private_key,
+                receipt_node_id=receipt_node_id,
                 pop_hex=pop_hex,
                 public_address=public_address,
                 network_address=_canonical_socket_address(
@@ -1697,6 +1966,7 @@ def render_validator_config(
     genesis_expected_hash_rewritten = False
     genesis_file_rewritten = False
     kagemusha_offline_section_seen = False
+    receipt_signer_written = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
@@ -1724,6 +1994,29 @@ def render_validator_config(
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
             rendered.append(raw_line)
+            if current_section == "[torii]":
+                if (
+                    validator.receipt_public_key is None
+                    or validator.receipt_private_key is None
+                ):
+                    raise ValueError(
+                        f"validator `{validator.slug}` lacks its runtime-only Torii "
+                        "receipt keypair"
+                    )
+                validate_receipt_keypair(
+                    validator.receipt_public_key,
+                    validator.receipt_private_key,
+                    f"validator `{validator.slug}`",
+                )
+                rendered.extend(
+                    [
+                        "receipt_public_key = "
+                        + _quote_toml(validator.receipt_public_key),
+                        "receipt_private_key = "
+                        + _quote_toml(validator.receipt_private_key),
+                    ]
+                )
+                receipt_signer_written = True
             if current_section == "[settlement.offline]":
                 kagemusha_offline_section_seen = True
                 if kagemusha_release_policy_path is not None:
@@ -2057,6 +2350,10 @@ def render_validator_config(
             f"rendered config for `{validator.slug}` lacks the mandatory "
             "`[genesis] expected_hash` or `expected_hash_file` assignment"
         )
+    if not receipt_signer_written:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory `[torii]` table"
+        )
     if genesis_file is not None and not genesis_file_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory "
@@ -2126,6 +2423,7 @@ def render_bundle(
             f"--kagemusha-release-root: {listed}"
         )
     _validate_privacy_issuer_template(template, validators)
+    _validate_receipt_signer_template(template)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
     path_root = bundle_root if bundle_root is not None else install_root
@@ -2178,6 +2476,7 @@ def render_bundle(
             raise ValueError(
                 "kagemusha_release_root and the validator-writable install, bundle, and render roots must be disjoint"
             )
+    receipt_signer_map(validators)
     _ensure_private_directory(output_dir, "render output directory")
     if bundle_root is None:
         _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")

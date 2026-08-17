@@ -41,8 +41,8 @@ status publication, and readiness release. The CompleteTip branch consumes its
 retained retired-predecessor authority at that boundary, while the generic
 activated owner remains accessible only through a private runner borrow key.
 The guarded source mapping now also covers the consuming finalization chain:
-joint ingress retirement, exact executor/Kura finality, adapter-WAL retirement,
-the existing durable output handoff, refreshed live Serve census, opaque
+joint ingress retirement, exact executor/Kura finality, adapter closure, the
+existing durable output handoff, post-handoff WAL retirement, refreshed live Serve census, opaque
 all-row LedgerV1 publication, coordinator/registry consumption, and the sole
 cleanup-ready shutdown permit. This is a source-refinement contract;
 `run_inner` has not switched to the new owner or minted these type states.
@@ -1756,11 +1756,12 @@ Proposal-to-Prepare or Prepare-to-Commit classifier and an affine cold reducer
 replay which must reproduce both children. Both cold branches splice the exact
 pair into the complete census; Proposal recovery reconstructs its chunks from
 the same body-store owner. The unified lifecycle Completion-turn driver
-classifies both recovered Proposal settlement shapes, but the live production
-runner does not yet invoke that driver, so the cold Proposal path remains
-unreachable from the production loop. The deductive model is unchanged; this
-source-fidelity boundary promotes no theorem, proof-ledger row, or evidence
-gate.
+classifies both recovered Proposal settlement shapes. The live lifecycle
+height driver invokes it with the real borrow-bound Completion turn before the
+ordinary completion tail, so the cold Proposal path is reachable without
+adding a second scheduler or publication authority. The deductive model is
+unchanged; this source-fidelity boundary promotes no theorem, proof-ledger row,
+or evidence gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence

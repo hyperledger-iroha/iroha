@@ -94,6 +94,7 @@ MACOS_CONTROLLER_FILES = (
     "configs/soranexus/taira/check_mcp_rollout.sh",
     "configs/soranexus/taira/privacy_rollout_plan_v1.json",
     "scripts/build_privacy_v1_boi_handoff.py",
+    "scripts/build_taira_public_v2_prerequisite_handoff.py",
     "scripts/build_taira_rollout_candidate.py",
     "scripts/capture_taira_macos_four_peer_receipt.py",
     "scripts/capture_taira_privacy_protocol_four_peer_receipt.py",
@@ -201,6 +202,7 @@ FINAL_ARCHIVE_DIRECTORIES = frozenset(
 )
 
 PEER_COUNT = 4
+SLUGS = tuple(f"taira-validator-{number}" for number in range(1, PEER_COUNT + 1))
 MAX_RECEIPT_LIFETIME_SECONDS = 60 * 60
 MAX_FUTURE_CLOCK_SKEW_SECONDS = 5 * 60
 MAX_JSON_BYTES = 1024 * 1024
@@ -209,6 +211,11 @@ MAX_FINAL_ARCHIVE_LOGICAL_BYTES = (
     taira_release_authority.MAX_ARCHIVE_LOGICAL_BYTES + 64 * 1024 * 1024
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+RECEIPT_PUBLIC_PAYLOAD_RE = re.compile(r"(?:02|03)[0-9a-f]{64}")
+RECEIPT_PUBLIC_KEY_PREFIX = "e70121"
+RECEIPT_NODE_ID_DOMAIN = b"iroha.taira.receipt-signer.node-id.v1\x00"
+RECEIPT_NODE_ID_PREFIX = "taira-node:receipt-signer:secp256k1:sha256:"
+SECP256K1_FIELD_MODULUS = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 
@@ -280,6 +287,71 @@ def _sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         _fail(f"{label} must be one lowercase SHA-256 digest")
     return value
+
+
+def _receipt_node_id(payload_hex: str, label: str) -> str:
+    """Derive one canonical lifecycle node ID from a compressed receipt key."""
+
+    if RECEIPT_PUBLIC_PAYLOAD_RE.fullmatch(payload_hex) is None:
+        _fail(f"{label} receipt public key payload is noncanonical")
+    payload = bytes.fromhex(payload_hex)
+    x = int.from_bytes(payload[1:], "big")
+    if x >= SECP256K1_FIELD_MODULUS:
+        _fail(f"{label} receipt public key is outside secp256k1")
+    y_squared = (pow(x, 3, SECP256K1_FIELD_MODULUS) + 7) % (
+        SECP256K1_FIELD_MODULUS
+    )
+    y = pow(
+        y_squared,
+        (SECP256K1_FIELD_MODULUS + 1) // 4,
+        SECP256K1_FIELD_MODULUS,
+    )
+    if pow(y, 2, SECP256K1_FIELD_MODULUS) != y_squared:
+        _fail(f"{label} receipt public key is not a secp256k1 curve point")
+    canonical_key = RECEIPT_PUBLIC_KEY_PREFIX + payload_hex.upper()
+    return RECEIPT_NODE_ID_PREFIX + hashlib.sha256(
+        RECEIPT_NODE_ID_DOMAIN + canonical_key.encode("ascii")
+    ).hexdigest()
+
+
+def _receipt_signers(value: object, label: str) -> dict[str, dict[str, object]]:
+    """Validate the exact ordered, secret-free receipt signer map."""
+
+    if not isinstance(value, dict) or list(value) != list(SLUGS):
+        _fail(f"{label} must bind the exact ordered four validator slugs")
+    result: dict[str, dict[str, object]] = {}
+    seen_nodes: set[str] = set()
+    seen_keys: set[str] = set()
+    for slug in SLUGS:
+        row = value.get(slug)
+        if not isinstance(row, dict):
+            _fail(f"{label} row for {slug} must be an object")
+        _exact_fields(row, {"node_id", "public_key"}, f"{label} row for {slug}")
+        public_key = row.get("public_key")
+        if not isinstance(public_key, dict):
+            _fail(f"{label} public key for {slug} must be an object")
+        _exact_fields(
+            public_key,
+            {"algorithm", "payload_hex"},
+            f"{label} public key for {slug}",
+        )
+        if public_key.get("algorithm") != "secp256k1" or not isinstance(
+            public_key.get("payload_hex"), str
+        ):
+            _fail(f"{label} public key for {slug} is not canonical secp256k1")
+        payload_hex = public_key["payload_hex"]
+        node_id = _receipt_node_id(payload_hex, f"{label} row for {slug}")
+        if row.get("node_id") != node_id:
+            _fail(f"{label} node ID for {slug} is not derived from its receipt key")
+        if node_id in seen_nodes or payload_hex in seen_keys:
+            _fail(f"{label} aliases receipt signer identities")
+        seen_nodes.add(node_id)
+        seen_keys.add(payload_hex)
+        result[slug] = {
+            "node_id": node_id,
+            "public_key": dict(public_key),
+        }
+    return result
 
 
 def _commit(value: object, label: str) -> str:
@@ -642,6 +714,7 @@ def _validate_macos_receipt(
             "peer_count",
             "peers",
             "platform",
+            "receipt_signers",
             "receipt_id",
             "restart_generation",
             "schema",
@@ -721,6 +794,10 @@ def _validate_macos_receipt(
         name: _sha256(config_digests[name], f"macOS {name} config digest")
         for name in sorted(expected_config_names)
     }
+    receipt_signers = _receipt_signers(
+        receipt["receipt_signers"],
+        "macOS receipt signer map",
+    )
     restart_generation = _sha256(
         receipt["restart_generation"], "macOS restart generation"
     )
@@ -739,6 +816,7 @@ def _validate_macos_receipt(
                 "final_height",
                 "label",
                 "number",
+                "receipt_signer_node_id",
                 "restart_proof",
                 "source_commit",
                 "validator_binary_sha256",
@@ -765,6 +843,8 @@ def _validate_macos_receipt(
             _fail("every macOS peer must report the exact validator binary")
         if peer["validator_config_sha256"] != normalized_config_digests[expected_label]:
             _fail("every macOS peer must report its exact validator config")
+        if peer["receipt_signer_node_id"] != receipt_signers[expected_label]["node_id"]:
+            _fail("every macOS peer must report its exact receipt signer node ID")
         if peer["restart_proof"] != "passed":
             _fail("every macOS peer must carry a passed restart proof")
 
@@ -773,6 +853,7 @@ def _validate_macos_receipt(
         "end_block_hash": end_hash,
         "end_height": end_height,
         "receipt_id": receipt_id,
+        "receipt_signers": receipt_signers,
         "reset_manifest_sha256": reset_manifest_sha,
         "restart_generation": restart_generation,
         "supervisor_sha256": supervisor_sha,
@@ -1797,6 +1878,7 @@ def verify_admission(
         "peer_count": PEER_COUNT,
         "privacy_protocol_receipt_id": privacy_protocol_receipt["receipt_id"],
         "receipt_id": receipt["receipt_id"],
+        "receipt_signers": receipt["receipt_signers"],
         "reset_manifest_sha256": receipt["reset_manifest_sha256"],
         "release_manifest_sha256": final_verification["manifest_sha256"],
         "release_manifest_verifier_sha256": (trusted_release_manifest_verifier_sha256),

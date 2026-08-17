@@ -141,6 +141,7 @@ LINUX_FILES = COMMON_FILES + (
 MACOS_FILES = COMMON_FILES + (
     "configs/soranexus/taira/check_mcp_rollout.sh",
     "scripts/build_privacy_v1_boi_handoff.py",
+    "scripts/build_taira_public_v2_prerequisite_handoff.py",
     "scripts/build_taira_rollout_candidate.py",
     "scripts/capture_taira_macos_four_peer_receipt.py",
     "scripts/capture_taira_privacy_protocol_four_peer_receipt.py",
@@ -204,7 +205,11 @@ ROLE_OPERATIONS: dict[str, tuple[str, set[str]]] = {
     ),
     "macos-publish": (
         "macos",
-        {"publish-rollout"},
+        {
+            "build-public-soak-candidate",
+            "build-public-soak-publication",
+            "publish-rollout",
+        },
     ),
 }
 # Root is retained only by installed orchestration whose filesystem transition
@@ -229,6 +234,12 @@ PYTHON_OPERATIONS = {
     "assemble-candidate": "scripts/build_taira_rollout_candidate.py",
     "assemble-boi": "scripts/build_privacy_v1_boi_handoff.py",
     "deploy-reset": "scripts/deploy_taira_v21_reset.py",
+    "build-public-soak-candidate": (
+        "scripts/build_taira_public_v2_prerequisite_handoff.py"
+    ),
+    "build-public-soak-publication": (
+        "scripts/build_taira_public_v2_prerequisite_handoff.py"
+    ),
     "publish-rollout": "scripts/publish_taira_rollout.py",
     "verify-privacy-rollout": "scripts/taira_privacy_rollout_contract.py",
     "admit": "scripts/taira_rollout_admission.py",
@@ -328,6 +339,16 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--repository",
         "--suffix",
     },
+    "build-public-soak-candidate": {
+        "--candidate-root",
+        "--output",
+    },
+    "build-public-soak-publication": {
+        "--candidate-root",
+        "--candidate-handoff",
+        "--publication-root",
+        "--output",
+    },
     "admit": {
         "--output", "--archive", "--authority-dir", "--expected-source-commit",
         "--expected-dpn-validator-release-commit",
@@ -352,6 +373,8 @@ IMMUTABLE_HANDOFF_OUTPUT_PREFIXES = {
     "snapshot-public-privacy": "public-input-",
     "capture-four-peer": "qualification-receipt-",
     "assemble-boi": "boi-qualified-",
+    "build-public-soak-candidate": "public-soak-candidate-",
+    "build-public-soak-publication": "public-soak-publication-",
 }
 INPUT_PATH_FLAGS = {
     "--source", "--evidence-root", "--archive", "--checkout-root",
@@ -374,6 +397,7 @@ INPUT_PATH_FLAGS = {
     "--artifact-handoff-root", "--candidate-archive",
     "--candidate-authority-dir",
     "--candidate-root",
+    "--candidate-handoff", "--publication-root",
     "--result", "--write-config",
 }
 KAGEMUSHA_PREPARE_RESET_FLAGS = frozenset(
@@ -396,6 +420,12 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
     ("assemble-candidate", "assemble"): OPERATION_FLAGS["assemble-candidate"],
     ("assemble-boi", None): OPERATION_FLAGS["assemble-boi"],
     ("deploy-reset", None): OPERATION_FLAGS["deploy-reset"] - {"--apply"},
+    ("build-public-soak-candidate", None): OPERATION_FLAGS[
+        "build-public-soak-candidate"
+    ],
+    ("build-public-soak-publication", None): OPERATION_FLAGS[
+        "build-public-soak-publication"
+    ],
     ("publish-rollout", None): OPERATION_FLAGS["publish-rollout"],
     ("admit", "init-replay-ledger"): {"--output"},
     ("admit", "verify"): OPERATION_FLAGS["admit"] - {"--output"},
@@ -488,6 +518,8 @@ ROLE_OPERATION_IDENTITY: dict[tuple[str, str], str] = {
     ("macos-deploy", "deploy-reset"): "root",
     ("macos-deploy", "check-public"): "staging",
     ("macos-deploy", "verify-privacy-rollout"): "authority",
+    ("macos-publish", "build-public-soak-candidate"): "authority",
+    ("macos-publish", "build-public-soak-publication"): "authority",
     ("macos-publish", "publish-rollout"): "authority",
 }
 
@@ -2924,6 +2956,191 @@ def _dispatch_boi_composite(
     _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
 
 
+def _publish_public_soak_prerequisite_handoff(
+    output: Path,
+    payload: bytes,
+    *,
+    kind: str,
+    handoff_root: Path,
+    controller_uid: int,
+    controller_gid: int,
+) -> None:
+    """Close one compact prerequisite file into a root-owned exact handoff."""
+
+    if output.parent != handoff_root or output.exists() or output.is_symlink():
+        _fail("public-soak prerequisite handoff output is not fresh and exact")
+    if not payload or len(payload) > MAX_CONTROLLER_BYTES:
+        _fail("public-soak prerequisite handoff payload is not bounded")
+    leaf = "public-soak-prerequisite-v1.json"
+    manifest = canonical_json_bytes(
+        {
+            "files": [
+                {
+                    "path": leaf,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size": len(payload),
+                }
+            ],
+            "kind": kind,
+            "schema": "iroha.taira.release_handoff",
+            "schema_version": 1,
+        }
+    )
+    output.mkdir(mode=0o700)
+    completed = False
+    try:
+        os.chown(output, controller_uid, controller_gid)
+        output.chmod(0o700)
+        for name, body in ((leaf, payload), (HANDOFF_MANIFEST, manifest)):
+            descriptor = os.open(
+                output / name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o400,
+            )
+            try:
+                os.fchown(descriptor, controller_uid, controller_gid)
+                os.fchmod(descriptor, 0o444)
+                view = memoryview(body)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        _fail("public-soak prerequisite handoff write was short")
+                    view = view[written:]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        output_descriptor = os.open(
+            output,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            os.fsync(output_descriptor)
+        finally:
+            os.close(output_descriptor)
+        output.chmod(0o555)
+        root_descriptor = os.open(
+            handoff_root,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            os.fsync(root_descriptor)
+        finally:
+            os.close(root_descriptor)
+        completed = True
+    finally:
+        if not completed:
+            _remove_controller_owned_tree(output, handoff_root)
+
+
+def _dispatch_public_soak_prerequisite_composite(
+    operation: str,
+    operation_args: Sequence[str],
+    attestation: dict[str, object],
+) -> int:
+    """Inject the current publisher attestation into one path-only producer."""
+
+    command = {
+        "build-public-soak-candidate": "candidate",
+        "build-public-soak-publication": "publication",
+    }.get(operation)
+    if command is None:
+        _fail("public-soak prerequisite operation is not exact")
+    authority_uid, authority_gid, authority_root = _identity_contract(
+        attestation, "authority"
+    )
+    controller_uid = int(attestation["uid"])
+    controller_gid = int(attestation.get("controller_gid", 0))
+    handoff_root = Path(str(attestation["handoff_root"]))
+    _subcommand, values = _operation_option_values(operation, operation_args)
+    output_values = values.get("--output", [])
+    if len(output_values) != 1:
+        _fail("public-soak prerequisite output is absent")
+    final_output = Path(output_values[0])
+    scratch = Path(
+        tempfile.mkdtemp(prefix=".public-soak-prerequisite-", dir=authority_root)
+    )
+    try:
+        if scratch.parent != authority_root or scratch.is_symlink():
+            _fail("public-soak prerequisite scratch escaped the authority root")
+        os.chown(scratch, authority_uid, authority_gid)
+        scratch.chmod(0o700)
+        provenance = scratch / "publisher-controller-attestation.json"
+        private_output = scratch / "public-soak-prerequisite-v1.json"
+        descriptor = os.open(
+            provenance,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o400,
+        )
+        try:
+            os.fchown(descriptor, authority_uid, authority_gid)
+            os.fchmod(descriptor, 0o400)
+            payload = canonical_json_bytes(attestation)
+            offset = 0
+            while offset < len(payload):
+                written = os.write(descriptor, payload[offset:])
+                if written <= 0:
+                    _fail("public-soak prerequisite attestation write was short")
+                offset += written
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        scratch_descriptor = os.open(
+            scratch,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            os.fsync(scratch_descriptor)
+        finally:
+            os.close(scratch_descriptor)
+        transformed = list(operation_args)
+        transformed[transformed.index("--output") + 1] = str(private_output)
+        result = _dispatch_installed_python(
+            PYTHON_OPERATIONS[operation],
+            [
+                command,
+                *transformed,
+                "--publisher-controller-attestation",
+                str(provenance),
+            ],
+            (authority_uid, authority_gid),
+        )
+        if result != 0:
+            return result
+        _validate_operation_outputs(
+            {private_output}, authority_uid, authority_gid
+        )
+        payload = _read_stable(private_output, MAX_CONTROLLER_BYTES)
+        _publish_public_soak_prerequisite_handoff(
+            final_output,
+            payload,
+            kind=(
+                "public-soak-candidate-prerequisite"
+                if command == "candidate"
+                else "public-soak-publication-prerequisite"
+            ),
+            handoff_root=handoff_root,
+            controller_uid=controller_uid,
+            controller_gid=controller_gid,
+        )
+        return 0
+    finally:
+        _remove_controller_owned_tree(scratch, authority_root)
+
+
 def _dispatch_publication_composite(
     operation_args: Sequence[str], attestation: dict[str, object]
 ) -> int:
@@ -3206,6 +3423,13 @@ def main(argv: list[str] | None = None) -> int:
             result = _dispatch_capture_composite(operation_args, attestation)
         elif args.operation == "assemble-boi":
             result = _dispatch_boi_composite(operation_args, attestation)
+        elif args.operation in {
+            "build-public-soak-candidate",
+            "build-public-soak-publication",
+        }:
+            result = _dispatch_public_soak_prerequisite_composite(
+                args.operation, operation_args, attestation
+            )
         elif args.operation == "publish-rollout":
             result = _dispatch_publication_composite(operation_args, attestation)
         else:

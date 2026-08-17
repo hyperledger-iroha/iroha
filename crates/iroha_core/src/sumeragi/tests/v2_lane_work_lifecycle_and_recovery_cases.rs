@@ -24,7 +24,7 @@ fn local_native_amx_signer_rejects_conflicting_claim_for_one_leg_phase() {
             .expect("validator has durable Native AMX guard")
             .record_count_for_test(),
         1,
-        "the exact retransmission must reuse one durable signing decision"
+        "the exact retransmission must reuse one Prepare authorization"
     );
     adapter.local_native_claims.clear();
     let conflicting = native_request_with_entrypoint(
@@ -54,7 +54,7 @@ fn local_native_amx_signer_rejects_conflicting_claim_for_one_leg_phase() {
     assert_eq!(commit.validate_plan_binding(), Ok(()));
     assert!(
         adapter.sign_native_request_once(&commit, 0).is_some(),
-        "Prepare and Commit are distinct durable claims"
+        "the matching Commit must replace Prepare with one durable claim"
     );
     assert_eq!(
         adapter
@@ -62,13 +62,14 @@ fn local_native_amx_signer_rejects_conflicting_claim_for_one_leg_phase() {
             .as_ref()
             .expect("validator has durable Native AMX guard")
             .record_count_for_test(),
-        2
+        1
     );
 }
 #[test]
 fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let request = native_request(&adapter, &keys);
+    let mut request = native_request(&adapter, &keys);
+    request.body.phase = NativeAmxPhase::Commit;
     assert_eq!(request.validate_plan_binding(), Ok(()));
     assert!(adapter.native_request_matches_context(&request, 0));
     let first = adapter
@@ -83,7 +84,7 @@ fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
     assert_eq!(
         reopened
             .sign_native_request_once(&request, 0)
-            .expect("exact full-request durable replay remains signable"),
+            .expect("exact Commit request remains durably replayable"),
         first
     );
     reopened.local_native_claims.clear();

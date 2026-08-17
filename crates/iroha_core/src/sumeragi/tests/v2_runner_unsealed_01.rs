@@ -1120,6 +1120,70 @@ fn runtime_queue_reserves_progress_and_completions() {
     };
     assert!(runtime_queue_config(&config).is_ok());
     assert!(effect_queue_config(&config).is_ok());
+    assert!(
+        lane_work_limits(
+            &config,
+            1,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+    );
+    let mut insufficient_native = config.clone();
+    insufficient_native
+        .limits
+        .native_amx_signing_guard_record_capacity = 130_559;
+    assert!(matches!(
+        lane_work_limits(
+            &insufficient_native,
+            1,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        ),
+        Err(V2RunnerError::NativeAmxSigningCapacity {
+            configured: 130_559,
+            required: 130_560,
+        })
+    ));
+    let mut largest_supported_native = config.clone();
+    largest_supported_native.limits.max_transactions = 4_096;
+    largest_supported_native
+        .limits
+        .native_amx_signing_guard_record_capacity = 1_044_480;
+    assert!(
+        lane_work_limits(
+            &largest_supported_native,
+            1,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        )
+        .is_ok(),
+        "the largest transaction bound covered by the hard signing journal must remain operable"
+    );
+    let mut unsupported_native = largest_supported_native;
+    unsupported_native
+        .limits
+        .native_amx_signing_guard_record_capacity = 1_044_479;
+    assert!(matches!(
+        lane_work_limits(
+            &unsupported_native,
+            1,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        ),
+        Err(V2RunnerError::NativeAmxSigningCapacity {
+            configured: 1_044_479,
+            required: 1_044_480,
+        })
+    ));
     let mut invalid = config;
     invalid.limits.effect_work_capacity = 3;
     assert!(matches!(

@@ -308,11 +308,11 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
         .expect("fixture has a remote validator")
         .clone();
     adapter.native_requests.insert(
-        NativeRequestKey {
-            body,
-            peer: peer.clone(),
+        body,
+        NativeRequestCatalogEntry {
+            message: NativeAmxMessage::PrepareRequest(request),
+            expected_peers: BTreeSet::from([peer.clone()]),
         },
-        NativeAmxMessage::PrepareRequest(request),
     );
     adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
     adapter

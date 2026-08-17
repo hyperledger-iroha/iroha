@@ -1022,12 +1022,15 @@ def _admission_bytes(
     expected_fields = {
         "artifact_handoff_sha256",
         "archive_sha256",
+        "boi_artifact_inventory_sha256",
         "deployment_performed",
         "linux_authority_manifest_sha256",
         "macos_end_block_hash",
         "macos_end_height",
         "peer_count",
+        "privacy_protocol_receipt_id",
         "receipt_id",
+        "receipt_signers",
         "release_manifest_sha256",
         "release_manifest_verifier_sha256",
         "reset_manifest_sha256",
@@ -1042,6 +1045,20 @@ def _admission_bytes(
         "verified",
     }
     _exact(result, expected_fields, f"{label} admission result")
+    _sha256(
+        result["boi_artifact_inventory_sha256"],
+        f"{label} BOI artifact inventory digest",
+    )
+    _sha256(
+        result["privacy_protocol_receipt_id"],
+        f"{label} privacy protocol receipt ID",
+    )
+    try:
+        receipt_signers = admission._receipt_signers(
+            result["receipt_signers"], f"{label} receipt signer map"
+        )
+    except admission.TairaRolloutAdmissionError as error:
+        raise TairaPublicationError(str(error)) from error
     archive_sha = _capture_file(archive, f"{label} admitted archive").sha256
     if (
         result["schema"] != admission.VERIFICATION_SCHEMA
@@ -1056,6 +1073,7 @@ def _admission_bytes(
         != request.trusted_signing_fingerprint
         or result["release_manifest_verifier_sha256"]
         != request.trusted_release_manifest_verifier_sha256
+        or result["receipt_signers"] != receipt_signers
     ):
         _fail(f"{label} admission result differs from the current candidate")
     return canonical_json_bytes(result)

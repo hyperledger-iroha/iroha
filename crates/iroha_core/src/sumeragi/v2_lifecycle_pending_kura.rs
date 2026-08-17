@@ -573,7 +573,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                 services,
                 receipt,
                 artifact,
-                wal_retirement_warning: finalized.into_wal_retirement_warning(),
+                finalized_adapter: finalized,
                 retired_ingress,
             },
             lane_work,

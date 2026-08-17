@@ -702,10 +702,40 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "Err(CertifiedServePrepareError::Backpressure) => {",
-        "operation.complete();",
-        "drop(operation);",
+        "fn prepare_and_dequeue_current_certified_serve<'cursor>(",
+        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
+        "            operation.complete();",
+        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
+        "            drop(operation);",
         "stateful selected Serve fail-stop transaction",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn prepare_decided_lane_recovery_ingress(",
+        "Some(decided_subject),",
+        "None,",
+        "terminal recovery must bind both invalid-version and current-height Serve classifiers",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn drain_decided_lane_recovery_ingress(",
+        ".authenticate_certified_body_request(request, sender)",
+        ".authenticate_certified_body_request_unchecked(request, sender)",
+        "live terminal drain authenticates before checked authorization",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn authorize_decided_lane_recovery_drain<",
+        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(",
+        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue_unchecked(",
+        "terminal recovery translates only the shared durable preparation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services",
+        "self.stage_certified_serve_rejection(request_hash, outcome)",
+        "Ok(())",
+        "production current Serve authorizer omits",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -2447,7 +2477,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 324
+) == 328
 
 
 @pytest.mark.parametrize(

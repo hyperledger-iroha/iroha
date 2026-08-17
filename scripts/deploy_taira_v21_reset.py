@@ -54,6 +54,7 @@ from typing import Any, Callable, NoReturn, Optional, Sequence
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
     from scripts.operator_http_headers import load_operator_context_from_file
+    from scripts import render_taira_validator_bundle as validator_renderer
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
@@ -61,12 +62,16 @@ except ModuleNotFoundError as error:
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
     from operator_http_headers import load_operator_context_from_file
+    import render_taira_validator_bundle as validator_renderer
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
 PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
+NETWORK_NAME = taira_constants.NETWORK_NAME
+NETWORK_ID = taira_constants.NETWORK_ID
+PROTOCOL_VERSION = 4
 TAIRA_LANE_COUNT = 7
 UNIVERSAL_DATASPACE_ID = 0
 DPN_DATASPACE_ID = 10
@@ -152,10 +157,18 @@ VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "s
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
+RECEIPT_PUBLIC_PAYLOAD_RE = re.compile(r"(?:02|03)[0-9a-f]{64}")
+LIFECYCLE_NODE_ID_RE = re.compile(
+    r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
+)
 BLOCK_HASH_RE = re.compile(
     r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?"
 )
 TERMINAL_UNHEALTHY_SCHEMA = "taira-terminal-unhealthy-v1"
+LIFECYCLE_STATE_SCHEMA = "iroha.taira.peer-supervisor-lifecycle-state.v1"
+LIFECYCLE_BINDING_DOMAIN = (
+    b"iroha.taira.peer-supervisor-lifecycle-binding.v1\x00"
+)
 INSTALL_ROOT = Path("/Library/SORA/Taira")
 LAUNCH_DAEMONS = Path("/Library/LaunchDaemons")
 DEFAULT_SUPERVISOR_PYTHON = Path("/usr/bin/python3")
@@ -183,8 +196,6 @@ DEPLOY_ISSUANCE_BARRIER = (
     "(or one stronger immutable candidate identity); deployment is disabled for "
     "both dry-run and apply before identity, admission, or path inspection"
 )
-
-
 class DeploymentError(RuntimeError):
     """Raised when an identity, safety, rollout, or rollback gate fails."""
 
@@ -534,7 +545,11 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "chain_discriminant": "integer",
     },
     ("network",): {"address": "string"},
-    ("torii",): {"address": "string"},
+    ("torii",): {
+        "address": "string",
+        "receipt_public_key": "string",
+        "receipt_private_key": "string",
+    },
     ("nexus", "storage"): {"local_budget_bytes": "integer"},
     ("nexus", "storage", "disk_budget_weights"): {
         "kura_blocks_bps": "integer",
@@ -803,6 +818,80 @@ class PeerPlan:
 
 
 @dataclasses.dataclass(frozen=True)
+class ReceiptSignerPlan:
+    """One secret-free receipt signer bound to a canonical validator slug."""
+
+    slug: str
+    node_id: str
+    public_key: str
+
+
+def require_receipt_signer_map(
+    value: object,
+    label: str,
+) -> tuple[ReceiptSignerPlan, ...]:
+    """Validate the exact ordered public receipt-signer projection."""
+
+    if not isinstance(value, dict) or list(value) != list(SLUGS):
+        fail(f"{label} must bind the exact ordered four validator slugs")
+    result: list[ReceiptSignerPlan] = []
+    seen_nodes: set[str] = set()
+    seen_keys: set[str] = set()
+    for slug in SLUGS:
+        row = value.get(slug)
+        if not isinstance(row, dict) or set(row) != {"node_id", "public_key"}:
+            fail(f"{label} row for {slug} is not schema-exact")
+        public = row.get("public_key")
+        if (
+            not isinstance(public, dict)
+            or set(public) != {"algorithm", "payload_hex"}
+            or public.get("algorithm") != "secp256k1"
+            or not isinstance(public.get("payload_hex"), str)
+            or RECEIPT_PUBLIC_PAYLOAD_RE.fullmatch(public["payload_hex"]) is None
+        ):
+            fail(f"{label} row for {slug} has a noncanonical receipt public key")
+        canonical_key = (
+            validator_renderer.RECEIPT_PUBLIC_KEY_PREFIX
+            + public["payload_hex"].upper()
+        )
+        try:
+            derived_node_id = validator_renderer.receipt_node_id(canonical_key)
+        except ValueError as error:
+            raise DeploymentError(
+                f"{label} row for {slug} has an invalid receipt public key"
+            ) from error
+        if row.get("node_id") != derived_node_id:
+            fail(f"{label} row for {slug} node ID is not derived from its receipt key")
+        if derived_node_id in seen_nodes or canonical_key in seen_keys:
+            fail(f"{label} aliases receipt signer identities")
+        seen_nodes.add(derived_node_id)
+        seen_keys.add(canonical_key)
+        result.append(ReceiptSignerPlan(slug, derived_node_id, canonical_key))
+    return tuple(result)
+
+
+def receipt_signer_public_map(
+    signers: Sequence[ReceiptSignerPlan],
+) -> dict[str, dict[str, object]]:
+    """Serialize an already verified signer plan without private material."""
+
+    if tuple(row.slug for row in signers) != SLUGS:
+        fail("receipt signer plan is not the exact ordered validator set")
+    return {
+        row.slug: {
+            "node_id": row.node_id,
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": row.public_key[
+                    len(validator_renderer.RECEIPT_PUBLIC_KEY_PREFIX) :
+                ].lower(),
+            },
+        }
+        for row in signers
+    }
+
+
+@dataclasses.dataclass(frozen=True)
 class BundlePlan:
     """Complete authenticated dry-run result used by apply."""
 
@@ -815,6 +904,7 @@ class BundlePlan:
     manifest_sha256: str
     manifest_identity: tuple[int, ...]
     signed_genesis_identity: tuple[int, ...]
+    receipt_signers: tuple[ReceiptSignerPlan, ...]
     peers: tuple[PeerPlan, ...]
     bundle_bytes: int
     free_bytes: int
@@ -830,6 +920,7 @@ def validate_config_projection(
     p2p_port: int,
     genesis_public_key: str,
     genesis_expected_hash: str,
+    receipt_signer: ReceiptSignerPlan,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
 
@@ -853,6 +944,26 @@ def validate_config_projection(
         fail(f"validator config P2P port is not exact {p2p_port}")
     if address_port(torii.get("address"), "torii.address") != torii_port:
         fail(f"validator config Torii port is not exact {torii_port}")
+    receipt_public_key = torii.get("receipt_public_key")
+    receipt_private_key = torii.get("receipt_private_key")
+    if (
+        not isinstance(receipt_public_key, str)
+        or not isinstance(receipt_private_key, str)
+    ):
+        fail("validator config lacks its explicit Torii receipt keypair")
+    try:
+        node_id = validator_renderer.validate_receipt_keypair(
+            receipt_public_key,
+            receipt_private_key,
+            "validator config",
+        )
+    except ValueError as error:
+        raise DeploymentError("validator config Torii receipt keypair is invalid") from error
+    if (
+        receipt_signer.public_key != receipt_public_key
+        or receipt_signer.node_id != node_id
+    ):
+        fail("validator config Torii receipt signer differs from the reset manifest")
     storage = nexus.get("storage")
     if (
         not isinstance(storage, dict)
@@ -1021,6 +1132,10 @@ def validate_bundle(
         slug: EMPTY_TREE_SHA256 for slug in SLUGS
     }:
         fail("reset manifest does not seal four empty storage trees")
+    receipt_signers = require_receipt_signer_map(
+        manifest.get("receipt_signers"),
+        "reset manifest receipt signer map",
+    )
     peers: list[PeerPlan] = []
     peer_columns = (SLUGS, LABELS, TORII_PORTS, P2P_PORTS)
     if any(len(column) != PEER_COUNT for column in peer_columns):
@@ -1055,6 +1170,7 @@ def validate_bundle(
             p2p_port=p2p_port,
             genesis_public_key=genesis_public_key,
             genesis_expected_hash=genesis_expected_hash,
+            receipt_signer=receipt_signers[index - 1],
         )
         peers.append(
             PeerPlan(
@@ -1100,6 +1216,7 @@ def validate_bundle(
         manifest_sha256=manifest_sha256,
         manifest_identity=metadata_identity(manifest_info),
         signed_genesis_identity=metadata_identity(signed_genesis_info),
+        receipt_signers=receipt_signers,
         peers=tuple(peers),
         bundle_bytes=bundle_bytes,
         free_bytes=free_bytes,
@@ -1193,6 +1310,7 @@ class AdmissionPlan:
     binary_sha256: str
     supervisor_sha256: str
     validator_config_sha256: tuple[tuple[str, str], ...]
+    receipt_signers: tuple[ReceiptSignerPlan, ...]
     restart_generation: str
     signer_fingerprint_sha256: str
     release_manifest_verifier_sha256: str
@@ -1454,6 +1572,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         "receipt_id",
         "release_manifest_sha256",
         "release_manifest_verifier_sha256",
+        "receipt_signers",
         "reset_manifest_sha256",
         "restart_generation",
         "schema",
@@ -1491,6 +1610,10 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     config_digests = tuple(
         (slug, require_sha256(raw_configs[slug], f"verified {slug} config SHA-256"))
         for slug in SLUGS
+    )
+    receipt_signers = require_receipt_signer_map(
+        result["receipt_signers"],
+        "rollout admission receipt signer map",
     )
     try:
         if rollout_admission.scan_inventory_paths(authority_dir) != list(
@@ -1604,6 +1727,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
             result["supervisor_sha256"], "verified supervisor SHA-256"
         ),
         validator_config_sha256=config_digests,
+        receipt_signers=receipt_signers,
         restart_generation=require_sha256(
             result["restart_generation"], "verified restart generation"
         ),
@@ -1663,8 +1787,12 @@ def require_inputs_match_admission(
         or bundle.manifest.get("source_commit") != admission.source_commit
         or bundle.manifest.get("dpn_validator_release_commit")
         != admission.dpn_validator_release_commit
+        or bundle.receipt_signers != admission.receipt_signers
     ):
-        fail("deployment executable inputs do not match the verified qualification receipt")
+        fail(
+            "deployment executable or receipt-signer inputs do not match the "
+            "verified qualification receipt"
+        )
 
 
 def require_admission_bound_inputs_unchanged(
@@ -2604,10 +2732,20 @@ def render_plist(
     installed_supervisor: Path,
     runtime_root: Path,
     restart_generation: str,
+    lifecycle_journal_root: Path,
+    authenticated_node_id: str,
 ) -> bytes:
-    """Render one fresh known-argument LaunchDaemon with all five stat fields."""
+    """Render one fresh LaunchDaemon bound to authenticated lifecycle identity."""
 
     pid_file = runtime_root / "pids" / f"validator-{peer.number}.pid"
+    expected_lifecycle_root = runtime_root / "lifecycle" / peer.slug
+    if (
+        not runtime_root.is_absolute()
+        or ".." in runtime_root.parts
+        or lifecycle_journal_root != expected_lifecycle_root
+        or LIFECYCLE_NODE_ID_RE.fullmatch(authenticated_node_id) is None
+    ):
+        fail("lifecycle journal path or authenticated node ID is not canonical")
     terminal_binding = supervisor_terminal_binding(
         sources.binary_sha256,
         binary_info,
@@ -2657,6 +2795,12 @@ def render_plist(
         str(terminal_file),
         "--restart-generation",
         restart_generation,
+        "--lifecycle-journal-root",
+        str(lifecycle_journal_root),
+        "--validator-id",
+        peer.slug,
+        "--node-id",
+        authenticated_node_id,
         "--initial-backoff-seconds",
         "1.0",
         "--maximum-backoff-seconds",
@@ -2907,7 +3051,10 @@ def normalized_block_hash(value: object, label: str) -> str:
     match = BLOCK_HASH_RE.fullmatch(value)
     if match is None:
         fail(f"{label} is not a canonical block hash")
-    return match.group(1).lower()
+    normalized = match.group(1).lower()
+    if int(normalized[-2:], 16) & 1 == 0:
+        fail(f"{label} does not carry the Iroha marker bit")
+    return normalized
 
 
 def nested(payload: dict[str, Any], *keys: str) -> object:
@@ -3006,6 +3153,42 @@ def no_terminal_check() -> None:
     """Default no-op for focused read-path tests without a runtime layout."""
 
 
+def deployment_completed_at_unix_ms() -> int:
+    """Return one positive millisecond timestamp for a completed deployment."""
+
+    value = time.time_ns() // 1_000_000
+    if value <= 0:
+        fail("deployment completion clock is not positive")
+    return value
+
+
+def deployed_config_set_sha256(bundle: BundlePlan) -> str:
+    """Hash the exact ordered public validator config identity map."""
+
+    value = {peer.slug: peer.config_sha256 for peer in bundle.peers}
+    if tuple(value) != SLUGS:
+        fail("deployed config set is not the exact ordered validator set")
+    payload = json.dumps(
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def deployed_topology_sha256(nexus_topology: str) -> str:
+    """Hash one already canonical exact-seven-lane topology projection."""
+
+    try:
+        value = json.loads(nexus_topology)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise DeploymentError("deployed topology is not canonical JSON") from error
+    canonical = json.dumps(
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
+    if canonical != nexus_topology:
+        fail("deployed topology is not canonical JSON")
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
 def supervisor_terminal_binding(
     binary_sha256: str,
     binary_info: os.stat_result,
@@ -3035,6 +3218,84 @@ def supervisor_terminal_binding(
             separators=(",", ":"),
         ).encode("ascii")
     ).hexdigest()
+
+
+def supervisor_lifecycle_binding(
+    runtime_binding_sha256: str,
+    restart_generation: str,
+    validator_id: str,
+    node_id: str,
+) -> str:
+    """Reproduce the supervisor's domain-separated lifecycle binding."""
+
+    if (
+        SHA256_RE.fullmatch(runtime_binding_sha256) is None
+        or SHA256_RE.fullmatch(restart_generation) is None
+        or validator_id not in SLUGS
+        or LIFECYCLE_NODE_ID_RE.fullmatch(node_id) is None
+    ):
+        fail("lifecycle binding inputs are not canonical")
+    payload = {
+        "node_id": node_id,
+        "restart_generation": restart_generation,
+        "runtime_binding_sha256": runtime_binding_sha256,
+        "schema": LIFECYCLE_STATE_SCHEMA,
+        "validator_id": validator_id,
+    }
+    encoded = (
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("ascii")
+    return hashlib.sha256(LIFECYCLE_BINDING_DOMAIN + encoded).hexdigest()
+
+
+def deployed_receipt_signer_map(
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    binary_info: os.stat_result,
+    restart_generation: str,
+) -> dict[str, dict[str, object]]:
+    """Bind each public receipt signer to its exact deployed runtime identity."""
+
+    node_ids = require_authenticated_lifecycle_node_ids(bundle)
+    if len(bundle.peers) != PEER_COUNT:
+        fail("deployed receipt signer map requires the exact four-peer plan")
+    binary_stat_seal = [
+        binary_info.st_dev,
+        binary_info.st_ino,
+        binary_info.st_size,
+        binary_info.st_mtime_ns,
+        binary_info.st_ctime_ns,
+    ]
+    public_map = receipt_signer_public_map(bundle.receipt_signers)
+    for peer, signer in zip(bundle.peers, bundle.receipt_signers, strict=True):
+        if peer.slug != signer.slug:
+            fail("deployed receipt signer order differs from the deploy peer plan")
+        runtime_binding = supervisor_terminal_binding(
+            sources.binary_sha256,
+            binary_info,
+            peer.config_sha256,
+            restart_generation,
+        )
+        public_map[peer.slug].update(
+            {
+                "binary_stat_seal": list(binary_stat_seal),
+                "config_sha256": peer.config_sha256,
+                "lifecycle_binding_sha256": supervisor_lifecycle_binding(
+                    runtime_binding,
+                    restart_generation,
+                    peer.slug,
+                    node_ids[peer.slug],
+                ),
+                "runtime_binding_sha256": runtime_binding,
+            }
+        )
+    return public_map
 
 
 def terminal_unhealthy_path(runtime_root: Path, peer: PeerPlan, binding: str) -> Path:
@@ -3368,7 +3629,7 @@ def validate_peer_health(
     if (
         commit_validators != PEER_COUNT
         or commit_min_signers != 3
-        or not 3 <= commit_signers <= PEER_COUNT
+        or commit_signers != commit_min_signers
         or commit_total_power != context_total_power
         or commit_signed_power > commit_total_power
         or commit_signed_power * 3 <= commit_total_power * 2
@@ -3886,7 +4147,49 @@ def install_runtime_layout(bundle: BundlePlan) -> Path:
     ensure_runtime_directory(
         runtime_root / "terminal", bundle.owner_uid, bundle.owner_gid
     )
+    install_lifecycle_journal_layout(bundle, runtime_root)
     return runtime_root
+
+
+def lifecycle_journal_root(runtime_root: Path, peer: PeerPlan) -> Path:
+    """Return the fixed owner-private journal root for one public validator."""
+
+    return runtime_root / "lifecycle" / peer.slug
+
+
+def install_lifecycle_journal_layout(
+    bundle: BundlePlan, runtime_root: Path
+) -> dict[str, Path]:
+    """Provision four distinct owner-private lifecycle journal roots."""
+
+    parent = runtime_root / "lifecycle"
+    ensure_runtime_directory(parent, bundle.owner_uid, bundle.owner_gid)
+    roots: dict[str, Path] = {}
+    for peer in bundle.peers:
+        root = lifecycle_journal_root(runtime_root, peer)
+        if root in roots.values():
+            fail("lifecycle journal roots are not distinct")
+        ensure_runtime_directory(root, bundle.owner_uid, bundle.owner_gid)
+        roots[peer.label] = root
+    if set(roots) != set(LABELS) or len(set(roots.values())) != PEER_COUNT:
+        fail("lifecycle journal layout is not the exact four-peer projection")
+    return roots
+
+
+def require_authenticated_lifecycle_node_ids(
+    bundle: BundlePlan,
+) -> dict[str, str]:
+    """Return only config-, manifest-, and qualification-bound lifecycle IDs."""
+
+    verified = require_receipt_signer_map(
+        bundle.manifest.get("receipt_signers"),
+        "reset manifest receipt signer map",
+    )
+    if verified != bundle.receipt_signers:
+        fail("authenticated receipt signer plan changed after bundle validation")
+    if tuple(row.slug for row in verified) != tuple(peer.slug for peer in bundle.peers):
+        fail("authenticated receipt signer order differs from the deploy peer plan")
+    return {row.slug: row.node_id for row in verified}
 
 
 def apply_reset(
@@ -3909,6 +4212,7 @@ def apply_reset(
         fail("--apply requires root")
     if len(old_cohort) != PEER_COUNT:
         fail("--apply requires exactly four authenticated rollback plists")
+    lifecycle_node_ids = require_authenticated_lifecycle_node_ids(bundle)
     ops = ops or SystemOps()
 
     ensure_root_directory(INSTALL_ROOT, 0o755)
@@ -3972,6 +4276,8 @@ def apply_reset(
             installed_supervisor=installed_supervisor,
             runtime_root=runtime_root,
             restart_generation=args.restart_generation,
+            lifecycle_journal_root=lifecycle_journal_root(runtime_root, peer),
+            authenticated_node_id=lifecycle_node_ids[peer.slug],
         )
         for peer in bundle.peers
     }
@@ -3984,6 +4290,12 @@ def apply_reset(
         )
         for peer in bundle.peers
     }
+    deployed_receipt_signers = deployed_receipt_signer_map(
+        bundle,
+        sources,
+        binary_info,
+        args.restart_generation,
+    )
     for label, body in plist_bodies.items():
         payload = plistlib.loads(body)
         if payload.get("Label") != label:
@@ -4126,10 +4438,25 @@ def apply_reset(
         "binary": str(installed_binary),
         "binary_sha256": sources.binary_sha256,
         "bundle": str(bundle.root),
+        "chain_id": CHAIN_ID,
+        "config_set_sha256": deployed_config_set_sha256(bundle),
+        "deployment_completed_at_unix_ms": deployment_completed_at_unix_ms(),
+        "genesis_block_hash": require_genesis_expected_hash(
+            bundle.manifest.get("genesis_expected_hash")
+        ),
         "nexus_topology": restarted.nexus_topology,
+        "network_id": NETWORK_ID,
+        "network_name": NETWORK_NAME,
+        "protocol_version": PROTOCOL_VERSION,
+        "signed_genesis_sha256": require_sha256(
+            bundle.manifest.get("signed_genesis_sha256"),
+            "deployed signed genesis SHA-256",
+        ),
+        "topology_sha256": deployed_topology_sha256(restarted.nexus_topology),
         "end_block_hash": restarted.block_hash,
         "end_height": restarted.height,
         "peer_count": PEER_COUNT,
+        "receipt_signers": deployed_receipt_signers,
         "restart_generation": args.restart_generation,
         "restart_duration_ms": restart_result.duration_ms,
         "restart_proof": "passed",
@@ -4372,6 +4699,10 @@ def _execute_after_provisioned_authority_contracts(
             ),
             "supervisor_sha256": sources.supervisor_sha256,
         }
+    # This refusal deliberately precedes the deployment lock and replay-ledger
+    # consumption: a cohort without receipt-signer-bound lifecycle identity may
+    # not begin even a recoverable apply transaction.
+    require_authenticated_lifecycle_node_ids(bundle)
     with exclusive_deployment_lock():
         locked_admission = verify_deployment_admission(args)
         if locked_admission != admission:

@@ -101,6 +101,15 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 HEX_32_RE = re.compile(r"[0-9a-f]{64}")
 SECP256K1_KEY_RE = re.compile(r"[0-9a-f]{66}")
 IDENTITY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{7,255}")
+RECEIPT_NODE_ID_DOMAIN = b"iroha.taira.receipt-signer.node-id.v1\x00"
+RECEIPT_NODE_ID_PREFIX = "taira-node:receipt-signer:secp256k1:sha256:"
+RECEIPT_PUBLIC_KEY_PREFIX = "e70121"
+TERMINAL_UNHEALTHY_SCHEMA = "taira-terminal-unhealthy-v1"
+LIFECYCLE_STATE_SCHEMA = "iroha.taira.peer-supervisor-lifecycle-state.v1"
+LIFECYCLE_BINDING_DOMAIN = (
+    b"iroha.taira.peer-supervisor-lifecycle-binding.v1\x00"
+)
+SECP256K1_FIELD_MODULUS = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 STABLE_FIELDS = (
     "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
     "st_size", "st_mtime_ns", "st_ctime_ns",
@@ -160,7 +169,9 @@ DEPLOY_IDENTITY_FIELDS = {
     "start_height", "end_height", "end_block_hash", "receipt_signers",
 }
 RECEIPT_SIGNER_FIELDS = {
-    "node_id", "public_key", "native_verifier_binary_sha256",
+    "node_id", "public_key", "binary_stat_seal", "config_sha256",
+    "runtime_binding_sha256", "lifecycle_binding_sha256",
+    "native_verifier_binary_sha256",
     "native_verifier_source_sha256", "native_verifier_receipt_sha256",
     "native_verifier_receipt_size_bytes", "verification_result",
 }
@@ -242,8 +253,13 @@ LIFECYCLE_FIELDS = {
     "schema", "schema_version", "deployment_completed_at_unix_ms",
     "restart_generation", "config_set_sha256", "topology_sha256",
     "signed_genesis_sha256", "supervisor_sha256", "genesis_block_hash",
-    "journal_inventory", "native_journal_verifier_receipt", "baseline",
+    "raw_windows", "journal_inventory", "native_journal_verifier_receipt", "baseline",
     "terminal", "unexpected_exit_events", "restart_events",
+}
+LIFECYCLE_RAW_WINDOW_FIELDS = {
+    "validator_id", "node_id", "binding_sha256", "artifact_sha256",
+    "artifact_size_bytes", "records_sha256", "record_count",
+    "baseline_sequence", "terminal_sequence",
 }
 ARTIFACT_IDENTITY_FIELDS = {"sha256", "size_bytes"}
 LIFECYCLE_CHECKPOINT_FIELDS = {
@@ -418,7 +434,71 @@ def _public_key(value: object, label: str) -> Mapping[str, object]:
     _require(isinstance(payload, str) and SECP256K1_KEY_RE.fullmatch(payload) is not None
              and payload[:2] in {"02", "03"}
              and payload[2:] != "0" * 64, f"{label} payload is noncanonical")
+    x = int(payload[2:], 16)
+    _require(x < SECP256K1_FIELD_MODULUS,
+             f"{label} x-coordinate is outside secp256k1")
+    y_squared = (pow(x, 3, SECP256K1_FIELD_MODULUS) + 7) % SECP256K1_FIELD_MODULUS
+    y = pow(y_squared, (SECP256K1_FIELD_MODULUS + 1) // 4,
+            SECP256K1_FIELD_MODULUS)
+    _require(pow(y, 2, SECP256K1_FIELD_MODULUS) == y_squared,
+             f"{label} is not a secp256k1 curve point")
     return key
+
+
+def _receipt_node_id(key: Mapping[str, object]) -> str:
+    """Derive the canonical deployed node ID from one validated receipt key."""
+
+    payload = key["payload_hex"]
+    assert isinstance(payload, str)
+    canonical_key = RECEIPT_PUBLIC_KEY_PREFIX + payload.upper()
+    return RECEIPT_NODE_ID_PREFIX + hashlib.sha256(
+        RECEIPT_NODE_ID_DOMAIN + canonical_key.encode("ascii")
+    ).hexdigest()
+
+
+def _runtime_binding_sha256(
+    binary_sha256: str,
+    binary_stat_seal: Sequence[int],
+    config_sha256: str,
+    restart_generation: str,
+) -> str:
+    """Derive the supervisor's exact binary/config/restart binding."""
+
+    payload = {
+        "binary_sha256": binary_sha256,
+        "binary_stat_seal": list(binary_stat_seal),
+        "config_sha256": config_sha256,
+        "restart_generation": restart_generation,
+        "schema": TERMINAL_UNHEALTHY_SCHEMA,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+
+
+def _lifecycle_binding_sha256(
+    runtime_binding_sha256: str,
+    restart_generation: str,
+    validator_id: str,
+    node_id: str,
+) -> str:
+    """Derive the supervisor's domain-separated lifecycle binding."""
+
+    payload = {
+        "node_id": node_id,
+        "restart_generation": restart_generation,
+        "runtime_binding_sha256": runtime_binding_sha256,
+        "schema": LIFECYCLE_STATE_SCHEMA,
+        "validator_id": validator_id,
+    }
+    return hashlib.sha256(
+        LIFECYCLE_BINDING_DOMAIN + _canonical_json(payload)
+    ).hexdigest()
 
 
 def _iroha_hash(value: object, label: str, expected_type: str) -> str:
@@ -429,7 +509,10 @@ def _iroha_hash(value: object, label: str, expected_type: str) -> str:
              f"{label} algorithm is not {IROHA_HASH_ALGORITHM}")
     _require(identity["type"] == expected_type,
              f"{label} HashOf type is wrong")
-    return _hex_32(identity["value"], f"{label} value")
+    digest = _hex_32(identity["value"], f"{label} value")
+    _require(int(digest[-2:], 16) & 1 == 1,
+             f"{label} HashOf value is missing the Iroha marker bit")
+    return digest
 
 
 def _canonical_json(value: object) -> bytes:
@@ -668,6 +751,44 @@ def _validate_prerequisites(
                                  f"deploy node ID {validator}")
         key = dict(_public_key(signer["public_key"],
                                f"deploy receipt public key {validator}"))
+        _require(node_id == _receipt_node_id(key),
+                 f"deploy node ID {validator} is not derived from its receipt key")
+        binary_stat_seal = signer["binary_stat_seal"]
+        _require(isinstance(binary_stat_seal, list)
+                 and len(binary_stat_seal) == 5,
+                 f"deploy binary stat seal {validator} is not exact")
+        normalized_stat_seal = tuple(
+            _integer(value, f"deploy binary stat seal {validator}[{index}]",
+                     minimum=1 if index in {0, 1, 2} else 0)
+            for index, value in enumerate(binary_stat_seal)
+        )
+        config_sha256 = _artifact_sha256(
+            signer["config_sha256"], f"deploy config {validator}"
+        )
+        runtime_binding = _artifact_sha256(
+            signer["runtime_binding_sha256"],
+            f"deploy runtime binding {validator}",
+        )
+        expected_runtime_binding = _runtime_binding_sha256(
+            str(deploy["validator_binary_sha256"]),
+            normalized_stat_seal,
+            config_sha256,
+            str(deploy["restart_generation"]),
+        )
+        _require(runtime_binding == expected_runtime_binding,
+                 f"deploy runtime binding {validator} is not derived from the "
+                 "exact binary, config, and restart generation")
+        lifecycle_binding = _artifact_sha256(
+            signer["lifecycle_binding_sha256"],
+            f"deploy lifecycle binding {validator}",
+        )
+        _require(lifecycle_binding == _lifecycle_binding_sha256(
+            runtime_binding,
+            str(deploy["restart_generation"]),
+            validator,
+            node_id,
+        ), f"deploy lifecycle binding {validator} is not derived from its exact "
+           "runtime and receipt identity")
         _require(_artifact_sha256(
             signer["native_verifier_binary_sha256"],
             f"deploy native verifier binary {validator}")
@@ -693,7 +814,14 @@ def _validate_prerequisites(
         node_ids.add(node_id)
         public_keys.add(key_tuple)
         native_receipts.add(native_receipt)
-        receipt_signers[validator] = {"node_id": node_id, "public_key": key}
+        receipt_signers[validator] = {
+            "binary_stat_seal": list(normalized_stat_seal),
+            "config_sha256": config_sha256,
+            "lifecycle_binding_sha256": lifecycle_binding,
+            "node_id": node_id,
+            "public_key": key,
+            "runtime_binding_sha256": runtime_binding,
+        }
     return {
         "candidate": candidate_digest,
         "publication": publication_digest,
@@ -982,6 +1110,54 @@ def _validate_lifecycle(
                          "lifecycle genesis block hash", BLOCK_HASH_TYPE)
              == deploy["genesis_block_hash"],
              "lifecycle genesis block differs from deployment")
+    raw_windows = document["raw_windows"]
+    _require(isinstance(raw_windows, list)
+             and len(raw_windows) == VALIDATOR_COUNT,
+             "lifecycle raw windows do not cover exactly four validators")
+    raw_artifacts: set[str] = set()
+    raw_record_sets: set[str] = set()
+    for index, validator in enumerate(VALIDATORS):
+        raw = _exact(
+            raw_windows[index],
+            LIFECYCLE_RAW_WINDOW_FIELDS,
+            f"lifecycle raw window {index}",
+        )
+        _require(raw["validator_id"] == validator,
+                 "lifecycle raw windows are not in canonical validator order")
+        _require(_identity_text(raw["node_id"], "lifecycle raw-window node ID")
+                 == deploy["receipt_signers"][validator]["node_id"],
+                 "lifecycle raw-window node differs from deployment")
+        _require(_artifact_sha256(
+            raw["binding_sha256"], "lifecycle raw-window binding"
+        ) == deploy["receipt_signers"][validator]["lifecycle_binding_sha256"],
+                 "lifecycle raw-window binding differs from deployment")
+        artifact_sha256 = _artifact_sha256(
+            raw["artifact_sha256"], "lifecycle raw-window artifact"
+        )
+        records_sha256 = _artifact_sha256(
+            raw["records_sha256"], "lifecycle raw-window records"
+        )
+        _integer(raw["artifact_size_bytes"],
+                 "lifecycle raw-window artifact size", minimum=1)
+        record_count = _integer(
+            raw["record_count"], "lifecycle raw-window record count", minimum=2
+        )
+        baseline_sequence = _integer(
+            raw["baseline_sequence"], "lifecycle raw-window baseline sequence"
+        )
+        terminal_sequence = _integer(
+            raw["terminal_sequence"],
+            "lifecycle raw-window terminal sequence",
+            minimum=baseline_sequence + 2,
+        )
+        _require(record_count == terminal_sequence - baseline_sequence,
+                 "lifecycle raw-window sequence interval is not exact")
+        _require(artifact_sha256 not in raw_artifacts,
+                 "lifecycle raw-window artifacts are aliased")
+        _require(records_sha256 not in raw_record_sets,
+                 "lifecycle raw-window record sets are aliased")
+        raw_artifacts.add(artifact_sha256)
+        raw_record_sets.add(records_sha256)
     checkpoints: dict[str, Mapping[str, object]] = {}
     validator_sets: dict[str, dict[str, Mapping[str, object]]] = {}
     for checkpoint_name in ("baseline", "terminal"):

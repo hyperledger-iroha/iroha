@@ -6884,7 +6884,7 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 ) -> InboundBlockMessage {
     let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
         64,
-        128 * 1024 * 1024,
+        512 * 1024 * 1024,
         64 * 1024 * 1024,
         CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
         8 * 1024 * 1024,

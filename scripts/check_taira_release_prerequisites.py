@@ -54,6 +54,16 @@ PREREQUISITES = (
         "deployment issuance authority",
     ),
     Prerequisite(
+        "scripts/build_taira_public_v2_deploy_handoff.py",
+        "require_deploy_native_evidence_authority_provisioned",
+        "post-deploy native-evidence authority",
+    ),
+    Prerequisite(
+        "scripts/run_taira_public_v2_24h_soak.py",
+        "require_public_soak_runner_authority_provisioned",
+        "public 24-hour soak producer authority",
+    ),
+    Prerequisite(
         "scripts/taira_privacy_rollout_contract.py",
         "require_authenticated_rollout_observation_authority_provisioned",
         "rollout observation authority",

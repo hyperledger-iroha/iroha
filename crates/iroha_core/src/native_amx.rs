@@ -16,7 +16,7 @@ use iroha_data_model::{
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     num::NonZeroUsize,
@@ -29,9 +29,9 @@ use std::{
 };
 use thiserror::Error;
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
-const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 4;
+const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 5;
 #[cfg(unix)]
-const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v4";
+const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v5";
 #[cfg(unix)]
 const NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
     "native-amx-v2-signing-guard-v1",
@@ -45,9 +45,16 @@ const NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE: &str = "chain-anchor.norito";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP: &str = "chain-anchor.norito.tmp";
 #[cfg(unix)]
 const NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signer-directory:v1\0";
-const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v4\0";
-const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v4\0";
-const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v4\0";
+const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v5\0";
+const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v5\0";
+const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v5\0";
+#[cfg(unix)]
+const NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v4";
+#[cfg(unix)]
+const NATIVE_AMX_V4_RETIRED_SUFFIX: &str = ".retired-v5";
+const NATIVE_AMX_V4_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v4\0";
+const NATIVE_AMX_V4_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v4\0";
+const NATIVE_AMX_V4_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v4\0";
 /// Absolute bound for durable Native AMX signing decisions retained at one height.
 pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize =
     iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX;
@@ -82,16 +89,9 @@ pub(crate) enum NativeAmxParticipantApplicationRole {
     /// durable application evidence.
     SeparateParticipant,
 }
-/// Classify whether a Native AMX control leg needs its own durable participant
-/// application evidence.
-///
-/// A coordinator-route leg certifies routing and settlement, but its economic
-/// effects are already carried by the canonical global block. It must never
-/// create a second participant receipt or WSV frontier marker. A same-route
-/// leg is classified as the coordinator only when its incarnation, proposal
-/// height, lane-local height/view, and proposal hash exactly match the
-/// coordinator identity. Any identity drift is an error rather than a second
-/// participant route.
+/// Classify whether a control leg needs durable participant application evidence.
+/// The exact coordinator route is represented by the global block and creates
+/// no duplicate receipt/frontier marker; identity drift is rejected.
 pub(crate) fn native_amx_participant_application_role(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,
@@ -163,11 +163,8 @@ pub(crate) fn native_amx_participant_application_role(
     }
     Ok(NativeAmxParticipantApplicationRole::Coordinator)
 }
-/// Return whether one exact route incarnation needs separate participant
-/// application evidence in this receipt.
-///
-/// Every leg is classified, even after a match, so malformed or same-route
-/// identity-drift evidence always fails closed.
+/// Whether this exact route incarnation needs separate participant application
+/// evidence; all legs remain classified so malformed identity drift fails closed.
 pub(crate) fn native_amx_receipt_requires_separate_participant_application_for(
     receipt: &NativeAmxReceipt,
     lane_id: LaneId,
@@ -203,10 +200,12 @@ struct NativeAmxSigningKeyV2 {
 }
 impl NativeAmxSigningKeyV2 {
     fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
+        let mut round = body.round;
+        round.view = 0;
         Self {
             network_id: body.network_id,
             context_id: body.round.context_id,
-            round: body.round,
+            round,
             epoch: body.epoch,
             source_id: body.source_id,
             plan_digest: body.plan_digest,
@@ -231,7 +230,6 @@ struct NativeAmxSigningSlotV3 {
     participant_lane_incarnation: Hash,
     participant_lane_block_height: u64,
     participant_lane_block_view: u64,
-    phase: NativeAmxPhase,
     signer: PeerId,
 }
 impl NativeAmxSigningSlotV3 {
@@ -246,7 +244,6 @@ impl NativeAmxSigningSlotV3 {
             participant_lane_incarnation: body.participant_lane_incarnation,
             participant_lane_block_height: body.participant_lane_block_height,
             participant_lane_block_view: body.participant_lane_block_view,
-            phase: body.phase,
             signer: signer.clone(),
         }
     }
@@ -264,19 +261,16 @@ impl NativeAmxSigningSlotClaimV3 {
         }
     }
 }
-/// Durable source-session claim shared by every phase and participant leg.
-///
-/// Participant proposal and settlement identities deliberately remain in the
-/// separate slot claim. This claim prevents a source from changing its typed
-/// entrypoint, global round, routing plan, authority height, or coordinator
-/// identity while still allowing the same grouped source to certify each
-/// participant route exactly once.
+/// Immutable source-session claim shared by every phase and participant leg.
+/// It binds entrypoint, global context, plan, authority height, and coordinator,
+/// while allowing the same request in a later certified global view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSourceSessionClaimV4 {
     source_id: [u8; Hash::LENGTH],
     tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan_digest: Hash,
-    round: ConsensusRound,
+    context_id: HeightContextId,
+    round_height: u64,
     epoch: u64,
     network_id: NetworkId,
     authority_context_height: u64,
@@ -293,7 +287,8 @@ impl NativeAmxSourceSessionClaimV4 {
             source_id: body.source_id,
             tx_entrypoint_hash: body.tx_entrypoint_hash,
             plan_digest: body.plan_digest,
-            round: body.round,
+            context_id: body.round.context_id,
+            round_height: body.round.height,
             epoch: body.epoch,
             network_id: body.network_id,
             authority_context_height: body.authority_context_height,
@@ -306,7 +301,7 @@ impl NativeAmxSourceSessionClaimV4 {
         }
     }
 }
-/// Participant route/incarnation attached to one durable source-session claim.
+/// Participant route/incarnation attached to one source-session claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSourceParticipantClaimV4 {
     lane_id: LaneId,
@@ -430,9 +425,13 @@ impl NativeAmxSigningRecordV2 {
 struct NativeAmxSigningAnchorV2 {
     version: u8,
     binding: NativeAmxHeightBindingV2,
+    certified_view: Option<u64>,
+    record_floor: u32,
+    floor_head: Hash,
     record_count: u32,
     head_hash: Hash,
     highest_view: Option<u64>,
+    last_prepare_view: Option<u64>,
 }
 impl NativeAmxSigningAnchorV2 {
     fn empty(binding: NativeAmxHeightBindingV2) -> Result<Self, NativeAmxSigningGuardError> {
@@ -440,11 +439,208 @@ impl NativeAmxSigningAnchorV2 {
         Ok(Self {
             version: NATIVE_AMX_SIGNING_GUARD_VERSION,
             binding,
+            certified_view: None,
+            record_floor: 0,
+            floor_head: head_hash,
             record_count: 0,
             head_hash,
             highest_view: None,
+            last_prepare_view: None,
         })
     }
+}
+/// Version-4 key retained solely to authenticate and migrate the previous
+/// on-disk guard format. Its global view is part of the durable key.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+struct NativeAmxSigningKeyV4 {
+    network_id: NetworkId,
+    context_id: HeightContextId,
+    round: ConsensusRound,
+    epoch: u64,
+    source_id: [u8; Hash::LENGTH],
+    plan_digest: Hash,
+    participant_lane_id: LaneId,
+    participant_dataspace_id: DataSpaceId,
+    phase: NativeAmxPhase,
+    signer: PeerId,
+}
+impl NativeAmxSigningKeyV4 {
+    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
+        Self {
+            network_id: body.network_id,
+            context_id: body.round.context_id,
+            round: body.round,
+            epoch: body.epoch,
+            source_id: body.source_id,
+            plan_digest: body.plan_digest,
+            participant_lane_id: body.participant_lane_id,
+            participant_dataspace_id: body.participant_dataspace_id,
+            phase: body.phase,
+            signer: signer.clone(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct NativeAmxSigningSlotV4 {
+    network_id: NetworkId,
+    context_id: HeightContextId,
+    epoch: u64,
+    authority_context_height: u64,
+    participant_lane_id: LaneId,
+    participant_dataspace_id: DataSpaceId,
+    participant_lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    participant_lane_block_view: u64,
+    phase: NativeAmxPhase,
+    signer: PeerId,
+}
+impl NativeAmxSigningSlotV4 {
+    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
+        Self {
+            network_id: body.network_id,
+            context_id: body.round.context_id,
+            epoch: body.epoch,
+            authority_context_height: body.authority_context_height,
+            participant_lane_id: body.participant_lane_id,
+            participant_dataspace_id: body.participant_dataspace_id,
+            participant_lane_incarnation: body.participant_lane_incarnation,
+            participant_lane_block_height: body.participant_lane_block_height,
+            participant_lane_block_view: body.participant_lane_block_view,
+            phase: body.phase,
+            signer: signer.clone(),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeAmxSourceSessionClaimV4Legacy {
+    source_id: [u8; Hash::LENGTH],
+    tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+    plan_digest: Hash,
+    round: ConsensusRound,
+    epoch: u64,
+    network_id: NetworkId,
+    authority_context_height: u64,
+    coordinator_lane_id: LaneId,
+    coordinator_dataspace_id: DataSpaceId,
+    coordinator_lane_incarnation: Hash,
+    planned_coordinator_block_height: u64,
+    coordinator_lane_block_view: u64,
+    coordinator_proposal_hash: Hash,
+}
+impl NativeAmxSourceSessionClaimV4Legacy {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        Self {
+            source_id: body.source_id,
+            tx_entrypoint_hash: body.tx_entrypoint_hash,
+            plan_digest: body.plan_digest,
+            round: body.round,
+            epoch: body.epoch,
+            network_id: body.network_id,
+            authority_context_height: body.authority_context_height,
+            coordinator_lane_id: body.coordinator_lane_id,
+            coordinator_dataspace_id: body.coordinator_dataspace_id,
+            coordinator_lane_incarnation: body.coordinator_lane_incarnation,
+            planned_coordinator_block_height: body.planned_coordinator_block_height,
+            coordinator_lane_block_view: body.coordinator_lane_block_view,
+            coordinator_proposal_hash: body.coordinator_proposal_hash,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct NativeAmxSigningRecordV4 {
+    version: u8,
+    sequence: u32,
+    previous_head: Hash,
+    key: NativeAmxSigningKeyV4,
+    body: NativeAmxAttestationBodyV2,
+    body_digest: Hash,
+    record_hash: Hash,
+}
+impl NativeAmxSigningRecordV4 {
+    #[cfg(test)]
+    fn from_body_for_test(
+        sequence: u32,
+        previous_head: Hash,
+        body: &NativeAmxAttestationBodyV2,
+        signer: &PeerId,
+    ) -> Result<Self, NativeAmxSigningGuardError> {
+        let encoded_body = norito::encode_canonical(body)
+            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
+        let mut record = Self {
+            version: 4,
+            sequence,
+            previous_head,
+            key: NativeAmxSigningKeyV4::from_body(body, signer),
+            body: *body,
+            body_digest: Hash::new_from_chunks(&[
+                NATIVE_AMX_V4_SIGNING_BODY_DOMAIN,
+                encoded_body.as_slice(),
+            ]),
+            record_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        record.record_hash = record.computed_record_hash()?;
+        Ok(record)
+    }
+    fn computed_body_digest(&self) -> Result<Hash, NativeAmxSigningGuardError> {
+        let encoded = norito::encode_canonical(&self.body)
+            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
+        Ok(Hash::new_from_chunks(&[
+            NATIVE_AMX_V4_SIGNING_BODY_DOMAIN,
+            encoded.as_slice(),
+        ]))
+    }
+    fn computed_record_hash(&self) -> Result<Hash, NativeAmxSigningGuardError> {
+        let mut hashable = self.clone();
+        hashable.record_hash = Hash::prehashed([0; Hash::LENGTH]);
+        let encoded = norito::encode_canonical(&hashable)
+            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
+        Ok(Hash::new_from_chunks(&[
+            NATIVE_AMX_V4_SIGNING_RECORD_DOMAIN,
+            encoded.as_slice(),
+        ]))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct NativeAmxSigningAnchorV4 {
+    version: u8,
+    binding: NativeAmxHeightBindingV2,
+    record_count: u32,
+    head_hash: Hash,
+    highest_view: Option<u64>,
+}
+impl NativeAmxSigningAnchorV4 {
+    #[cfg(test)]
+    fn empty_for_test(
+        binding: NativeAmxHeightBindingV2,
+    ) -> Result<Self, NativeAmxSigningGuardError> {
+        let mut anchor = Self {
+            version: 4,
+            binding,
+            record_count: 0,
+            head_hash: Hash::prehashed([0; Hash::LENGTH]),
+            highest_view: None,
+        };
+        anchor.head_hash = anchor.genesis_head()?;
+        Ok(anchor)
+    }
+    fn genesis_head(&self) -> Result<Hash, NativeAmxSigningGuardError> {
+        let encoded = norito::encode_canonical(&self.binding)
+            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
+        Ok(Hash::new_from_chunks(&[
+            NATIVE_AMX_V4_SIGNING_GENESIS_DOMAIN,
+            encoded.as_slice(),
+        ]))
+    }
+}
+#[derive(Debug)]
+struct LoadedNativeAmxV4Journal {
+    anchor: NativeAmxSigningAnchorV4,
+    records: Vec<NativeAmxSigningRecordV4>,
+}
+#[derive(Debug)]
+struct NativeAmxV5MigrationImage {
+    anchor: NativeAmxSigningAnchorV2,
+    records: Vec<NativeAmxSigningRecordV2>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NativeAmxFileIdentity {
@@ -459,6 +655,11 @@ struct NativeAmxSigningGuardInner {
     record_identities: BTreeMap<NativeAmxSigningKeyV2, (PathBuf, NativeAmxFileIdentity)>,
     source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
     slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
+    prepare_view: Option<u64>,
+    prepare_records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxAttestationBodyV2>,
+    prepare_source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
+    prepare_slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
+    prepare_quarantine_view: Option<u64>,
     poisoned: Option<String>,
 }
 #[derive(Debug)]
@@ -532,7 +733,15 @@ pub(crate) enum NativeAmxSigningGuardError {
         /// Highest view durably authorized at this height.
         highest_view: u64,
     },
-    /// The same source transaction attempted to change its durable session claim.
+    /// Restart cannot reconstruct the exact Prepare body signed in this view.
+    #[error(
+        "native AMX Prepare signing is quarantined in recovered view {view}; wait for a certified higher view"
+    )]
+    PrepareViewQuarantined {
+        /// Recovered view which may already contain a local Prepare signature.
+        view: u64,
+    },
+    /// The same source transaction attempted to change its retained session claim.
     #[error("native AMX source transaction conflicts with its durable session claim")]
     PlanEquivocation,
     /// One lane-local signing slot attempted a different proposal or settlement.
@@ -541,7 +750,7 @@ pub(crate) enum NativeAmxSigningGuardError {
     /// The exact signing key already authorizes a different full body.
     #[error("native AMX body conflicts with the durable signing decision")]
     Equivocation,
-    /// The journal has reached its configured record bound.
+    /// The guard has reached its configured decision bound.
     #[error("native AMX signing journal reached its record capacity")]
     Capacity,
     /// The attempted body or open parameters are structurally invalid.
@@ -566,7 +775,7 @@ impl NativeAmxSigningGuardError {
         }
     }
 }
-/// Validated runtime ceilings for one Native AMX signing journal.
+/// Validated runtime ceilings for one Native AMX signing guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeAmxSigningGuardLimits {
     pub(crate) max_records: NonZeroUsize,
@@ -595,17 +804,10 @@ impl NativeAmxSigningGuardLimits {
         })
     }
 }
-/// Crash-safe local anti-equivocation journal for Native AMX v2 votes.
-///
-/// Every record is appended to a hash chain. The updated chain anchor is also
-/// atomically written and directory-fsynced before record returns. Callers must
-/// invoke record immediately before creating the BLS signature.
-///
-/// The chain detects partial deletion, replacement, and rollback relative to
-/// its retained anchor. Coordinated rollback of the complete signer directory,
-/// including both every record and its anchor, is indistinguishable from an
-/// older valid filesystem snapshot and requires external monotonic storage or
-/// a TPM; that threat is outside a filesystem-only guard's guarantees.
+/// Crash-safe local anti-equivocation guard for Native AMX v2 votes.
+/// Commits form a checkpointed authenticated chain; prepares fsync and quarantine
+/// their volatile view. Call `record` before signing. V4 evidence is migrated;
+/// whole-directory rollback requires external monotonic storage.
 #[derive(Debug)]
 pub(crate) struct NativeAmxSigningGuard {
     directory: PathBuf,
@@ -619,11 +821,8 @@ pub(crate) struct NativeAmxSigningGuard {
     inner: Mutex<NativeAmxSigningGuardInner>,
 }
 impl NativeAmxSigningGuard {
-    /// Open one signer-specific journal at an exact frozen height context.
-    ///
-    /// The configured record bound must be non-zero and no greater than the
-    /// protocol hard ceiling. An existing signer may reopen the same exact
-    /// height context or advance by exactly one height.
+    /// Open a signer journal for one frozen context, enforcing the protocol
+    /// record bound and exact reopen-or-next-height progression.
     pub(crate) fn open(
         store_root: &Path,
         active_height: u64,
@@ -682,7 +881,16 @@ impl NativeAmxSigningGuard {
                 "record capacity does not fit the durable format".to_owned(),
             )
         })?;
-        let (directory, owner_uid) = native_amx_ensure_signer_directory(store_root, &signer)?;
+        let supplied_binding = NativeAmxHeightBindingV2 {
+            active_height,
+            context_id,
+            epoch,
+            network_id,
+            signer: signer.clone(),
+            max_records: max_records_u32,
+        };
+        let (directory, owner_uid, signer_digest) =
+            native_amx_ensure_signer_directory(store_root, &signer)?;
         let (directory_handle, directory_identity) =
             native_amx_open_secure_directory(&directory, owner_uid)?;
         let (owner_lock, lock_path, lock_identity) =
@@ -703,14 +911,15 @@ impl NativeAmxSigningGuard {
             limits.max_record_bytes.get(),
             limits.max_anchor_bytes.get(),
         )?;
-        let supplied_binding = NativeAmxHeightBindingV2 {
-            active_height,
-            context_id,
-            epoch,
-            network_id,
-            signer: signer.clone(),
-            max_records: max_records_u32,
-        };
+        Self::migrate_v4_journal_if_needed(
+            store_root,
+            signer_digest,
+            &directory,
+            &directory_handle,
+            owner_uid,
+            &supplied_binding,
+            limits,
+        )?;
         let durable_anchor =
             Self::read_anchor(&directory, owner_uid, limits.max_anchor_bytes.get())?;
         let (anchor, records, source_claims, slot_claims) = match durable_anchor {
@@ -820,6 +1029,7 @@ impl NativeAmxSigningGuard {
                     .map(|identity| (key.clone(), (path, identity)))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let prepare_quarantine_view = anchor.last_prepare_view;
         Ok(Self {
             directory,
             directory_handle,
@@ -836,9 +1046,693 @@ impl NativeAmxSigningGuard {
                 record_identities,
                 source_claims,
                 slot_claims,
+                prepare_view: None,
+                prepare_records: BTreeMap::new(),
+                prepare_source_claims: BTreeMap::new(),
+                prepare_slot_claims: BTreeMap::new(),
+                prepare_quarantine_view,
                 poisoned: None,
             }),
         })
+    }
+    #[cfg(unix)]
+    fn migrate_v4_journal_if_needed(
+        store_root: &Path,
+        signer_digest: Hash,
+        directory: &Path,
+        directory_handle: &File,
+        owner_uid: u32,
+        supplied_binding: &NativeAmxHeightBindingV2,
+        limits: NativeAmxSigningGuardLimits,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        let legacy_root = store_root.join(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY);
+        let legacy_root_metadata = match fs::symlink_metadata(&legacy_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(native_amx_unsafe_journal(&legacy_root, error.to_string())),
+        };
+        native_amx_validate_secure_directory_metadata(
+            &legacy_root,
+            &legacy_root_metadata,
+            owner_uid,
+        )?;
+        let legacy_directory = legacy_root.join(signer_digest.to_string());
+        let retired_directory =
+            legacy_root.join(format!("{signer_digest}{NATIVE_AMX_V4_RETIRED_SUFFIX}"));
+        let retired_metadata = match fs::symlink_metadata(&retired_directory) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(native_amx_unsafe_journal(
+                    &retired_directory,
+                    error.to_string(),
+                ));
+            }
+        };
+        if let Some(metadata) = retired_metadata.as_ref() {
+            native_amx_validate_secure_directory_metadata(&retired_directory, metadata, owner_uid)?;
+        }
+        let legacy_metadata = match fs::symlink_metadata(&legacy_directory) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(native_amx_unsafe_journal(
+                    &legacy_directory,
+                    error.to_string(),
+                ));
+            }
+        };
+        let Some(legacy_metadata) = legacy_metadata else {
+            if retired_metadata.is_some()
+                && Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())?.is_none()
+            {
+                return Err(native_amx_unsafe_journal(
+                    &retired_directory,
+                    "retired V4 evidence exists without a published V5 anchor",
+                ));
+            }
+            return Ok(());
+        };
+        if retired_metadata.is_some() {
+            return Err(native_amx_unsafe_journal(
+                &legacy_root,
+                "active and retired V4 evidence coexist",
+            ));
+        }
+        native_amx_validate_secure_directory_metadata(
+            &legacy_directory,
+            &legacy_metadata,
+            owner_uid,
+        )?;
+        let (legacy_handle, legacy_identity) =
+            native_amx_open_secure_directory(&legacy_directory, owner_uid)?;
+        let (legacy_lock, legacy_lock_path, legacy_lock_identity) =
+            native_amx_acquire_owner_lock(&legacy_directory, &legacy_handle, owner_uid)?;
+        native_amx_verify_owned_directory(
+            &legacy_directory,
+            &legacy_handle,
+            legacy_identity,
+            owner_uid,
+            &legacy_lock_path,
+            &legacy_lock,
+            legacy_lock_identity,
+        )?;
+        native_amx_reconcile_guard_temps(
+            &legacy_directory,
+            &legacy_handle,
+            owner_uid,
+            limits.max_record_bytes.get(),
+            limits.max_anchor_bytes.get(),
+        )?;
+        let legacy = Self::load_validated_v4_journal(
+            &legacy_directory,
+            owner_uid,
+            limits.max_records.get(),
+            limits.max_record_bytes.get(),
+            limits.max_anchor_bytes.get(),
+        )?;
+        let image = Self::v5_migration_image(&legacy, supplied_binding)?;
+        match Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())? {
+            Some(anchor) => {
+                let loaded = Self::load_validated_journal(
+                    directory,
+                    directory_handle,
+                    owner_uid,
+                    &anchor,
+                    limits.max_records.get(),
+                    limits.max_record_bytes.get(),
+                )?;
+                Self::validate_v5_migration_image(directory, &image, &anchor, &loaded)?;
+            }
+            None => {
+                Self::remove_unpublished_v5_migration_prefix(
+                    directory,
+                    directory_handle,
+                    owner_uid,
+                    limits.max_record_bytes.get(),
+                    &image.records,
+                )?;
+                Self::publish_v5_migration_image(
+                    directory,
+                    directory_handle,
+                    owner_uid,
+                    limits,
+                    &image,
+                )?;
+            }
+        }
+        native_amx_verify_owned_directory(
+            &legacy_directory,
+            &legacy_handle,
+            legacy_identity,
+            owner_uid,
+            &legacy_lock_path,
+            &legacy_lock,
+            legacy_lock_identity,
+        )?;
+        fs::rename(&legacy_directory, &retired_directory)
+            .map_err(|error| native_amx_unsafe_journal(&legacy_directory, error.to_string()))?;
+        native_amx_sync_directory_path(&legacy_root)?;
+        let retired = fs::symlink_metadata(&retired_directory)
+            .map_err(|error| native_amx_unsafe_journal(&retired_directory, error.to_string()))?;
+        native_amx_validate_secure_directory_metadata(&retired_directory, &retired, owner_uid)?;
+        if native_amx_file_identity(&retired) != legacy_identity {
+            return Err(native_amx_unsafe_journal(
+                &retired_directory,
+                "retired V4 signer directory changed during publication",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn load_validated_v4_journal(
+        directory: &Path,
+        owner_uid: u32,
+        max_records: usize,
+        max_record_bytes: usize,
+        max_anchor_bytes: usize,
+    ) -> Result<LoadedNativeAmxV4Journal, NativeAmxSigningGuardError> {
+        let anchor_path = directory.join(NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE);
+        let bytes = native_amx_read_secure_file(&anchor_path, max_anchor_bytes, owner_uid)?;
+        let anchor = norito::decode_canonical::<NativeAmxSigningAnchorV4>(&bytes)
+            .map_err(|error| native_amx_unsafe_journal(&anchor_path, error.to_string()))?;
+        if anchor.version != 4
+            || anchor.binding.active_height == 0
+            || native_amx_hash_is_zero_sentinel(anchor.binding.context_id.0.as_ref())
+            || native_amx_hash_is_zero_sentinel(anchor.binding.network_id.as_bytes())
+            || anchor.binding.max_records == 0
+            || usize::try_from(anchor.binding.max_records)
+                .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
+            || anchor.record_count > anchor.binding.max_records
+        {
+            return Err(native_amx_unsafe_journal(
+                &anchor_path,
+                "unsupported, non-canonical, or invalid V4 chain anchor",
+            ));
+        }
+        let mut current = BTreeMap::<u32, NativeAmxSigningRecordV4>::new();
+        let mut file_count = 0_usize;
+        for item in fs::read_dir(directory)
+            .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?
+        {
+            let item =
+                item.map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
+            let path = item.path();
+            let name = item.file_name();
+            let name = name.to_string_lossy();
+            if name == NATIVE_AMX_SIGNING_GUARD_LOCK_FILE
+                || name == NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE
+            {
+                continue;
+            }
+            if !native_amx_valid_record_filename(&name) {
+                return Err(native_amx_unsafe_journal(&path, "unknown V4 journal file"));
+            }
+            file_count = file_count.saturating_add(1);
+            if file_count > max_records {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "V4 record count exceeds the configured runtime limit",
+                ));
+            }
+            let record_bytes = native_amx_read_secure_file(&path, max_record_bytes, owner_uid)?;
+            let record = norito::decode_canonical::<NativeAmxSigningRecordV4>(&record_bytes)
+                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
+            let expected_key = NativeAmxSigningKeyV4::from_body(&record.body, &record.key.signer);
+            if record.version != 4
+                || record.sequence == 0
+                || !native_amx_body_shape_valid(&record.body)
+                || record.key != expected_key
+                || record.body_digest != record.computed_body_digest()?
+                || record.record_hash != record.computed_record_hash()?
+                || Self::v4_record_path(directory, &record) != path
+            {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "unsupported, non-canonical, misnamed, or corrupt V4 signing record",
+                ));
+            }
+            let height = record.body.authority_context_height;
+            if height > anchor.binding.active_height {
+                return Err(NativeAmxSigningGuardError::FutureHeight {
+                    record_height: height,
+                    active_height: anchor.binding.active_height,
+                });
+            }
+            if height < anchor.binding.active_height {
+                if height.checked_add(1) != Some(anchor.binding.active_height) {
+                    return Err(native_amx_unsafe_journal(
+                        &path,
+                        "V4 record is more than one height behind its anchor",
+                    ));
+                }
+                continue;
+            }
+            if current.insert(record.sequence, record).is_some() {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "duplicate V4 record sequence",
+                ));
+            }
+        }
+        let mut head = anchor.genesis_head()?;
+        let mut records = Vec::with_capacity(anchor.record_count as usize);
+        let mut source_sessions = BTreeMap::new();
+        let mut source_participants = BTreeMap::new();
+        let mut slot_claims = BTreeMap::new();
+        let mut highest_view = None::<u64>;
+        for sequence in 1..=anchor.record_count {
+            let Some(record) = current.remove(&sequence) else {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    format!("anchored V4 record sequence {sequence} is missing"),
+                ));
+            };
+            Self::validate_v4_record_binding(directory, &record, &anchor)?;
+            if record.previous_head != head {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "V4 record chain predecessor mismatch",
+                ));
+            }
+            Self::validate_v4_claims(
+                directory,
+                &record,
+                &mut source_sessions,
+                &mut source_participants,
+                &mut slot_claims,
+            )?;
+            if highest_view.is_some_and(|view| record.body.round.view < view) {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "V4 record chain regresses its durable view high-water",
+                ));
+            }
+            highest_view = Some(highest_view.map_or(record.body.round.view, |view| {
+                view.max(record.body.round.view)
+            }));
+            head = record.record_hash;
+            records.push(record);
+        }
+        if head != anchor.head_hash || highest_view != anchor.highest_view {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "V4 chain anchor head or highest view mismatch",
+            ));
+        }
+        if !current.is_empty() {
+            let tail_sequence = anchor
+                .record_count
+                .checked_add(1)
+                .ok_or_else(|| native_amx_unsafe_journal(directory, "V4 sequence overflow"))?;
+            if current.len() != 1 || !current.contains_key(&tail_sequence) {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "more than one unpublished V4 tail record",
+                ));
+            }
+            let tail = current
+                .remove(&tail_sequence)
+                .expect("tail membership checked");
+            Self::validate_v4_record_binding(directory, &tail, &anchor)?;
+            if tail.previous_head != anchor.head_hash
+                || anchor.record_count >= anchor.binding.max_records
+                || anchor
+                    .highest_view
+                    .is_some_and(|view| tail.body.round.view < view)
+            {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "invalid unpublished V4 tail record",
+                ));
+            }
+            Self::validate_v4_claims(
+                directory,
+                &tail,
+                &mut source_sessions,
+                &mut source_participants,
+                &mut slot_claims,
+            )?;
+        }
+        Ok(LoadedNativeAmxV4Journal { anchor, records })
+    }
+    #[cfg(unix)]
+    fn validate_v4_record_binding(
+        directory: &Path,
+        record: &NativeAmxSigningRecordV4,
+        anchor: &NativeAmxSigningAnchorV4,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        let binding = &anchor.binding;
+        if record.body.authority_context_height != binding.active_height
+            || record.body.round.height != binding.active_height
+            || record.body.round.context_id != binding.context_id
+            || record.body.epoch != binding.epoch
+            || record.body.network_id != binding.network_id
+            || record.key.signer != binding.signer
+        {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "V4 record does not match its anchored height context",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn validate_v4_claims(
+        directory: &Path,
+        record: &NativeAmxSigningRecordV4,
+        source_sessions: &mut BTreeMap<[u8; Hash::LENGTH], NativeAmxSourceSessionClaimV4Legacy>,
+        source_participants: &mut BTreeMap<
+            ([u8; Hash::LENGTH], LaneId, DataSpaceId),
+            NativeAmxSourceParticipantClaimV4,
+        >,
+        slot_claims: &mut BTreeMap<NativeAmxSigningSlotV4, NativeAmxSigningSlotClaimV3>,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        let body = &record.body;
+        let source_claim = NativeAmxSourceSessionClaimV4Legacy::from_body(body);
+        if source_sessions
+            .insert(body.source_id, source_claim)
+            .is_some_and(|claim| claim != source_claim)
+        {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "one source has conflicting V4 session claims",
+            ));
+        }
+        let participant = NativeAmxSourceParticipantClaimV4::from_body(body);
+        if source_participants
+            .insert(
+                (
+                    body.source_id,
+                    participant.lane_id,
+                    participant.dataspace_id,
+                ),
+                participant,
+            )
+            .is_some_and(|claim| claim != participant)
+        {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "one source has conflicting V4 participant incarnations",
+            ));
+        }
+        let slot = NativeAmxSigningSlotV4::from_body(body, &record.key.signer);
+        let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
+        if slot_claims
+            .insert(slot, slot_claim)
+            .is_some_and(|claim| claim != slot_claim)
+        {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "one V4 participant slot has conflicting proposal/settlement claims",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn v5_migration_image(
+        legacy: &LoadedNativeAmxV4Journal,
+        supplied_binding: &NativeAmxHeightBindingV2,
+    ) -> Result<NativeAmxV5MigrationImage, NativeAmxSigningGuardError> {
+        let legacy_binding = &legacy.anchor.binding;
+        if legacy_binding.network_id != supplied_binding.network_id
+            || legacy_binding.signer != supplied_binding.signer
+            || legacy_binding.max_records != supplied_binding.max_records
+        {
+            return Err(NativeAmxSigningGuardError::ContextMismatch);
+        }
+        if supplied_binding.active_height < legacy_binding.active_height {
+            return Err(NativeAmxSigningGuardError::HeightRegression {
+                supplied_height: supplied_binding.active_height,
+                durable_height: legacy_binding.active_height,
+            });
+        }
+        let mut anchor = NativeAmxSigningAnchorV2::empty(supplied_binding.clone())?;
+        if supplied_binding.active_height != legacy_binding.active_height {
+            if legacy_binding.active_height.checked_add(1) != Some(supplied_binding.active_height) {
+                return Err(NativeAmxSigningGuardError::HeightJump {
+                    supplied_height: supplied_binding.active_height,
+                    durable_height: legacy_binding.active_height,
+                });
+            }
+            if supplied_binding.context_id == legacy_binding.context_id
+                || supplied_binding.epoch < legacy_binding.epoch
+            {
+                return Err(NativeAmxSigningGuardError::ContextMismatch);
+            }
+            return Ok(NativeAmxV5MigrationImage {
+                anchor,
+                records: Vec::new(),
+            });
+        }
+        if supplied_binding.context_id != legacy_binding.context_id
+            || supplied_binding.epoch != legacy_binding.epoch
+        {
+            return Err(NativeAmxSigningGuardError::ContextMismatch);
+        }
+        let mut source_claims =
+            BTreeMap::<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>::new();
+        let mut slot_claims =
+            BTreeMap::<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>::new();
+        let mut commit_claims =
+            BTreeMap::<NativeAmxSigningKeyV2, NativeAmxAttestationBodyV2>::new();
+        let mut commit_bodies = Vec::new();
+        let mut highest_prepare_view = None::<u64>;
+        for legacy_record in &legacy.records {
+            let body = &legacy_record.body;
+            match source_claims.entry(body.source_id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(NativeAmxDurableSourceClaimV4::from_body(body));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    if !entry.get().accepts(body) {
+                        return Err(native_amx_unsafe_journal(
+                            Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                            "V4 evidence conflicts under V5 source-session semantics",
+                        ));
+                    }
+                    entry.get_mut().insert_participant(body);
+                }
+            }
+            let slot = NativeAmxSigningSlotV3::from_body(body, &legacy_binding.signer);
+            let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
+            if slot_claims
+                .insert(slot, slot_claim)
+                .is_some_and(|claim| claim != slot_claim)
+            {
+                return Err(native_amx_unsafe_journal(
+                    Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                    "V4 evidence conflicts under V5 phase-neutral slot semantics",
+                ));
+            }
+            if body.phase == NativeAmxPhase::Prepare {
+                highest_prepare_view = Some(
+                    highest_prepare_view.map_or(body.round.view, |view| view.max(body.round.view)),
+                );
+                continue;
+            }
+            let key = NativeAmxSigningKeyV2::from_body(body, &legacy_binding.signer);
+            if let Some(existing) = commit_claims.get(&key) {
+                if !native_amx_bodies_share_durable_signing_decision(existing, body) {
+                    return Err(native_amx_unsafe_journal(
+                        Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                        "V4 Commit evidence conflicts under V5 view-neutral key semantics",
+                    ));
+                }
+                continue;
+            }
+            commit_claims.insert(key, *body);
+            // V4 validation already proves that record views never regress.
+            // Preserve that authenticated sequence order: the V5 key erases
+            // the global view, so iterating a key-sorted map here could place
+            // a later-view Commit before an earlier-view Commit.
+            commit_bodies.push(*body);
+        }
+        let mut records = Vec::with_capacity(commit_bodies.len());
+        let mut head = anchor.head_hash;
+        for body in &commit_bodies {
+            let sequence = u32::try_from(records.len())
+                .ok()
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(|| {
+                    native_amx_unsafe_journal(
+                        Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                        "migrated V5 record sequence overflow",
+                    )
+                })?;
+            let record =
+                NativeAmxSigningRecordV2::from_body(sequence, head, body, &legacy_binding.signer)?;
+            head = record.record_hash;
+            records.push(record);
+        }
+        anchor.record_count = u32::try_from(records.len()).map_err(|_| {
+            native_amx_unsafe_journal(
+                Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                "migrated V5 record count overflow",
+            )
+        })?;
+        anchor.head_hash = head;
+        anchor.highest_view = legacy.anchor.highest_view;
+        anchor.last_prepare_view = highest_prepare_view;
+        if anchor
+            .last_prepare_view
+            .is_some_and(|view| anchor.highest_view.is_none_or(|highest| view > highest))
+        {
+            return Err(native_amx_unsafe_journal(
+                Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
+                "migrated Prepare quarantine exceeds the V4 view high-water",
+            ));
+        }
+        Ok(NativeAmxV5MigrationImage { anchor, records })
+    }
+    #[cfg(unix)]
+    fn validate_v5_migration_image(
+        directory: &Path,
+        expected: &NativeAmxV5MigrationImage,
+        anchor: &NativeAmxSigningAnchorV2,
+        loaded: &LoadedNativeAmxJournal,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        if anchor != &expected.anchor || loaded.records.len() != expected.records.len() {
+            return Err(native_amx_unsafe_journal(
+                directory,
+                "published V5 journal conflicts with authenticated V4 evidence",
+            ));
+        }
+        for expected_record in &expected.records {
+            if loaded.records.get(&expected_record.key) != Some(expected_record) {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "published V5 Commit claim conflicts with authenticated V4 evidence",
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn remove_unpublished_v5_migration_prefix(
+        directory: &Path,
+        directory_handle: &File,
+        owner_uid: u32,
+        max_record_bytes: usize,
+        expected: &[NativeAmxSigningRecordV2],
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        let mut prefix = BTreeMap::<u32, PathBuf>::new();
+        for item in fs::read_dir(directory)
+            .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?
+        {
+            let item =
+                item.map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
+            if item.file_name() == NATIVE_AMX_SIGNING_GUARD_LOCK_FILE {
+                continue;
+            }
+            let path = item.path();
+            let name = item.file_name();
+            let name = name.to_string_lossy();
+            if !native_amx_valid_record_filename(&name) {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "unknown unpublished V5 migration entry",
+                ));
+            }
+            let record = Self::read_record(directory, &path, owner_uid, max_record_bytes)?;
+            let index = usize::try_from(record.sequence.saturating_sub(1)).map_err(|_| {
+                native_amx_unsafe_journal(&path, "unpublished V5 sequence overflow")
+            })?;
+            if expected.get(index) != Some(&record)
+                || prefix.insert(record.sequence, path.clone()).is_some()
+            {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "unpublished V5 migration record is not an authenticated prefix",
+                ));
+            }
+        }
+        for sequence in 1..=u32::try_from(prefix.len()).unwrap_or(u32::MAX) {
+            if !prefix.contains_key(&sequence) {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "unpublished V5 migration prefix has a sequence gap",
+                ));
+            }
+        }
+        if prefix.is_empty() {
+            return Ok(());
+        }
+        for path in prefix.into_values() {
+            fs::remove_file(&path)
+                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
+        }
+        native_amx_sync_directory_handle(directory, directory_handle)
+    }
+    #[cfg(unix)]
+    fn publish_v5_migration_image(
+        directory: &Path,
+        directory_handle: &File,
+        owner_uid: u32,
+        limits: NativeAmxSigningGuardLimits,
+        image: &NativeAmxV5MigrationImage,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        for record in &image.records {
+            let bytes = norito::encode_canonical(record)
+                .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
+            if bytes.len() > limits.max_record_bytes.get() {
+                return Err(native_amx_unsafe_journal(
+                    directory,
+                    "migrated V5 record exceeds its configured runtime byte limit",
+                ));
+            }
+            let path = Self::record_path(directory, record);
+            let temp = path.with_extension(NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION);
+            native_amx_write_new_secure_temp(
+                &temp,
+                &bytes,
+                limits.max_record_bytes.get(),
+                owner_uid,
+            )?;
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(native_amx_unsafe_journal(
+                        &path,
+                        "migrated V5 record path already exists",
+                    ));
+                }
+                Err(error) => return Err(native_amx_unsafe_journal(&path, error.to_string())),
+            }
+            fs::rename(&temp, &path)
+                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
+        }
+        if !image.records.is_empty() {
+            native_amx_sync_directory_handle(directory, directory_handle)?;
+        }
+        Self::persist_anchor(
+            directory,
+            directory_handle,
+            owner_uid,
+            &image.anchor,
+            limits.max_anchor_bytes.get(),
+        )?;
+        let anchor = Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())?
+            .ok_or_else(|| native_amx_unsafe_journal(directory, "migrated V5 anchor vanished"))?;
+        let loaded = Self::load_validated_journal(
+            directory,
+            directory_handle,
+            owner_uid,
+            &anchor,
+            limits.max_records.get(),
+            limits.max_record_bytes.get(),
+        )?;
+        Self::validate_v5_migration_image(directory, image, &anchor, &loaded)
+    }
+    #[cfg(unix)]
+    fn v4_record_path(directory: &Path, record: &NativeAmxSigningRecordV4) -> PathBuf {
+        directory.join(format!(
+            "{:020}.{:010}.{}.{}",
+            record.body.authority_context_height,
+            record.sequence,
+            record.record_hash,
+            NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION
+        ))
     }
     fn anchor_path(directory: &Path) -> PathBuf {
         directory.join(NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE)
@@ -872,6 +1766,11 @@ impl NativeAmxSigningGuard {
         let bytes = native_amx_read_secure_file(&path, max_anchor_bytes, owner_uid)?;
         let anchor = norito::decode_canonical::<NativeAmxSigningAnchorV2>(&bytes)
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
+        let genesis_head = anchor
+            .binding
+            .genesis_head()
+            .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
+        let active_record_count = anchor.record_count.checked_sub(anchor.record_floor);
         if anchor.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || anchor.binding.active_height == 0
             || native_amx_hash_is_zero_sentinel(anchor.binding.context_id.0.as_ref())
@@ -879,7 +1778,21 @@ impl NativeAmxSigningGuard {
             || anchor.binding.max_records == 0
             || usize::try_from(anchor.binding.max_records)
                 .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
-            || anchor.record_count > anchor.binding.max_records
+            || active_record_count.is_none_or(|count| count > anchor.binding.max_records)
+            || (anchor.record_floor == anchor.record_count && anchor.record_floor != 0)
+            || (anchor.record_floor == 0 && anchor.floor_head != genesis_head)
+            || (anchor.record_count == 0 && anchor.head_hash != genesis_head)
+            || anchor
+                .certified_view
+                .is_some_and(|view| anchor.highest_view.is_none_or(|highest| view > highest))
+            || anchor
+                .last_prepare_view
+                .is_some_and(|view| anchor.highest_view.is_none_or(|highest| view > highest))
+            || anchor.certified_view.is_some_and(|certified| {
+                anchor
+                    .last_prepare_view
+                    .is_some_and(|prepare| prepare < certified)
+            })
         {
             return Err(native_amx_unsafe_journal(
                 &path,
@@ -901,6 +1814,7 @@ impl NativeAmxSigningGuard {
         if record.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || record.sequence == 0
             || !native_amx_body_shape_valid(&record.body)
+            || record.body.phase != NativeAmxPhase::Commit
             || record.key != expected_key
             || record.body_digest != record.computed_body_digest()?
             || record.record_hash != record.computed_record_hash()?
@@ -942,7 +1856,7 @@ impl NativeAmxSigningGuard {
         max_record_bytes: usize,
     ) -> Result<LoadedNativeAmxJournal, NativeAmxSigningGuardError> {
         let mut current = BTreeMap::<u32, (NativeAmxSigningRecordV2, PathBuf)>::new();
-        let mut stale_paths = Vec::new();
+        let mut cleanup_paths = Vec::new();
         let mut final_record_count = 0_usize;
         for item in fs::read_dir(directory)
             .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?
@@ -961,10 +1875,10 @@ impl NativeAmxSigningGuard {
                 return Err(native_amx_unsafe_journal(&path, "unknown journal file"));
             }
             final_record_count = final_record_count.saturating_add(1);
-            if final_record_count > max_records {
+            if final_record_count > max_records.saturating_mul(2) {
                 return Err(native_amx_unsafe_journal(
                     directory,
-                    "record count exceeds the configured runtime limit",
+                    "record and crash-leftover count exceeds the configured runtime limit",
                 ));
             }
             let record = Self::read_record(directory, &path, owner_uid, max_record_bytes)?;
@@ -982,8 +1896,34 @@ impl NativeAmxSigningGuard {
                         "record is more than one height behind the anchor",
                     ));
                 }
-                stale_paths.push(path);
+                cleanup_paths.push(path);
                 continue;
+            }
+            Self::validate_record_binding(&path, &record, anchor)?;
+            let retired_by_view = anchor
+                .certified_view
+                .is_some_and(|view| record.body.round.view < view);
+            if record.sequence <= anchor.record_floor
+                || (anchor.record_floor == 0 && retired_by_view)
+            {
+                if !retired_by_view
+                    || (record.sequence == anchor.record_floor
+                        && anchor.record_floor != 0
+                        && record.record_hash != anchor.floor_head)
+                {
+                    return Err(native_amx_unsafe_journal(
+                        &path,
+                        "record conflicts with the certified prefix checkpoint",
+                    ));
+                }
+                cleanup_paths.push(path);
+                continue;
+            }
+            if retired_by_view {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "retired-view record appears inside the active suffix",
+                ));
             }
             if current
                 .insert(record.sequence, (record, path.clone()))
@@ -995,22 +1935,25 @@ impl NativeAmxSigningGuard {
                 ));
             }
         }
-        let expected_count = usize::try_from(anchor.record_count)
+        let active_record_count = anchor
+            .record_count
+            .checked_sub(anchor.record_floor)
+            .ok_or_else(|| native_amx_unsafe_journal(directory, "record floor exceeds tail"))?;
+        let expected_count = usize::try_from(active_record_count)
             .map_err(|_| native_amx_unsafe_journal(directory, "record count overflow"))?;
-        let mut head = anchor.binding.genesis_head()?;
+        let mut head = anchor.floor_head;
         let mut records = BTreeMap::new();
         let mut source_claims = BTreeMap::new();
         let mut slot_claims = BTreeMap::new();
         let mut anchored_paths = Vec::with_capacity(expected_count);
         let mut highest_view = None::<u64>;
-        for sequence in 1..=anchor.record_count {
+        for sequence in anchor.record_floor.saturating_add(1)..=anchor.record_count {
             let Some((record, path)) = current.remove(&sequence) else {
                 return Err(native_amx_unsafe_journal(
                     directory,
                     format!("anchored record sequence {sequence} is missing"),
                 ));
             };
-            Self::validate_record_binding(&path, &record, anchor)?;
             if record.previous_head != head {
                 return Err(native_amx_unsafe_journal(
                     &path,
@@ -1060,16 +2003,21 @@ impl NativeAmxSigningGuard {
             }
             anchored_paths.push(path);
         }
+        let anchor_covers_record_views = match (anchor.highest_view, highest_view) {
+            (None, None) => true,
+            (Some(anchor_view), Some(record_view)) => anchor_view >= record_view,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+        };
         if records.len() != expected_count
             || head != anchor.head_hash
-            || highest_view != anchor.highest_view
+            || !anchor_covers_record_views
         {
             return Err(native_amx_unsafe_journal(
                 directory,
                 "chain anchor count, head, or highest view mismatch",
             ));
         }
-        let mut cleanup_paths = stale_paths;
         if !current.is_empty() {
             let tail_sequence = anchor
                 .record_count
@@ -1088,7 +2036,10 @@ impl NativeAmxSigningGuard {
             let tail_slot = NativeAmxSigningSlotV3::from_body(&tail.body, &tail.key.signer);
             let tail_slot_claim = NativeAmxSigningSlotClaimV3::from_body(&tail.body);
             if tail.previous_head != anchor.head_hash
-                || anchor.record_count >= anchor.binding.max_records
+                || active_record_count >= anchor.binding.max_records
+                || anchor
+                    .certified_view
+                    .is_some_and(|view| tail.body.round.view < view)
                 || anchor
                     .highest_view
                     .is_some_and(|view| tail.body.round.view < view)
@@ -1220,6 +2171,267 @@ impl NativeAmxSigningGuard {
         }
         Ok(())
     }
+    fn advance_view_high_water(
+        &self,
+        inner: &mut NativeAmxSigningGuardInner,
+        view: u64,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        if inner
+            .anchor
+            .highest_view
+            .is_some_and(|highest| view <= highest)
+        {
+            return Ok(());
+        }
+        let mut next_anchor = inner.anchor.clone();
+        next_anchor.highest_view = Some(view);
+        Self::persist_anchor(
+            &self.directory,
+            &self.directory_handle,
+            self.owner_uid,
+            &next_anchor,
+            self.limits.max_anchor_bytes.get(),
+        )?;
+        let anchor_identity = native_amx_secure_file_identity(
+            &Self::anchor_path(&self.directory),
+            self.limits.max_anchor_bytes.get(),
+            self.owner_uid,
+        )?;
+        native_amx_verify_owned_directory(
+            &self.directory,
+            &self.directory_handle,
+            self.directory_identity,
+            self.owner_uid,
+            &self.lock_path,
+            &self.owner_lock,
+            self.lock_identity,
+        )?;
+        inner.anchor = next_anchor;
+        inner.anchor_identity = anchor_identity;
+        Ok(())
+    }
+    /// Retain Commit claims at or above a certified view, publishing the anchor
+    /// before removing retired prefixes so restart sees an authenticated chain.
+    pub(crate) fn advance_certified_view(
+        &self,
+        view: u64,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        let mut inner = self.inner.lock();
+        if let Some(reason) = inner.poisoned.as_ref() {
+            return Err(NativeAmxSigningGuardError::Poisoned(reason.clone()));
+        }
+        let result = self.advance_certified_view_locked(&mut inner, view);
+        if let Err(NativeAmxSigningGuardError::UnsafeJournal(message)) = &result {
+            inner.poisoned = Some(message.clone());
+        }
+        result
+    }
+    fn advance_certified_view_locked(
+        &self,
+        inner: &mut NativeAmxSigningGuardInner,
+        view: u64,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        if inner
+            .anchor
+            .certified_view
+            .is_some_and(|certified| view <= certified)
+        {
+            return Ok(());
+        }
+        native_amx_verify_owned_directory(
+            &self.directory,
+            &self.directory_handle,
+            self.directory_identity,
+            self.owner_uid,
+            &self.lock_path,
+            &self.owner_lock,
+            self.lock_identity,
+        )?;
+        self.verify_retained_journal_paths(inner)?;
+        let mut ordered = inner
+            .records
+            .iter()
+            .map(|(key, record)| (record.sequence, key.clone(), record.clone()))
+            .collect::<Vec<_>>();
+        ordered.sort_by_key(|(sequence, _, _)| *sequence);
+        let mut retired = Vec::new();
+        let mut saw_retained = false;
+        for (_, key, record) in &ordered {
+            if record.body.round.view < view {
+                if saw_retained {
+                    return Err(native_amx_unsafe_journal(
+                        &self.directory,
+                        "certified-view retirement is not a record-chain prefix",
+                    ));
+                }
+                let (path, _) = inner.record_identities.get(key).ok_or_else(|| {
+                    native_amx_unsafe_journal(
+                        &self.directory,
+                        "retired Commit claim has no retained path identity",
+                    )
+                })?;
+                retired.push((key.clone(), path.clone(), record.clone()));
+            } else {
+                saw_retained = true;
+            }
+        }
+        let mut next_anchor = inner.anchor.clone();
+        next_anchor.certified_view = Some(view);
+        next_anchor.highest_view = Some(
+            next_anchor
+                .highest_view
+                .map_or(view, |highest| highest.max(view)),
+        );
+        if next_anchor
+            .last_prepare_view
+            .is_some_and(|prepare| prepare < view)
+        {
+            next_anchor.last_prepare_view = None;
+        }
+        if retired.len() == ordered.len() {
+            let genesis_head = next_anchor.binding.genesis_head()?;
+            next_anchor.record_floor = 0;
+            next_anchor.floor_head = genesis_head;
+            next_anchor.record_count = 0;
+            next_anchor.head_hash = genesis_head;
+        } else if let Some((_, _, last_retired)) = retired.last() {
+            next_anchor.record_floor = last_retired.sequence;
+            next_anchor.floor_head = last_retired.record_hash;
+        }
+        Self::persist_anchor(
+            &self.directory,
+            &self.directory_handle,
+            self.owner_uid,
+            &next_anchor,
+            self.limits.max_anchor_bytes.get(),
+        )?;
+        let anchor_identity = native_amx_secure_file_identity(
+            &Self::anchor_path(&self.directory),
+            self.limits.max_anchor_bytes.get(),
+            self.owner_uid,
+        )?;
+        native_amx_verify_owned_directory(
+            &self.directory,
+            &self.directory_handle,
+            self.directory_identity,
+            self.owner_uid,
+            &self.lock_path,
+            &self.owner_lock,
+            self.lock_identity,
+        )?;
+        for (_, path, _) in &retired {
+            fs::remove_file(path)
+                .map_err(|error| native_amx_unsafe_journal(path, error.to_string()))?;
+        }
+        if !retired.is_empty() {
+            native_amx_sync_directory_handle(&self.directory, &self.directory_handle)?;
+        }
+        for (key, _, _) in retired {
+            inner.records.remove(&key);
+            inner.record_identities.remove(&key);
+        }
+        inner.anchor = next_anchor;
+        inner.anchor_identity = anchor_identity;
+        Self::rebuild_durable_claims(inner);
+        if inner.prepare_view != Some(view) {
+            inner.prepare_view = None;
+            inner.prepare_records.clear();
+            inner.prepare_source_claims.clear();
+            inner.prepare_slot_claims.clear();
+        }
+        if inner
+            .prepare_quarantine_view
+            .is_some_and(|quarantined| quarantined < view)
+        {
+            inner.prepare_quarantine_view = None;
+        }
+        Ok(())
+    }
+    fn rebuild_durable_claims(inner: &mut NativeAmxSigningGuardInner) {
+        inner.source_claims.clear();
+        inner.slot_claims.clear();
+        for record in inner.records.values() {
+            let body = &record.body;
+            inner
+                .source_claims
+                .entry(body.source_id)
+                .and_modify(|claim| claim.insert_participant(body))
+                .or_insert_with(|| NativeAmxDurableSourceClaimV4::from_body(body));
+            inner.slot_claims.insert(
+                NativeAmxSigningSlotV3::from_body(body, &record.key.signer),
+                NativeAmxSigningSlotClaimV3::from_body(body),
+            );
+        }
+    }
+    fn select_prepare_view(inner: &mut NativeAmxSigningGuardInner, view: u64) {
+        if inner.prepare_view != Some(view) {
+            inner.prepare_view = Some(view);
+            inner.prepare_records.clear();
+            inner.prepare_source_claims.clear();
+            inner.prepare_slot_claims.clear();
+        }
+        if inner
+            .prepare_quarantine_view
+            .is_some_and(|quarantined| view > quarantined)
+        {
+            inner.prepare_quarantine_view = None;
+        }
+    }
+    fn mark_prepare_view(
+        &self,
+        inner: &mut NativeAmxSigningGuardInner,
+        view: u64,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        if inner.anchor.last_prepare_view == Some(view) {
+            return Ok(());
+        }
+        let mut next_anchor = inner.anchor.clone();
+        next_anchor.last_prepare_view = Some(view);
+        next_anchor.highest_view = Some(
+            next_anchor
+                .highest_view
+                .map_or(view, |highest| highest.max(view)),
+        );
+        Self::persist_anchor(
+            &self.directory,
+            &self.directory_handle,
+            self.owner_uid,
+            &next_anchor,
+            self.limits.max_anchor_bytes.get(),
+        )?;
+        let anchor_identity = native_amx_secure_file_identity(
+            &Self::anchor_path(&self.directory),
+            self.limits.max_anchor_bytes.get(),
+            self.owner_uid,
+        )?;
+        native_amx_verify_owned_directory(
+            &self.directory,
+            &self.directory_handle,
+            self.directory_identity,
+            self.owner_uid,
+            &self.lock_path,
+            &self.owner_lock,
+            self.lock_identity,
+        )?;
+        inner.anchor = next_anchor;
+        inner.anchor_identity = anchor_identity;
+        Ok(())
+    }
+    fn retire_prepare_superseded_by_commit(
+        inner: &mut NativeAmxSigningGuardInner,
+        commit: &NativeAmxAttestationBodyV2,
+    ) {
+        let mut prepare = *commit;
+        prepare.phase = NativeAmxPhase::Prepare;
+        let key = NativeAmxSigningKeyV2::from_body(&prepare, &inner.anchor.binding.signer);
+        if inner.prepare_records.get(&key) != Some(&prepare) {
+            return;
+        }
+        inner.prepare_records.remove(&key);
+        // The matching durable Commit claim was installed before this call.
+        // Keep volatile Prepare claims as monotone same-view supersets so
+        // replacement stays O(log N) while conflicts remain fail-closed.
+    }
     fn record_locked(
         &self,
         inner: &mut NativeAmxSigningGuardInner,
@@ -1240,7 +2452,7 @@ impl NativeAmxSigningGuard {
                 "malformed attestation body".to_owned(),
             ));
         }
-        let binding = &inner.anchor.binding;
+        let binding = inner.anchor.binding.clone();
         if body.network_id != binding.network_id
             || body.round.context_id != binding.context_id
             || body.epoch != binding.epoch
@@ -1259,16 +2471,87 @@ impl NativeAmxSigningGuard {
                 active_height: binding.active_height,
             });
         }
-        let key = NativeAmxSigningKeyV2::from_body(body, &binding.signer);
-        if let Some(existing) = inner.records.get(&key) {
-            return if existing.body == *body {
-                Ok(())
-            } else {
-                Err(NativeAmxSigningGuardError::Equivocation)
-            };
+        if inner
+            .anchor
+            .highest_view
+            .is_some_and(|highest| body.round.view < highest)
+        {
+            return Err(NativeAmxSigningGuardError::StaleView {
+                attempted_view: body.round.view,
+                highest_view: inner.anchor.highest_view.expect("checked"),
+            });
         }
+        Self::select_prepare_view(inner, body.round.view);
+        let key = NativeAmxSigningKeyV2::from_body(body, &binding.signer);
         let slot = NativeAmxSigningSlotV3::from_body(body, &binding.signer);
         let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
+        if body.phase == NativeAmxPhase::Prepare {
+            if inner.prepare_quarantine_view == Some(body.round.view) {
+                return Err(NativeAmxSigningGuardError::PrepareViewQuarantined {
+                    view: body.round.view,
+                });
+            }
+            if inner
+                .slot_claims
+                .get(&slot)
+                .is_some_and(|claim| *claim != slot_claim)
+            {
+                return Err(NativeAmxSigningGuardError::SlotEquivocation);
+            }
+            if inner
+                .source_claims
+                .get(&body.source_id)
+                .is_some_and(|claim| !claim.accepts(body))
+            {
+                return Err(NativeAmxSigningGuardError::PlanEquivocation);
+            }
+            if let Some(existing) = inner.prepare_records.get(&key) {
+                return if existing == body {
+                    Ok(())
+                } else {
+                    Err(NativeAmxSigningGuardError::Equivocation)
+                };
+            }
+            if inner
+                .prepare_slot_claims
+                .get(&slot)
+                .is_some_and(|claim| *claim != slot_claim)
+            {
+                return Err(NativeAmxSigningGuardError::SlotEquivocation);
+            }
+            if inner
+                .prepare_source_claims
+                .get(&body.source_id)
+                .is_some_and(|claim| !claim.accepts(body))
+            {
+                return Err(NativeAmxSigningGuardError::PlanEquivocation);
+            }
+            if inner
+                .records
+                .len()
+                .saturating_add(inner.prepare_records.len())
+                >= self.limits.max_records.get()
+            {
+                return Err(NativeAmxSigningGuardError::Capacity);
+            }
+            self.mark_prepare_view(inner, body.round.view)?;
+            inner.prepare_records.insert(key, *body);
+            inner
+                .prepare_source_claims
+                .entry(body.source_id)
+                .and_modify(|claim| claim.insert_participant(body))
+                .or_insert_with(|| NativeAmxDurableSourceClaimV4::from_body(body));
+            inner.prepare_slot_claims.entry(slot).or_insert(slot_claim);
+            return Ok(());
+        }
+        if let Some(existing) = inner.records.get(&key) {
+            if !native_amx_bodies_share_durable_signing_decision(&existing.body, body) {
+                return Err(NativeAmxSigningGuardError::Equivocation);
+            }
+            self.advance_view_high_water(inner, body.round.view)?;
+            Self::retire_prepare_superseded_by_commit(inner, body);
+            return Ok(());
+        }
         if inner
             .slot_claims
             .get(&slot)
@@ -1284,16 +2567,31 @@ impl NativeAmxSigningGuard {
             return Err(NativeAmxSigningGuardError::PlanEquivocation);
         }
         if inner
-            .anchor
-            .highest_view
-            .is_some_and(|highest| body.round.view < highest)
+            .prepare_slot_claims
+            .get(&slot)
+            .is_some_and(|claim| *claim != slot_claim)
         {
-            return Err(NativeAmxSigningGuardError::StaleView {
-                attempted_view: body.round.view,
-                highest_view: inner.anchor.highest_view.expect("checked"),
-            });
+            return Err(NativeAmxSigningGuardError::SlotEquivocation);
         }
-        if inner.records.len() >= self.limits.max_records.get() {
+        if inner
+            .prepare_source_claims
+            .get(&body.source_id)
+            .is_some_and(|claim| !claim.accepts(body))
+        {
+            return Err(NativeAmxSigningGuardError::PlanEquivocation);
+        }
+        let mut prepare = *body;
+        prepare.phase = NativeAmxPhase::Prepare;
+        let prepare_key = NativeAmxSigningKeyV2::from_body(&prepare, &binding.signer);
+        let replaces_prepare =
+            usize::from(inner.prepare_records.get(&prepare_key) == Some(&prepare));
+        if inner
+            .records
+            .len()
+            .saturating_add(inner.prepare_records.len())
+            .saturating_sub(replaces_prepare)
+            >= self.limits.max_records.get()
+        {
             return Err(NativeAmxSigningGuardError::Capacity);
         }
         let sequence = inner.anchor.record_count.checked_add(1).ok_or_else(|| {
@@ -1401,13 +2699,12 @@ impl NativeAmxSigningGuard {
             .and_modify(|claim| claim.insert_participant(body))
             .or_insert_with(|| NativeAmxDurableSourceClaimV4::from_body(body));
         inner.slot_claims.entry(slot).or_insert(slot_claim);
+        Self::retire_prepare_superseded_by_commit(inner, body);
         Ok(())
     }
-    /// Durably authorize an authenticated full-plan request before BLS signature creation.
-    ///
-    /// Exact replay at the current view is idempotent. A changed source session,
-    /// a conflicting body for one key, or a stale view is refused.
-    /// Unsafe journal and I/O failures permanently poison this guard instance.
+    /// Authorize a full-plan request before BLS signing. Commits are durable;
+    /// prepares are volatile after their view marker is fsynced. Exact replay is
+    /// idempotent, while conflicts, stale views, or unsafe I/O poison the guard.
     pub(crate) fn record(
         &self,
         request: &NativeAmxAttestationRequestV2,
@@ -1443,7 +2740,15 @@ impl NativeAmxSigningGuard {
     }
     #[cfg(test)]
     pub(crate) fn record_count_for_test(&self) -> u32 {
-        self.inner.lock().anchor.record_count
+        let inner = self.inner.lock();
+        let prepare_count = if inner.prepare_records.is_empty() {
+            u32::from(inner.prepare_quarantine_view.is_some())
+        } else {
+            u32::try_from(inner.prepare_records.len()).unwrap_or(u32::MAX)
+        };
+        u32::try_from(inner.records.len())
+            .unwrap_or(u32::MAX)
+            .saturating_add(prepare_count)
     }
     #[cfg(test)]
     pub(crate) const fn max_records_for_test(&self) -> usize {
@@ -1465,7 +2770,7 @@ impl NativeAmxSigningGuard {
 fn native_amx_ensure_signer_directory(
     store_root: &Path,
     signer: &PeerId,
-) -> Result<(PathBuf, u32), NativeAmxSigningGuardError> {
+) -> Result<(PathBuf, u32, Hash), NativeAmxSigningGuardError> {
     #[cfg(not(unix))]
     {
         let _ = (store_root, signer);
@@ -1495,7 +2800,7 @@ fn native_amx_ensure_signer_directory(
         if signer_created {
             native_amx_sync_directory_path(&guard_root)?;
         }
-        Ok((directory, owner_uid))
+        Ok((directory, owner_uid, signer_digest))
     }
 }
 #[cfg(unix)]
@@ -2139,23 +3444,15 @@ pub struct NativeAmxVoteV2 {
     /// BLS signature over [`NativeAmxAttestationBodyV2::signature_preimage`].
     pub bls_signature: Vec<u8>,
 }
-/// Full-plan request presented to a native AMX participant committee.
-///
-/// The signed attestation body carries the stable plan digest and the exact
-/// participant leg. The complete canonical leg list is included so a signer
-/// can independently recompute that digest and reject omitted, extra,
-/// duplicated, or role-swapped routes before producing a vote.
+/// Full-plan request whose body and canonical legs expose any route-list drift.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxAttestationRequestV2 {
     /// Participant attestation body that will be signed after validation.
     pub body: NativeAmxAttestationBodyV2,
     /// Complete plan in coordinator-first canonical order.
     pub plan_legs: Vec<RouteLeg>,
-    /// Exact coordinator lane proposal whose transaction membership is being attested.
-    ///
-    /// This proposal is a non-circular pre-commitment: its hash binds lane
-    /// coordinates, committee, predecessor, and transaction hashes, but does
-    /// not include the native AMX receipt assembled from the resulting votes.
+    /// Coordinator proposal pre-commitment binding lane, committee, predecessor,
+    /// and transactions, but not the receipt assembled from its votes.
     pub coordinator_proposal: LaneBlockProposalV1,
     /// Exact control-only participant proposal whose result is supplied by the coordinator.
     pub participant_proposal: LaneBlockProposalV1,
@@ -2198,9 +3495,8 @@ pub enum NativeAmxRequestError {
 }
 impl NativeAmxAttestationRequestV2 {
     /// Validate complete plan membership, canonical roles/order, and digest.
-    ///
     /// # Errors
-    /// Returns an error for malformed or replay-substituted plan evidence.
+    /// Rejects malformed or replay-substituted plan evidence.
     pub fn validate_plan_binding(&self) -> Result<(), NativeAmxRequestError> {
         if !native_amx_body_shape_valid(&self.body)
             || self.plan_legs.len() > MAX_NATIVE_AMX_PLAN_LEGS
@@ -2430,11 +3726,8 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
         && min_quorum == expected_quorum
 }
 impl NativeAmxVoteV2 {
-    /// Validate the cheap, stateless vote envelope before doing BLS verification.
-    ///
-    /// This checks the phase, authenticated transport signer, body shape, signature
-    /// length, and BLS-normal signer algorithm without parsing or verifying the
-    /// attacker-controlled signature bytes.
+    /// Validate phase, sender, shape, length, and BLS-normal identity without
+    /// parsing or verifying attacker-controlled signature bytes.
     pub(crate) fn validate_ingress_shape(
         &self,
         expected_phase: NativeAmxPhase,
@@ -2469,15 +3762,10 @@ impl NativeAmxVoteV2 {
             .verify(self.signer.public_key(), &self.body.signature_preimage())
             .map_err(|_| NativeAmxVoteIngressError::InvalidSignature)
     }
-    /// Validate phase, transport signer binding, BLS-normal identity, and vote signature.
-    ///
-    /// This is the stateless ingress prefilter. Callers that know the current world state must
-    /// still verify that the signer has a live proof of possession at the planned block height.
-    ///
+    /// Validate phase, transport signer, BLS-normal identity, and vote signature;
+    /// callers must still check live proof of possession at the planned height.
     /// # Errors
-    /// Returns an error when the vote is carried by the wrong phase message, the authenticated
-    /// sender does not match the signer, the signer is not BLS-normal, or the BLS signature does
-    /// not verify against the canonical attestation preimage.
+    /// Rejects phase, signer, identity, or canonical-preimage signature mismatch.
     pub fn validate_ingress(
         &self,
         expected_phase: NativeAmxPhase,
@@ -2508,13 +3796,10 @@ pub struct NativeAmxCommitRequestV2 {
     pub prepare_qc: NativeAmxAttestationQcV2,
 }
 impl NativeAmxCommitRequestV2 {
-    /// Validate that the request advances exactly one certified participant leg
-    /// from Prepare to Commit.
-    ///
+    /// Validate one certified participant leg's Prepare-to-Commit advance.
     /// # Errors
-    ///
-    /// Returns [`NativeAmxCommitRequestError`] if either phase is wrong or any
-    /// signed context, transaction, plan, route, or height field differs.
+    /// Returns [`NativeAmxCommitRequestError`] for a wrong phase or any signed
+    /// context, transaction, plan, route, or height mismatch.
     pub fn validate_shape(&self) -> Result<(), NativeAmxCommitRequestError> {
         if self.request.validate_plan_binding().is_err() {
             return Err(NativeAmxCommitRequestError::InvalidPlanBinding);
@@ -2660,11 +3945,8 @@ pub enum NativeAmxQcValidationError {
     #[error("native AMX QC aggregate signature is invalid")]
     InvalidAggregateSignature,
 }
-/// Validate one exact context-bound native AMX certificate against the frozen
-/// participant committee and its proof-of-possession map.
-///
+/// Validate a context-bound certificate against its frozen committee and PoPs.
 /// # Errors
-///
 /// Returns [`NativeAmxQcValidationError`] for body, committee, quorum, PoP, or
 /// aggregate-signature drift.
 pub fn validate_native_amx_qc(
@@ -2755,11 +4037,8 @@ pub fn validate_native_amx_qc(
     )
     .map_err(|_| NativeAmxQcValidationError::InvalidAggregateSignature)
 }
-/// Validate the bounded, producer-hashable shape of an aligned native AMX v2 receipt.
-///
-/// This deliberately performs no aggregate cryptography or state lookup. Block
-/// admission and merge pre-execution additionally validate the historical route,
-/// committee authority, proofs of possession, and aggregate signatures.
+/// Validate a receipt's bounded, producer-hashable shape without cryptography or
+/// state lookup; admission also checks route, authority, PoPs, and signatures.
 #[must_use]
 pub(crate) fn receipt_shape_matches_coordinator_payload(
     receipt: Option<&iroha_data_model::block::consensus::NativeAmxReceipt>,
@@ -2960,16 +4239,20 @@ fn native_amx_bodies_match_leg(
         && left.coordinator_lane_block_view == right.coordinator_lane_block_view
         && left.coordinator_proposal_hash == right.coordinator_proposal_hash
 }
-/// Build a native AMX attestation QC from sorted or unsorted participant votes.
-///
-/// The resulting bitmap and aggregate signature are deterministic because votes are projected into
-/// the supplied validator-set order before aggregation.
-///
+fn native_amx_bodies_share_durable_signing_decision(
+    left: &NativeAmxAttestationBodyV2,
+    right: &NativeAmxAttestationBodyV2,
+) -> bool {
+    let mut left = *left;
+    let mut right = *right;
+    left.round.view = 0;
+    right.round.view = 0;
+    left == right
+}
+/// Build a deterministic native AMX QC by projecting votes into validator order.
 /// # Errors
-/// Returns an error when the committee or its canonical commit threshold is
-/// malformed, votes do not match `body`, include duplicate or unknown signers,
-/// fail to meet `min_signers`, or cannot be aggregated as BLS-normal
-/// signatures.
+/// Rejects malformed committee/thresholds, mismatched bodies, duplicate or
+/// unknown signers, insufficient quorum, or invalid BLS-normal signatures.
 pub fn aggregate_votes_to_qc(
     body: NativeAmxAttestationBodyV2,
     validator_set: Vec<PeerId>,
@@ -3114,6 +4397,10 @@ impl NativeAmxSession {
             .map(|source| source.values().cloned().collect())
             .unwrap_or_default()
     }
+    fn retain_view(&mut self, view: u64) {
+        self.votes
+            .retain(|bucket, _| bucket.body.round.view == view);
+    }
 }
 /// Bounded cache of native AMX vote sessions keyed by source transaction and plan digest.
 pub struct NativeAmxSessionCache {
@@ -3144,12 +4431,10 @@ impl NativeAmxSessionCache {
             source_plan_claims: BTreeMap::new(),
         }
     }
-    /// Insert a vote, rejecting duplicate signers for the same exact attestation body.
-    ///
+    /// Insert a vote for an exact attestation body.
     /// # Errors
-    /// Returns [`NativeAmxSessionError::DuplicateSigner`] when a signer votes twice for one body,
-    /// [`NativeAmxSessionError::PlanEquivocation`] for a conflicting source-plan claim, or
-    /// [`NativeAmxSessionError::Capacity`] instead of evicting a safety-relevant claim.
+    /// Returns duplicate-signer, plan-equivocation, or capacity errors rather
+    /// than replacing safety-relevant evidence.
     pub fn insert_vote(&mut self, vote: NativeAmxVoteV2) -> Result<(), NativeAmxSessionError> {
         let key = NativeAmxSessionKey::from_body(&vote.body);
         if self
@@ -3219,6 +4504,27 @@ impl NativeAmxSessionCache {
             })
             .collect()
     }
+    /// Retain buckets for the certified view and retire orphaned source claims;
+    /// the signing guard owns durable commits and recovered-prepare quarantine.
+    pub(crate) fn retain_view(&mut self, view: u64) {
+        self.sessions.retain(|_, session| {
+            session.retain_view(view);
+            !session.votes.is_empty()
+        });
+        let surviving_claims = self
+            .sessions
+            .keys()
+            .map(|key| (key.source_id, key.plan_digest))
+            .collect::<BTreeSet<_>>();
+        self.source_plan_claims.retain(|source_id, plan_digest| {
+            surviving_claims.contains(&(*source_id, *plan_digest))
+        });
+    }
+    /// Retire every volatile vote bucket and source-plan claim at terminal height decision.
+    pub(crate) fn clear(&mut self) {
+        self.sessions.clear();
+        self.source_plan_claims.clear();
+    }
     /// Return whether retained Native AMX vote evidence names an exact lane
     /// incarnation as coordinator or participant.
     #[must_use]
@@ -3243,1791 +4549,5 @@ impl NativeAmxSessionCache {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        block::{
-            consensus::NativeAmxAttestationBodyV2,
-            consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
-        },
-        nexus::{DataSpaceId, LaneId},
-        peer::PeerId,
-        transaction::TransactionEntrypoint,
-    };
-    use std::num::NonZeroUsize;
-    fn checked_bls_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-            .expect("generate checked native AMX BLS fixture keypair")
-    }
-    fn checked_bls_signature_payload(keypair: &KeyPair, message: &[u8]) -> Vec<u8> {
-        let signature = Signature::try_new(keypair.private_key(), message)
-            .expect("checked native AMX vote fixture signature");
-        signature
-            .verify(keypair.public_key(), message)
-            .expect("checked native AMX vote fixture signature verifies");
-        signature.payload().to_vec()
-    }
-    fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV2 {
-        let mut body = NativeAmxAttestationBodyV2 {
-            round: ConsensusRound {
-                context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-                    Hash::new(b"native-amx-v2-test-context"),
-                )),
-                height: 42,
-                view: 3,
-            },
-            epoch: 7,
-            network_id: network_id(b"native-amx-v2-test-genesis"),
-            source_id: [0xCD; iroha_crypto::Hash::LENGTH],
-            tx_entrypoint_hash:
-                iroha_crypto::HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-                    Hash::prehashed([0xCD; iroha_crypto::Hash::LENGTH]),
-                ),
-            plan_digest: Hash::new(b"native-amx-plan"),
-            phase,
-            coordinator_lane_id: LaneId::new(1),
-            coordinator_dataspace_id: DataSpaceId::new(7),
-            coordinator_lane_incarnation: Hash::new(b"native-amx-v2-coordinator-incarnation"),
-            participant_lane_id: LaneId::new(2),
-            participant_dataspace_id: DataSpaceId::new(8),
-            participant_lane_incarnation: Hash::new(b"native-amx-v2-participant-incarnation"),
-            participant_previous_block_height: 0,
-            participant_previous_block_descriptor_hash: None,
-            participant_lane_block_height: 1,
-            participant_lane_block_view: 0,
-            participant_proposal_hash: Hash::new(b"native-amx-v2-participant-proposal"),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
-            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: 42,
-            planned_coordinator_block_height: 42,
-            coordinator_lane_block_view: 3,
-            coordinator_proposal_hash: Hash::new(b"native-amx-v2-coordinator-proposal"),
-        };
-        body.participant_settlement_commitment = body
-            .computed_grouped_participant_settlement_commitment(&[body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        body
-    }
-    fn signing_guard_signer(seed: u8) -> (KeyPair, PeerId) {
-        let keypair = checked_bls_keypair(seed);
-        let signer = PeerId::new(keypair.public_key().clone());
-        (keypair, signer)
-    }
-    fn signing_guard_capacity(value: usize) -> NonZeroUsize {
-        NonZeroUsize::new(value).expect("test signing capacity is non-zero")
-    }
-    fn signing_guard_limits(max_records: usize) -> NativeAmxSigningGuardLimits {
-        NativeAmxSigningGuardLimits::new(
-            signing_guard_capacity(max_records),
-            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
-            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
-        )
-        .expect("test signing guard limits are valid")
-    }
-    #[test]
-    fn signing_journal_identity_ignores_ambient_norito_layout() {
-        let (_, signer) = signing_guard_signer(0x6D);
-        let body = body(NativeAmxPhase::Prepare);
-        let binding = NativeAmxHeightBindingV2 {
-            active_height: body.authority_context_height,
-            context_id: body.round.context_id,
-            epoch: body.epoch,
-            network_id: body.network_id,
-            signer: signer.clone(),
-            max_records: 8,
-        };
-        let genesis_head = binding
-            .genesis_head()
-            .expect("derive canonical genesis head");
-        let record = NativeAmxSigningRecordV2::from_body(1, genesis_head, &body, &signer)
-            .expect("derive canonical signing record");
-        let body_digest = record
-            .computed_body_digest()
-            .expect("derive canonical body digest");
-        let record_hash = record
-            .computed_record_hash()
-            .expect("derive canonical record hash");
-        let canonical_record =
-            norito::encode_canonical(&record).expect("encode canonical signing record");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        assert_ne!(
-            norito::to_bytes(&record).expect("encode alternate-layout signing record"),
-            canonical_record,
-            "fixture must exercise a distinct ambient Norito layout"
-        );
-        assert_eq!(
-            binding
-                .genesis_head()
-                .expect("derive genesis head under alternate layout"),
-            genesis_head
-        );
-        assert_eq!(
-            record
-                .computed_body_digest()
-                .expect("derive body digest under alternate layout"),
-            body_digest
-        );
-        assert_eq!(
-            record
-                .computed_record_hash()
-                .expect("derive record hash under alternate layout"),
-            record_hash
-        );
-    }
-    #[cfg(unix)]
-    fn open_signing_guard(
-        root: &Path,
-        body: &NativeAmxAttestationBodyV2,
-        signer: PeerId,
-        max_records: usize,
-    ) -> Result<NativeAmxSigningGuard, NativeAmxSigningGuardError> {
-        NativeAmxSigningGuard::open(
-            root,
-            body.authority_context_height,
-            body.round.context_id,
-            body.epoch,
-            body.network_id,
-            signer,
-            signing_guard_limits(max_records),
-        )
-    }
-    #[cfg(unix)]
-    fn signing_record_paths(guard: &NativeAmxSigningGuard) -> Vec<PathBuf> {
-        let mut paths = fs::read_dir(&guard.directory)
-            .expect("read signer journal")
-            .map(|entry| entry.expect("journal entry"))
-            .filter(|entry| native_amx_valid_record_filename(&entry.file_name().to_string_lossy()))
-            .map(|entry| entry.path())
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths
-    }
-    #[cfg(unix)]
-    fn write_secure_new(path: &Path, bytes: &[u8]) {
-        let mut options = OpenOptions::new();
-        options
-            .create_new(true)
-            .write(true)
-            .mode(NATIVE_AMX_SIGNING_FILE_MODE);
-        let mut file = options.open(path).expect("create secure test record");
-        file.write_all(bytes).expect("write secure test record");
-        file.sync_all().expect("sync secure test record");
-        fs::set_permissions(
-            path,
-            fs::Permissions::from_mode(NATIVE_AMX_SIGNING_FILE_MODE),
-        )
-        .expect("set secure test record mode");
-    }
-    fn another_context(label: &[u8]) -> HeightContextId {
-        HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
-            label,
-        )))
-    }
-    #[test]
-    fn participant_leg_cap_reserves_one_slot_for_the_coordinator() {
-        assert_eq!(
-            MAX_NATIVE_AMX_PARTICIPANT_LEGS + 1,
-            MAX_NATIVE_AMX_PLAN_LEGS
-        );
-        assert!(native_amx_participant_leg_count_within_limit(0));
-        assert!(native_amx_participant_leg_count_within_limit(
-            MAX_NATIVE_AMX_PARTICIPANT_LEGS
-        ));
-        assert!(!native_amx_participant_leg_count_within_limit(
-            MAX_NATIVE_AMX_PLAN_LEGS
-        ));
-    }
-    #[cfg(not(unix))]
-    #[test]
-    fn signing_guard_fails_closed_on_unsupported_filesystems() {
-        let body = body(NativeAmxPhase::Prepare);
-        let (_keypair, signer) = signing_guard_signer(0x70);
-        assert!(matches!(
-            NativeAmxSigningGuard::open(
-                Path::new("."),
-                body.authority_context_height,
-                body.round.context_id,
-                body.epoch,
-                body.network_id,
-                signer,
-                signing_guard_limits(8),
-            ),
-            Err(NativeAmxSigningGuardError::UnsupportedPlatform)
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_legacy_signer_journal_instead_of_ignoring_it() {
-        for (index, legacy_name) in NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES
-            .iter()
-            .enumerate()
-        {
-            let root = tempfile::tempdir().expect("temp dir");
-            let body = body(NativeAmxPhase::Prepare);
-            let seed = 0x6F_u8.saturating_add(u8::try_from(index).expect("legacy index fits u8"));
-            let (_keypair, signer) = signing_guard_signer(seed);
-            let owner_uid = native_amx_effective_user_id(root.path()).expect("effective uid");
-            let signer_digest =
-                native_amx_signer_directory_digest(root.path(), &signer).expect("signer digest");
-            let legacy_root = root.path().join(*legacy_name);
-            native_amx_ensure_secure_directory(&legacy_root, owner_uid)
-                .expect("create secure legacy root");
-            native_amx_ensure_secure_directory(
-                &legacy_root.join(signer_digest.to_string()),
-                owner_uid,
-            )
-            .expect("create secure legacy signer journal");
-            assert!(matches!(
-                open_signing_guard(root.path(), &body, signer, 8),
-                Err(NativeAmxSigningGuardError::UnsafeJournal(message))
-                    if message.contains("authenticated recovery")
-            ));
-            assert!(
-                !root
-                    .path()
-                    .join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY)
-                    .exists(),
-                "legacy directory {legacy_name} must fail before V4 journal creation"
-            );
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x71);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&body)
-            .expect("record first body");
-        guard
-            .record_body_for_test(&body)
-            .expect("exact replay is idempotent");
-        let mut conflict = body;
-        conflict.coordinator_proposal_hash = Hash::new(b"conflicting coordinator proposal");
-        assert_eq!(
-            guard.record_body_for_test(&conflict),
-            Err(NativeAmxSigningGuardError::Equivocation)
-        );
-        drop(guard);
-        let restarted =
-            open_signing_guard(root.path(), &body, signer, 8).expect("restart signing guard");
-        restarted
-            .record_body_for_test(&body)
-            .expect("restart exact replay");
-        assert_eq!(
-            restarted.record_body_for_test(&conflict),
-            Err(NativeAmxSigningGuardError::Equivocation)
-        );
-    }
-    include!("native_amx/signing_guard_boundary_tests.rs");
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_durably_rejects_participant_slot_aba_across_sources_and_views() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x8D);
-        let first = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &first, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&first)
-            .expect("record first slot claim");
-        let mut conflicting_proposal = first;
-        conflicting_proposal.round.view += 1;
-        conflicting_proposal.participant_proposal_hash = Hash::new(b"slot-conflicting proposal");
-        assert_eq!(
-            guard.record_body_for_test(&conflicting_proposal),
-            Err(NativeAmxSigningGuardError::SlotEquivocation)
-        );
-        assert_eq!(guard.record_count_for_test(), 1);
-        let mut conflicting_settlement = first;
-        conflicting_settlement.round.view += 1;
-        conflicting_settlement.participant_settlement_commitment =
-            Hash::new(b"slot-conflicting settlement only");
-        assert_eq!(
-            guard.record_body_for_test(&conflicting_settlement),
-            Err(NativeAmxSigningGuardError::SlotEquivocation)
-        );
-        assert_eq!(guard.record_count_for_test(), 1);
-        let mut conflicting = first;
-        conflicting.round.view += 1;
-        conflicting.source_id = [0xEF; Hash::LENGTH];
-        conflicting.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed(conflicting.source_id),
-        );
-        conflicting.participant_settlement_commitment = conflicting
-            .computed_grouped_participant_settlement_commitment(&[conflicting.source_id])
-            .expect("single-source test fixture settlement is valid");
-        assert_eq!(
-            guard.record_body_for_test(&conflicting),
-            Err(NativeAmxSigningGuardError::SlotEquivocation)
-        );
-        assert_eq!(guard.record_count_for_test(), 1);
-        drop(guard);
-        conflicting.round.view += 1;
-        let restarted =
-            open_signing_guard(root.path(), &first, signer, 8).expect("restart signing guard");
-        assert_eq!(
-            restarted.record_body_for_test(&conflicting_settlement),
-            Err(NativeAmxSigningGuardError::SlotEquivocation)
-        );
-        assert_eq!(restarted.record_count_for_test(), 1);
-        assert_eq!(
-            restarted.record_body_for_test(&conflicting),
-            Err(NativeAmxSigningGuardError::SlotEquivocation)
-        );
-        assert_eq!(restarted.record_count_for_test(), 1);
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_binds_context_epoch_and_monotonic_view_then_resets_next_height() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x73);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard.record_body_for_test(&base).expect("record base view");
-        let mut high = base;
-        high.source_id = [0xA1; Hash::LENGTH];
-        high.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xA1; Hash::LENGTH]),
-        );
-        high.round.view += 2;
-        high.coordinator_lane_block_view += 2;
-        guard
-            .record_body_for_test(&high)
-            .expect("advance durable view");
-        drop(guard);
-        assert!(matches!(
-            NativeAmxSigningGuard::open(
-                root.path(),
-                base.authority_context_height,
-                another_context(b"same-height-context-drift"),
-                base.epoch,
-                base.network_id,
-                signer.clone(),
-                signing_guard_limits(8),
-            ),
-            Err(NativeAmxSigningGuardError::ContextMismatch)
-        ));
-        assert!(matches!(
-            NativeAmxSigningGuard::open(
-                root.path(),
-                base.authority_context_height,
-                base.round.context_id,
-                base.epoch + 1,
-                base.network_id,
-                signer.clone(),
-                signing_guard_limits(8),
-            ),
-            Err(NativeAmxSigningGuardError::ContextMismatch)
-        ));
-        assert!(matches!(
-            NativeAmxSigningGuard::open(
-                root.path(),
-                base.authority_context_height,
-                base.round.context_id,
-                base.epoch,
-                network_id(b"same-height-foreign-genesis"),
-                signer.clone(),
-                signing_guard_limits(8),
-            ),
-            Err(NativeAmxSigningGuardError::ContextMismatch)
-        ));
-        let restarted = open_signing_guard(root.path(), &base, signer.clone(), 8)
-            .expect("restart exact context");
-        let mut stale = base;
-        stale.source_id = [0xA2; Hash::LENGTH];
-        stale.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xA2; Hash::LENGTH]),
-        );
-        stale.round.view += 1;
-        stale.coordinator_lane_block_view += 1;
-        assert_eq!(
-            restarted.record_body_for_test(&stale),
-            Err(NativeAmxSigningGuardError::StaleView {
-                attempted_view: base.round.view + 1,
-                highest_view: base.round.view + 2,
-            })
-        );
-        drop(restarted);
-        let next_context = another_context(b"next-height-context");
-        let next_guard = NativeAmxSigningGuard::open(
-            root.path(),
-            base.authority_context_height + 1,
-            next_context,
-            base.epoch,
-            base.network_id,
-            signer.clone(),
-            signing_guard_limits(8),
-        )
-        .expect("advance exact next height");
-        let mut next = base;
-        next.round.height += 1;
-        next.round.context_id = next_context;
-        next.round.view = 0;
-        next.coordinator_lane_block_view = 0;
-        next.authority_context_height += 1;
-        next.planned_coordinator_block_height += 1;
-        next_guard
-            .record_body_for_test(&next)
-            .expect("view high-water resets at next height");
-        drop(next_guard);
-        assert!(matches!(
-            open_signing_guard(root.path(), &next, signer.clone(), 16),
-            Err(NativeAmxSigningGuardError::ContextMismatch)
-        ));
-        assert!(matches!(
-            open_signing_guard(root.path(), &base, signer, 8),
-            Err(NativeAmxSigningGuardError::HeightRegression { .. })
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_detects_plain_deletion_of_anchored_record() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x74);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&body)
-            .expect("record anchored body");
-        let path = signing_record_paths(&guard)
-            .into_iter()
-            .next()
-            .expect("anchored record");
-        drop(guard);
-        fs::remove_file(&path).expect("delete anchored record");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_detects_live_anchor_and_record_deletion_before_another_append() {
-        for delete_anchor in [false, true] {
-            let root = tempfile::tempdir().expect("temp dir");
-            let (_keypair, signer) = signing_guard_signer(if delete_anchor { 0x87 } else { 0x86 });
-            let first = body(NativeAmxPhase::Prepare);
-            let guard =
-                open_signing_guard(root.path(), &first, signer, 8).expect("open signing guard");
-            guard
-                .record_body_for_test(&first)
-                .expect("record anchored body");
-            let deleted_path = if delete_anchor {
-                NativeAmxSigningGuard::anchor_path(&guard.directory)
-            } else {
-                signing_record_paths(&guard)
-                    .into_iter()
-                    .next()
-                    .expect("anchored record")
-            };
-            fs::remove_file(&deleted_path).expect("delete live retained journal path");
-            let mut second = first;
-            second.source_id = [0xD1; Hash::LENGTH];
-            second.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-                Hash::prehashed([0xD1; Hash::LENGTH]),
-            );
-            assert!(matches!(
-                guard.record_body_for_test(&second),
-                Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-            ));
-            assert!(matches!(
-                guard.record_body_for_test(&second),
-                Err(NativeAmxSigningGuardError::Poisoned(_))
-            ));
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_detects_live_anchor_and_record_replacement_before_another_append() {
-        for replace_anchor in [false, true] {
-            let root = tempfile::tempdir().expect("temp dir");
-            let (_keypair, signer) = signing_guard_signer(if replace_anchor { 0x89 } else { 0x88 });
-            let first = body(NativeAmxPhase::Prepare);
-            let guard =
-                open_signing_guard(root.path(), &first, signer, 8).expect("open signing guard");
-            guard
-                .record_body_for_test(&first)
-                .expect("record anchored body");
-            let replaced_path = if replace_anchor {
-                NativeAmxSigningGuard::anchor_path(&guard.directory)
-            } else {
-                signing_record_paths(&guard)
-                    .into_iter()
-                    .next()
-                    .expect("anchored record")
-            };
-            let bytes = fs::read(&replaced_path).expect("read retained journal path");
-            let replacement = guard.directory.join(if replace_anchor {
-                "replacement-anchor"
-            } else {
-                "replacement-record"
-            });
-            write_secure_new(&replacement, &bytes);
-            fs::rename(&replacement, &replaced_path).expect("replace retained journal path");
-            let mut second = first;
-            second.source_id = [0xD2; Hash::LENGTH];
-            second.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-                Hash::prehashed([0xD2; Hash::LENGTH]),
-            );
-            assert!(matches!(
-                guard.record_body_for_test(&second),
-                Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-            ));
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_anchor_deletion_or_wrong_v4_anchor_version() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x83);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&body)
-            .expect("record anchored body");
-        let anchor_path = NativeAmxSigningGuard::anchor_path(&guard.directory);
-        drop(guard);
-        fs::remove_file(anchor_path).expect("delete chain anchor");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        let version_root = tempfile::tempdir().expect("wrong-version temp dir");
-        let (_keypair, version_signer) = signing_guard_signer(0x93);
-        let version_guard =
-            open_signing_guard(version_root.path(), &body, version_signer.clone(), 8)
-                .expect("open wrong-version fixture guard");
-        version_guard
-            .record_body_for_test(&body)
-            .expect("record wrong-version fixture body");
-        let version_anchor_path = NativeAmxSigningGuard::anchor_path(&version_guard.directory);
-        let version_anchor_bytes =
-            fs::read(&version_anchor_path).expect("read canonical V4 anchor");
-        let mut wrong_version_anchor =
-            norito::decode_canonical::<NativeAmxSigningAnchorV2>(&version_anchor_bytes)
-                .expect("decode canonical V4 anchor");
-        wrong_version_anchor.version = NATIVE_AMX_SIGNING_GUARD_VERSION.saturating_sub(1);
-        drop(version_guard);
-        fs::write(
-            &version_anchor_path,
-            norito::encode_canonical(&wrong_version_anchor)
-                .expect("encode wrong-version V4 anchor"),
-        )
-        .expect("replace anchor with wrong-version bytes");
-        assert!(matches!(
-            open_signing_guard(version_root.path(), &body, version_signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_detects_hardlink_move_of_anchored_record() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x75);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&body)
-            .expect("record anchored body");
-        let path = signing_record_paths(&guard)
-            .into_iter()
-            .next()
-            .expect("anchored record");
-        drop(guard);
-        let escaped = root.path().join("escaped-record.norito");
-        fs::hard_link(&path, &escaped).expect("hardlink record outside signer journal");
-        fs::remove_file(&path).expect("unlink anchored journal path");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_wrong_version_noncanonical_and_hardlinked_records() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x76);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&body)
-            .expect("record anchored body");
-        let path = signing_record_paths(&guard)
-            .into_iter()
-            .next()
-            .expect("anchored record");
-        drop(guard);
-        let bytes = fs::read(&path).expect("read record");
-        let record =
-            norito::decode_from_bytes::<NativeAmxSigningRecordV2>(&bytes).expect("decode record");
-        let mut wrong_version_record = record.clone();
-        wrong_version_record.version = NATIVE_AMX_SIGNING_GUARD_VERSION.saturating_sub(1);
-        fs::write(
-            &path,
-            norito::encode_canonical(&wrong_version_record)
-                .expect("encode wrong-version V4 record"),
-        )
-        .expect("replace with wrong-version V4 record");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer.clone(), 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        fs::write(&path, &bytes).expect("restore canonical V4 record");
-        fs::write(&path, record.encode()).expect("replace with bare Norito");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer.clone(), 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        fs::write(&path, bytes).expect("restore framed record");
-        let escaped = root.path().join("record-hardlink");
-        fs::hard_link(&path, &escaped).expect("create hardlink");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_reconciles_only_one_unpublished_tail() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x77);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&base)
-            .expect("record anchored base");
-        let anchor = guard.inner.lock().anchor.clone();
-        let mut tail_body = base;
-        tail_body.source_id = [0xB1; Hash::LENGTH];
-        tail_body.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xB1; Hash::LENGTH]),
-        );
-        let tail = NativeAmxSigningRecordV2::from_body(
-            anchor.record_count + 1,
-            anchor.head_hash,
-            &tail_body,
-            &signer,
-        )
-        .expect("build unpublished tail");
-        let tail_path = NativeAmxSigningGuard::record_path(&guard.directory, &tail);
-        write_secure_new(
-            &tail_path,
-            &norito::to_bytes(&tail).expect("encode unpublished tail"),
-        );
-        drop(guard);
-        let restarted = open_signing_guard(root.path(), &base, signer, 8)
-            .expect("reconcile one unpublished tail");
-        assert!(!tail_path.exists());
-        assert_eq!(restarted.inner.lock().anchor.record_count, 1);
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_discards_crash_left_anchor_temp_without_losing_committed_head() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x8B);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&base)
-            .expect("record anchored body");
-        let committed_anchor = guard.inner.lock().anchor.clone();
-        let temp_path = NativeAmxSigningGuard::anchor_temp_path(&guard.directory);
-        write_secure_new(
-            &temp_path,
-            &norito::to_bytes(&committed_anchor).expect("encode crash-left anchor temp"),
-        );
-        drop(guard);
-        let restarted = open_signing_guard(root.path(), &base, signer, 8)
-            .expect("reconcile crash-left anchor temp");
-        assert!(!temp_path.exists());
-        assert_eq!(restarted.inner.lock().anchor, committed_anchor);
-        restarted
-            .record_body_for_test(&base)
-            .expect("committed head remains replayable");
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_finishes_height_transition_after_anchor_publish_crash() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x8C);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard
-            .record_body_for_test(&base)
-            .expect("record old-height body");
-        let old_record = signing_record_paths(&guard)
-            .into_iter()
-            .next()
-            .expect("old-height record");
-        let next_context = another_context(b"crash-boundary-next-height-context");
-        let next_binding = NativeAmxHeightBindingV2 {
-            active_height: base.authority_context_height + 1,
-            context_id: next_context,
-            epoch: base.epoch,
-            network_id: base.network_id,
-            signer: signer.clone(),
-            max_records: 8,
-        };
-        let next_anchor =
-            NativeAmxSigningAnchorV2::empty(next_binding).expect("build next-height empty anchor");
-        NativeAmxSigningGuard::persist_anchor(
-            &guard.directory,
-            &guard.directory_handle,
-            guard.owner_uid,
-            &next_anchor,
-            guard.limits.max_anchor_bytes.get(),
-        )
-        .expect("publish next-height anchor before simulated crash");
-        drop(guard);
-        let mut next = base;
-        next.round.height += 1;
-        next.round.context_id = next_context;
-        next.round.view = 0;
-        next.coordinator_lane_block_view = 0;
-        next.authority_context_height += 1;
-        next.planned_coordinator_block_height += 1;
-        let restarted = open_signing_guard(root.path(), &next, signer, 8)
-            .expect("finish stale-record cleanup after anchor publication crash");
-        assert!(!old_record.exists());
-        restarted
-            .record_body_for_test(&next)
-            .expect("sign at recovered height");
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_multiple_unpublished_tails() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x78);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        let anchor = guard.inner.lock().anchor.clone();
-        let mut first_body = base;
-        first_body.source_id = [0xB2; Hash::LENGTH];
-        first_body.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xB2; Hash::LENGTH]),
-        );
-        let first = NativeAmxSigningRecordV2::from_body(1, anchor.head_hash, &first_body, &signer)
-            .expect("first tail");
-        let mut second_body = base;
-        second_body.source_id = [0xB3; Hash::LENGTH];
-        second_body.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xB3; Hash::LENGTH]),
-        );
-        let second =
-            NativeAmxSigningRecordV2::from_body(2, first.record_hash, &second_body, &signer)
-                .expect("second tail");
-        for record in [&first, &second] {
-            let path = NativeAmxSigningGuard::record_path(&guard.directory, record);
-            write_secure_new(&path, &norito::to_bytes(record).expect("encode tail"));
-        }
-        drop(guard);
-        assert!(matches!(
-            open_signing_guard(root.path(), &base, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_latches_poison_after_lock_path_deletion() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x79);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        fs::remove_file(&guard.lock_path).expect("delete retained lock path");
-        assert!(matches!(
-            guard.record_body_for_test(&body),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        assert!(matches!(
-            guard.record_body_for_test(&body),
-            Err(NativeAmxSigningGuardError::Poisoned(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_latches_poison_after_directory_or_lock_replacement() {
-        for replace_directory in [false, true] {
-            let root = tempfile::tempdir().expect("temp dir");
-            let (_keypair, signer) =
-                signing_guard_signer(if replace_directory { 0x8C } else { 0x8B });
-            let body = body(NativeAmxPhase::Prepare);
-            let guard =
-                open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-            if replace_directory {
-                let moved = root.path().join("moved-signer-directory");
-                fs::rename(&guard.directory, moved).expect("move retained signer directory");
-                let mut builder = DirBuilder::new();
-                builder.mode(NATIVE_AMX_SIGNING_DIRECTORY_MODE);
-                builder
-                    .create(&guard.directory)
-                    .expect("create replacement signer directory");
-            } else {
-                let replacement = guard.directory.join("replacement-owner-lock");
-                write_secure_new(&replacement, b"");
-                fs::rename(replacement, &guard.lock_path).expect("replace owner lock path");
-            }
-            assert!(matches!(
-                guard.record_body_for_test(&body),
-                Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-            ));
-            assert!(matches!(
-                guard.record_body_for_test(&body),
-                Err(NativeAmxSigningGuardError::Poisoned(_))
-            ));
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_malformed_context_and_view_bodies() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x80);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        let mut foreign_context = body;
-        foreign_context.round.context_id =
-            HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
-                b"foreign-signing-guard-context",
-            )));
-        assert_eq!(
-            guard.record_body_for_test(&foreign_context),
-            Err(NativeAmxSigningGuardError::ContextMismatch)
-        );
-        let mut zero_source = body;
-        zero_source.source_id = [0; Hash::LENGTH];
-        assert!(matches!(
-            guard.record_body_for_test(&zero_source),
-            Err(NativeAmxSigningGuardError::InvalidInput(_))
-        ));
-        let mut zero_planned_height = body;
-        zero_planned_height.planned_coordinator_block_height = 0;
-        assert!(matches!(
-            guard.record_body_for_test(&zero_planned_height),
-            Err(NativeAmxSigningGuardError::InvalidInput(_))
-        ));
-        guard
-            .record_body_for_test(&body)
-            .expect("record baseline body");
-        let mut entrypoint_drift = body;
-        entrypoint_drift.phase = NativeAmxPhase::Commit;
-        entrypoint_drift.tx_entrypoint_hash =
-            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-                b"conflicting-signing-guard-entrypoint",
-            ));
-        assert_eq!(
-            guard.record_body_for_test(&entrypoint_drift),
-            Err(NativeAmxSigningGuardError::PlanEquivocation)
-        );
-        let mut mismatched_view = body;
-        mismatched_view.coordinator_lane_block_view += 1;
-        assert_eq!(
-            guard.record_body_for_test(&mismatched_view),
-            Err(NativeAmxSigningGuardError::Equivocation)
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_unknown_and_symlink_temps() {
-        use std::os::unix::fs::symlink;
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x81);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record_body_for_test(&body).expect("record body");
-        let record_path = signing_record_paths(&guard)
-            .into_iter()
-            .next()
-            .expect("record path");
-        let directory = guard.directory.clone();
-        drop(guard);
-        let unknown = directory.join("unknown.tmp");
-        write_secure_new(&unknown, b"unknown");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer.clone(), 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        fs::remove_file(&unknown).expect("remove unknown temp");
-        let temp_link = record_path.with_extension(NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION);
-        symlink(&record_path, &temp_link).expect("create known-name temp symlink");
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_fails_closed_on_injected_future_record() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x82);
-        let current = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &current, signer.clone(), 8)
-            .expect("open signing guard");
-        let anchor = guard.inner.lock().anchor.clone();
-        let mut future = current;
-        future.round.height += 1;
-        future.authority_context_height += 1;
-        future.planned_coordinator_block_height += 1;
-        let record = NativeAmxSigningRecordV2::from_body(1, anchor.head_hash, &future, &signer)
-            .expect("future record");
-        let path = NativeAmxSigningGuard::record_path(&guard.directory, &record);
-        write_secure_new(
-            &path,
-            &norito::to_bytes(&record).expect("encode future record"),
-        );
-        drop(guard);
-        assert_eq!(
-            open_signing_guard(root.path(), &current, signer, 8)
-                .expect_err("future record must fail closed"),
-            NativeAmxSigningGuardError::FutureHeight {
-                record_height: future.authority_context_height,
-                active_height: current.authority_context_height,
-            }
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_enforces_configured_and_protocol_capacity() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x7A);
-        let first = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &first, signer.clone(), 1)
-            .expect("open one-record guard");
-        guard
-            .record_body_for_test(&first)
-            .expect("record within capacity");
-        let mut second = first;
-        second.source_id = [0xCE; Hash::LENGTH];
-        second.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0xCE; Hash::LENGTH]),
-        );
-        assert_eq!(
-            guard.record_body_for_test(&second),
-            Err(NativeAmxSigningGuardError::Capacity)
-        );
-        drop(guard);
-        let _ = signer;
-        assert!(matches!(
-            NativeAmxSigningGuardLimits::new(
-                signing_guard_capacity(MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD + 1),
-                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
-                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
-            ),
-            Err(NativeAmxSigningGuardError::InvalidInput(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_uses_signer_specific_journals_for_key_rotation() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_first_keypair, first_signer) = signing_guard_signer(0x7B);
-        let (_second_keypair, second_signer) = signing_guard_signer(0x7C);
-        let body = body(NativeAmxPhase::Prepare);
-        let first = open_signing_guard(root.path(), &body, first_signer.clone(), 8)
-            .expect("open first signer");
-        first
-            .record_body_for_test(&body)
-            .expect("record first signer body");
-        let first_directory = first.directory.clone();
-        drop(first);
-        let second =
-            open_signing_guard(root.path(), &body, second_signer, 8).expect("open rotated signer");
-        second
-            .record_body_for_test(&body)
-            .expect("record rotated signer body");
-        assert_ne!(first_directory, second.directory);
-        drop(second);
-        let first_restarted = open_signing_guard(root.path(), &body, first_signer, 8)
-            .expect("reopen retained first signer journal");
-        let mut conflict = body;
-        conflict.coordinator_proposal_hash = Hash::new(b"first signer conflict");
-        assert_eq!(
-            first_restarted.record_body_for_test(&conflict),
-            Err(NativeAmxSigningGuardError::Equivocation)
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn corrupted_retired_signer_journal_does_not_brick_rotated_signer() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_first_keypair, first_signer) = signing_guard_signer(0x84);
-        let (_second_keypair, second_signer) = signing_guard_signer(0x85);
-        let body = body(NativeAmxPhase::Prepare);
-        let first = open_signing_guard(root.path(), &body, first_signer.clone(), 8)
-            .expect("open first signer");
-        first
-            .record_body_for_test(&body)
-            .expect("record first signer body");
-        let first_record = signing_record_paths(&first)
-            .into_iter()
-            .next()
-            .expect("first signer record");
-        drop(first);
-        fs::remove_file(first_record).expect("corrupt retired signer journal");
-        let second = open_signing_guard(root.path(), &body, second_signer, 8)
-            .expect("rotated signer remains isolated");
-        second
-            .record_body_for_test(&body)
-            .expect("record rotated signer body");
-        drop(second);
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, first_signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_sets_strict_directory_and_file_modes() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x7D);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        guard.record_body_for_test(&body).expect("record body");
-        assert_eq!(
-            fs::symlink_metadata(&guard.directory)
-                .expect("directory metadata")
-                .mode()
-                & 0o777,
-            NATIVE_AMX_SIGNING_DIRECTORY_MODE
-        );
-        for path in signing_record_paths(&guard).into_iter().chain([
-            guard.lock_path.clone(),
-            NativeAmxSigningGuard::anchor_path(&guard.directory),
-        ]) {
-            assert_eq!(
-                fs::symlink_metadata(path).expect("file metadata").mode() & 0o777,
-                NATIVE_AMX_SIGNING_FILE_MODE
-            );
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_rejects_foreign_uid_for_every_trusted_path_class() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x8A);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        guard.record_body_for_test(&body).expect("record body");
-        assert_eq!(
-            native_amx_effective_user_id(root.path()).expect("probe effective UID"),
-            guard.owner_uid
-        );
-        let wrong_uid = guard.owner_uid ^ 1;
-        let root_metadata = fs::symlink_metadata(root.path()).expect("store root metadata");
-        assert_eq!(root_metadata.uid(), guard.owner_uid);
-        assert!(matches!(
-            native_amx_validate_uid(root.path(), &root_metadata, wrong_uid),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        let directory_metadata =
-            fs::symlink_metadata(&guard.directory).expect("signer directory metadata");
-        assert!(matches!(
-            native_amx_validate_uid(&guard.directory, &directory_metadata, wrong_uid),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-        ));
-        for path in signing_record_paths(&guard).into_iter().chain([
-            guard.lock_path.clone(),
-            NativeAmxSigningGuard::anchor_path(&guard.directory),
-        ]) {
-            let metadata = fs::symlink_metadata(&path).expect("trusted file metadata");
-            assert!(matches!(
-                native_amx_validate_uid(&path, &metadata, wrong_uid),
-                Err(NativeAmxSigningGuardError::UnsafeJournal(_))
-            ));
-        }
-    }
-    fn body_for_validator_set(
-        phase: NativeAmxPhase,
-        validator_set: &[PeerId],
-    ) -> NativeAmxAttestationBodyV2 {
-        let mut body = body(phase);
-        body.participant_validator_set_hash = HashOf::new(&validator_set.to_vec());
-        body.participant_validator_count =
-            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-        body.participant_min_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-        )
-        .expect("fixture validator quorum fits u32");
-        body
-    }
-    fn aligned_pops(validator_set: &[PeerId], keypairs: &[KeyPair]) -> Vec<Vec<u8>> {
-        validator_set
-            .iter()
-            .map(|validator| {
-                let keypair = keypairs
-                    .iter()
-                    .find(|keypair| keypair.public_key() == validator.public_key())
-                    .expect("fixture validator has key material");
-                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                    .expect("prove fixture PoP")
-            })
-            .collect()
-    }
-    fn full_plan_request(
-        mut body: NativeAmxAttestationBodyV2,
-        coordinator_validator_set: Vec<PeerId>,
-    ) -> NativeAmxAttestationRequestV2 {
-        let coordinator =
-            RoutingDecision::new(body.coordinator_lane_id, body.coordinator_dataspace_id);
-        let participant =
-            RoutingDecision::new(body.participant_lane_id, body.participant_dataspace_id);
-        let routing_plan = RoutingPlan::native_amx(
-            coordinator,
-            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
-        );
-        body.plan_digest = routing_plan.digest();
-        let validator_count = u32::try_from(coordinator_validator_set.len())
-            .expect("fixture coordinator validator count fits u32");
-        let min_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(
-                coordinator_validator_set.len(),
-            )
-            .max(1),
-        )
-        .expect("fixture coordinator quorum fits u32");
-        let participant_validator_set = coordinator_validator_set.clone();
-        let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-            lane_id: body.coordinator_lane_id,
-            dataspace_id: body.coordinator_dataspace_id,
-            lane_incarnation: body.coordinator_lane_incarnation,
-            proposal_height: body.authority_context_height,
-            previous_lane_block_height: body.planned_coordinator_block_height.saturating_sub(1),
-            previous_lane_block_descriptor_hash: (body.planned_coordinator_block_height > 1)
-                .then(|| Hash::new(b"native-amx-v2-test-previous-descriptor")),
-            lane_block_height: body.planned_coordinator_block_height,
-            lane_block_view: body.coordinator_lane_block_view,
-            subject_hash: Hash::new(b"native-amx-v2-test-subject"),
-            payload_ownership_hash: Hash::new(b"native-amx-v2-test-ownership"),
-            rbc_instance_hash: Hash::new(b"native-amx-v2-test-rbc"),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&coordinator_validator_set),
-            validator_set: coordinator_validator_set,
-            validator_count,
-            min_quorum,
-            qc_mode_tag: "permissioned:native-amx-v2-test".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-        let mut coordinator_proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
-        body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-        let mut participant_descriptor =
-            iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-                lane_id: body.participant_lane_id,
-                dataspace_id: body.participant_dataspace_id,
-                lane_incarnation: body.participant_lane_incarnation,
-                proposal_height: body.authority_context_height,
-                previous_lane_block_height: body.participant_previous_block_height,
-                previous_lane_block_descriptor_hash: body
-                    .participant_previous_block_descriptor_hash,
-                lane_block_height: body.participant_lane_block_height,
-                lane_block_view: body.participant_lane_block_view,
-                subject_hash: Hash::new(b"native-amx-v2-test-participant-subject"),
-                payload_ownership_hash: Hash::new(b"native-amx-v2-test-participant-ownership"),
-                rbc_instance_hash: Hash::new(b"native-amx-v2-test-participant-rbc"),
-                accepted_candidate_indices: vec![0],
-                accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&participant_validator_set),
-                validator_set: participant_validator_set,
-                validator_count: body.participant_validator_count,
-                min_quorum: body.participant_min_quorum,
-                qc_mode_tag: "permissioned:native-amx-v2-test".to_owned(),
-                descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-            };
-        participant_descriptor.descriptor_hash = participant_descriptor.computed_descriptor_hash();
-        let mut participant_proposal = LaneBlockProposalV1 {
-            descriptor: participant_descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
-        body.participant_proposal_hash = participant_proposal.proposal_hash;
-        let participant_settlement = body
-            .computed_grouped_participant_settlement(&[body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture participant settlement hashes"),
-        );
-        NativeAmxAttestationRequestV2 {
-            body,
-            plan_legs: routing_plan.legs(),
-            coordinator_proposal,
-            participant_proposal,
-            participant_settlement,
-        }
-    }
-    fn vote(phase: NativeAmxPhase) -> NativeAmxVoteV2 {
-        let keypair = checked_random_ed25519_keypair();
-        NativeAmxVoteV2 {
-            body: body(phase),
-            signer: PeerId::new(keypair.public_key().clone()),
-            bls_signature: vec![0xA5; 96],
-        }
-    }
-    #[test]
-    fn session_cache_rejects_duplicate_signer() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let vote = vote(NativeAmxPhase::Prepare);
-        cache
-            .insert_vote(vote.clone())
-            .expect("first vote should insert");
-        assert!(matches!(
-            cache.insert_vote(vote),
-            Err(NativeAmxSessionError::DuplicateSigner)
-        ));
-    }
-    #[test]
-    fn session_cache_rejects_live_source_plan_equivocation() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let first = vote(NativeAmxPhase::Prepare);
-        cache.insert_vote(first.clone()).expect("first plan claim");
-        let mut equivocation = first;
-        equivocation.body.plan_digest = Hash::new(b"equivocating-native-amx-plan");
-        assert_eq!(
-            cache.insert_vote(equivocation),
-            Err(NativeAmxSessionError::PlanEquivocation)
-        );
-    }
-    #[test]
-    fn full_plan_request_binds_canonical_routes_and_coordinator_proposal() {
-        let keypair = checked_bls_keypair(0x77);
-        let validators = vec![PeerId::new(keypair.public_key().clone())];
-        let request = full_plan_request(
-            body_for_validator_set(NativeAmxPhase::Prepare, &validators),
-            validators,
-        );
-        assert_eq!(request.validate_plan_binding(), Ok(()));
-        let mut coordinator_participates = request.clone();
-        coordinator_participates.body.participant_lane_id =
-            coordinator_participates.body.coordinator_lane_id;
-        coordinator_participates.body.participant_dataspace_id =
-            coordinator_participates.body.coordinator_dataspace_id;
-        coordinator_participates.body.participant_lane_incarnation =
-            coordinator_participates.body.coordinator_lane_incarnation;
-        coordinator_participates
-            .body
-            .participant_previous_block_height = coordinator_participates
-            .coordinator_proposal
-            .descriptor
-            .previous_lane_block_height;
-        coordinator_participates
-            .body
-            .participant_previous_block_descriptor_hash = coordinator_participates
-            .coordinator_proposal
-            .descriptor
-            .previous_lane_block_descriptor_hash;
-        coordinator_participates.body.participant_lane_block_height = coordinator_participates
-            .coordinator_proposal
-            .descriptor
-            .lane_block_height;
-        coordinator_participates.body.participant_lane_block_view = coordinator_participates
-            .coordinator_proposal
-            .descriptor
-            .lane_block_view;
-        coordinator_participates.participant_proposal =
-            coordinator_participates.coordinator_proposal.clone();
-        coordinator_participates.body.participant_proposal_hash =
-            coordinator_participates.participant_proposal.proposal_hash;
-        let coordinator_route = RoutingDecision::new(
-            coordinator_participates.body.coordinator_lane_id,
-            coordinator_participates.body.coordinator_dataspace_id,
-        );
-        let overlapping_plan = RoutingPlan::native_amx(
-            coordinator_route,
-            vec![RouteLeg::new(coordinator_route, RouteLegRole::Participant)],
-        );
-        coordinator_participates.body.plan_digest = overlapping_plan.digest();
-        coordinator_participates.plan_legs = overlapping_plan.legs();
-        coordinator_participates.participant_settlement = coordinator_participates
-            .body
-            .computed_grouped_participant_settlement(&[coordinator_participates.body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        coordinator_participates
-            .body
-            .participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
-                &coordinator_participates.participant_settlement,
-            )
-            .expect("overlapping participant settlement hashes"),
-        );
-        assert_eq!(
-            coordinator_participates.validate_plan_binding(),
-            Ok(()),
-            "the coordinator route may also own one participant leg"
-        );
-        let mut stale_same_route = coordinator_participates.clone();
-        let stale_incarnation = Hash::new(b"stale same-route participant incarnation");
-        stale_same_route.body.participant_lane_incarnation = stale_incarnation;
-        stale_same_route
-            .participant_proposal
-            .descriptor
-            .lane_incarnation = stale_incarnation;
-        stale_same_route
-            .participant_proposal
-            .descriptor
-            .descriptor_hash = stale_same_route
-            .participant_proposal
-            .descriptor
-            .computed_descriptor_hash();
-        stale_same_route.participant_proposal.proposal_hash = stale_same_route
-            .participant_proposal
-            .computed_proposal_hash();
-        stale_same_route.body.participant_proposal_hash =
-            stale_same_route.participant_proposal.proposal_hash;
-        stale_same_route.participant_settlement = stale_same_route
-            .body
-            .computed_grouped_participant_settlement(&[stale_same_route.body.source_id])
-            .expect("stale same-route settlement fixture remains structurally valid");
-        stale_same_route.body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
-                &stale_same_route.participant_settlement,
-            )
-            .expect("stale same-route settlement hashes"),
-        );
-        assert_eq!(
-            stale_same_route.validate_plan_binding(),
-            Err(NativeAmxRequestError::ParticipantProposalMismatch),
-            "a same-route participant cannot drift to another lane incarnation"
-        );
-        let mut omitted_participant = request.clone();
-        omitted_participant.plan_legs.truncate(1);
-        assert_eq!(
-            omitted_participant.validate_plan_binding(),
-            Err(NativeAmxRequestError::IncompletePlan)
-        );
-        let mut substituted_proposal = request;
-        substituted_proposal.body.coordinator_proposal_hash =
-            Hash::new(b"substituted-native-amx-coordinator-proposal");
-        assert_eq!(
-            substituted_proposal.validate_plan_binding(),
-            Err(NativeAmxRequestError::CoordinatorProposalMismatch)
-        );
-    }
-    #[test]
-    fn session_cache_allows_same_signer_for_retried_body() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let vote = vote(NativeAmxPhase::Prepare);
-        let key = NativeAmxSessionKey::from_body(&vote.body);
-        let mut retried_vote = vote.clone();
-        retried_vote.body.planned_coordinator_block_height = retried_vote
-            .body
-            .planned_coordinator_block_height
-            .saturating_add(1);
-        cache.insert_vote(vote.clone()).expect("first body vote");
-        cache
-            .insert_vote(retried_vote.clone())
-            .expect("same signer may vote on a retried body");
-        assert_eq!(cache.sorted_votes_for_body(key, &vote.body), vec![vote]);
-        assert_eq!(
-            cache.sorted_votes_for_body(key, &retried_vote.body),
-            vec![retried_vote]
-        );
-        assert_eq!(cache.sorted_votes(key, NativeAmxPhase::Prepare).len(), 2);
-    }
-    #[test]
-    fn session_cache_allows_same_signer_for_different_participant_legs() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let vote = vote(NativeAmxPhase::Prepare);
-        let key = NativeAmxSessionKey::from_body(&vote.body);
-        let mut other_leg = vote.clone();
-        other_leg.body.participant_lane_id = LaneId::new(9);
-        other_leg.body.participant_dataspace_id = DataSpaceId::new(10);
-        cache.insert_vote(vote.clone()).expect("first leg vote");
-        cache
-            .insert_vote(other_leg.clone())
-            .expect("same signer may vote on another participant leg");
-        assert_eq!(cache.sorted_votes_for_body(key, &vote.body), vec![vote]);
-        assert_eq!(
-            cache.sorted_votes_for_body(key, &other_leg.body),
-            vec![other_leg]
-        );
-    }
-    #[test]
-    fn session_cache_filters_exact_body_votes_to_validator_set() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let allowed_keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate checked allowed native AMX BLS fixture keypair");
-        let unknown_keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate checked unknown native AMX BLS fixture keypair");
-        let allowed = PeerId::new(allowed_keypair.public_key().clone());
-        let unknown = PeerId::new(unknown_keypair.public_key().clone());
-        let body = body(NativeAmxPhase::Prepare);
-        let allowed_vote = NativeAmxVoteV2 {
-            body,
-            signer: allowed.clone(),
-            bls_signature: vec![1],
-        };
-        let unknown_vote = NativeAmxVoteV2 {
-            body,
-            signer: unknown,
-            bls_signature: vec![2],
-        };
-        let key = NativeAmxSessionKey::from_body(&body);
-        cache
-            .insert_vote(allowed_vote.clone())
-            .expect("allowed signer vote");
-        cache
-            .insert_vote(unknown_vote)
-            .expect("unknown signer vote");
-        assert_eq!(
-            cache.sorted_votes_for_body_from(key, &body, &[allowed]),
-            vec![allowed_vote]
-        );
-    }
-    #[test]
-    fn session_cache_capacity_does_not_evict_source_plan_claims() {
-        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(1).expect("nonzero"));
-        let first = vote(NativeAmxPhase::Prepare);
-        let first_key = NativeAmxSessionKey::from_body(&first.body);
-        cache.insert_vote(first.clone()).expect("first vote");
-        let mut second = vote(NativeAmxPhase::Prepare);
-        second.body.source_id = [0xAC; iroha_crypto::Hash::LENGTH];
-        let second_key = NativeAmxSessionKey::from_body(&second.body);
-        assert_eq!(
-            cache.insert_vote(second),
-            Err(NativeAmxSessionError::Capacity)
-        );
-        assert_eq!(
-            cache.sorted_votes(first_key, NativeAmxPhase::Prepare).len(),
-            1
-        );
-        assert!(
-            cache
-                .sorted_votes(second_key, NativeAmxPhase::Prepare)
-                .is_empty()
-        );
-        let mut conflicting_plan = first;
-        conflicting_plan.body.plan_digest = Hash::new(b"claim must survive capacity failure");
-        assert_eq!(
-            cache.insert_vote(conflicting_plan),
-            Err(NativeAmxSessionError::PlanEquivocation)
-        );
-    }
-    #[test]
-    fn session_cache_body_capacity_fails_without_fifo_eviction() {
-        let mut cache = NativeAmxSessionCache::with_limits(
-            NonZeroUsize::new(4).expect("nonzero sessions"),
-            NonZeroUsize::new(2).expect("nonzero body buckets"),
-        );
-        let first = vote(NativeAmxPhase::Prepare);
-        let key = NativeAmxSessionKey::from_body(&first.body);
-        let mut second = first.clone();
-        second.body.planned_coordinator_block_height = 43;
-        let mut third = first.clone();
-        third.body.planned_coordinator_block_height = 44;
-        cache.insert_vote(first.clone()).expect("first vote");
-        cache.insert_vote(second.clone()).expect("second vote");
-        assert_eq!(
-            cache.insert_vote(third.clone()),
-            Err(NativeAmxSessionError::Capacity)
-        );
-        assert_eq!(cache.sorted_votes_for_body(key, &first.body), vec![first]);
-        assert_eq!(cache.sorted_votes_for_body(key, &second.body), vec![second]);
-        assert!(cache.sorted_votes_for_body(key, &third.body).is_empty());
-        assert_eq!(cache.sorted_votes(key, NativeAmxPhase::Prepare).len(), 2);
-    }
-    fn signed_vote(body: &NativeAmxAttestationBodyV2, keypair: &KeyPair) -> NativeAmxVoteV2 {
-        NativeAmxVoteV2 {
-            body: *body,
-            signer: PeerId::new(keypair.public_key().clone()),
-            bls_signature: checked_bls_signature_payload(keypair, &body.signature_preimage()),
-        }
-    }
-    #[test]
-    fn vote_ingress_validation_accepts_matching_signed_bls_vote() {
-        let keypair = checked_bls_keypair(0xE1);
-        let body = body(NativeAmxPhase::Prepare);
-        let vote = signed_vote(&body, &keypair);
-        let sender = vote.signer.clone();
-        assert_eq!(
-            vote.validate_ingress(NativeAmxPhase::Prepare, Some(&sender)),
-            Ok(())
-        );
-    }
-    #[test]
-    fn vote_ingress_validation_rejects_phase_and_sender_mismatches() {
-        let keypair = checked_bls_keypair(0xE2);
-        let other_keypair = checked_bls_keypair(0xE3);
-        let body = body(NativeAmxPhase::Prepare);
-        let vote = signed_vote(&body, &keypair);
-        let sender = vote.signer.clone();
-        let other_sender = PeerId::new(other_keypair.public_key().clone());
-        assert_eq!(
-            vote.validate_ingress(NativeAmxPhase::Commit, Some(&sender)),
-            Err(NativeAmxVoteIngressError::PhaseMismatch {
-                expected: NativeAmxPhase::Commit,
-                actual: NativeAmxPhase::Prepare
-            })
-        );
-        assert_eq!(
-            vote.validate_ingress(NativeAmxPhase::Prepare, Some(&other_sender)),
-            Err(NativeAmxVoteIngressError::SenderMismatch)
-        );
-    }
-    #[test]
-    fn vote_ingress_validation_rejects_non_bls_and_bad_signatures() {
-        let ed25519_keypair = checked_random_ed25519_keypair();
-        let body = body(NativeAmxPhase::Commit);
-        let ed25519_signature =
-            Signature::try_new(ed25519_keypair.private_key(), &body.signature_preimage())
-                .expect("checked Ed25519 fixture signature")
-                .payload()
-                .to_vec();
-        let ed25519_vote = NativeAmxVoteV2 {
-            body,
-            signer: PeerId::new(ed25519_keypair.public_key().clone()),
-            bls_signature: ed25519_signature,
-        };
-        assert_eq!(
-            ed25519_vote.validate_ingress(NativeAmxPhase::Commit, None),
-            Err(NativeAmxVoteIngressError::InvalidSignature),
-            "the fixed-width signature gate runs before signer-algorithm inspection"
-        );
-        let mut non_bls_vote = ed25519_vote;
-        non_bls_vote.bls_signature = vec![0_u8; NATIVE_AMX_BLS_PROOF_BYTES];
-        assert_eq!(
-            non_bls_vote.validate_ingress(NativeAmxPhase::Commit, None),
-            Err(NativeAmxVoteIngressError::SignerNotBlsNormal)
-        );
-        let bls_keypair = checked_bls_keypair(0xE4);
-        let mut bad_signature_vote = signed_vote(&body, &bls_keypair);
-        bad_signature_vote.bls_signature = vec![0_u8; 96];
-        assert_eq!(
-            bad_signature_vote.validate_ingress_shape(NativeAmxPhase::Commit, None),
-            Ok(()),
-            "the cheap envelope gate must not parse attacker-controlled BLS bytes"
-        );
-        assert_eq!(
-            bad_signature_vote.verify_signature(),
-            Err(NativeAmxVoteIngressError::InvalidSignature)
-        );
-        assert_eq!(
-            bad_signature_vote.validate_ingress(NativeAmxPhase::Commit, None),
-            Err(NativeAmxVoteIngressError::InvalidSignature)
-        );
-    }
-    #[test]
-    fn aggregate_votes_to_qc_orders_votes_by_validator_set() {
-        let keypairs = [
-            checked_bls_keypair(0xA1),
-            checked_bls_keypair(0xB2),
-            checked_bls_keypair(0xC3),
-        ];
-        let mut validator_set = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        validator_set.sort();
-        let body = body_for_validator_set(NativeAmxPhase::Commit, &validator_set);
-        let validator_set_pops = aligned_pops(&validator_set, &keypairs);
-        let votes = vec![
-            signed_vote(&body, &keypairs[2]),
-            signed_vote(&body, &keypairs[0]),
-            signed_vote(&body, &keypairs[1]),
-        ];
-        let qc = aggregate_votes_to_qc(
-            body,
-            validator_set.clone(),
-            validator_set_pops.clone(),
-            &votes,
-            3,
-        )
-        .expect("valid quorum should aggregate");
-        assert_eq!(qc.body, body);
-        assert_eq!(qc.validator_set(), validator_set.as_slice());
-        assert_eq!(qc.validator_set_pops(), validator_set_pops.as_slice());
-        let mut expected_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
-        for keypair in [&keypairs[2], &keypairs[0], &keypairs[1]] {
-            let signer = PeerId::new(keypair.public_key().clone());
-            let index = validator_set
-                .iter()
-                .position(|validator| validator == &signer)
-                .expect("vote signer belongs to fixture committee");
-            expected_bitmap[index / 8] |= 1_u8 << (index % 8);
-        }
-        assert_eq!(qc.signers_bitmap, expected_bitmap);
-        let individual_signatures = [
-            signed_vote(&body, &keypairs[0]).bls_signature,
-            signed_vote(&body, &keypairs[1]).bls_signature,
-            signed_vote(&body, &keypairs[2]).bls_signature,
-        ];
-        let signature_refs = individual_signatures
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>();
-        let expected_aggregate = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate reference signatures");
-        assert_eq!(qc.bls_aggregate_signature, expected_aggregate);
-    }
-    #[test]
-    fn aggregate_votes_to_qc_rejects_bad_vote_sets() {
-        let keypairs = [checked_bls_keypair(0xD1), checked_bls_keypair(0xD2)];
-        let mut validator_set = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        validator_set.sort();
-        let body = body_for_validator_set(NativeAmxPhase::Prepare, &validator_set);
-        let validator_set_pops = aligned_pops(&validator_set, &keypairs);
-        let vote = signed_vote(&body, &keypairs[0]);
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &[],
-                2,
-            ),
-            Err(NativeAmxQcBuildError::EmptyVotes)
-        );
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &[vote.clone()],
-                2,
-            ),
-            Err(NativeAmxQcBuildError::QuorumNotMet)
-        );
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &[vote.clone(), vote.clone()],
-                2
-            ),
-            Err(NativeAmxQcBuildError::DuplicateSigner)
-        );
-        let outsider = checked_bls_keypair(0xD3);
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &[signed_vote(&body, &outsider)],
-                2
-            ),
-            Err(NativeAmxQcBuildError::SignerNotInValidatorSet)
-        );
-        let ed25519_keypair = checked_random_ed25519_keypair();
-        let ed25519_signer = PeerId::new(ed25519_keypair.public_key().clone());
-        let ed25519_body = body_for_validator_set(
-            NativeAmxPhase::Prepare,
-            std::slice::from_ref(&ed25519_signer),
-        );
-        let ed25519_vote = NativeAmxVoteV2 {
-            body: ed25519_body,
-            signer: ed25519_signer.clone(),
-            bls_signature: Signature::try_new(
-                ed25519_keypair.private_key(),
-                &ed25519_body.signature_preimage(),
-            )
-            .expect("checked Ed25519 fixture signature")
-            .payload()
-            .to_vec(),
-        };
-        assert_eq!(
-            aggregate_votes_to_qc(
-                ed25519_body,
-                vec![ed25519_signer],
-                vec![vec![0; NATIVE_AMX_BLS_PROOF_BYTES]],
-                &[ed25519_vote],
-                1,
-            ),
-            Err(NativeAmxQcBuildError::SignerNotBlsNormal)
-        );
-        let mut bad_signature_vote = vote.clone();
-        bad_signature_vote.bls_signature = vec![0_u8; 96];
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &[bad_signature_vote],
-                2
-            ),
-            Err(NativeAmxQcBuildError::InvalidSignature)
-        );
-        let mut wrong_body_vote = vote;
-        wrong_body_vote.body.phase = NativeAmxPhase::Commit;
-        assert_eq!(
-            aggregate_votes_to_qc(
-                body,
-                validator_set,
-                validator_set_pops,
-                &[wrong_body_vote],
-                2,
-            ),
-            Err(NativeAmxQcBuildError::BodyMismatch)
-        );
-        let keypairs = [
-            checked_bls_keypair(0xD4),
-            checked_bls_keypair(0xD5),
-            checked_bls_keypair(0xD6),
-            checked_bls_keypair(0xD7),
-        ];
-        let mut validator_set = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        validator_set.sort();
-        let mut lowered_body = body_for_validator_set(NativeAmxPhase::Prepare, &validator_set);
-        lowered_body.participant_min_quorum = 2;
-        let lowered_votes = keypairs
-            .iter()
-            .map(|keypair| signed_vote(&lowered_body, keypair))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            aggregate_votes_to_qc(
-                lowered_body,
-                validator_set.clone(),
-                aligned_pops(&validator_set, &keypairs),
-                &lowered_votes,
-                2,
-            ),
-            Err(NativeAmxQcBuildError::InvalidValidatorSet),
-            "a signed committee context must not lower the canonical threshold"
-        );
-        let canonical_body = body_for_validator_set(NativeAmxPhase::Prepare, &validator_set);
-        let mut reversed = validator_set.clone();
-        reversed.reverse();
-        assert_eq!(
-            aggregate_votes_to_qc(
-                canonical_body,
-                reversed,
-                aligned_pops(&validator_set, &keypairs),
-                &lowered_votes,
-                3,
-            ),
-            Err(NativeAmxQcBuildError::InvalidValidatorSet)
-        );
-    }
-    // Commit-request and QC replay-validation tests retain their stable libtest paths.
-    include!("native_amx/commit_validation_tail_tests.rs");
+    include!("native_amx/tests.rs");
 }

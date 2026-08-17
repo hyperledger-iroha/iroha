@@ -222,6 +222,66 @@ def require_source_commit(value: str) -> str:
     return value
 
 
+def require_receipt_signer_public_map(
+    value: Any,
+) -> dict[str, dict[str, object]]:
+    """Require the exact ordered, secret-free Taira receipt-signer map."""
+
+    if not isinstance(value, dict) or list(value) != list(SLUGS):
+        fail("receipt signer map is not the exact ordered Taira validator set")
+    normalized: dict[str, dict[str, object]] = {}
+    seen_node_ids: set[str] = set()
+    seen_public_keys: set[str] = set()
+    for slug in SLUGS:
+        row = value.get(slug)
+        if not isinstance(row, dict) or set(row) != {"node_id", "public_key"}:
+            fail(f"receipt signer `{slug}` must contain only node_id and public_key")
+        public_key = row.get("public_key")
+        if (
+            not isinstance(public_key, dict)
+            or set(public_key) != {"algorithm", "payload_hex"}
+            or public_key.get("algorithm") != "secp256k1"
+        ):
+            fail(
+                f"receipt signer `{slug}` public_key must be one exact secp256k1 "
+                "projection"
+            )
+        payload_hex = public_key.get("payload_hex")
+        if (
+            not isinstance(payload_hex, str)
+            or re.fullmatch(r"(?:02|03)[0-9a-f]{64}", payload_hex) is None
+        ):
+            fail(
+                f"receipt signer `{slug}` public_key payload must be canonical "
+                "compressed secp256k1 hex"
+            )
+        canonical_public_key = (
+            renderer.RECEIPT_PUBLIC_KEY_PREFIX + payload_hex.upper()
+        )
+        try:
+            expected_node_id = renderer.receipt_node_id(canonical_public_key)
+        except ValueError as error:
+            raise RuntimeError(f"receipt signer `{slug}` {error}") from error
+        node_id = row.get("node_id")
+        if node_id != expected_node_id:
+            fail(
+                f"receipt signer `{slug}` node_id is not derived from its exact "
+                "configured public key"
+            )
+        if node_id in seen_node_ids or canonical_public_key in seen_public_keys:
+            fail("receipt signer map contains duplicate node IDs or public keys")
+        seen_node_ids.add(node_id)
+        seen_public_keys.add(canonical_public_key)
+        normalized[slug] = {
+            "node_id": node_id,
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": payload_hex,
+            },
+        }
+    return normalized
+
+
 def _require_canonical(path: Path, label: str, *, directory: bool) -> None:
     if not path.is_absolute():
         fail(f"{label} must be an absolute path")
@@ -981,6 +1041,14 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         copy_private_file(
             source / "validator-roster.toml", output / "validator-roster.toml"
         )
+        receipt_signers = require_receipt_signer_public_map(
+            renderer.receipt_signer_map(
+                renderer.load_roster(
+                    output / "validator-roster.toml",
+                    secrets_path=source / "validator-secrets.toml",
+                )
+            )
+        )
         write_private_file(output / "base-config.toml", privacy_payloads["config.toml"])
         rendered = output / "rendered"
 
@@ -1160,6 +1228,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 "bound_genesis_manifest_sha256": sha256(output / "genesis.json"),
                 "base_config_sha256": sha256(output / "base-config.toml"),
                 "configs": config_hashes,
+                "receipt_signers": receipt_signers,
                 "governance_manifests": {
                     slug: sha256(rendered / slug / "manifests/governance.manifest.json")
                     for slug in SLUGS

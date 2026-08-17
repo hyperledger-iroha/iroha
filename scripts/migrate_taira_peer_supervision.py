@@ -47,6 +47,12 @@ SUPERVISOR_SOURCE = Path(__file__).with_name("taira_peer_supervisor.py")
 CANONICAL_GENESIS_RELATIVE_PATH = Path("canonical") / "genesis.signed.nrt"
 KURA_DIRECTORY_NAME = "kura"
 SNAPSHOT_DIRECTORY_NAME = "snapshot"
+LIFECYCLE_NODE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{7,255}")
+LIFECYCLE_IDENTITY_BARRIER = (
+    "legacy supervision capture has no independently authenticated deploy "
+    "receipt-signer node_id; config public keys, labels, and hostnames must not "
+    "be substituted"
+)
 
 
 class MigrationError(RuntimeError):
@@ -496,8 +502,14 @@ def launchd_plist(
     manifest: dict[str, Any],
     installed_supervisor: Path,
     python_path: Path,
+    lifecycle_journal_root: Path | None = None,
+    authenticated_node_id: str | None = None,
 ) -> bytes:
-    """Render one independent validator LaunchDaemon plist."""
+    """Render one independent validator LaunchDaemon plist.
+
+    Lifecycle arguments are opt-in because the legacy migration manifest has
+    no independent authority for the deployed receipt-signing node ID.
+    """
 
     runtime = manifest["runtime"]
     working_directory = peer["working_directory"]
@@ -543,6 +555,33 @@ def launchd_plist(
         "--rapid-fatal-uptime-seconds",
         str(runtime["rapid_fatal_uptime_seconds"]),
     ]
+    if (lifecycle_journal_root is None) != (authenticated_node_id is None):
+        raise MigrationError("lifecycle journal identity must be provided together")
+    if lifecycle_journal_root is not None:
+        assert authenticated_node_id is not None
+        validator_id = f"taira-validator-{peer['number']}"
+        expected_root = (
+            Path(manifest["install"]["directory"]) / "lifecycle" / validator_id
+        )
+        if (
+            lifecycle_journal_root != expected_root
+            or not lifecycle_journal_root.is_absolute()
+            or ".." in lifecycle_journal_root.parts
+            or LIFECYCLE_NODE_ID_RE.fullmatch(authenticated_node_id) is None
+        ):
+            raise MigrationError(
+                "lifecycle journal path or authenticated node ID is not canonical"
+            )
+        program_arguments.extend(
+            [
+                "--lifecycle-journal-root",
+                str(lifecycle_journal_root),
+                "--validator-id",
+                validator_id,
+                "--node-id",
+                authenticated_node_id,
+            ]
+        )
     if runtime["binary_stat_sealed"]:
         binary = manifest["binary"]
         program_arguments[6:6] = [
@@ -1266,6 +1305,41 @@ def ensure_install_directory(path: Path, *, uid: int, gid: int, mode: int) -> No
         path.mkdir(mode=mode, parents=True)
         os.chown(path, uid, gid)
     path.chmod(mode)
+
+
+def lifecycle_journal_root(install_dir: Path, peer_number: int) -> Path:
+    """Return the fixed lifecycle journal root for one migrated peer."""
+
+    if peer_number not in range(1, PEER_COUNT + 1):
+        raise MigrationError("lifecycle peer number is outside the four-peer cohort")
+    return install_dir / "lifecycle" / f"taira-validator-{peer_number}"
+
+
+def ensure_lifecycle_journal_layout(
+    install_dir: Path, *, uid: int, gid: int
+) -> tuple[Path, ...]:
+    """Provision four distinct mode-0700 owner-private journal roots."""
+
+    parent = install_dir / "lifecycle"
+    ensure_install_directory(parent, uid=uid, gid=gid, mode=0o700)
+    roots = tuple(
+        lifecycle_journal_root(install_dir, number)
+        for number in range(1, PEER_COUNT + 1)
+    )
+    if len(set(roots)) != PEER_COUNT:
+        raise MigrationError("lifecycle journal roots are not distinct")
+    for root in roots:
+        ensure_install_directory(root, uid=uid, gid=gid, mode=0o700)
+        info = root.lstat()
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != uid
+            or info.st_gid != gid
+            or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            raise MigrationError(f"unsafe lifecycle journal root: {root}")
+    return roots
 
 
 def copy_new_file(

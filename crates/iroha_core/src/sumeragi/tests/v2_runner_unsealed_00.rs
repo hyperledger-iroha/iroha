@@ -425,7 +425,9 @@ fn decided_recovery_certified_request(
                 1,
                 Hash::new(b"runner recovery executed block"),
             ),
-            signers: (0..context.roster.len())
+            signers: (0..super::super::network_topology::commit_quorum_from_len(
+                context.roster.len(),
+            ))
                 .map(|index| u32::try_from(index).expect("small runner roster index"))
                 .collect(),
             aggregate_signature: vec![0xA5; 48],
@@ -443,14 +445,18 @@ fn admitted_decided_recovery_request(
     request: &wire::CertifiedBodyRequest,
 ) -> InboundBlockMessage {
     let requester = request.requester.clone();
+    let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+    let reply_route = routes.mint(requester.clone());
     super::super::fair_v2_ingress_admit_with_roster_for_test(
-        InboundBlockMessage::from_transport(
+        InboundBlockMessage::try_from_transport_with_reply_route(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
             )),
             requester.clone(),
             requester,
-        ),
+            reply_route,
+        )
+        .expect("decided recovery fixture retains an authenticated reply route"),
         context
             .roster
             .iter()
@@ -478,7 +484,9 @@ impl RecordingDecidedLaneAuthorizer {
         }
     }
 }
-impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
+impl ordinary_ingress_consumer::CurrentCertifiedServePreDequeueAuthorizer
+    for RecordingDecidedLaneAuthorizer
+{
     type Admission = u8;
     fn stage_negative(
         &mut self,

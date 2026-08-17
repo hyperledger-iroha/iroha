@@ -25,6 +25,7 @@ import pytest
 from scripts import build_taira_rollout_candidate as candidate_builder
 from scripts import release_artifact_contract as contract
 from scripts import release_manifest_signing as signing
+from scripts import render_taira_validator_bundle as receipt_renderer
 from scripts import seal_taira_release_controllers as controller_seal
 from scripts import taira_privacy_protocol_receipt as privacy_evidence
 from scripts import taira_release_authority as linux_authority
@@ -50,6 +51,24 @@ SUBSTITUTE_PUBLIC_KEY = bytes.fromhex(
     "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00"
 )
 SOURCE_DATE_EPOCH = 1_700_000_000
+
+
+def _receipt_signers() -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for number, slug in enumerate(admission.SLUGS, start=1):
+        private_payload = number.to_bytes(32, "big")
+        public_payload = receipt_renderer._secp256k1_public_payload(private_payload)
+        public_key = receipt_renderer.RECEIPT_PUBLIC_KEY_PREFIX + (
+            public_payload.hex().upper()
+        )
+        result[slug] = {
+            "node_id": receipt_renderer.receipt_node_id(public_key),
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": public_payload.hex(),
+            },
+        }
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -275,6 +294,7 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
     }
     start_hash = "4" * 64
     end_hash = "5" * 64
+    receipt_signers = _receipt_signers()
     body: dict[str, object] = {
         "artifact_handoff_sha256": "2" * 64,
         "end": {"block_hash": end_hash, "height": 102},
@@ -287,6 +307,9 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
                 "final_height": 102,
                 "label": f"taira-validator-{number}",
                 "number": number,
+                "receipt_signer_node_id": receipt_signers[
+                    f"taira-validator-{number}"
+                ]["node_id"],
                 "restart_proof": "passed",
                 "source_commit": COMMIT,
                 "validator_binary_sha256": validator_sha,
@@ -295,6 +318,7 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
             for number in range(1, 5)
         ],
         "platform": {"arch": "arm64", "os": "macos"},
+        "receipt_signers": receipt_signers,
         "reset_manifest_sha256": reset_manifest_sha,
         "restart_generation": "6" * 64,
         "schema": admission.MACOS_RECEIPT_SCHEMA,
@@ -309,6 +333,13 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
         mutation(body)
     receipt_id = admission.compute_macos_receipt_id(body)
     return {**body, "receipt_id": receipt_id}
+
+
+def _swap_receipt_signer_associations(receipt: dict[str, object]) -> None:
+    signers = receipt["receipt_signers"]
+    assert isinstance(signers, dict)
+    first, second = admission.SLUGS[:2]
+    signers[first], signers[second] = signers[second], signers[first]
 
 
 def _privacy_protocol_evidence(
@@ -767,6 +798,7 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     assert result["reset_manifest_sha256"] == "8" * 64
     assert result["supervisor_sha256"] == "7" * 64
     assert result["validator_binary_sha256"] == "3" * 64
+    assert result["receipt_signers"] == _receipt_signers()
     assert result["boi_artifact_inventory_sha256"] == hashlib.sha256(
         (
             candidate.boi_artifact_handoff
@@ -1277,6 +1309,45 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
             lambda receipt: receipt.__setitem__("supervisor_sha256", "NOT-A-DIGEST"),
             "supervisor digest",
         ),
+        (
+            lambda receipt: receipt.pop("receipt_signers"),
+            "fields are not exact",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"].pop(admission.SLUGS[-1]),
+            "exact ordered four validator slugs",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][
+                admission.SLUGS[0]
+            ].__setitem__(
+                "node_id", admission.RECEIPT_NODE_ID_PREFIX + "0" * 64
+            ),
+            "not derived from its receipt key",
+        ),
+        (
+            _swap_receipt_signer_associations,
+            "exact receipt signer node ID",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][
+                admission.SLUGS[0]
+            ].__setitem__("receipt_private_key", "812620" + "01" * 32),
+            "fields are not exact",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][admission.SLUGS[0]][
+                "public_key"
+            ].__setitem__("payload_hex", "00" * 33),
+            "payload is noncanonical",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"].__setitem__(
+                admission.SLUGS[1],
+                dict(receipt["receipt_signers"][admission.SLUGS[0]]),
+            ),
+            "aliases receipt signer identities",
+        ),
     ],
     ids=(
         "wrong-arch",
@@ -1291,6 +1362,13 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
         "missing-config-binding",
         "peer-config-substitution",
         "invalid-supervisor-binding",
+        "missing-receipt-signer-map",
+        "missing-receipt-signer",
+        "receipt-node-mismatch",
+        "receipt-signer-association-swap",
+        "receipt-private-key-leak",
+        "non-secp-receipt-key",
+        "duplicate-receipt-signer",
     ),
 )
 def test_macos_receipt_rejects_malformed_or_cross_source_rows(

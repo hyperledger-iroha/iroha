@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -462,13 +463,115 @@ def test_authority_host_attestations_are_distinct_and_cannot_be_reused() -> None
     assert "--role macos-publish" in source
 
 
+def test_deploy_workflow_rejects_weak_or_incomplete_apply_reports() -> None:
+    deploy = "\n".join(
+        str(step.get("run", "")) for step in _steps(_workflow()["macos-deploy"])
+    )
+    for token in (
+        '"deployment_completed_at_unix_ms"',
+        '"config_set_sha256"',
+        '"genesis_block_hash"',
+        '"signed_genesis_sha256"',
+        '"topology_sha256"',
+        '"receipt_signers"',
+        'range(1,5)',
+        '"protocol_version":4',
+        '"peer_count":4',
+        'int(genesis[-2:],16)&1==0',
+    ):
+        assert token in deploy
+
+
+def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
+    tmp_path: Path,
+) -> None:
+    deploy = "\n".join(
+        str(step.get("run", "")) for step in _steps(_workflow()["macos-deploy"])
+    )
+    marker = 'before,after=(json.load(open(path,encoding="ascii"))'
+    marker_index = deploy.index(marker)
+    start = deploy.rfind("import json,sys\n", 0, marker_index)
+    script = deploy[start : deploy.index("\nPY\n", marker_index)]
+    before = {"admission_receipt_id": "receipt", "applied": False}
+    signer = {
+        "binary_stat_seal": [1, 2, 3, 4, 5],
+        "config_sha256": "1" * 64,
+        "lifecycle_binding_sha256": "2" * 64,
+        "node_id": "taira-node:receipt-signer:secp256k1:sha256:" + "3" * 64,
+        "public_key": {"algorithm": "secp256k1", "payload_hex": "02" + "4" * 64},
+        "runtime_binding_sha256": "5" * 64,
+    }
+    after = {
+        "admission_receipt_id": "receipt",
+        "applied": True,
+        "binary_sha256": "6" * 64,
+        "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+        "config_set_sha256": "7" * 64,
+        "deployment_completed_at_unix_ms": 1,
+        "end_block_hash": "8" * 62 + "11",
+        "end_height": 2,
+        "genesis_block_hash": "9" * 62 + "11",
+        "network_id": "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
+        "network_name": "taira",
+        "peer_count": 4,
+        "protocol_version": 4,
+        "receipt_signers": {
+            f"taira-validator-{index}": {
+                **signer,
+                "node_id": signer["node_id"][:-1] + str(index),
+                "public_key": {
+                    **signer["public_key"],
+                    "payload_hex": "02" + f"{index:x}" * 64,
+                },
+            }
+            for index in range(1, 5)
+        },
+        "restart_proof": "passed",
+        "signed_genesis_sha256": "a" * 64,
+        "start_height": 1,
+        "supervisor_sha256": "b" * 64,
+        "topology_sha256": "c" * 64,
+    }
+    before_path = tmp_path / "before.json"
+    after_path = tmp_path / "after.json"
+    before_path.write_text(json.dumps(before), encoding="ascii")
+
+    def run(value: dict[str, object]) -> subprocess.CompletedProcess[str]:
+        after_path.write_text(json.dumps(value), encoding="ascii")
+        return subprocess.run(
+            [sys.executable, "-I", "-S", "-", str(before_path), str(after_path)],
+            input=script,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert run(after).returncode == 0
+    for field, invalid in (
+        ("deployment_completed_at_unix_ms", 0),
+        ("end_block_hash", "8" * 64),
+        ("end_height", 1),
+        ("genesis_block_hash", "8" * 64),
+        ("protocol_version", True),
+        ("topology_sha256", "C" * 64),
+    ):
+        mutated = json.loads(json.dumps(after))
+        mutated[field] = invalid
+        assert run(mutated).returncode != 0, field
+    mutated = json.loads(json.dumps(after))
+    mutated["receipt_signers"]["taira-validator-4"]["public_key"] = dict(
+        mutated["receipt_signers"]["taira-validator-1"]["public_key"]
+    )
+    assert run(mutated).returncode != 0
+
+
 def _publisher_step(source: str | None = None) -> dict[str, object]:
     jobs = _workflow(source)
     steps = _steps(jobs["macos-publish"])
     assert [step.get("name") for step in steps] == [
         "Download candidate bytes into publication quarantine",
         "Publish through the sealed installed authority controller",
-        "Upload the exact root-closed publication handoff",
+        "Upload the exact root-closed publication and public-soak handoffs",
     ]
     return steps[1]
 
@@ -500,6 +603,8 @@ def _assert_sealed_publication_workflow(source: str) -> None:
         'test "$inspected_candidate" = "$candidate"',
         'test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"',
         'test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"',
+        "build-public-soak-candidate --",
+        '--output "$candidate_prerequisite"',
         "publish-rollout --",
         '--candidate-root "$candidate"',
         '--expected-source-commit "$source_commit"',
@@ -511,6 +616,12 @@ def _assert_sealed_publication_workflow(source: str) -> None:
         '--suffix "$TAIRA_OCI_TAG_SUFFIX"',
         "publication handoff inventory differs",
         "publication handoff file identity differs",
+        "build-public-soak-publication --",
+        '--candidate-handoff "$candidate_prerequisite/public-soak-prerequisite-v1.json"',
+        '--publication-root "$final"',
+        '--output "$publication_prerequisite"',
+        "public-soak prerequisite handoff identity differs",
+        "public-soak prerequisite file identity differs",
     ):
         assert required in run
     for forbidden in (
@@ -551,6 +662,9 @@ def test_publisher_rechecks_run_scoped_root_and_source_before_sealed_dispatch() 
     assert run.index(
         'test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"'
     ) < run.index("publish-rollout --")
+    assert run.index("build-public-soak-candidate --") < run.index(
+        "publish-rollout --"
+    ) < run.index("build-public-soak-publication --")
 
 
 def test_root_closed_publication_upload_is_exactly_receipt_derived() -> None:
@@ -561,10 +675,14 @@ def test_root_closed_publication_upload_is_exactly_receipt_derived() -> None:
     )
     with_values = upload.get("with")
     assert isinstance(with_values, dict)
-    assert with_values["path"] == (
+    assert with_values["path"].splitlines() == [
         "${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/publication-receipt-"
-        "${{ steps.publish.outputs.receipt_id }}/"
-    )
+        "${{ steps.publish.outputs.receipt_id }}/",
+        "${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/public-soak-candidate-"
+        "${{ github.run_id }}-${{ github.run_attempt }}/",
+        "${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/public-soak-publication-"
+        "${{ github.run_id }}-${{ github.run_attempt }}/",
+    ]
     assert with_values["if-no-files-found"] == "error"
 
 

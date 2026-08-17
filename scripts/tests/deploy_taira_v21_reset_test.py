@@ -20,6 +20,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts.tests.taira_receipt_signer_test_support import (
+    projection_config_text as _support_projection_config_text,
+    receipt_keypair as _support_receipt_keypair,
+    receipt_signer_map as _support_receipt_signer_map,
+)
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "deploy_taira_v21_reset.py"
 SPEC = importlib.util.spec_from_file_location("deploy_taira_v21_reset", MODULE_PATH)
@@ -31,6 +36,18 @@ SPEC.loader.exec_module(MODULE)
 GENESIS_PUBLIC_KEY = "ed0120" + "AB" * 32
 GENESIS_EXPECTED_HASH = "00" * 31 + "01"
 DPN_VALIDATOR_RELEASE_COMMIT = "d" * 40
+
+
+def _receipt_keypair(index: int) -> tuple[str, str, str]:
+    return _support_receipt_keypair(index)
+
+
+def _receipt_signer_map() -> dict[str, dict[str, object]]:
+    return _support_receipt_signer_map()
+
+
+def _projection_config_text() -> str:
+    return _support_projection_config_text()
 
 
 def _write(path: Path, body: bytes) -> None:
@@ -153,6 +170,7 @@ def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
     _write(rendered / "genesis.json", (bundle / "genesis.json").read_bytes())
     config_hashes: dict[str, str] = {}
     for index, slug in enumerate(MODULE.SLUGS):
+        receipt_public_key, receipt_private_key, _ = _receipt_keypair(index + 1)
         workdir = rendered / slug
         _mkdir(workdir)
         for name in ("codec", "configs", "manifests", "runtime", "storage"):
@@ -165,6 +183,8 @@ address = "addr:127.0.0.1:{MODULE.P2P_PORTS[index]}#0000"
 
 [torii]
 address = "addr:127.0.0.1:{MODULE.TORII_PORTS[index]}#0000"
+receipt_public_key = "{receipt_public_key}"
+receipt_private_key = "{receipt_private_key}"
 
 [nexus.storage]
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
@@ -207,6 +227,7 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
             (bundle / "base-config.toml").read_bytes()
         ).hexdigest(),
         "configs": config_hashes,
+        "receipt_signers": _receipt_signer_map(),
         "prewarmed_storage_sha256": {
             slug: MODULE.EMPTY_TREE_SHA256 for slug in MODULE.SLUGS
         },
@@ -229,36 +250,6 @@ def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.Bundl
         minimum_free_bytes=0,
         maximum_fsync_latency_ms=10_000,
     )
-
-
-def _projection_config_text() -> str:
-    return f"""chain = "{MODULE.CHAIN_ID}"
-chain_discriminant = {MODULE.CHAIN_DISCRIMINANT}
-trusted_peers = [
-  "peer-one",
-]
-
-[network]
-address = "addr:127.0.0.1:1337#ABCD"
-
-[torii]
-address = "addr:127.0.0.1:8080#1234"
-
-[nexus.storage]
-local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
-
-[nexus.storage.disk_budget_weights]
-kura_blocks_bps = 7499
-wsv_snapshots_bps = 2000
-sorafs_bps = 1
-soranet_spool_bps = 250
-soravpn_spool_bps = 250
-
-[genesis]
-file = "/private/reset/genesis.signed.nrt"
-public_key = "{GENESIS_PUBLIC_KEY}"
-expected_hash = "{GENESIS_EXPECTED_HASH}"
-"""
 
 
 def test_projection_parser_extracts_all_required_fields() -> None:
@@ -565,6 +556,8 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
         installed_supervisor=installed_supervisor,
         runtime_root=runtime,
         restart_generation="4" * 64,
+        lifecycle_journal_root=runtime / "lifecycle" / bundle.peers[0].slug,
+        authenticated_node_id=_receipt_keypair(1)[2],
     )
     payload = plistlib.loads(body)
     arguments = payload["ProgramArguments"]
@@ -593,12 +586,9 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
         bundle.peers[0].config_sha256,
         "4" * 64,
     )
-    assert arguments[arguments.index("--terminal-unhealthy-file") + 1] == str(
-        runtime / "terminal" / f"validator-1-{terminal_binding}-terminal-unhealthy.json"
-    )
-    assert payload["EnvironmentVariables"]["GENESIS"] == str(
-        bundle.root / "genesis.signed.nrt"
-    )
+    expected_terminal = runtime / "terminal" / f"validator-1-{terminal_binding}-terminal-unhealthy.json"
+    assert arguments[arguments.index("--terminal-unhealthy-file") + 1] == str(expected_terminal)
+    assert payload["EnvironmentVariables"]["GENESIS"] == str(bundle.root / "genesis.signed.nrt")
 
 
 def test_validate_sources_uses_validated_runtime_not_controller_python(
@@ -1172,7 +1162,7 @@ def test_four_peer_health_rejects_noncanonical_lane_bindings(
     [
         (("protocol_version",), 3),
         (("height_context", "validator_count"), 1),
-        (("last_commit_qc", "signer_count"), 2),
+        (("last_commit_qc", "signer_count"), 2), (("last_commit_qc", "signer_count"), 4),
         (("last_commit_qc", "signed_power"), 2),
         (("last_commit_qc", "certificate", "phase", "phase"), "prepare"),
     ],
@@ -2103,6 +2093,7 @@ def test_deployment_admission_requires_and_binds_qualified_boi_result(
         "receipt_id": "f" * 64,
         "release_manifest_sha256": "6" * 64,
         "release_manifest_verifier_sha256": "2" * 64,
+        "receipt_signers": _receipt_signer_map(),
         "reset_manifest_sha256": "7" * 64,
         "restart_generation": "8" * 64,
         "schema": MODULE.rollout_admission.VERIFICATION_SCHEMA,
@@ -2261,6 +2252,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
     monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
     monkeypatch.setattr(MODULE, "validate_bundle", lambda *args, **kwargs: bundle)
     monkeypatch.setattr(MODULE, "validate_sources", lambda *args, **kwargs: sources)
+    monkeypatch.setattr(MODULE, "require_authenticated_lifecycle_node_ids", lambda _: {})
     monkeypatch.setattr(
         MODULE,
         "verify_deployment_admission",
@@ -2400,6 +2392,10 @@ def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
         supervisor_sha256="1" * 64,
         validator_config_sha256=tuple(
             (slug, f"{index}" * 64) for index, slug in enumerate(MODULE.SLUGS, start=2)
+        ),
+        receipt_signers=MODULE.require_receipt_signer_map(
+            _receipt_signer_map(),
+            "test receipt signer map",
         ),
         restart_generation="6" * 64,
         signer_fingerprint_sha256="7" * 64,
@@ -2611,8 +2607,12 @@ def test_production_config_may_differ_from_secret_free_qualification(tmp_path: P
             "dpn_validator_release_commit": (
                 admission.dpn_validator_release_commit
             ),
+            "receipt_signers": MODULE.receipt_signer_public_map(
+                admission.receipt_signers
+            ),
         },
         peers=peers,
+        receipt_signers=admission.receipt_signers,
     )
     sources = SimpleNamespace(
         binary_sha256=admission.binary_sha256,

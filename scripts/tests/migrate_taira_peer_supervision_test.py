@@ -287,6 +287,12 @@ def test_plan_renders_four_independent_keepalive_jobs(tmp_path: Path) -> None:
             == manifest["runtime"]["restart_generation"]
         )
         assert migration.is_sha256(manifest["runtime"]["restart_generation"])
+        for option in (
+            "--lifecycle-journal-root",
+            "--validator-id",
+            "--node-id",
+        ):
+            assert option not in arguments
         assert str(configs[(index + 1) % 4]) not in arguments
     assert len({tuple(arguments) for arguments in all_arguments}) == 4
     assert "do-not-persist" not in json.dumps(manifest)
@@ -294,6 +300,71 @@ def test_plan_renders_four_independent_keepalive_jobs(tmp_path: Path) -> None:
         configs[0].parents[1] / "genesis.signed.nrt"
     )
     assert migration.is_sha256(manifest["legacy"]["controller"]["command_sha256"])
+    assert "no independently authenticated" in migration.LIFECYCLE_IDENTITY_BARRIER
+
+
+def test_plist_wires_only_complete_authenticated_lifecycle_identity(
+    tmp_path: Path,
+) -> None:
+    manifest, _assets, _configs, _storage = render_fake_plan(tmp_path)
+    peer = manifest["peers"][0]
+    install_dir = Path(manifest["install"]["directory"])
+    root = migration.lifecycle_journal_root(install_dir, 1)
+    node_id = "taira-node:validator-1:receipt-signer"
+
+    payload = migration.launchd_plist(
+        peer=peer,
+        manifest=manifest,
+        installed_supervisor=Path(manifest["install"]["supervisor"]),
+        python_path=Path(manifest["python"]["path"]),
+        lifecycle_journal_root=root,
+        authenticated_node_id=node_id,
+    )
+    arguments = plistlib.loads(payload)["ProgramArguments"]
+    assert arguments[arguments.index("--lifecycle-journal-root") + 1] == str(root)
+    assert arguments[arguments.index("--validator-id") + 1] == "taira-validator-1"
+    assert arguments[arguments.index("--node-id") + 1] == node_id
+
+    with pytest.raises(migration.MigrationError, match="provided together"):
+        migration.launchd_plist(
+            peer=peer,
+            manifest=manifest,
+            installed_supervisor=Path(manifest["install"]["supervisor"]),
+            python_path=Path(manifest["python"]["path"]),
+            lifecycle_journal_root=root,
+        )
+    with pytest.raises(migration.MigrationError, match="authenticated node ID"):
+        migration.launchd_plist(
+            peer=peer,
+            manifest=manifest,
+            installed_supervisor=Path(manifest["install"]["supervisor"]),
+            python_path=Path(manifest["python"]["path"]),
+            lifecycle_journal_root=root,
+            authenticated_node_id="not canonical spaces",
+        )
+
+
+def test_migration_lifecycle_layout_is_fixed_distinct_and_owner_private(
+    tmp_path: Path,
+) -> None:
+    install_dir = tmp_path / "supervision"
+    install_dir.mkdir(mode=0o700)
+    uid, gid = os.getuid(), os.getgid()
+
+    roots = migration.ensure_lifecycle_journal_layout(
+        install_dir, uid=uid, gid=gid
+    )
+
+    assert roots == tuple(
+        install_dir / "lifecycle" / f"taira-validator-{number}"
+        for number in range(1, 5)
+    )
+    assert len(set(roots)) == 4
+    for root in roots:
+        info = root.lstat()
+        assert stat.S_ISDIR(info.st_mode)
+        assert stat.S_IMODE(info.st_mode) == 0o700
+        assert (info.st_uid, info.st_gid) == (uid, gid)
 
 
 def test_pre_latch_v3_manifest_has_an_explicit_version_boundary(

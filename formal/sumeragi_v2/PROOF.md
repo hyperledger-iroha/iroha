@@ -560,8 +560,9 @@ type state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
-and both ingress gates, joins exact Kura finality to adapter/WAL retirement,
-seals the existing output handoff before refreshing Serve state, and publishes
+and both ingress gates, joins exact Kura finality to adapter closure, retains
+the safety WAL through the existing durable output handoff, retires it only
+after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
 clean shutdown. This is not a new mechanized liveness theorem, and the
 serialized runner still needs to mint these states in the atomic cutover.
@@ -1763,9 +1764,10 @@ batch, preflights `PrepareIntent -> Sign(Prepare)`, fsyncs that frame, and then
 uses the same two-child LedgerV1 publication. Capacity is retryable only before
 the WAL append; every later ambiguity is restart-only. The unified lifecycle
 Completion-turn driver classifies both recovered Proposal settlement shapes,
-but the live production runner does not yet invoke that driver, so the cold
-Proposal path remains unreachable from the production loop. These are
-source-bound production-refinement contracts; the existing deductive
+and the live lifecycle height driver invokes it with the real borrow-bound
+Completion turn before the ordinary completion tail. The cold Proposal path is
+therefore reachable without a second scheduler or publication authority. These
+are source-bound production-refinement contracts; the existing deductive
 asynchronous proof does not by itself prove their Rust persistence ordering,
 and no theorem or evidence status is promoted. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership

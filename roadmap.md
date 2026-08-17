@@ -1,12 +1,17 @@
 # Roadmap
 
-Last updated: 2026-08-16
+Last updated: 2026-08-17
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
+- Exercise the combined Sumeragi liveness changes in the authenticated
+  four-validator loss/hold/heal corridor, then complete full-workspace tests and
+  strict all-target Clippy before the release freeze. The focused `iroha_core`
+  compile and regression slices are green, but they are not a substitute for
+  the release-wide run.
 - Freeze the current revision-4 candidate only after the physical ChainEpoch
   proof shards, exact four-validator fault corridor, and remaining authoritative
   formal and workspace-wide validation are complete. Historical mutable-tree
@@ -61,18 +66,14 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the immutable 5,067,263-line first-party Rust baseline, the
   5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
-  The combined mutable-worktree audit covers 8,081 source paths with 195
-  exceptions and counts 5,012,843 Rust lines, 1,760 below the active ratchet
-  and 452,307 above the objective. This preserves the required 550 lines of
-  aggregate headroom with 1,210 lines of reserve, but the gate still reports
-  two per-file findings:
-  `pytests/scripts/sumeragi_v2_proof_ledger_release_corridor_cases.py` at 5,011
-  lines and `scripts/run_sumeragi_v2_release_gates.sh` at 5,001 lines. It is not
-  an immutable-candidate receipt. Do not redefine the baseline, count moved
-  test code as a physical reduction, or weaken required runtime, security,
-  consensus, SDK, or release-evidence behavior to close it. Keep deterministic
-  oversized-file exceptions as exact ratchets and return the source-budget
-  gate to finding-free.
+  The settled mutable-worktree audit covers 8,095 source paths with 194
+  exceptions and counts 5,014,521 Rust lines, 82 below the active ratchet and
+  453,985 above the objective. The gate is finding-free and all changed
+  oversized-file limits moved downward only. This is not an immutable-candidate
+  receipt: preserve the current limits, reclaim another 468 lines before
+  accepting aggregate growth if the 550-line operating reserve is required,
+  and continue reducing toward the objective without weakening runtime,
+  security, consensus, SDK, or release-evidence behavior.
 - Track every reviewed production module and add the new source and fixture
   files to the eventual signed commit, then rerun the strict SDK source-closure
   guard from that frozen candidate. Keep the staged merge-resolution and
@@ -27621,7 +27622,35 @@ runtime premise on the final signed source.
   attestation and zero-drift lifecycle evidence, and the candidate/publication/
   deploy-bound `TAIRA_PUBLIC_V2_24H_COMPLETED.json` plus durable admission
   receipt; the local fault-profile receipt above is not a substitute for this
-  public-cohort evidence.
+  public-cohort evidence. The fail-closed process lease and a structural
+  long-lived runner now own one exact 432,000-slot attempt, stream its bounded
+  workload/capture inventories, and require exact native launch and backend-
+  shutdown receipts. The public runner remains source-disabled before path or
+  network I/O until a genuine runtime signer/native verifier is provisioned;
+  its captured handoff must still be submitted to the independently provisioned
+  authority and replay broker. Do not
+  register the state library itself as a controller operation or treat an
+  abandoned lease as resumable evidence. The installed controller must inject
+  its preprovisioned state root beneath non-writable trusted ancestry rather
+  than accepting a caller-selected root. The signed pre-deploy chain now carries
+  an explicit key-derived receipt-signer node ID for every validator and binds
+  it to the exact binary, config, restart generation, runtime, and lifecycle
+  identities; no label-derived substitute is accepted. The supervisor and plist
+  renderers support fixed owner-private peer-local journals, and the offline
+  collector validates, retains, and globally resequences all four windows before
+  passing the four source journals plus the global journal to a digest-pinned
+  native verifier and capturing its receipt. The collector still needs to run
+  behind the protected controller. The path-only candidate/publication
+  prerequisite producer is now sealed into `macos-publish`, and the publication
+  workflow retains both root-closed outputs; its three upstream authority
+  refusals remain intentional. The structural post-deploy handoff producer now
+  derives the exact checker identity from a closed applied-report/reset/native-
+  receipt evidence root plus both prior handoffs and the installed deploy
+  controller attestation, but its independent native-evidence authority remains
+  an unconditional source barrier and it is not yet a sealed workflow operation.
+  The genuine native producer/verifier, authority verifier, replay broker, and
+  protected controller/workflow integration remain to be implemented and
+  provisioned.
 
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof conditions height progress on a valid

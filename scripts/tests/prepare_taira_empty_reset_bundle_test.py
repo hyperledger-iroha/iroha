@@ -372,6 +372,39 @@ def _fake_renderer(
     return written
 
 
+def _fake_receipt_signers() -> dict[str, dict[str, object]]:
+    signers: dict[str, dict[str, object]] = {}
+    for scalar, slug in enumerate(reset_bundle.SLUGS, start=1):
+        public_payload = reset_bundle.renderer._secp256k1_public_payload(
+            scalar.to_bytes(32, "big")
+        )
+        public_key = (
+            reset_bundle.renderer.RECEIPT_PUBLIC_KEY_PREFIX
+            + public_payload.hex().upper()
+        )
+        signers[slug] = {
+            "node_id": reset_bundle.renderer.receipt_node_id(public_key),
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": public_payload.hex(),
+            },
+        }
+    return signers
+
+
+def _stub_receipt_signer_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        reset_bundle.renderer,
+        "load_roster",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        reset_bundle.renderer,
+        "receipt_signer_map",
+        lambda _validators: _fake_receipt_signers(),
+    )
+
+
 def _prepare_args(
     private: Path,
     source: Path,
@@ -440,6 +473,30 @@ def test_private_file_guard_rejects_symlink_hardlink_and_permissive_mode(
     original.chmod(0o640)
     with pytest.raises(RuntimeError, match="unsafe private file identity"):
         reset_bundle.require_private_regular_file(original)
+
+
+def test_receipt_signer_public_map_rejects_omission_reorder_mismatch_and_secret() -> None:
+    accepted = _fake_receipt_signers()
+    assert reset_bundle.require_receipt_signer_public_map(accepted) == accepted
+
+    omitted = dict(accepted)
+    omitted.pop(reset_bundle.SLUGS[-1])
+    reordered = dict(reversed(list(accepted.items())))
+    mismatched = json.loads(json.dumps(accepted))
+    mismatched[reset_bundle.SLUGS[0]]["node_id"] = (
+        reset_bundle.renderer.RECEIPT_NODE_ID_PREFIX + "0" * 64
+    )
+    private_leak = json.loads(json.dumps(accepted))
+    private_leak[reset_bundle.SLUGS[0]]["receipt_private_key"] = "812620" + "01" * 32
+
+    for tampered in (
+        omitted,
+        reordered,
+        mismatched,
+        private_leak,
+    ):
+        with pytest.raises(RuntimeError):
+            reset_bundle.require_receipt_signer_public_map(tampered)
 
 
 def test_authenticated_privacy_snapshot_rejects_file_substitution(
@@ -772,6 +829,7 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     monkeypatch.setattr(
         reset_bundle.renderer, "render_bundle", render_with_release_root
     )
+    _stub_receipt_signer_loading(monkeypatch)
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
@@ -817,6 +875,7 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     assert (output / "base-config.toml").read_bytes() == payloads["config.toml"]
     assert (output / "genesis.signed.nrt").read_bytes() == b"new signed genesis"
     assert not (output / "validator-secrets.toml").exists()
+    assert "receipt_private" not in json.dumps(manifest).lower()
     assert manifest["chain_id"] == reset_bundle.CHAIN_ID
     assert manifest["dpn_validator_release_commit"] == DPN_COMMIT
     assert manifest["kagemusha_release_root"] == str(args.kagemusha_release_root)
@@ -866,6 +925,7 @@ def test_prepare_removes_all_partial_output_when_native_signing_fails(
     _write_private(signer, b"fake external signer")
     signer.chmod(0o700)
     monkeypatch.setattr(reset_bundle.renderer, "render_bundle", _fake_renderer)
+    _stub_receipt_signer_loading(monkeypatch)
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
@@ -907,6 +967,7 @@ def test_prepare_refuses_invalid_first_pass_before_using_external_signer(
     external_signer.chmod(0o700)
     signer = mock.Mock()
     monkeypatch.setattr(reset_bundle.renderer, "render_bundle", _fake_renderer)
+    _stub_receipt_signer_loading(monkeypatch)
     monkeypatch.setattr(reset_bundle, "_sign_genesis", signer)
     monkeypatch.setattr(
         reset_bundle,

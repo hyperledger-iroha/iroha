@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from scripts import close_taira_qualification_handoff as closer
+from scripts import render_taira_validator_bundle as receipt_renderer
 from scripts import taira_privacy_protocol_receipt as privacy_evidence
 from scripts.tests.taira_privacy_protocol_receipt_test import build_valid_evidence
 
@@ -61,6 +62,26 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
     receipt_value = {
         "artifact_handoff_sha256": "e" * 64,
         "receipt_id": "f" * 64,
+        "receipt_signers": {
+            slug: {
+                "node_id": receipt_renderer.receipt_node_id(
+                    receipt_renderer.RECEIPT_PUBLIC_KEY_PREFIX
+                    + receipt_renderer._secp256k1_public_payload(
+                        number.to_bytes(32, "big")
+                    ).hex().upper()
+                ),
+                "public_key": {
+                    "algorithm": "secp256k1",
+                    "payload_hex": receipt_renderer._secp256k1_public_payload(
+                        number.to_bytes(32, "big")
+                    ).hex(),
+                },
+            }
+            for number, slug in enumerate(
+                closer.rollout_admission.SLUGS,
+                start=1,
+            )
+        },
         "schema": closer.MACOS_RECEIPT_SCHEMA,
         "schema_version": closer.MACOS_RECEIPT_SCHEMA_VERSION,
         "source": source,
@@ -121,6 +142,38 @@ def test_qualification_handoff_is_root_freezable_and_exactly_closed(
 
 def stat_mode(path: Path) -> int:
     return path.stat().st_mode & 0o777
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda value: value["receipt_signers"].pop(
+            closer.rollout_admission.SLUGS[-1]
+        ),
+        lambda value: value["receipt_signers"][
+            closer.rollout_admission.SLUGS[0]
+        ].__setitem__(
+            "node_id",
+            closer.rollout_admission.RECEIPT_NODE_ID_PREFIX + "0" * 64,
+        ),
+        lambda value: value["receipt_signers"][
+            closer.rollout_admission.SLUGS[0]
+        ].__setitem__("receipt_private_key", "812620" + "01" * 32),
+    ),
+    ids=("omitted-signer", "node-mismatch", "private-key-leak"),
+)
+def test_qualification_handoff_rejects_tampered_receipt_signer_map(
+    tmp_path: Path,
+    mutation,
+) -> None:
+    receipt, privacy_receipt, identity, value = _fixture(tmp_path)
+    mutation(value)
+    receipt.write_bytes(closer.canonical_json_bytes(value))
+    output = tmp_path / "handoff"
+
+    with pytest.raises(closer.QualificationHandoffError):
+        closer.close_handoff(receipt, privacy_receipt, identity, output)
+    assert not output.exists()
 
 
 def test_qualification_handoff_rejects_source_substitution(tmp_path: Path) -> None:

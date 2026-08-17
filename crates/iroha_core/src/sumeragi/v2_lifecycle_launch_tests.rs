@@ -333,7 +333,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         include_str!("../kura/bound_progress_and_retained_support.rs")
     );
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
-    let worker_source = include_str!("v2_worker.rs");
+    let worker_source = concat!(
+        include_str!("v2_worker.rs"),
+        include_str!("v2_worker/effect_services_impl.rs")
+    );
     let effects_source = include_str!("v2_effects.rs");
     let runtime_source =
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
@@ -921,8 +924,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1")
         .expect("runner has one sealed lifecycle preactivation borrow")
         .1
-        .split_once("/// Cadence-derived process-local deadline")
-        .expect("preactivation borrow ends before interrupted-tip recovery")
+        .split_once("/// Exact reducer facts which own one local proposal-side work item")
+        .expect("preactivation borrow ends before local proposal ownership")
         .0;
     for required in [
         "_seal: ProductionLifecyclePreActivationRunnerBorrowSealV1",
@@ -1021,8 +1024,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("fn with_runner_setup_transaction<R, E>(")
         .expect("launched lifecycle has one sealed preactivation setup transaction")
         .1
-        .split_once("/// Borrow executor and services for closed-ingress runner setup")
-        .expect("private setup transaction ends before its runner aperture")
+        .split_once("fn with_canonical_body_recovery_ingress_transaction<R, E, Activation>(")
+        .expect("private setup transaction ends before canonical recovery setup")
         .0;
     let setup_guard = preactivation_setup
         .find("let output_guard = self.services.lifecycle_output_guard()")
@@ -1376,7 +1379,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("fn retire_lifecycle_stores_for_test(")
         .expect("activation behavior has one consuming retirement fixture")
         .1
-        .split_once("/// Borrow the live owner/runtime/service triple")
+        .split_once("/// Borrow the live owner/runtime/service/local-Proposal owners only from the runner")
         .expect("retirement fixture ends before the ordinary runner borrow")
         .0;
     let fixture_owner_order = fixture_retirement
@@ -1462,10 +1465,17 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let output_permit = rollover
         .find("ProductionLifecycleOutputRolloverPermitV1 {")
         .expect("only the finalized owner mints the sibling-call permit");
+    let wal_retirement = rollover
+        .find("finalized_adapter.retire_after_output_handoff()")
+        .expect("the safety WAL retires only after durable output rollover");
     let serve_refresh = rollover
         .find("refresh_live_serve_retirement_cut(&services, &retired_ingress)")
         .expect("Serve census refresh follows durable output handoff");
-    assert!(sealed_output < output_permit && output_permit < serve_refresh);
+    assert!(
+        sealed_output < output_permit
+            && output_permit < wal_retirement
+            && wal_retirement < serve_refresh
+    );
     assert!(finalized_output_source.contains(
         "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1"
     ));
@@ -1539,7 +1549,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             .find(&format!("struct {state}"))
             .unwrap_or_else(|| panic!("missing opaque finalization state {state}"));
         let prefix = &declaration_source[..start];
-        let declaration_start = prefix.rfind("\n\n").unwrap_or(0);
+        let declaration_start = prefix
+            .rfind("\n}\n")
+            .map_or(0, |offset| offset + 3)
+            .max(prefix.rfind("\n\n").map_or(0, |offset| offset + 2));
         let declaration_end = declaration_source[start..]
             .find("\n}")
             .map(|offset| start + offset)
@@ -1649,35 +1662,35 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .find("BlockSignaturePolicy::GenesisAuthority(")
         .expect("the recovered body store retains the genesis signature policy");
     let decision = finalization_behavior
-        .find("WalRecordV2::Decision(decision)")
+        .find("WalRecordV2::Decision(decision.clone())")
         .expect("the finalization fixture starts from a durable Decision");
     let launch = finalization_behavior
         .find("let mut launched = owner")
         .expect("the recovered Decision owner launches through production");
     let dispatch = finalization_behavior
-        .find(".dispatch_recovered_decision_apply(")
-        .expect("the recovered Apply uses the lifecycle scheduler");
+        .find("ProductionRecoveredCompletionDispatchV1::ApplyQueued")
+        .expect("the recovered Apply enters the lifecycle completion scheduler");
     let settle = finalization_behavior
-        .find("settle_recovered_decision_apply_completion(&mut lane_work)")
-        .expect("the recovered Apply publishes exact finality");
+        .find("ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied")
+        .expect("the lifecycle completion scheduler publishes exact finality");
     let activation = finalization_behavior
-        .find("let activated = launched")
+        .find("let mut activated = launched")
         .expect("the completed recovered height activates through the runner seal");
     let finalize = finalization_behavior
-        .find(".into_finalized_rollover(&mut runner)")
-        .expect("the activated owner runs the production finalization transition");
-    let retain_decision = finalization_behavior
+        .find("lifecycle_run_inner::finalize_lifecycle_height(")
+        .expect("the activated owner enters the production finalization transaction");
+    let retain_decision = finalization_behavior[finalize..]
         .find(".retain_merge_sidecars_for_global_view(")
+        .map(|offset| finalize + offset)
         .expect("the lane owner retains the ordinary exact Decision carrier");
-    let output = finalization_behavior
-        .find(".rollover_outputs(&mut runner, lane_work, &successor, 64)")
-        .expect("the exact service and lane owners seal output together");
-    let stores = finalization_behavior
-        .find(".retire_lifecycle_stores()")
-        .expect("lifecycle stores retire only after output handoff");
-    let workers = finalization_behavior
-        .find("cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)")
-        .expect("clean worker teardown is the final behavior step");
+    let cleanup = finalization_behavior[retain_decision..]
+        .find("assert!(outcome.cleanup().warnings().is_empty())")
+        .map(|offset| retain_decision + offset)
+        .expect("the finalization transaction completes worker cleanup");
+    let wal_retirement = finalization_behavior[cleanup..]
+        .find("assert!(outcome.wal_retirement_warning().is_none())")
+        .map(|offset| cleanup + offset)
+        .expect("the finalization transaction retires the safety WAL after handoff");
     assert!(
         status_guard < genesis_key
             && genesis_key < genesis_transaction
@@ -1691,9 +1704,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             && settle < activation
             && activation < finalize
             && finalize < retain_decision
-            && retain_decision < output
-            && output < stores
-            && stores < workers
+            && retain_decision < cleanup
+            && cleanup < wal_retirement
     );
     assert!(registry_validate_source.contains("broadcast.is_unpaired()"));
     assert!(
@@ -1753,7 +1765,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         )
         .expect("runner owns the recovered lifecycle dependency permit")
         .1
-        .split_once("/// Cadence-derived process-local deadline")
+        .split_once("/// Process-local borrow key for preparing a launched lifecycle before activation")
         .expect("runner dependency permit stays a bounded source region")
         .0;
     for required in [
@@ -1852,8 +1864,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("struct ProductionLifecycleCompleteTipRunnerActivationV1")
         .expect("runner retains one CompleteTip activation authority")
         .1
-        .split_once("struct ProductionLifecycleActivatedRunnerAuthorityV1")
-        .expect("CompleteTip activation ends before the live runner borrow key")
+        .split_once("struct ProductionLifecyclePendingKuraRunnerActivationV1")
+        .expect("CompleteTip activation ends before the PendingKura authority")
         .0;
     for required in [
         "_seal: ProductionLifecycleCompleteTipRunnerActivationSealV1",

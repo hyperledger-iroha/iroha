@@ -607,6 +607,12 @@ Sumeragi view. Empty participant proposals remain invalid because they cannot pr
 sources the participant committee authorized. Unlike ordinary asynchronous lane completion, a
 carrier containing Native AMX work is admissible only after every participant leg supplies matching
 Prepare and Commit QCs for that exact finality object.
+If any Native source in one dependency-coupled candidate slice is still
+pending, candidate assembly defers the complete Native cohort together before
+refilling independent single-route work. It never recomputes a surviving
+source against a different participant proposal while the first body is
+signable. The coordinator also pins source and phase-neutral participant-slot
+claims for the global view before local signing or request publication.
 
 Each Native AMX QC carries an ordered validator set and exactly one historical
 BLS proof of possession for every validator. The data model enforces this
@@ -625,19 +631,29 @@ route has mixed coordinator and participant roles uses the same block-wide
 anchor and defers the role-sensitive check until the complete group is
 available.
 
-The versioned durable Native AMX source-session claim binds the source ID, typed transaction
-entrypoint hash, plan digest, global round context, authority height, coordinator
-route/incarnation/planned height/view/proposal, and every participant route/incarnation. The
-grouped participant slot claim remains separate and binds the participant proposal and settlement
-hashes for the exact lane height, view, phase, and signer. A claimed source or slot may be retried
-only with the same complete identities. Legacy entries are rejected; they may
-not be replaced by a weaker projection, and any future rebuild must come from
-authenticated canonical evidence. Before Prepare or Commit signing, and again at admission,
-the guard requires the active incarnation, exact predecessor height and descriptor hash, and the
-contiguous next lane height. Commit repeats the complete participant identity certified by Prepare
-and carries the exact matching PrepareQC. A source, session, proposal, predecessor, or settlement
-conflict fails closed across restart. Global round view monotonicity remains an independent guard
-and never forces equality with the participant lane view.
+The versioned Native AMX signing guard durably records Commit decisions. Its source-session claim
+binds the source ID, typed transaction entrypoint hash, plan digest, height context, authority
+height, coordinator route/incarnation/planned height/view/proposal, and every participant
+route/incarnation. The grouped participant slot claim is phase-neutral and binds the participant
+proposal and settlement hashes for the exact lane height, lane view, and signer, so a durable
+Commit also constrains every later Prepare retry. Prepare anti-equivocation is scoped to one global
+view in volatile exact-body/source/slot maps. Commit claims are retained only for the current
+certified global view: because both Native QCs bind the exact global block-creation round, a
+strictly newer certified view atomically checkpoints and retires the older Commit prefix before
+accepting replacement work. Reinstalling the same view is idempotent and preserves its claims.
+Before the first Prepare signature in that view, the guard atomically fsyncs a
+`last_prepare_view` anchor marker; reopening the same height quarantines
+that view until the global safety WAL installs a strictly newer certified numeric view. This keeps
+same-view crash safety without letting uncertified Prepare choices split honest validators forever
+across view changes. Authenticated V4 journals are migrated before V5 opens: same-height Commit
+claims and the highest Prepare quarantine are preserved, a finalized immediately preceding height
+starts an empty successor journal, and malformed or conflicting legacy evidence still fails closed.
+Before Prepare or Commit signing, and again at admission, the guard requires
+the active incarnation, exact predecessor height and descriptor hash,
+and the contiguous next lane height. Commit repeats the complete participant identity certified by
+Prepare and carries the exact matching PrepareQC. A committed source, session, proposal,
+predecessor, or settlement conflict fails closed across restart. Global round view monotonicity
+remains independent from the participant lane view.
 
 Participant finality is control-only. Exactly one coordinator ownership executes each AMX source
 and commits its state transition; participant proposals are not executable-payload handoffs and
@@ -903,6 +919,15 @@ reference-matching entry.
 On a certified view transition, deferred work not protected by the exact proposal round and subject of the
 TC's selected high PrepareQC is released from the executor and transport. Kura cleanup is cached by
 certified carrier-state transition rather than rescanning its bounded store on every actor loop.
+The same certified transition retires strictly older global control,
+payload-chunk, and merge-share fanouts from the exact-output worker before
+retry arbitration. A permanently unreachable topology target therefore cannot
+accumulate one old-view owner per timeout until the shared corridor rejects the
+current Proposal or TimeoutVote for every responsive peer. Height-only recovery
+and epoch-wide VRF traffic are outside this view cut. Exact identical topology
+retries reuse their incumbent worker owner, and each frozen target has one
+separate pacemaker reservation so the TimeoutVote needed to certify the cleanup
+view cannot itself be starved by ordinary Safety-class backlog.
 With neither a lock nor a durable decision, Kura retains only entries eligible for the new exact
 carrier round; the initial directive installs that retention before ingress opens. With a lock or
 durable decision, cleanup waits for the durable body and retains only its exact compact reference,
@@ -1136,6 +1161,10 @@ context. WAL, body, chunk, or cleanup-worker retirement after that durability
 boundary returns an ordered typed warning report. Those local cleanup warnings
 remain operator-visible but cannot turn a committed block back into an error or
 prevent successor-height progress.
+The finalized-height type retains the safety WAL until canonical lane/output
+rollover is durably reconstructible. A crash between global Kura finality and a
+late lane certificate therefore reopens from the Decision WAL instead of
+entering `PendingKuraApply` without any recoverable Decision-Fetch authority.
 
 ## Correctness claim and trusted boundary
 

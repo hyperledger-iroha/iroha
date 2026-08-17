@@ -257,7 +257,12 @@ fn production_serve_requests_for_execution_commitment(
     let non_local = (0..keys.len())
         .filter(|index| *index != local)
         .collect::<Vec<_>>();
-    let all = (0..keys.len()).collect::<Vec<_>>();
+    let exact_quorum = super::super::network_topology::commit_quorum_from_len(keys.len());
+    let mut local_quorum = std::iter::once(local)
+        .chain((0..keys.len()).filter(|index| *index != local))
+        .take(exact_quorum)
+        .collect::<Vec<_>>();
+    local_quorum.sort_unstable();
     let build = |requester: usize, signers: &[usize]| {
         let (request, _) = super::super::v2_worker::tests::production_authenticated_serve_request(
             context,
@@ -278,7 +283,7 @@ fn production_serve_requests_for_execution_commitment(
     };
     (
         build(rejected_requester, &non_local),
-        build(admitted_requester, &all),
+        build(admitted_requester, &local_quorum),
     )
 }
 

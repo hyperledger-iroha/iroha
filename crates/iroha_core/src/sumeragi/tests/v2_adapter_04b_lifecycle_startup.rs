@@ -11,7 +11,6 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
     let (startup, proposal, manifest, validated) =
         reopen_with_persisted_prepare_intent(&safety, &storage.path().join("body"), 0xC7);
     let commitment = validated.execution_commitment();
-
     {
         let mut holder =
             super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
@@ -30,7 +29,6 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
         drop(durable);
     }
     crate::sumeragi::status::clear_v2_status();
-
     let authenticated = open_recovered_startup_test(&safety)
         .expect("reopen the exact recovered-vote adapter startup")
         .authenticate_final_wal_startup_authority()
@@ -834,6 +832,9 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
 
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn assert_safety_wal_retention(path: &std::path::Path, retained: bool) {
+    assert_eq!(path.exists(), retained, "unexpected safety WAL retention");
+}
 fn exercise_pending_kura_production_lifecycle(
     owner: super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     verified: VerifiedHeightContext,
@@ -843,6 +844,7 @@ fn exercise_pending_kura_production_lifecycle(
     kura: Arc<Kura>,
     local_signer: KeyPair,
     expected: super::super::v2_recovery::PendingKuraApply,
+    safety_wal_path: std::path::PathBuf,
     finalize: bool,
 ) {
     let local_peer = PeerId::new(local_signer.public_key().clone());
@@ -1024,6 +1026,7 @@ fn exercise_pending_kura_production_lifecycle(
     let (finalized, mut lane_work) = activated
         .into_finalized_rollover(&mut active_runner)
         .unwrap_or_else(|error| panic!("finalize pending Kura lifecycle owner: {error}"));
+    assert_safety_wal_retention(&safety_wal_path, true);
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     drop(producer_episode);
@@ -1047,6 +1050,7 @@ fn exercise_pending_kura_production_lifecycle(
     let (post_output, retained_sidecars) = finalized
         .rollover_outputs(&mut active_runner, lane_work, &successor, 64)
         .unwrap_or_else(|error| panic!("roll over pending Kura lifecycle outputs: {error}"));
+    assert_safety_wal_retention(&safety_wal_path, false);
     let cleanup_ready = post_output
         .retire_lifecycle_stores()
         .unwrap_or_else(|error| panic!("retire pending Kura lifecycle stores: {error}"));
@@ -1281,7 +1285,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 .join("wal")
                 .join(format!("{:020}.wal", recovered_context.height));
             let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
-                wal_path,
+                wal_path.clone(),
                 &recovered_context,
                 &proofs,
                 0,
@@ -1335,6 +1339,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 kura,
                 local_signer,
                 expected,
+                wal_path,
                 finalize,
             );
             continue;

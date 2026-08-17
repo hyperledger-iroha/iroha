@@ -5,6 +5,7 @@ import json
 import os
 import fcntl
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -100,6 +101,12 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     assert "scripts/snapshot_taira_public_privacy_inputs.py" in controller.LINUX_FILES
     assert "scripts/build_privacy_v1_boi_handoff.py" in controller.LINUX_FILES
     assert "scripts/check_native_sdk_abi22_artifact.py" in controller.LINUX_FILES
+    assert "scripts/build_taira_public_v2_prerequisite_handoff.py" in (
+        controller.MACOS_FILES
+    )
+    assert "scripts/build_taira_public_v2_prerequisite_handoff.py" not in (
+        controller.LINUX_FILES
+    )
     for relative in set(controller.LINUX_FILES + controller.MACOS_FILES):
         assert (ROOT / relative).is_file(), relative
         assert controller._validate_relative(relative) == relative
@@ -1253,8 +1260,194 @@ def test_publisher_runner_trust_exactly_attests_sealed_tools_inputs_and_literals
     assert result["trusted_values"] == trust["trusted_values"]
     assert controller.ROLE_OPERATIONS["macos-publish"] == (
         "macos",
-        {"publish-rollout"},
+        {
+            "build-public-soak-candidate",
+            "build-public-soak-publication",
+            "publish-rollout",
+        },
     )
+
+
+def _public_soak_prerequisite_fixture(
+    tmp_path: Path,
+) -> tuple[dict[str, object], Path, Path, Path, Path, Path]:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    handoff.chmod(0o711)
+    trusted.chmod(0o700)
+    candidate = handoff / "publish-candidate-123-1"
+    publication = handoff / ("publication-receipt-" + "a" * 64)
+    _write_handoff(candidate, {"candidate": b"candidate"}, "candidate")
+    _write_handoff(publication, {"publication": b"publication"}, "publication")
+    _freeze_handoff(candidate)
+    _freeze_handoff(publication)
+    attestation = _attestation(handoff, trusted, "macos-publish")
+    candidate_prerequisite = handoff / "public-soak-candidate-122-1"
+    _write_handoff(
+        candidate_prerequisite,
+        {"public-soak-prerequisite-v1.json": b"{}\n"},
+        "public-soak-candidate-prerequisite",
+    )
+    _freeze_handoff(candidate_prerequisite)
+    candidate_handoff = (
+        candidate_prerequisite / "public-soak-prerequisite-v1.json"
+    )
+    candidate_output = handoff / "public-soak-candidate-123-1"
+    publication_output = handoff / "public-soak-publication-123-1"
+    return (
+        attestation,
+        candidate,
+        publication,
+        candidate_handoff,
+        candidate_output,
+        publication_output,
+    )
+
+
+def test_public_soak_prerequisite_operations_accept_only_their_exact_paths(
+    tmp_path: Path,
+) -> None:
+    (
+        attestation,
+        candidate,
+        publication,
+        candidate_handoff,
+        candidate_output,
+        publication_output,
+    ) = (
+        _public_soak_prerequisite_fixture(tmp_path)
+    )
+
+    staged, outputs = controller._validate_operation_args(
+        "build-public-soak-candidate",
+        ["--candidate-root", str(candidate), "--output", str(candidate_output)],
+        attestation,
+    )
+    assert staged == {candidate}
+    assert outputs == {candidate_output}
+
+    staged, outputs = controller._validate_operation_args(
+        "build-public-soak-publication",
+        [
+            "--candidate-root",
+            str(candidate),
+            "--candidate-handoff",
+            str(candidate_handoff),
+            "--publication-root",
+            str(publication),
+            "--output",
+            str(publication_output),
+        ],
+        attestation,
+    )
+    assert staged == {candidate, candidate_handoff.parent, publication}
+    assert outputs == {publication_output}
+
+    with pytest.raises(controller.ControllerSealError, match="not allow-listed"):
+        controller._validate_operation_args(
+            "build-public-soak-candidate",
+            [
+                "--candidate-root",
+                str(candidate),
+                "--candidate-handoff",
+                str(candidate_handoff),
+                "--output",
+                str(candidate_output),
+            ],
+            attestation,
+        )
+    with pytest.raises(controller.ControllerSealError, match="mandatory options"):
+        controller._validate_operation_args(
+            "build-public-soak-publication",
+            [
+                "--candidate-root",
+                str(candidate),
+                "--output",
+                str(publication_output),
+            ],
+            attestation,
+        )
+
+
+@pytest.mark.parametrize(
+    ("operation", "command"),
+    (
+        ("build-public-soak-candidate", "candidate"),
+        ("build-public-soak-publication", "publication"),
+    ),
+)
+def test_public_soak_prerequisite_composite_injects_private_current_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    command: str,
+) -> None:
+    (
+        attestation,
+        candidate,
+        publication,
+        candidate_handoff,
+        candidate_output,
+        publication_output,
+    ) = (
+        _public_soak_prerequisite_fixture(tmp_path)
+    )
+    final_output = candidate_output if command == "candidate" else publication_output
+    args = ["--candidate-root", str(candidate), "--output", str(final_output)]
+    if command == "publication":
+        args = [
+            "--candidate-root",
+            str(candidate),
+            "--candidate-handoff",
+            str(candidate_handoff),
+            "--publication-root",
+            str(publication),
+            "--output",
+            str(final_output),
+        ]
+    captured_path: Path | None = None
+
+    def dispatch(relative, child_args, run_as, external_tool_identity=None):
+        nonlocal captured_path
+        assert relative == "scripts/build_taira_public_v2_prerequisite_handoff.py"
+        assert child_args[0] == command
+        transformed = list(child_args[1 : 1 + len(args)])
+        private_output = Path(transformed[transformed.index("--output") + 1])
+        assert private_output.parent == Path(child_args[-1]).parent
+        assert private_output.name == "public-soak-prerequisite-v1.json"
+        transformed[transformed.index("--output") + 1] = str(final_output)
+        assert transformed == args
+        assert child_args[-2] == "--publisher-controller-attestation"
+        captured_path = Path(child_args[-1])
+        info = captured_path.stat()
+        assert stat.S_IMODE(info.st_mode) == 0o400
+        assert json.loads(captured_path.read_bytes()) == attestation
+        assert run_as == (os.getuid(), os.getgid())
+        assert external_tool_identity is None
+        private_output.write_bytes(
+            controller.canonical_json_bytes({"kind": command})
+        )
+        private_output.chmod(0o400)
+        return 0
+
+    monkeypatch.setattr(controller, "_dispatch_installed_python", dispatch)
+    assert (
+        controller._dispatch_public_soak_prerequisite_composite(
+            operation, args, attestation
+        )
+        == 0
+    )
+    assert captured_path is not None and not captured_path.exists()
+    assert final_output.is_dir()
+    assert stat.S_IMODE(final_output.stat().st_mode) == 0o555
+    assert {
+        path.name for path in final_output.iterdir()
+    } == {
+        controller.HANDOFF_MANIFEST,
+        "public-soak-prerequisite-v1.json",
+    }
 
 
 @pytest.mark.parametrize(

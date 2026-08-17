@@ -149,7 +149,8 @@ barriers into multi-second stalls.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me runtime template for per-validator
-  BLS private keys and dedicated SoraNet Ed25519 transport key pairs, shared
+  BLS private keys, dedicated SoraNet Ed25519 transport key pairs, and dedicated
+  Torii secp256k1 submission-receipt key pairs, shared
   onboarding/faucet authority and streaming identity key
   material, the public identity of the provider-backed Soracloud mutation
   signer, plus the public SoraFS admission-council roots and quorum. Keep the
@@ -675,14 +676,16 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put each matching validator `private_key` plus its dedicated
-   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair
-   and the shared
+   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair,
+   its secp256k1 `receipt_public_key`/`receipt_private_key` pair, and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`, every
    `soracloud_runtime_signer_*` public binding field,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
    values in the runtime file. A validator's SoraNet transport identity must
    be distinct from both its BLS node identity and the shared streaming
-   identity; the renderer rejects reuse and duplicate transport identities.
+   identity. The Torii receipt key is also validator-specific and distinct from
+   every validator and transport key; the renderer checks each public/private
+   pair on secp256k1 and rejects duplicate receipt identities.
    SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
@@ -693,13 +696,14 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
 5. Copy each validator's complete generated directory to that validator
    host's canonical `/etc/iroha/taira-validator` directory. Every rendered
-config binds signer sidecars and governance manifests to that same
-first-release install root; it never embeds the developer checkout or
-`dist/` path. The renderer creates bundle and runtime directories with mode
-`0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
-onboarding, faucet, and API-token sidecars with mode `0600`, writes only
-canonical signer paths and the BLAKE3 token digest to peer config, and emits a
-protective `.gitignore`. It also creates the
+   config binds signer sidecars and governance manifests to that same
+   first-release install root; it never embeds the developer checkout or
+   `dist/` path. The renderer creates bundle and runtime directories with mode
+   `0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
+   onboarding, faucet, and API-token sidecars with mode `0600`, injects only
+   that validator's receipt key pair directly into its owner-private config,
+   writes canonical paths for the other signers plus the BLAKE3 token digest,
+   and emits a protective `.gitignore`. It also creates the
    co-located `sorafs_admission/` directory and rewrites admission-envelope,
    signer, and manifest paths together when
    `--install-root` is changed. It prints sidecar paths but never their contents.
@@ -1869,9 +1873,9 @@ Before any self-hosted job or Cargo invocation, the hosted `release-readiness`
 job runs `scripts/check_taira_release_prerequisites.py`. It reports and rejects
 any critical-path authority that remains an unconditional source-level refusal.
 This is intentionally the current result until the independent native-evidence,
-protocol-receipt, Exact12-governance, BOI, deploy-issuance, and rollout-observation
-authorities, plus the distinct public 24-hour soak observation authority, are
-implemented and provisioned. The gate
+protocol-receipt, Exact12-governance, BOI, deploy-issuance, post-deploy native-
+evidence, rollout-observation, public-soak producer, and distinct public-soak
+observation authorities are implemented and provisioned. The gate
 prevents an unavailable release from spending build hours merely to reach the
 same refusal later.
 
@@ -1888,6 +1892,52 @@ It publishes no authority itself. Admission remains source-disabled until an
 independent Ed25519 verifier, pinned native evidence verifier, and atomic replay
 broker provision the dedicated public-soak authority contract and durable
 admission receipt; no live public-soak receipt is currently claimed.
+
+`scripts/taira_public_v2_24h_soak_state.py` supplies the controller-side lease
+primitive for that future runner. One process holds the lock for the entire
+attempt; state transitions are atomic and bind the exact source, three handoffs,
+deployed tip, native-verified soak anchor and producer launch, controller, and
+native verifier. A crash leaves a non-resumable attempt, and clock drift, a
+missed capture window, state rewriting, or root-path replacement fails closed.
+The module is not a workload runner and is not an installed controller
+operation; exposing it directly would exit without contacting Taira or
+producing evidence. The reset and legacy-migration plist renderers accept the
+exact journal root, validator ID, and node ID only as one all-or-none identity.
+Each validator now receives an explicit runtime-only Torii secp256k1 receipt
+key pair. Its public key and domain-separated derived node ID are carried,
+without the private key, through the reset manifest, four-peer receipt,
+admission, qualification, and deployment records. Deployment rederives the
+supervisor runtime and lifecycle bindings from the exact binary stat seal,
+config digest, restart generation, validator slug, and node ID. This closes the
+former pre-deploy lifecycle node-ID source barrier; the separate deployment-
+issuance authority remains source-disabled.
+
+The opt-in supervisor journal records owner-private per-peer lifecycle windows.
+`scripts/collect_taira_public_v2_lifecycle_evidence.py` validates those four raw
+chains, retains the exact source artifacts and their deploy-bound identities,
+globally resequences them, and publishes final lifecycle evidence only after
+passing all five journals to a digest-pinned native verifier and capturing its
+exact request-bound receipt. The collector is still an offline helper, not an
+installed controller operation or an authority. The candidate and publication
+prerequisite handoffs now have path-only producers behind two `macos-publish`
+controller operations, and the publication workflow retains their root-closed
+outputs. They remain fail-closed until the existing native-evidence, privacy-
+origin, and rollout-observation authorities are provisioned. The structural
+post-deploy handoff producer validates the exact applied reset report, reset
+manifest, four native-receipt files, candidate/publication handoffs, and
+installed deploy-controller attestation before emitting the closed deploy
+identity consumed by the soak checker. Its public entry point still refuses
+before path I/O until the independent deploy-native evidence authority is
+provisioned, and it is not installed as a controller/workflow operation.
+`scripts/run_taira_public_v2_24h_soak.py` now supplies the structural long-lived
+runner around that contract. Its private injected-backend seam binds the full
+candidate/publication/deploy/anchor launch subject, dispatches exactly 432,000
+monotonic slots, holds the lease through capture, streams the bounded evidence
+inventories, and requires exact native launch and backend-shutdown receipts.
+Its public API and CLI remain an unconditional source refusal before caller
+path or network I/O. A genuine protected runtime signer/native verifier,
+observation authority, replay broker, and controller/workflow integration are
+still required before any deployed-public soak can start or claim completion.
 
 Both untrusted native builders default to six Cargo jobs and reuse a Cargo
 target outside the authenticated source checkout only for retries of the same
@@ -2645,7 +2695,9 @@ away from the shipped MCP-enabled config:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
    - `validator_secrets.local.toml` must include every validator BLS private
      key, its dedicated Ed25519 `soranet_transport_public_key` and
-     `soranet_transport_private_key`, and the shared `account_onboarding_*`, `torii_faucet_*`, and
+     `soranet_transport_private_key`, its dedicated secp256k1
+     `receipt_public_key` and `receipt_private_key`, and the shared
+     `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `soracloud_runtime_signer_*`,
      `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
      fields because the checked-in template intentionally leaves those

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import stat
@@ -78,6 +79,31 @@ SORACLOUD_SIGNER_POLICY_DIGEST_HEX = "95" * 32
 ONBOARDING_TOKEN = "bootstrap-api-token-0123456789abcdef"
 
 
+def _receipt_keypair(index: int) -> tuple[str, str]:
+    private_payload = index.to_bytes(32, "big")
+    public_payload = MODULE._secp256k1_public_payload(private_payload)
+    return (
+        MODULE.RECEIPT_PUBLIC_KEY_PREFIX + public_payload.hex().upper(),
+        MODULE.RECEIPT_PRIVATE_KEY_PREFIX + private_payload.hex().upper(),
+    )
+
+
+def test_receipt_keypair_and_node_id_use_canonical_secp256k1_domain() -> None:
+    public_key, private_key = _receipt_keypair(1)
+
+    assert public_key == (
+        "e701210279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"
+    )
+    assert private_key == "812620" + "0" * 63 + "1"
+    expected_node_id = MODULE.RECEIPT_NODE_ID_PREFIX + hashlib.sha256(
+        MODULE.RECEIPT_NODE_ID_DOMAIN + public_key.encode("ascii")
+    ).hexdigest()
+    assert MODULE.validate_receipt_keypair(public_key, private_key, "fixture") == (
+        expected_node_id
+    )
+    assert MODULE.receipt_node_id(public_key) == expected_node_id
+
+
 def test_native_onboarding_token_hash_tool_receives_secret_only_on_stdin(
     tmp_path: Path,
 ) -> None:
@@ -126,6 +152,8 @@ def test_taira_templates_require_no_backend_offline_enrollment() -> None:
     assert "escrow_accounts" not in config_text
     assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in secrets_text
     assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in config_text
+    assert "REPLACE_WITH_SECP256K1_RECEIPT_PUBLIC_KEY_1" in secrets_text
+    assert "REPLACE_WITH_SECP256K1_RECEIPT_PRIVATE_KEY_1" in secrets_text
     assert "operation_registry_max_entries = 4096" in config_text
     assert "operation_registry_max_bytes = 524288" in config_text
     assert "\n[settlement.offline]\n" not in config_text
@@ -678,6 +706,7 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         "",
     ]
     for index in range(1, validator_count + 1):
+        receipt_public_key, receipt_private_key = _receipt_keypair(index)
         validators.extend(
             [
                 "[[validators]]",
@@ -685,6 +714,8 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
                 f'private_key = "peer-{index}-private"',
                 f'soranet_transport_public_key = "peer-{index}-soranet-public"',
                 f'soranet_transport_private_key = "peer-{index}-soranet-private"',
+                f'receipt_public_key = "{receipt_public_key}"',
+                f'receipt_private_key = "{receipt_private_key}"',
                 "",
             ]
         )
@@ -715,6 +746,9 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         'soranet_transport_private_key_file = '
         '"/etc/iroha/taira-validator/runtime/soranet-transport.key"' in config
     )
+    receipt_public_key, receipt_private_key = _receipt_keypair(3)
+    assert f'receipt_public_key = "{receipt_public_key}"' in config
+    assert f'receipt_private_key = "{receipt_private_key}"' in config
     assert 'expected_hash_file = "/run/iroha/genesis.expected_hash"' in config
     assert 'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
@@ -1932,6 +1966,149 @@ def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
     assert validators[-1].private_key == "peer-4-private"
     assert validators[0].soranet_transport_public_key == "peer-1-soranet-public"
     assert validators[-1].soranet_transport_private_key == "peer-4-soranet-private"
+    assert validators[0].receipt_public_key == _receipt_keypair(1)[0]
+    assert validators[-1].receipt_private_key == _receipt_keypair(4)[1]
+    public_projection = MODULE.receipt_signer_map(validators)
+    assert list(public_projection) == [
+        "taira-validator-1",
+        "taira-validator-2",
+        "taira-validator-3",
+        "taira-validator-4",
+    ]
+    assert "private" not in json.dumps(public_projection).lower()
+    assert public_projection["taira-validator-1"]["node_id"] == (
+        MODULE.receipt_node_id(_receipt_keypair(1)[0])
+    )
+
+
+@pytest.mark.parametrize("field", ["receipt_public_key", "receipt_private_key"])
+def test_secret_material_requires_each_validator_receipt_key(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    public_key, private_key = _receipt_keypair(2)
+    value = public_key if field == "receipt_public_key" else private_key
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            f'{field} = "{value}"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=field):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_secret_material_rejects_receipt_keypair_mismatch(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    _, private_one = _receipt_keypair(1)
+    _, private_two = _receipt_keypair(2)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            f'receipt_private_key = "{private_one}"',
+            f'receipt_private_key = "{private_two}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="do not form one secp256k1 keypair"):
+        MODULE.load_secret_material(secrets_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected"),
+    [
+        ("receipt_public_key", "bls12381g2" + "00" * 96, "compressed secp256k1"),
+        ("receipt_private_key", "bls12381g1" + "00" * 48, "secp256k1 private"),
+        ("receipt_private_key", "812620" + "00" * 32, "outside the secp256k1"),
+        ("receipt_public_key", "e7012102" + "FF" * 32, "outside secp256k1"),
+        ("receipt_public_key", "e7012102" + "00" * 32, "not a secp256k1"),
+    ],
+)
+def test_secret_material_rejects_noncanonical_receipt_algorithms_and_points(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+    expected: str,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    public_key, private_key = _receipt_keypair(1)
+    current = public_key if field == "receipt_public_key" else private_key
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            f'{field} = "{current}"',
+            f'{field} = "{replacement}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_secret_material_rejects_duplicate_receipt_signer(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    public_one, private_one = _receipt_keypair(1)
+    public_two, private_two = _receipt_keypair(2)
+    text = secrets_path.read_text(encoding="utf-8")
+    text = text.replace(public_two, public_one, 1).replace(private_two, private_one, 1)
+    secrets_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicates a Torii receipt"):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_load_roster_rejects_receipt_keys_in_public_roster(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    public_key, private_key = _receipt_keypair(1)
+    roster_path.write_text(
+        roster_path.read_text(encoding="utf-8").replace(
+            'private_key = "peer-1-private"',
+            'private_key = "peer-1-private"\n'
+            f'receipt_public_key = "{public_key}"\n'
+            f'receipt_private_key = "{private_key}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime-only --secrets file"):
+        MODULE.load_roster(roster_path)
+
+
+@pytest.mark.parametrize("field", ["receipt_public_key", "receipt_private_key"])
+def test_render_bundle_rejects_receipt_keys_in_shared_template(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    value = _receipt_keypair(1)[0 if field == "receipt_public_key" else 1]
+    base_config_path.write_text(
+        BASE_CONFIG.replace("[torii]\n", f'[torii]\n{field} = "{value}"\n', 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="receipt signer material"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+        )
 
 
 def test_secret_material_requires_each_validator_transport_pair(tmp_path: Path) -> None:
@@ -1996,7 +2173,7 @@ def test_render_bundle_rejects_unpopulated_template_placeholders(
     try:
         MODULE.render_bundle(base_config_path, roster_path, output_dir)
     except ValueError as error:
-        assert "template placeholder values" in str(error)
+        assert "runtime-only Torii receipt keypair" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError(
             "render_bundle accepted placeholder secrets without a secrets file"

@@ -12,6 +12,7 @@ from typing import Any, Callable
 import pytest
 
 from scripts import check_taira_public_v2_24h_soak_evidence as checker
+from scripts import render_taira_validator_bundle as receipt_renderer
 
 
 TEST_DURATION_MS = 2_000
@@ -47,20 +48,39 @@ def digest(label: str) -> str:
 def iroha_hash(label: str, hash_type: str) -> dict[str, str]:
     """Return one explicitly marked Iroha HashOf fixture."""
 
+    value = bytearray(hashlib.sha256(label.encode("ascii")).digest())
+    value[-1] |= 1
     return {
         "algorithm": checker.IROHA_HASH_ALGORITHM,
         "type": hash_type,
-        "value": digest(label),
+        "value": value.hex(),
     }
 
 
 def public_key(label: str) -> dict[str, str]:
     """Return one marked compressed secp256k1 receipt key."""
 
+    scalar = (
+        int.from_bytes(hashlib.sha256(label.encode("ascii")).digest(), "big")
+        % (receipt_renderer.SECP256K1_GROUP_ORDER - 1)
+    ) + 1
+    payload = receipt_renderer._secp256k1_public_payload(
+        scalar.to_bytes(32, "big")
+    )
     return {
         "algorithm": "secp256k1",
-        "payload_hex": "02" + digest(label),
+        "payload_hex": payload.hex(),
     }
+
+
+def test_receipt_node_domain_matches_runtime_renderer() -> None:
+    key = public_key("cross-module-receipt-node")
+    canonical = (
+        receipt_renderer.RECEIPT_PUBLIC_KEY_PREFIX
+        + key["payload_hex"].upper()
+    )
+
+    assert checker._receipt_node_id(key) == receipt_renderer.receipt_node_id(canonical)
 
 
 def artifact(label: str, payload: bytes) -> checker.Artifact:
@@ -196,10 +216,31 @@ def make_fixture() -> EvidenceFixture:
     publication, publication_reference = handoff_artifact(
         "publication.json", "publication", source, publication_identity
     )
-    receipt_signers = {
-        validator: {
-            "node_id": f"taira-node:{validator}:fixture",
-            "public_key": public_key(f"receipt-key-{validator}"),
+    restart_generation = digest("restart-generation")
+    receipt_signers: dict[str, dict[str, object]] = {}
+    for validator in checker.VALIDATORS:
+        key = public_key(f"receipt-key-{validator}")
+        binary_stat_seal = [41, 73, 1_000_000, 2_000_000, 3_000_000]
+        config_sha256 = digest(f"config-{validator}")
+        runtime_binding = checker._runtime_binding_sha256(
+            binary_sha256,
+            binary_stat_seal,
+            config_sha256,
+            restart_generation,
+        )
+        node_id = checker._receipt_node_id(key)
+        receipt_signers[validator] = {
+            "binary_stat_seal": binary_stat_seal,
+            "config_sha256": config_sha256,
+            "lifecycle_binding_sha256": checker._lifecycle_binding_sha256(
+                runtime_binding,
+                restart_generation,
+                validator,
+                node_id,
+            ),
+            "node_id": node_id,
+            "public_key": key,
+            "runtime_binding_sha256": runtime_binding,
             "native_verifier_binary_sha256": native_binary_sha256,
             "native_verifier_source_sha256": native_source_sha256,
             "native_verifier_receipt_sha256": digest(
@@ -208,8 +249,6 @@ def make_fixture() -> EvidenceFixture:
             "native_verifier_receipt_size_bytes": 256,
             "verification_result": "verified",
         }
-        for validator in checker.VALIDATORS
-    }
     deploy_end_hash = iroha_hash("deploy-end-block", checker.BLOCK_HASH_TYPE)
     deploy_identity = {
         "qualification_receipt_id": qualification_id,
@@ -236,7 +275,7 @@ def make_fixture() -> EvidenceFixture:
         "topology_sha256": digest("topology"),
         "config_set_sha256": digest("config-set"),
         "supervisor_sha256": digest("supervisor"),
-        "restart_generation": digest("restart-generation"),
+        "restart_generation": restart_generation,
         "network_name": checker.taira_constants.NETWORK_NAME,
         "chain_id": checker.taira_constants.CHAIN_ID,
         "network_id": checker.taira_constants.NETWORK_ID,
@@ -375,6 +414,22 @@ def make_fixture() -> EvidenceFixture:
         "signed_genesis_sha256": deploy_identity["signed_genesis_sha256"],
         "supervisor_sha256": deploy_identity["supervisor_sha256"],
         "genesis_block_hash": copy.deepcopy(genesis_block_hash),
+        "raw_windows": [
+            {
+                "artifact_sha256": digest(f"raw-window-{validator}"),
+                "artifact_size_bytes": 4_096 + index,
+                "baseline_sequence": 10 * index,
+                "binding_sha256": receipt_signers[validator][
+                    "lifecycle_binding_sha256"
+                ],
+                "node_id": receipt_signers[validator]["node_id"],
+                "record_count": 2,
+                "records_sha256": digest(f"raw-window-records-{validator}"),
+                "terminal_sequence": 10 * index + 2,
+                "validator_id": validator,
+            }
+            for index, validator in enumerate(checker.VALIDATORS, start=1)
+        ],
         "journal_inventory": lifecycle_journal_reference,
         "native_journal_verifier_receipt": {
             "sha256": digest("placeholder-journal-verifier-receipt"),
@@ -1059,6 +1114,12 @@ def test_marked_iroha_hash_is_not_an_artifact_sha256() -> None:
             iroha_hash("transaction", checker.BLOCK_HASH_TYPE),
             "transaction", checker.SIGNED_TRANSACTION_HASH_TYPE,
         )
+    unmarked = iroha_hash("unmarked", checker.SIGNED_TRANSACTION_HASH_TYPE)
+    unmarked["value"] = unmarked["value"][:-2] + "00"
+    with pytest.raises(checker.EvidenceError, match="marker bit"):
+        checker._iroha_hash(
+            unmarked, "transaction", checker.SIGNED_TRANSACTION_HASH_TYPE
+        )
     assert checker._artifact_sha256(digest("artifact"), "artifact")
 
 
@@ -1335,6 +1396,78 @@ def test_deploy_receipt_key_requires_compressed_sec1_prefix(
         ].__setitem__("payload_hex", "04" + digest("uncompressed-shape")),
     )
     with pytest.raises(checker.EvidenceError, match="payload is noncanonical"):
+        validate(evidence)
+
+
+def test_deploy_receipt_node_must_be_derived_from_exact_key(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_handoff_identity(
+        evidence,
+        "deploy",
+        "deploy_handoff",
+        lambda identity: identity["receipt_signers"][
+            checker.VALIDATORS[0]
+        ].__setitem__("node_id", checker.RECEIPT_NODE_ID_PREFIX + "0" * 64),
+    )
+    with pytest.raises(checker.EvidenceError, match="not derived from its receipt key"):
+        validate(evidence)
+
+
+@pytest.mark.parametrize("field", ["config_sha256", "binary_stat_seal"])
+def test_deploy_runtime_binding_cross_binds_binary_config_and_generation(
+    evidence: EvidenceFixture,
+    field: str,
+) -> None:
+    def mutate(identity: dict[str, Any]) -> None:
+        signer = identity["receipt_signers"][checker.VALIDATORS[0]]
+        signer[field] = digest("attacker-config") if field == "config_sha256" else [9] * 5
+
+    replace_handoff_identity(evidence, "deploy", "deploy_handoff", mutate)
+    with pytest.raises(checker.EvidenceError, match="runtime binding.*not derived"):
+        validate(evidence)
+
+
+def test_deploy_lifecycle_binding_cross_binds_runtime_node_and_slug(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_handoff_identity(
+        evidence,
+        "deploy",
+        "deploy_handoff",
+        lambda identity: identity["receipt_signers"][
+            checker.VALIDATORS[0]
+        ].__setitem__("lifecycle_binding_sha256", digest("attacker-lifecycle")),
+    )
+    with pytest.raises(checker.EvidenceError, match="lifecycle binding.*not derived"):
+        validate(evidence)
+
+
+def test_deploy_receipt_signer_rejects_slug_association_swap(
+    evidence: EvidenceFixture,
+) -> None:
+    def swap(identity: dict[str, Any]) -> None:
+        signers = identity["receipt_signers"]
+        first, second = checker.VALIDATORS[:2]
+        signers[first], signers[second] = signers[second], signers[first]
+
+    replace_handoff_identity(evidence, "deploy", "deploy_handoff", swap)
+    with pytest.raises(checker.EvidenceError, match="lifecycle binding.*not derived"):
+        validate(evidence)
+
+
+def test_deploy_receipt_signer_rejects_private_key_field(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_handoff_identity(
+        evidence,
+        "deploy",
+        "deploy_handoff",
+        lambda identity: identity["receipt_signers"][
+            checker.VALIDATORS[0]
+        ].__setitem__("receipt_private_key", "812620" + "01" * 32),
+    )
+    with pytest.raises(checker.EvidenceError, match="fields are not exact"):
         validate(evidence)
 
 
@@ -1748,6 +1881,40 @@ def test_lifecycle_is_bound_to_deployment_completion_generation(
         ),
     )
     with pytest.raises(checker.EvidenceError, match="generation is spliced"):
+        validate(evidence)
+
+
+def test_lifecycle_raw_windows_cross_bind_deploy_lifecycle_identity(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_lifecycle(
+        evidence,
+        lambda value: value["raw_windows"][0].__setitem__(
+            "binding_sha256", digest("attacker-raw-binding")
+        ),
+    )
+    with pytest.raises(checker.EvidenceError, match="binding differs from deployment"):
+        validate(evidence)
+
+
+def test_lifecycle_raw_windows_reject_omission_and_reorder(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_lifecycle(
+        evidence,
+        lambda value: value["raw_windows"].__setitem__(
+            slice(0, 2), list(reversed(value["raw_windows"][:2]))
+        ),
+    )
+    with pytest.raises(checker.EvidenceError, match="canonical validator order"):
+        validate(evidence)
+
+
+def test_lifecycle_raw_windows_require_exact_four_validators(
+    evidence: EvidenceFixture,
+) -> None:
+    replace_lifecycle(evidence, lambda value: value["raw_windows"].pop())
+    with pytest.raises(checker.EvidenceError, match="exactly four validators"):
         validate(evidence)
 
 
