@@ -1,6 +1,14 @@
 #[test]
 fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps() {
     let mut fixture = ProductionTransportFixture::new();
+    let now = Instant::now();
+    fixture
+        .executor
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            now,
+        )
+        .expect("arm the production executor after startup");
     let fetch_tag = fixture.executor.current_tag();
     let fetch_ordinal = fixture
         .lifecycle_ordinals
@@ -70,7 +78,7 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
         .expect("reserve the selected Serve target after Fetch");
     let initial = fixture
         .executor
-        .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+        .exact_serve_predecessor_observation(now, serve_ordinal, None)
         .expect("observe the selected Serve before Fetch completion");
     assert!(initial.should_open_predecessor_admission());
     assert!(
@@ -84,7 +92,7 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
         .expect("late reconstruction materializes BodyAvailable under the Fetch owner");
     let observation = fixture
         .executor
-        .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+        .exact_serve_predecessor_observation(now, serve_ordinal, None)
         .expect("observe late BodyAvailable behind the selected Serve");
     assert!(observation.should_open_predecessor_admission());
     assert!(observation.has_runnable_predecessor());
@@ -96,14 +104,14 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
         fixture
             .executor
             .older_runtime_lifecycle_predates_retained_response(
-                Instant::now(),
+                now,
                 retained_response_ordinal,
             )
             .expect("exercise the published retained-response predecessor probe")
     );
     let repeated = fixture
         .executor
-        .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+        .exact_serve_predecessor_observation(now, serve_ordinal, None)
         .expect("retained-response probing cannot reset selected-Serve state");
     assert!(repeated.should_open_predecessor_admission());
     assert!(repeated.has_runnable_predecessor());
@@ -113,46 +121,31 @@ fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
         "the late Fetch successor is runnable inside serialized runtime"
     );
 
-    assert!(matches!(
+    assert_eq!(
         fixture
             .executor
-            .step(Instant::now(), &mut services)
-            .expect("the reopened predecessor owns the next serialized step"),
-        EffectExecutorStep::Advanced { .. }
-    ));
-    assert_eq!(fixture.executor.status().queued_runtime_completions, 0);
-    assert_eq!(
-        services.store_tasks.len(),
-        1,
-        "the reopened BodyAvailable transition must produce one Store successor"
+            .step(now, &mut services)
+            .expect("the reopened predecessor owns one serialized admission attempt"),
+        EffectExecutorStep::Advanced { effects: 0 },
+        "the orphan completion reaches one durable terminal without inventing reducer work"
     );
-    assert_eq!(
-        services.store_tasks[0].lifecycle_ordinal(),
-        fetch_ordinal,
-        "the Store successor must keep the reopened Fetch owner"
+    assert_eq!(fixture.executor.status().queued_runtime_completions, 0);
+    assert!(
+        services.store_tasks.is_empty(),
+        "an injected Fetch without matching reducer body work must not create a Store task"
     );
     assert!(fixture.executor.pending_fetches.is_empty());
-    let passive_store = fixture
-        .executor
-        .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
-        .expect("an incomplete Store remains passive");
-    assert!(!passive_store.should_open_predecessor_admission());
-    assert!(
-        !passive_store.has_runnable_predecessor(),
-        "pending Store work alone cannot reopen predecessor admission"
+    assert!(fixture.executor.pending_stores.is_empty());
+    assert_eq!(
+        fixture.executor.ready_bodies.len(),
+        1,
+        "the reconstructed body remains staged for later matching reducer work"
     );
-    let stored_completion_evidence =
-        ExactServePredecessorCompletionEvidence::try_new(fetch_ordinal)
-            .expect("tracked Store completion retains the exact Fetch ordinal");
-    let replenished = fixture
+    let terminal = fixture
         .executor
-        .exact_serve_predecessor_observation(
-            Instant::now(),
-            serve_ordinal,
-            Some(stored_completion_evidence),
-        )
-        .expect("a completed Store is runnable");
-    assert!(replenished.should_open_predecessor_admission());
-    assert!(replenished.has_runnable_predecessor());
+        .exact_serve_predecessor_observation(now, serve_ordinal, None)
+        .expect("the durable terminal closes the selected Serve aperture");
+    assert!(!terminal.should_open_predecessor_admission());
+    assert!(!terminal.has_runnable_predecessor());
     assert!(!fixture.executor.status().fail_closed);
 }
